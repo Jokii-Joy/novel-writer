@@ -939,6 +939,10 @@
         setActiveNovelId(novel.id);
         setActiveChapterId(created.id);
         setChapter(created);
+        // Creating from the home screen has to land in the editor: the book and
+        // its first chapter exist, so staying on the overview would look like
+        // the click did nothing.
+        setView('write');
         pushToast('小说已创建', 'ok');
       } catch (err) {
         pushToast(errText(err, '新建小说失败'), 'error');

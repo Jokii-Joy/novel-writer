@@ -487,7 +487,7 @@ body 为 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`，错误绝不�
 9. **保存目录只增不删**：`library.mirror` 不删除「上次写过、这次书单里没有」的旧文件（避免误删用户手改过的文件）。同名小说靠 `(2)` 后缀去重，顺序可能随书单顺序漂移。加密与明文文件是**两套并存**的，切换加密后旧的 `.md` 不会被自动清理。
 10. **自动保存的密钥就是宿主 secrets 的 `key.bin`**：删掉 `DSH_HOME/novel-writer/secrets/` 之后，之前写出的 `.nwe` 再也解不开（这是加密的正常代价）。要换机，请连 `secrets/` 一起拷。
 11. **沉浸模式的全屏依赖浏览器 `requestFullscreen`**：桌面版 WebView 里可能被策略拒绝（此时沉浸本身仍工作，只是不占满显示器）。
-12. **八套主题都会重映射 `--dsw-alias-*`**（作用域限定 `.nw-root`）。这是让外壳跟随主题的必要手段，但宿主后续改 token 语义时 `98-shell-theme.js` 需要同步。
+12. **九套主题都会重映射 `--dsw-alias-*`**（作用域限定 `.nw-root`）。这是让外壳跟随主题的必要手段，但宿主后续改 token 语义时 `98-shell-theme.js` 需要同步。
 13. 编辑器渲染依赖真实浏览器排版（字体度量、滚动容器）。用无头 / 假 DOM 时打字机居中与粗光标位置无法验证。
 14. **R3 起的改动均没有跑自动化测试**（用户要求「改完由我自己测试」），所以 `journals` / `smtp` / `imap` / `submit` / `library` / 导出 `appendText` / 九套主题 / 浮动坞 / 粗光标 / 灵感便签 / 落盘 docx / 欢迎页 / 收件箱这些新代码路径，只经过了 `node --check`、`build-client`（含加载闸门）、以及宿主接口的连通性冒烟，**没有逐条功能回归**。
 15. **SMTP / IMAP 只实现了明文 / STARTTLS 与 AUTH PLAIN/LOGIN**：OAuth2（Gmail 现代登录、Outlook）不支持，必须改用应用专用密码；服务端 15–20 秒墙钟超时，超时即失败不重试。
@@ -495,5 +495,5 @@ body 为 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`，错误绝不�
 17. **收件箱只读最近 12 封的头部与 600 字节摘要**，不下载附件、不回信、不删除；被墙或服务器限流时首页会显示服务器原话而不是「没有回信」。Gmail 需要先在网页端开启 IMAP 并生成应用专用密码。
 18. **163 / 126 的 `Unsafe Login` 可能仍然存在**：R11 已补 RFC 2971 `ID` 握手（`name=novel-writer`），但网易的白名单是按客户端名审核的，握手之后仍可能被拒。此时错误码是 `imap-id-required`（不再是「密码错」），请按提示把客户端加入白名单，或换 QQ / Gmail 收信。QQ 邮箱的 IMAP 需要在网页端「设置 → 账户」里手动开启。
 19. **导出会跳过没有正文的章节**：只写了标题、正文还空着的章节（大纲占位）在 docx / epub / txt 里不会出现，否则会留下「一整页只有一个标题」或者干脆一页空白。这一条在 R11 定下，先前版本会把空章也排进去。
-19. **期刊「删除」是写墓碑而不是物理删除**：内置 79 家来自代码里的常量表，若只从用户覆盖层移除，下次 `merge()` 会把它们复活。墓碑存在 `settings.json` 的 `journals` 键里，跟着 `DSH_HOME` 走；换机不拷这个文件，删除会「复原」。
-20. **GitHub 推送需要你自己跑一次 `setup-github.cmd`**：本机到 `github.com` 的连接不稳定（`api.github.com` 正常，但 `github.com/login/device/code` 反复超时），OAuth 设备流在这里完不成。脚本里的 Token 方式（方式 B）不受此影响。另外仓库名默认是 `novel-writer`，若已被占用，`gh repo create` 会失败，改脚本第 20 行的 `REPO=` 即可。
+20. **期刊「删除」是写墓碑而不是物理删除**：内置 79 家来自代码里的常量表，若只从用户覆盖层移除，下次 `merge()` 会把它们复活。墓碑存在 `settings.json` 的 `journals` 键里，跟着 `DSH_HOME` 走；换机不拷这个文件，删除会「复原」。
+21. **GitHub 推送需要你自己跑一次 `setup-github.cmd`**：本机到 `github.com` 的连接不稳定（`api.github.com` 正常，但 `github.com/login/device/code` 反复超时），OAuth 设备流在这里完不成。脚本里的 Token 方式（方式 B）不受此影响。另外仓库名默认是 `novel-writer`，若已被占用，`gh repo create` 会失败，改脚本第 23 行的 `REPO=` 即可。
