@@ -1,12 +1,15 @@
-# 小说创作台 · Novel Studio
+# 精神空间 · Mindspace
 
 > 在 DeepSeek Harness 左侧栏里完成整部小说的写作、校对、排版、导出与投稿。
 
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.0.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.2.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第十一轮（R11）改造：插件改名 **精神空间**；修首页「正在创作」点不进编辑页；修 163/126 收件箱
+  `Unsafe Login`（补 RFC 2971 `ID` 握手）；**灵感便签改成纯色整页**；**光标可设置**（粗细/颜色/闪烁）；
+  投稿邮件**不再复述期刊征稿要求**；**期刊库支持增删改查**；附带一键上传 GitHub 的脚本。
 - 第五轮（R5）改造：删掉整条顶部工具栏、新增**欢迎首页**、主题扩到**八套**、设置改**左右两栏**、
   投稿向导改**四步**并带**智能推荐**、期刊库扩到 **79 家**、新增**投稿管理**、图标换成内联 SVG、
   SMTP 加**端口自愈矩阵**、**移除阿里云盘**。
@@ -51,13 +54,16 @@ plugin_manager action=install_bundle target=C:\Users\17737\Desktop\dsh\编码区
 安装后：
 
 - 入口为 entryId `include:novel-writer`（`list_plugins` 可查），状态应为 `enabled:true` / `fiberPhase:"active"`；
-- 左侧栏出现书本图标（order 5，位于插件与市场之间），点击切到「小说创作台」主面板；
+- 左侧栏出现书本图标（order 5，位于插件与市场之间），点击切到「精神空间」主面板；
 - 校验 Host 是否就绪（**Web 端口每次启动都会变**，用 `dsh web` 打印的端口或桌面版实际端口）：
 
 ```
 GET http://127.0.0.1:<web端口>/novel-writer/api/ping
-→ {"ok":true,"data":{"name":"novel-writer","version":"1.0.0","capabilities":{...}}}
+→ {"ok":true,"data":{"name":"novel-writer","version":"1.2.0","capabilities":{...}}}
 ```
+
+> 包名仍是 `novel-writer`（`@local/novel-writer`、entryId `include:novel-writer`、API 前缀 `/novel-writer/api`），
+> 只有**显示名**改成了「精神空间」。改包名会让已安装的 profile 指向一个不存在的目录，得不偿失。
 
 > 若浏览器里点「AI 校对 / 云备份」报 405，说明 Host 的 HTTP 路由没注册成功（旧版在 web 宿主上
 > mount 时机过早读不到 `webServer`）。本版 `index.js` 用 `ctx.inject(['webServer'], …)` 延迟注册，
@@ -77,6 +83,30 @@ node scripts/build-client.mjs      # client/src/*.js → client/client.js
 node --check client/client.js
 ```
 
+`build-client.mjs` 结束前会自动跑一次 **加载闸门**（`scripts/verify-client-load.mjs`）：用假的
+`window.__ModuleLoader__` + 只解析 `react` 的 `require` 把产物整个 eval 一遍，断言导出了
+`inject: ["slots"]` 与 `apply`。**语法检查抓不到的「反引号提前闭合模板字符串」只有这道闸门能拦住** ——
+CSS 是用模板字符串写的，注释里多写一个反引号就会让整块样式变成语法错误。
+
+### 上传到 GitHub（R11 附带）
+
+本机没有全局安装 git / gh，所以工具是**便携版**放在 `.tools/`（已被 `.gitignore` 忽略，不进仓库）：
+
+- `.tools/git/` — PortableGit 2.56（`git.exe`）
+- `.tools/bin/gh.exe` — GitHub CLI 2.103
+
+**手动步骤只有一个**：双击仓库根目录的 **`setup-github.cmd`**。
+
+脚本会自动：把 `.tools` 加进本次会话的 `PATH` → 让你选登录方式（A 浏览器 / B 粘贴 Token）→
+读账号名并补 `git config user.name/email` → `git init -b main` + 提交 → `gh repo create --public --push`，
+最后打印仓库地址。**无需管理员权限，不改系统环境变量，不装任何东西到系统目录。**
+
+> ⚠️ 这台机器到 `github.com` 的连接不稳定（`api.github.com` 正常，但 `github.com/login/device/code`
+> 反复超时）。若浏览器登录卡住，选方式 B：在 https://github.com/settings/tokens 生成一个
+> 勾了 `repo` 的 classic token 粘进去即可。本地提交已经做好，网络恢复后重跑脚本会自动续上。
+
+也可以完全不跑脚本，用 GitHub 网页「Upload files」把这个目录（除 `.tools/`）传上去。
+
 ---
 
 ## 2. 功能
@@ -93,6 +123,8 @@ node --check client/client.js
 - 打开插件先到**首页**而不是上次的章节：`view: 'home' | 'write'`，默认 `home`；选中章节 / 新建首章 / 进沉浸 / 点「继续写作」才切到 `write`。
 - 四张卡：**正在创作**（最多 6 部，按最近更新排序，显示章节数 · 字数 · 日期）、**创作统计**（全书 / 本书 / 近 7 天 / 今天）、**投稿记录**（最多 5 条，状态徽章 + 距今 N 天）、**快捷入口**（继续写作 / 期刊库 / 投稿管理 / 设置）。
 - 数据来自 `submit.record` 与 `journals.list`，任一失败都静默降级为空态；投稿成功后会主动刷新。
+- **首页不画下划线**（R11）：`.nw-link` 在这页是嵌在正文里的行内按钮，一条常驻底线会被看成断裂的边框，
+  所以首页统一用品牌色 + hover 下划线表达可点。编辑页与对话框里的锚点样式不受影响。
 
 ### 侧栏顶部与右下坞
 侧栏 topbar 六个图标：`⌂` 首页 · `⛶` 沉浸 · `▥` 宿主侧栏 · `🔒` 锁定 · `⚙` 设置 · `‹` 收起目录。
@@ -144,6 +176,8 @@ stroke 1.5、圆头圆角，60 个名字覆盖新建 / 编辑 / 导航 / 上传�
 ### 编辑器
 - 纯文本 / Markdown 源文编辑，三层叠放（高亮镜像层 + 粗光标层 + 透明 textarea），不引入富文本 contenteditable。
 - **加粗加黑光标**：`caret-color: transparent` + 绝对定位 `.nw-cursor`（默认 `--nw-caret-width: 3px`、高 = 1.2em、墨色 `--nw-caret-color` 近黑 `#0f0f0e`），位置复用同一套 `measureCaret()` 测量，`translate3d` 只在位置变化时写；有选区 / 输入法组合中 / 窗口失焦时自动隐藏；1.06s `step-end` 闪烁，切换两个等价 keyframes 重启闪烁且零 reflow。
+- **光标可设置（R11）**：设置 →「外观」里有三项 —— **粗细**（1–8px 滑块，默认 3px）、**颜色**（取色器 + 文本框，留空表示跟随主题；九套主题各自有一份默认墨色）、**闪烁**（开关，关掉后 `data-caret-blink="0"` 让 `animation: none`）。
+  实现细节：粗细/颜色写进 `.nw-surface` 的 CSS 变量，闪烁写 `data-*` 属性而**不写内联 style** —— 因为 `paintCaret()` 每帧会改写 `animationName` 来重启闪烁周期，内联值会被它悄悄打开。
 - 自动保存（默认 1200ms 防抖，可配 200–60000ms），失焦 / Ctrl+S / 切章 / 卸载 / `beforeunload` 立即保存。
 - 输入路径：零 setState + rAF 合帧 + read→write 两阶段；`measureCaret` 只增量改写一个 textNode；`spellCheck`/`autoCorrect`/`autoCapitalize` 全关；`.nw-stack` 加 `contain: layout style`。（R2 同步 200 字实测 0.36–0.8ms/字。）
 - 字号默认 **20px**、行距 **2.0**、页宽 **760px**；老默认值（17 / 1.9 / 720，以及 R2 过渡期的 19）一次性迁移到新默认，用户自选值不动。
@@ -154,7 +188,9 @@ stroke 1.5、圆头圆角，60 个名字覆盖新建 / 编辑 / 导航 / 上传�
 ### 导入 / 导出
 - 导入 `txt` / `md` / `markdown` / `docx` / `epub`：自动识别章节标题切分，保留书名与作者；中文 txt 非 UTF-8 时回落 GB18030。入口在目录底部。
 - 导出 `docx` / `pdf` / `epub` / `txt`：入口在书 / 章行的「⋯」菜单，可只导当前章或整本。
-  - docx：A4（11906×16838 twips）、宋体 12pt、首行缩进 480 twips、1.5 倍行距、Heading 1 章标题、页脚 PAGE 域。
+  - docx：A4（11906×16838 twips）、宋体 **14pt**（四号，接近期刊通行的「小四/四号」）、首行缩进 560 twips、
+    1.5 倍行距（投稿附件 1.75 倍）、Heading 1 18pt、页脚 PAGE 域。
+    标题与作者居中排在第一页顶部，**其下直接接正文**（不单独起标题页、不留空白页）。
   - epub：EPUB 3，`mimetype` 首条且不压缩，含 container / OPF / nav / toc.ncx。
   - pdf：优先 Harness `officeToPdf`；不可用时回退内置 `libreoffice-kit`。
 - **文末追加固定内容**：设置 →「写作」里写一段「文末追加内容」并开「导出时追加」，或在导出对话框里对单次导出临时更改。
@@ -186,6 +222,11 @@ stroke 1.5、圆头圆角，60 个名字覆盖新建 / 编辑 / 导航 / 上传�
    点「查看全文」以只读层展示完整邮件（不截断）。**这一步不会发信。**
 4. 点「确认投稿」才真正 `submit.send`，随后写一条投稿记录（`submissions.json`，最近 50 条）。
 
+- **邮件正文不复述征稿要求**（R11）：遵守要求体现在信本身（主题格式、附件数量与命名、是否粘贴正文），
+  在正文里逐条抄录「贵刊要求：1…2…3…」会像模板群发，编辑一眼就能看出来。R11 删掉了
+  `handleSubmitPrepare` 里「模型漏了哪条就补一条进正文」的逻辑，也把兜底信的
+  「贵刊的征稿要求我已逐条对照」改写成一句「投稿前已按贵刊要求核对格式与字数」；
+  `SUBMIT_SYSTEM_PROMPT` 里也加了一条硬约束禁止复述。
 - **投稿附件是「稿件」而不是网页导出**（R10）：docx 走 `manuscript` 模式——页眉右对齐 `书名　·　作者：X`（楷体 9pt 灰）、
   正文行距放宽到 1.75 倍并在每章前分页，方便审稿人直接在纸上批注；附件行可下载与编辑部完全一致的字节。
 - **安全阀**：只有 ≤ 4000 字才把正文交给模型调整；返回的章数必须一致、每章长度在 0.7×–1.4× 之间，否则丢弃改回纯规则排版；AI 不可用时自动退回规则排版并给出 warning。
@@ -197,11 +238,19 @@ stroke 1.5、圆头圆角，60 个名字覆盖新建 / 编辑 / 导航 / 上传�
 **小说名 · 期刊 · 投稿日期 · 距今 N 天 · 状态徽章**，可原地改状态（`submit.update`，原子重写 `submissions.json`），
 也可「重新投稿」——回填该期刊重新打开向导第 1 步。状态是本机记账，不会联网、不解析回信。
 
-### 期刊库（R5 新增）
+### 期刊库（R5 新增，R11 支持增删改查）
 `NW.dialogs.Journals`，入口在首页「快捷入口 → 期刊库」。
 79 行列表 + 搜索 + 「只看待核对」；每行显示名称、邮箱（未收录则写「未收录邮箱」）、字数区间与「已核对 / 待核对」徽章；
 行内编辑邮箱 / 官网 / 字数区间 / 要求，保存时只写 delta，填了邮箱会自动置 `verified:true`。
 内置条目的 `tags / subject 模板 / attachments / paperOnly / responseDays / minWords / maxWords` 也一并落库。
+
+**R11 补齐了「增」和「删」**：
+- **新增**：工具栏「新增期刊」→ 先填期刊名（其余字段同编辑表单），保存时由 `lib/journals.js` 的 `makeId()` 按名称生成 slug（重名自动加 `-2`），整条作为自定义条目落库。
+- **删除**：行内「删除」按钮或编辑表单底部「删除这家期刊」，二次确认后写**墓碑**（`{id, deleted:true}`）。
+  墓碑是必须的 —— 内置 79 家来自代码里的 `TABLE`，如果只是从 overrides 里移除，下一次 `merge()` 会把它们**复活**，
+  用户会看到「删了又回来」。
+- **改 / 查**：原有能力不变；自定义条目可改全部字段，内置条目只存与内置值不同的字段（`diffFromBuiltin`）。
+- 多邮箱仍按「期刊 + 体裁 / 字数区间」分列，编辑器里一行一条：`邮箱 | 体裁 | 字数 | 备注`。
 
 ### 数据与隐私
 IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `settings` / `notes`（R10 新增灵感便签）。
@@ -242,7 +291,7 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
   选目录 / 开关 / 保存 / 恢复全部收在 `NW.dialogs.Backup` 这一个面板里（标题「自动保存与恢复」）。
 - **选一个文件夹，之后每次改动自动覆盖写入**：`library.pick()` 打开 Windows 原生目录选择器
   （回退到宿主 `uiWorkspace.pickDirectory()`），选定即视为开启自动保存。
-- **落盘格式是 Word**（R10）：`<书名>.docx`（加密时 `<书名>.docx.nwe`）——A4、宋体 12pt、首行缩进、每章分页，
+- **落盘格式是 Word**（R10）：`<书名>.docx`（加密时 `<书名>.docx.nwe`）——A4、宋体 14pt、首行缩进、每章分页，
   编辑和审稿人双击就能打开；早期版本写的 `.md` 仍然能被列出与解密，只是不再新写。
 - **默认加密**：写盘的是 `NWENC1` + base64(`iv[12] || tag[16] || ciphertext`)，AES-256-GCM，
   密钥由宿主 `secrets` 里的 `key.bin` 经 HKDF-SHA256 派生（info `novel-writer-mirror`）。密钥只在本机，拷走文件夹的人打不开。
@@ -252,14 +301,18 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
   `.nwe` / `.json`，客户端读成文本交给宿主 `library.restore({text, name})` 解密，不要求文件在保存目录里。
 - 「解密出明文副本」把 `.nwe` 解成 `<dir>/plain/*.docx` 与 `library.json` 供备份或交给别的编辑器，原件保留。
 
-### 灵感便签（R10）
-写作页右侧常驻一枚小标签（`✦ 灵感`），点开是一列便签：随手写一句画面 / 对白 / 转折，`Ctrl/Cmd + Enter` 记下，
-带时间戳与删除按钮；数据存在 IndexedDB 的 `notes` store，随书库一起进导出与文件夹备份。
-- **不挡正文**：便签列固定在写作面右缘、收起时只有一枚标签；展开时编辑器自动把右侧留白从 88px 扩到 212px
-  （`notesLane` → `applyDockLane()`），文本列重新居中排版，任何字都不会被盖住。
+### 灵感便签（R10 / R11 改为纯色整页）
+写作页右侧常驻一枚小标签（`✦ 灵感`）。点开后是**一整页纯色写作面**：没有标题、没有计数、没有按钮，
+只有一个通栏输入框，背景就是当前主题的纸色（跟随九套主题，纯色无纹理）。
+- **怎么存**：`Ctrl/Cmd + Enter` 或点别处（失焦）即写回；`Esc` 收起。内容存在 IndexedDB 的 `notes` store，
+  随书库一起进导出与文件夹备份。
+- **一页一本书**：整页内容在打开时由该书的便签合并而成，保存时折回一条，所以下次打开看到的就是同一份文本，
+  不会有列表、时间戳这些额外东西。
+- **不再占正文留白**：R10 的浮动便签列会给正文让出 212px；改成整页后编辑器的右侧留白恢复为坞的 88px，
+  文本列重新居中（`notesLane` 固定为 `false`）。
 - 沉浸模式下不渲染（沉浸是纯写作画布）。
 
-### 收件箱（R9）
+### 收件箱（R9，R11 修 163/126）
 - 首页右上「收件箱」卡片读收件箱最近 12 封，显示发件人 / 主题 / 摘要 / 未读点；`inbox.list` 是真实 IMAP 往返。
 - 零依赖 IMAP 客户端 `lib/imap.js`（只用 `node:net` / `node:tls`）：993 直连 TLS，143 强制 STARTTLS；
   自签证书先记录 `certBypassed` 再降级（与 SMTP 同一套错误码与中文提示）。
@@ -267,6 +320,13 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
   大多数作者只有一个邮箱，不必再学一套服务器地址。
 - **「已关闭」与「连不上」分开显示**：`enabled:false` 时宿主根本不发 IMAP 请求，首页说「收件箱已关闭」并给去设置的入口；
   认证失败则原样显示服务器返回的那句话 + 授权码建议，绝不把失败画成「没有回信」。
+- **网易 `Unsafe Login`（R11 修复）**：163 / 126 会拒绝没有声明客户端身份的会话 ——
+  `LOGIN` 成功之后 `SELECT INBOX` 直接回 `NO SELECT Unsafe Login. Please contact kefu@188.com for help`。
+  旧代码把这段文本里的 `login` 匹配成「认证失败」，把人引去查密码，方向完全错了。
+  现在 `Session.identify()` 在 `LOGIN` 之后、任何 `SELECT` 之前发送 RFC 2971 的
+  `ID ("name" "novel-writer" "version" "1.2.0" …)`；命令失败只记 `idStatus` 不抛（ID 是可选命令），
+  但 `command()` 里新增了 `unsafe login` 的专门分支，命中时返回 `imap-id-required` 而不是 `imap-auth-failed`，
+  提示语也改成「这是网易对未声明身份客户端的封锁，插件已自动握手；仍失败请把本客户端加入白名单或改用 QQ / Gmail」。
 
 ### 邮件服务器自愈（R5）
 `lib/smtp.js` 的 `diagnose()` 在「测试连接」时按 **(465 SSL) → (587 STARTTLS) → (25 明文)** 顺序试三种形态，
@@ -276,23 +336,26 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
 
 ## 3. 验收状态
 
-> **第十轮（R10）按要求「不执行测试」**：本轮改造只做了构建、语法校验、bundle 加载校验，以及宿主接口的连通性冒烟；
+> **第十一轮（R11）按要求「不执行测试」**：本轮改造只做了构建、语法校验、bundle 加载校验，以及宿主接口的连通性冒烟；
 > 界面上的点击验收由用户在真实 Harness 里自行完成。
 >
 > | 检查 | 命令 / 方式 | 结果 |
 > | --- | --- | --- |
-> | 每个 client part 语法 | `node --check client/src/*.js`（`00-boot`/`99-end` 为 factory 包装，单独 check 必然失败，属预期） | 17 个真实 part 全部 exit 0 |
-> | 构建产物语法 | `node scripts/build-client.mjs` + `node --check client/client.js` | **19 parts / 656331 bytes**（文件 676909 字节），exit 0 |
+> | 每个 client part 语法 | `node --check client/src/*.js`（`00-boot`/`99-end` 为 factory 包装，单独 check 必然失败，属预期） | 19 个真实 part 全部 exit 0 |
+> | 构建产物语法 | `node scripts/build-client.mjs` + `node --check client/client.js` | **19 parts / 664874 bytes**，exit 0 |
 > | **bundle 能否被加载** | `node scripts/verify-client-load.mjs`（构建脚本自动跑） | `ok (id=@local/novel-writer, inject=["slots"])` |
+> | Host 模块语法 | `node --check index.js` + 12 个 `lib/*.js` | 全部 exit 0 |
 > | CSS 模板串完整性 | 自写扫描器查每个 `NW.CSS_PARTS.push(` 的闭合 | `ALL CSS TEMPLATES OK` |
 > | 图标完整性 | 比对 `42-icons.js` 的 PATHS 与全仓 `NW.icon(...)` 调用 | 定义 48 个，引用 26 个，缺失 **0** |
 > | 主题接线 | 扫三处主题声明（编辑器 / 外壳 / 设置项） | 九套 id 三处一致：`harness claude card eye night ink newspaper magazine guofeng` |
-> | Host 模块语法 | `node --check index.js` + 12 个 `lib/*.js` | 全部 exit 0 |
 > | 期刊多分类邮箱（离线） | `await list()` + `resolveEmail()` | 79 家中 **16 家带变体**，共 **32 条**按字数区间的收稿邮箱 |
-> | **落盘 docx 往返** | `library.mirror({encrypt:true})` → `readSnapshot` → `decryptTo` | 目录内是 `测试书.docx.nwe`；解密出 `测试书.docx`（4260B，`PK\x03\x04`，含 `第一章` / `正文一`）与 `library.json`；快照取回 `novels 1 / chapters 1 / settings.theme claude` |
+> | **落盘 docx 往返** | `library.mirror({encrypt:true})` → `readSnapshot` → `decryptTo` | 目录内是 `测试书.docx.nwe`；解密出 `测试书.docx`（4260B，`PK\x03\x04`，含 `第一章` / `正文一`）与 `library.json` |
 > | 解密副本可打开 | `unzipSync` 解析镜像出的 docx | 9 个部件齐全（document / styles / settings / footer / rels / core / app） |
-> | 期刊库自检（离线） | `selftest` | 内置 **79 家** |
+> | docx 版式结构（离线） | `buildDocx` + `unzipSync` 读 `word/document.xml` | 正文 `w:sz 28`（14pt）、首行缩进 560 twips、`第一章` 紧跟作者行、**相邻分页折叠**、空章跳过 |
+| 期刊库自检（离线） | `selftest` | 内置 **79 家** |
 > | secrets / docx / epub / webServer | `selftest` | 8 项全 ok |
+> | GitHub 工具链 | `.tools\git\cmd\git.exe --version` / `.tools\bin\gh.exe --version` | `2.56.0.windows.2` / `2.103.0`，可执行 |
+> | 本地仓库 | `git log --oneline` | 已提交（`.tools/` 被 `.gitignore` 忽略）；**推送未完成**，见下 |
 >
 > ### 为什么多了一个 `verify-client-load.mjs`
 >
@@ -307,14 +370,17 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
 
 | 变了什么 | 现在在哪 |
 | --- | --- |
-| 顶部工具栏整条没有 | 侧栏 topbar 六个图标 + 浮动坞「更多」组 |
+| 顶部工具栏整条没有 | 侧栏 topbar 六个图标 + 右下浮动坞（只剩 AI 校对 / 一键排版 / 投稿） |
 | 打开插件先看到首页 | 首页四张卡（含收件箱）；点章节 / 继续写作才进编辑器 |
 | 设置不再是长滚动 | 左导航 + 右内容，右栏自己滚 |
 | 投稿向导是三步 | 选小说 → 选期刊 → 邮件预览（预览页所有字段都能改） |
 | 主题九套 | 设置·外观，色块两行（含 R10 新增「杂志」） |
-| **云备份没有了** | 改成「自动保存与恢复」：选本地文件夹，改动即写加密 `.md.nwe` |
-| **保存默认加密** | 设置·导出与文件里可以关，关掉后写的是明文 `.md` |
+| **云备份没有了** | 改成「自动保存与恢复」：选本地文件夹，改动即写加密 `.docx.nwe` |
+| **保存默认加密** | 设置·导出与文件里可以关，关掉后写的是明文 `.docx` |
 | 图标换了 | 全部内联 SVG，跟随 `color` |
+| **插件叫「精神空间」** | 侧栏按钮、锁屏标题、首页标题都换了；包名/entryId 仍是 `novel-writer` |
+| **灵感便签是整页** | 写作页右缘 `✦` 点开是纯色通栏，不再是浮动列表 |
+| **光标可调** | 设置·外观：粗细 / 颜色 / 闪烁 |
 
 ### 历史验收数字（R2 / R3，仍可复跑但选择器部分已失效）
 
@@ -373,7 +439,7 @@ novel-writer/
 │  ├─ pdf.js                docxToPdf（officeToPdf → libreoffice-kit 回退）
 │  └─ import-parse.js       parseImport（txt/md/docx/epub，GB18030 回退）
 ├─ client/
-│  ├─ client.js             构建产物（勿手改，19 parts 拼接 / 656331 bytes）
+│  ├─ client.js             构建产物（勿手改，19 parts 拼接 / 664874 bytes）
 │  └─ src/                  00→99 按文件名字典序拼接
 │     ├─ 00-boot / 99-end        __ModuleLoader__ 封装与 apply 导出
 │     ├─ 05-css                  设计 token 层（16/14/13px、圆角、控件高度、间距、阴影）
@@ -393,8 +459,10 @@ novel-writer/
 │     ├─ 96-motion               动效 token 与 keyframes（nw-fade-up / toast-in / slide / pop）
 │     ├─ 97-theme               精修层（焦点环/模态/空态/滑块/色块/响应式）
 │     └─ 98-shell-theme         按 data-theme 重映射 --dsw-alias-*，让外壳跟随阅读主题
-├─ locale/{zh,en}.json      侧栏与面板标题
+├─ locale/{zh,en}.json      侧栏与面板标题（「精神空间」/ Mindspace）
 ├─ icon.svg                 侧栏图标
+├─ setup-github.cmd         双击即可：登录 → 建仓 → 推送（用 .tools 里的便携版 git/gh）
+├─ .tools/                  便携版 Git 2.56 与 GitHub CLI 2.103（被 .gitignore 忽略，不进仓库）
 ├─ docs/CONTRACT.md         全项目接口契约（文件归属、方法表、命名空间）
 ├─ docs/CONTRACT-R3.md      第三轮改造契约（主题/光标/坞/侧栏/导出/投稿/加密）
 ├─ docs/CONTRACT-R5.md      第五轮改造契约（期刊库/投稿四步/八主题/欢迎页/图标）
@@ -425,3 +493,7 @@ body 为 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`，错误绝不�
 15. **SMTP / IMAP 只实现了明文 / STARTTLS 与 AUTH PLAIN/LOGIN**：OAuth2（Gmail 现代登录、Outlook）不支持，必须改用应用专用密码；服务端 15–20 秒墙钟超时，超时即失败不重试。
 16. **投稿记录只存在本机** `DSH_HOME/novel-writer/submissions.json`（最近 50 条），R5 已加入状态流转（`sent / pending / accepted / rejected / published / withdrawn`），但**不与期刊系统对接**——真正送达仍然是一封你确认后发出的邮件，状态需要你自己在「投稿管理」里更新。
 17. **收件箱只读最近 12 封的头部与 600 字节摘要**，不下载附件、不回信、不删除；被墙或服务器限流时首页会显示服务器原话而不是「没有回信」。Gmail 需要先在网页端开启 IMAP 并生成应用专用密码。
+18. **163 / 126 的 `Unsafe Login` 可能仍然存在**：R11 已补 RFC 2971 `ID` 握手（`name=novel-writer`），但网易的白名单是按客户端名审核的，握手之后仍可能被拒。此时错误码是 `imap-id-required`（不再是「密码错」），请按提示把客户端加入白名单，或换 QQ / Gmail 收信。QQ 邮箱的 IMAP 需要在网页端「设置 → 账户」里手动开启。
+19. **导出会跳过没有正文的章节**：只写了标题、正文还空着的章节（大纲占位）在 docx / epub / txt 里不会出现，否则会留下「一整页只有一个标题」或者干脆一页空白。这一条在 R11 定下，先前版本会把空章也排进去。
+19. **期刊「删除」是写墓碑而不是物理删除**：内置 79 家来自代码里的常量表，若只从用户覆盖层移除，下次 `merge()` 会把它们复活。墓碑存在 `settings.json` 的 `journals` 键里，跟着 `DSH_HOME` 走；换机不拷这个文件，删除会「复原」。
+20. **GitHub 推送需要你自己跑一次 `setup-github.cmd`**：本机到 `github.com` 的连接不稳定（`api.github.com` 正常，但 `github.com/login/device/code` 反复超时），OAuth 设备流在这里完不成。脚本里的 Token 方式（方式 B）不受此影响。另外仓库名默认是 `novel-writer`，若已被占用，`gh repo create` 会失败，改脚本第 20 行的 `REPO=` 即可。

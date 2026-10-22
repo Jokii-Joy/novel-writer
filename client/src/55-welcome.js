@@ -564,12 +564,16 @@
 .nw-welcome-inboxbusy{padding:4px 0;}
 .nw-welcome-inboxerr{color:var(--nw-danger);}
 /* .nw-link is written for anchors; on a <button> the UA background/border/padding
-   have to be cleared or the refresh link renders as a grey pill. */
+   have to be cleared or the refresh link renders as a grey pill.
+   No underline here: on the home screen these are inline actions sitting inside
+   a text line, and a rule under them reads as a broken border rather than as a
+   link. Colour + hover is enough. */
+.nw-welcome .nw-link{border-bottom:0;text-decoration:none;color:var(--nw-brand);}
 .nw-welcome button.nw-link{
   padding:0;background:none;border:0;cursor:pointer;font-family:inherit;
-  border-bottom:1px solid color-mix(in srgb, var(--nw-brand) 30%, transparent);
+  border-bottom:0;text-decoration:none;color:var(--nw-brand);
 }
-.nw-welcome button.nw-link:hover{border-bottom-color:var(--nw-brand);}
+.nw-welcome button.nw-link:hover{text-decoration:underline;text-underline-offset:2px;}
 .nw-welcome button.nw-link:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
 
 /* Status badge — one shape, five tones; the tones ride the alias state tokens

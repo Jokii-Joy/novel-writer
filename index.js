@@ -18,7 +18,9 @@
 import { registerRoutes } from './lib/routes.js';
 
 export const name = 'novel-writer';
-export const version = '1.0.0';
+// Kept in step with package.json by hand: `ping` reports this, and a stale value
+// makes it impossible to tell which build the running host actually loaded.
+export const version = '1.2.0';
 
 /** Diagnostic surface read by `selftest` so a broken mount is visible. */
 const state = { registered: false, error: null, mountedAt: 0 };
