@@ -41,10 +41,24 @@ function readToken() {
 const token = readToken();
 if (!token) {
   console.error('没有找到 GitHub token：请重跑 setup-github.cmd，或设置 GITHUB_TOKEN。');
-  process.exit(1);
+  await halt();
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Stop the script without crashing.
+ *
+ * process.exit() aborts while fetch's socket is still closing, which shows up
+ * as "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)" plus a 0xC0000409
+ * exit code in the .cmd window. Every failure site already printed its reason,
+ * so we only set the code and wait on a promise that never resolves: Node then
+ * finishes the event loop on its own and exits with that code.
+ */
+function halt() {
+  process.exitCode = 1;
+  return new Promise(() => {});
+}
 
 /** One API call with plenty of retries — the link here is flaky but not dead. */
 async function api(method, url, body, tries = 8) {
@@ -81,7 +95,7 @@ async function api(method, url, body, tries = 8) {
 const me = await api('GET', 'https://api.github.com/user');
 if (me.status !== 200) {
   console.error('token 无效或权限不足：', me.status, JSON.stringify(me.json).slice(0, 300));
-  process.exit(1);
+  await halt();
 }
 const user = me.json.login;
 console.log(`已认证：${user}`);
@@ -99,7 +113,7 @@ if (probe.status === 404) {
   });
   if (created.status !== 201) {
     console.error('创建仓库失败：', created.status, JSON.stringify(created.json).slice(0, 400));
-    process.exit(1);
+    await halt();
   }
   console.log(`已创建 https://github.com/${full}`);
 } else if (probe.status === 200) {
@@ -107,7 +121,7 @@ if (probe.status === 404) {
   console.log(`仓库已存在：https://github.com/${full}`);
 } else {
   console.error('查询仓库失败：', probe.status, JSON.stringify(probe.json).slice(0, 300));
-  process.exit(1);
+  await halt();
 }
 
 // Upload only what git tracks: .tools/ and other ignored paths stay local.
@@ -130,7 +144,7 @@ for (const rel of files) {
   });
   if (blob.status !== 201) {
     console.error(`上传失败 ${rel}：`, blob.status, JSON.stringify(blob.json).slice(0, 200));
-    process.exit(1);
+    await halt();
   }
   entries.push({ path: rel.split(path.sep).join('/'), mode: '100644', type: 'blob', sha: blob.json.sha });
   console.log(`  ${rel} (${data.length}B)`);
@@ -139,7 +153,7 @@ for (const rel of files) {
 const tree = await api('POST', `https://api.github.com/repos/${full}/git/trees`, { tree: entries });
 if (tree.status !== 201) {
   console.error('创建目录树失败：', tree.status, JSON.stringify(tree.json).slice(0, 300));
-  process.exit(1);
+  await halt();
 }
 
 // Keep history when the branch already exists.
@@ -154,7 +168,7 @@ const commit = await api('POST', `https://api.github.com/repos/${full}/git/commi
 });
 if (commit.status !== 201) {
   console.error('创建提交失败：', commit.status, JSON.stringify(commit.json).slice(0, 300));
-  process.exit(1);
+  await halt();
 }
 
 if (parents.length === 0) {
@@ -164,7 +178,7 @@ if (parents.length === 0) {
   });
   if (made.status !== 201) {
     console.error('创建分支失败：', made.status, JSON.stringify(made.json).slice(0, 300));
-    process.exit(1);
+    await halt();
   }
 } else {
   const moved = await api('PATCH', `https://api.github.com/repos/${full}/git/refs/heads/${BRANCH}`, {
@@ -173,7 +187,7 @@ if (parents.length === 0) {
   });
   if (moved.status !== 200) {
     console.error('更新分支失败：', moved.status, JSON.stringify(moved.json).slice(0, 300));
-    process.exit(1);
+    await halt();
   }
 }
 
