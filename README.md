@@ -93,19 +93,23 @@ CSS 是用模板字符串写的，注释里多写一个反引号就会让整块�
 本机没有全局安装 git / gh，所以工具是**便携版**放在 `.tools/`（已被 `.gitignore` 忽略，不进仓库）：
 
 - `.tools/git/` — PortableGit 2.56（`git.exe`）
-- `.tools/bin/gh.exe` — GitHub CLI 2.103
+- `.tools/gh-token.txt` — 你的 GitHub Token（同样被忽略，**永远不要提交**）
 
-**手动步骤只有一个**：双击仓库根目录的 **`setup-github.cmd`**。
+**手动步骤只有一个**：双击仓库根目录的 **`setup-github.cmd`**，按提示粘贴一次 Token。
 
-脚本会自动：把 `.tools` 加进本次会话的 `PATH` → 让你选登录方式（A 浏览器 / B 粘贴 Token）→
-读账号名并补 `git config user.name/email` → `git init -b main` + 提交 → `gh repo create --public --push`，
-最后打印仓库地址。**无需管理员权限，不改系统环境变量，不装任何东西到系统目录。**
+脚本会：`git init -b main` + 提交 → 用 Token 调 `api.github.com` 建仓库 → 逐个上传被 git 跟踪的文件
+（blobs → tree → commit → ref）→ 打印仓库地址。**无需管理员权限，不改系统环境变量，不装任何东西到系统目录。**
 
-> ⚠️ 这台机器到 `github.com` 的连接不稳定（`api.github.com` 正常，但 `github.com/login/device/code`
-> 反复超时）。若浏览器登录卡住，选方式 B：在 https://github.com/settings/tokens 生成一个
-> 勾了 `repo` 的 classic token 粘进去即可。本地提交已经做好，网络恢复后重跑脚本会自动续上。
+> ⚠️ 为什么不用 `git push`：这台机器到 `github.com` 的连接是间歇性的（`api.github.com` 一直正常，
+> 但 `github.com/login/device/code` 会成片超时）。`git push` 和浏览器 OAuth 都要访问 `github.com`，
+> 所以随机失败。`tools/publish-github.mjs` 改走 REST API，**完全不碰 `github.com`**，只访问
+> `api.github.com`，结果与 push 等价（同样的 tree/commit）。每个请求自带重试。
+>
+> Token 只需要 `repo` 权限：打开 https://github.com/settings/tokens/new?scopes=repo&description=mindspace
+> 生成 classic token，粘进脚本即可。想换仓库名就改 `setup-github.cmd` 里的 `REPO=`。
 
 也可以完全不跑脚本，用 GitHub 网页「Upload files」把这个目录（除 `.tools/`）传上去。
+
 
 ---
 
@@ -354,7 +358,7 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
 > | docx 版式结构（离线） | `buildDocx` + `unzipSync` 读 `word/document.xml` | 正文 `w:sz 28`（14pt）、首行缩进 560 twips、`第一章` 紧跟作者行、**相邻分页折叠**、空章跳过 |
 > | 期刊库自检（离线） | `selftest` | 内置 **79 家** |
 > | secrets / docx / epub / webServer | `selftest` | 8 项全 ok |
-> | GitHub 工具链 | `.tools\git\cmd\git.exe --version` / `.tools\bin\gh.exe --version` | `2.56.0.windows.2` / `2.103.0`，可执行 |
+> | GitHub 工具链 | `.tools\git\cmd\git.exe --version` | `2.56.0.windows.2`，可执行 |
 > | 本地仓库 | `git log --oneline` | 已提交三个 commit（`.tools/` 被 `.gitignore` 忽略）；**推送需要一次 GitHub 登录**，见下 |
 >
 > ### 为什么多了一个 `verify-client-load.mjs`
@@ -461,7 +465,7 @@ novel-writer/
 │     └─ 98-shell-theme         按 data-theme 重映射 --dsw-alias-*，让外壳跟随阅读主题
 ├─ locale/{zh,en}.json      侧栏与面板标题（「精神空间」/ Mindspace）
 ├─ icon.svg                 侧栏图标
-├─ setup-github.cmd         双击即可：登录 → 建仓 → 推送（用 .tools 里的便携版 git/gh）
+├─ setup-github.cmd         双击即可：存 Token → 建仓 → 上传（走 api.github.com，不碰 github.com）
 ├─ .tools/                  便携版 Git 2.56 与 GitHub CLI 2.103（被 .gitignore 忽略，不进仓库）
 ├─ docs/CONTRACT.md         全项目接口契约（文件归属、方法表、命名空间）
 ├─ docs/CONTRACT-R3.md      第三轮改造契约（主题/光标/坞/侧栏/导出/投稿/加密）
@@ -496,4 +500,4 @@ body 为 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`，错误绝不�
 18. **163 / 126 的 `Unsafe Login` 可能仍然存在**：R11 已补 RFC 2971 `ID` 握手（`name=novel-writer`），但网易的白名单是按客户端名审核的，握手之后仍可能被拒。此时错误码是 `imap-id-required`（不再是「密码错」），请按提示把客户端加入白名单，或换 QQ / Gmail 收信。QQ 邮箱的 IMAP 需要在网页端「设置 → 账户」里手动开启。
 19. **导出会跳过没有正文的章节**：只写了标题、正文还空着的章节（大纲占位）在 docx / epub / txt 里不会出现，否则会留下「一整页只有一个标题」或者干脆一页空白。这一条在 R11 定下，先前版本会把空章也排进去。
 20. **期刊「删除」是写墓碑而不是物理删除**：内置 79 家来自代码里的常量表，若只从用户覆盖层移除，下次 `merge()` 会把它们复活。墓碑存在 `settings.json` 的 `journals` 键里，跟着 `DSH_HOME` 走；换机不拷这个文件，删除会「复原」。
-21. **GitHub 推送需要你自己跑一次 `setup-github.cmd`**：本机到 `github.com` 的连接不稳定（`api.github.com` 正常，但 `github.com/login/device/code` 反复超时），OAuth 设备流在这里完不成。脚本里的 Token 方式（方式 B）不受此影响。另外仓库名默认是 `novel-writer`，若已被占用，`gh repo create` 会失败，改脚本第 23 行的 `REPO=` 即可。
+21. **GitHub 上传需要你自己跑一次 `setup-github.cmd` 并粘一次 Token**：本机到 `github.com` 的连接间歇性中断（`api.github.com` 一直正常），所以浏览器 OAuth 设备流和 `git push` 都会随机失败。脚本因此改走 REST API，只访问 `api.github.com`；若某次仍失败，网络恢复后重跑即可（本地提交已保存）。仓库名默认 `novel-writer`，想换就改脚本里的 `REPO=`。
