@@ -342,7 +342,7 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
 > | 检查 | 命令 / 方式 | 结果 |
 > | --- | --- | --- |
 > | 每个 client part 语法 | `node --check client/src/*.js`（`00-boot`/`99-end` 为 factory 包装，单独 check 必然失败，属预期） | 19 个真实 part 全部 exit 0 |
-> | 构建产物语法 | `node scripts/build-client.mjs` + `node --check client/client.js` | **19 parts / 664874 bytes**，exit 0 |
+> | 构建产物语法 | `node scripts/build-client.mjs` + `node --check client/client.js` | **19 parts / 665094 bytes**，exit 0 |
 > | **bundle 能否被加载** | `node scripts/verify-client-load.mjs`（构建脚本自动跑） | `ok (id=@local/novel-writer, inject=["slots"])` |
 > | Host 模块语法 | `node --check index.js` + 12 个 `lib/*.js` | 全部 exit 0 |
 > | CSS 模板串完整性 | 自写扫描器查每个 `NW.CSS_PARTS.push(` 的闭合 | `ALL CSS TEMPLATES OK` |
@@ -352,10 +352,10 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
 > | **落盘 docx 往返** | `library.mirror({encrypt:true})` → `readSnapshot` → `decryptTo` | 目录内是 `测试书.docx.nwe`；解密出 `测试书.docx`（4260B，`PK\x03\x04`，含 `第一章` / `正文一`）与 `library.json` |
 > | 解密副本可打开 | `unzipSync` 解析镜像出的 docx | 9 个部件齐全（document / styles / settings / footer / rels / core / app） |
 > | docx 版式结构（离线） | `buildDocx` + `unzipSync` 读 `word/document.xml` | 正文 `w:sz 28`（14pt）、首行缩进 560 twips、`第一章` 紧跟作者行、**相邻分页折叠**、空章跳过 |
-| 期刊库自检（离线） | `selftest` | 内置 **79 家** |
+> | 期刊库自检（离线） | `selftest` | 内置 **79 家** |
 > | secrets / docx / epub / webServer | `selftest` | 8 项全 ok |
 > | GitHub 工具链 | `.tools\git\cmd\git.exe --version` / `.tools\bin\gh.exe --version` | `2.56.0.windows.2` / `2.103.0`，可执行 |
-> | 本地仓库 | `git log --oneline` | 已提交（`.tools/` 被 `.gitignore` 忽略）；**推送未完成**，见下 |
+> | 本地仓库 | `git log --oneline` | 已提交三个 commit（`.tools/` 被 `.gitignore` 忽略）；**推送需要一次 GitHub 登录**，见下 |
 >
 > ### 为什么多了一个 `verify-client-load.mjs`
 >
@@ -439,7 +439,7 @@ novel-writer/
 │  ├─ pdf.js                docxToPdf（officeToPdf → libreoffice-kit 回退）
 │  └─ import-parse.js       parseImport（txt/md/docx/epub，GB18030 回退）
 ├─ client/
-│  ├─ client.js             构建产物（勿手改，19 parts 拼接 / 664874 bytes）
+│  ├─ client.js             构建产物（勿手改，19 parts 拼接 / 665094 bytes）
 │  └─ src/                  00→99 按文件名字典序拼接
 │     ├─ 00-boot / 99-end        __ModuleLoader__ 封装与 apply 导出
 │     ├─ 05-css                  设计 token 层（16/14/13px、圆角、控件高度、间距、阴影）

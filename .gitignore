@@ -1,4 +1,5 @@
-# Local toolchain (PortableGit + gh CLI) downloaded by setup-github.cmd.
+# Local toolchain (PortableGit, downloaded by setup-github.cmd) and the GitHub
+# token that script stores next to it — neither may ever be committed.
 .tools/
 
 # Editor / OS noise
