@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Novel Studio">
+  <defs>
+    <linearGradient id="nwPage" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f7efe0"/>
+      <stop offset="1" stop-color="#e2cfae"/>
+    </linearGradient>
+    <linearGradient id="nwQuill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4aa3df"/>
+      <stop offset="1" stop-color="#1f5f9e"/>
+    </linearGradient>
+  </defs>
+  <rect x="7" y="9" width="38" height="46" rx="5" fill="url(#nwPage)" stroke="#c2a884" stroke-width="1.6"/>
+  <rect x="12" y="16" width="28" height="2.4" rx="1.2" fill="#b9a284"/>
+  <rect x="12" y="23" width="28" height="2.4" rx="1.2" fill="#b9a284"/>
+  <rect x="12" y="30" width="20" height="2.4" rx="1.2" fill="#b9a284"/>
+  <rect x="12" y="37" width="24" height="2.4" rx="1.2" fill="#b9a284"/>
+  <path d="M47 54c8-5 12-15 12-27l-9 12-6 3z" fill="url(#nwQuill)"/>
+  <path d="M43 51c4-6 8-12 12-18l-3-9-7 15z" fill="#2b7fc4" opacity="0.65"/>
+  <path d="M40.5 49.5 46 56" stroke="#1f5f9e" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="47" cy="19" r="2.6" fill="#4aa3df" opacity="0.8"/>
+</svg>

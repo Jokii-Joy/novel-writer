@@ -1,0 +1,47 @@
+{
+  "name": "@local/novel-writer",
+  "version": "1.2.0",
+  "private": true,
+  "description": "精神空间 — 沉浸式小说写作工作台 for DeepSeek Harness: chapter tree, distraction-free editor with typewriter mode and configurable caret, nine reading themes, AI proofreading, one-click typesetting, import/export (txt/md/docx/epub/pdf), journal submission wizard with editable journal library, IMAP inbox and encrypted local auto-save.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "novel",
+    "writing",
+    "editor"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OWNER/novel-writer.git"
+  },
+  "homepage": "https://github.com/OWNER/novel-writer#readme",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "client/client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build-client.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}

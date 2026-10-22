@@ -1,0 +1,11 @@
+# Local toolchain (PortableGit + gh CLI) downloaded by setup-github.cmd.
+.tools/
+
+# Editor / OS noise
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Node leftovers (the plugin itself ships no node_modules)
+node_modules/
+npm-debug.log*
