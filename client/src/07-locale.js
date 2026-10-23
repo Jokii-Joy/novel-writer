@@ -187,6 +187,54 @@
     // R10 ⑥: every inbox a journal registers, not just the matching one
     '本稿用这个': 'For this manuscript',
     '该刊登记的收稿邮箱': 'Inboxes on file for this journal',
+    // R12 ①: the manuscript's own home button (the shelf header is hidden in
+    // immersive mode, so the paper needs its own exit).
+    '首页': 'Home',
+    '回到首页': 'Back to home',
+    // R12 ②: the critique column beside the manuscript
+    '修改建议': 'Suggestions',
+    '关闭建议': 'Close suggestions',
+    '建议重点': 'Focus',
+    '正在读这一章…': 'Reading this chapter…',
+    '开始审读': 'Review this chapter',
+    '重新审读': 'Review again',
+    '取消高亮': 'Clear highlights',
+    '节奏': 'Pacing',
+    '用词': 'Diction',
+    '画面': 'Imagery',
+    '对话': 'Dialogue',
+    '视角': 'Point of view',
+    // R12 ④: the inbox reader
+    '邮件': 'Mail',
+    '去投稿': 'Go to submissions',
+    '正在从服务器读取这封邮件…': 'Fetching this message from the server…',
+    '这封邮件没有编号，无法读取': 'This message has no id and cannot be read',
+    '服务器没有返回正文': 'The server returned no body',
+    '（这封邮件没有可显示的正文）': '(this message has no displayable body)',
+    '（无主题）': '(no subject)',
+    // R12 ②: the critique column's empty and boundary states
+    '这一章还没有正文': 'This chapter has no text yet',
+    '获取修改建议失败': 'Could not get suggestions',
+    '模型要通读全文，通常十几秒。': 'The model reads the whole chapter — usually ten seconds or so.',
+    '让模型通读这一章，指出最值得改的地方。': 'Let the model read this chapter and point out what is worth changing.',
+    '建议是意见，不是自动替换；点一条会把原文滚到那一段。':
+      'Suggestions are opinions, not replacements — clicking one scrolls to that passage.',
+    '这一章没有被标出的明显问题。': 'Nothing obvious was flagged in this chapter.',
+    '换个重点再看看，或写下去。': 'Try another focus, or keep writing.',
+    '原文已改动，定位不到': 'Text changed — cannot locate',
+    '表达': 'Expression',
+    // Shared verbs and labels the shelf and empty states already use.
+    '重试': 'Retry',
+    '全部': 'All',
+    '书架': 'Shelf',
+    '导入小说': 'Import novels',
+    '更多操作': 'More actions',
+    '收起侧栏': 'Collapse sidebar',
+    '侧栏操作': 'Sidebar actions',
+    '创作台首页': 'Studio home',
+    '导出入口尚未接入': 'Export is not wired up yet',
+    '导入入口尚未接入': 'Import is not wired up yet',
+    '收起侧栏尚未接入': 'Sidebar collapse is not wired up yet',
   };
 
   const DICT = { zh: {}, en: EN };

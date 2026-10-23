@@ -3139,6 +3139,9 @@
         if (typeof p.onToast === 'function') p.onToast('请先选择一家期刊', 'info');
         return;
       }
+      // R12 ③: after the journal is picked the letter is already being built
+      // (runPrepare fires on entering step 3), so "下一步" lands straight on the
+      // preview instead of asking the author to press 生成 first.
       setStep(Math.min(3, step + 1));
     };
 
@@ -4028,6 +4031,119 @@
   };
 
   // =============================================================== Trash ====
+  /**
+   * 读信 (R12 ④) — the inbox rows were plain text and could not be opened.
+   *
+   * The list route only carries headers plus a 160-character snippet, so this
+   * dialog asks the host for the full body on mount. Two states matter:
+   * `loading` while the IMAP round trip runs (seconds, not milliseconds), and
+   * the failure state, which must show *why* — "读不到" alone leaves the writer
+   * unable to tell a network problem from an empty mailbox.
+   */
+  NW.dialogs.Mail = function Mail(props) {
+    const p = props || {};
+    const seed = (p.dialog && p.dialog.message) || p.message || {};
+    const uid = Number((p.dialog && p.dialog.uid) || seed.uid || 0);
+    const [state, setState] = useState({ loading: true, message: null, error: '', hint: '' });
+
+    useEffect(() => {
+      let alive = true;
+      if (!uid) {
+        setState({ loading: false, message: null, error: '这封邮件没有编号，无法读取', hint: '' });
+        return undefined;
+      }
+      NW.io.inbox
+        .read(uid)
+        .then((data) => {
+          if (!alive) return;
+          const message = data && data.message ? data.message : null;
+          setState({
+            loading: false,
+            message: message,
+            error: String((data && data.error) || (message ? '' : '服务器没有返回正文')),
+            hint: String((data && data.hint) || ''),
+          });
+        })
+        .catch((err) => {
+          if (!alive) return;
+          setState({ loading: false, message: null, error: errText(err, '读取邮件失败'), hint: '' });
+        });
+      return () => {
+        alive = false;
+      };
+    }, [uid]);
+
+    // The headers are already in the list payload, so show them while the body
+    // is still being fetched — the dialog never opens empty.
+    const header = state.message || seed;
+    const subject = String(header.subject || '（无主题）');
+    const from = String(header.from || header.address || '未知发件人');
+    const date = String(header.date || '');
+
+    let body;
+    if (state.loading) {
+      body = h(
+        'div',
+        { className: 'nw-mail-loading' },
+        NW.ui.spinner(),
+        h('span', null, NW.t('正在从服务器读取这封邮件…')),
+      );
+    } else if (state.error) {
+      body = h(
+        'div',
+        { className: 'nw-mail-loading' },
+        h('span', { style: { color: 'var(--dsw-alias-state-error-primary)' } }, state.error),
+        state.hint ? h('span', { className: 'nw-hint-block' }, state.hint) : null,
+        NW.ui.btn({
+          kind: 'primary',
+          onClick: () => {
+            setState({ loading: true, message: null, error: '', hint: '' });
+            NW.io.inbox
+              .read(uid)
+              .then((data) => {
+                const message = data && data.message ? data.message : null;
+                setState({
+                  loading: false,
+                  message: message,
+                  error: String((data && data.error) || (message ? '' : '服务器没有返回正文')),
+                  hint: String((data && data.hint) || ''),
+                });
+              })
+              .catch((err) => setState({ loading: false, message: null, error: errText(err, '读取邮件失败'), hint: '' }));
+          },
+          children: NW.t('重试'),
+        }),
+      );
+    } else {
+      body = h('pre', { className: 'nw-mail-body' }, String(state.message.text || '（这封邮件没有可显示的正文）'));
+    }
+
+    const meta = h(
+      'div',
+      { className: 'nw-mail-meta' },
+      h('span', { className: 'nw-mail-subject' }, subject),
+      h('span', { className: 'nw-mail-from' }, from),
+      date ? h('span', { className: 'nw-mail-date' }, date) : null,
+    );
+
+    return modal(
+      NW.t('邮件'),
+      h('div', { className: 'nw-mail' }, meta, body),
+      [
+        closeBtn(p),
+        h('span', { style: { flex: '1 1 auto' } }),
+        NW.ui.btn({
+          onClick: () => {
+            if (typeof p.onReply === 'function') p.onReply(header);
+          },
+          children: NW.t('去投稿'),
+        }),
+      ],
+      '760px',
+      p.onClose,
+    );
+  };
+
   NW.dialogs.Trash = function Trash(props) {
     const p = props || {};
     const [rows, setRows] = useState(null);

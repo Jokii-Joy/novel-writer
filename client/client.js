@@ -500,6 +500,54 @@ window.__ModuleLoader__.load({
     // R10 ⑥: every inbox a journal registers, not just the matching one
     '本稿用这个': 'For this manuscript',
     '该刊登记的收稿邮箱': 'Inboxes on file for this journal',
+    // R12 ①: the manuscript's own home button (the shelf header is hidden in
+    // immersive mode, so the paper needs its own exit).
+    '首页': 'Home',
+    '回到首页': 'Back to home',
+    // R12 ②: the critique column beside the manuscript
+    '修改建议': 'Suggestions',
+    '关闭建议': 'Close suggestions',
+    '建议重点': 'Focus',
+    '正在读这一章…': 'Reading this chapter…',
+    '开始审读': 'Review this chapter',
+    '重新审读': 'Review again',
+    '取消高亮': 'Clear highlights',
+    '节奏': 'Pacing',
+    '用词': 'Diction',
+    '画面': 'Imagery',
+    '对话': 'Dialogue',
+    '视角': 'Point of view',
+    // R12 ④: the inbox reader
+    '邮件': 'Mail',
+    '去投稿': 'Go to submissions',
+    '正在从服务器读取这封邮件…': 'Fetching this message from the server…',
+    '这封邮件没有编号，无法读取': 'This message has no id and cannot be read',
+    '服务器没有返回正文': 'The server returned no body',
+    '（这封邮件没有可显示的正文）': '(this message has no displayable body)',
+    '（无主题）': '(no subject)',
+    // R12 ②: the critique column's empty and boundary states
+    '这一章还没有正文': 'This chapter has no text yet',
+    '获取修改建议失败': 'Could not get suggestions',
+    '模型要通读全文，通常十几秒。': 'The model reads the whole chapter — usually ten seconds or so.',
+    '让模型通读这一章，指出最值得改的地方。': 'Let the model read this chapter and point out what is worth changing.',
+    '建议是意见，不是自动替换；点一条会把原文滚到那一段。':
+      'Suggestions are opinions, not replacements — clicking one scrolls to that passage.',
+    '这一章没有被标出的明显问题。': 'Nothing obvious was flagged in this chapter.',
+    '换个重点再看看，或写下去。': 'Try another focus, or keep writing.',
+    '原文已改动，定位不到': 'Text changed — cannot locate',
+    '表达': 'Expression',
+    // Shared verbs and labels the shelf and empty states already use.
+    '重试': 'Retry',
+    '全部': 'All',
+    '书架': 'Shelf',
+    '导入小说': 'Import novels',
+    '更多操作': 'More actions',
+    '收起侧栏': 'Collapse sidebar',
+    '侧栏操作': 'Sidebar actions',
+    '创作台首页': 'Studio home',
+    '导出入口尚未接入': 'Export is not wired up yet',
+    '导入入口尚未接入': 'Import is not wired up yet',
+    '收起侧栏尚未接入': 'Sidebar collapse is not wired up yet',
   };
 
   const DICT = { zh: {}, en: EN };
@@ -3371,6 +3419,21 @@ window.__ModuleLoader__.load({
     return api('inbox.list', { limit: Number(input.limit) || 12 });
   }
 
+  /** One message in full, by uid. The list only carries a 160-char snippet. */
+  function inboxRead(uid) {
+    return api('inbox.read', { uid: Number(uid) || 0 });
+  }
+
+  /** Editorial advice (not typo fixes) on one chapter. */
+  function revise(input) {
+    const body = input && typeof input === 'object' ? input : {};
+    const payload = { text: String(body.text == null ? '' : body.text) };
+    if (body.provider) payload.provider = String(body.provider);
+    if (body.model) payload.model = String(body.model);
+    if (body.focus) payload.focus = String(body.focus);
+    return api('revise', payload);
+  }
+
   NW.apiUrl = apiUrl;
   NW.api = api;
 
@@ -3421,12 +3484,14 @@ window.__ModuleLoader__.load({
       test: imapTest,
       presets: imapPresets,
       list: inboxList,
+      read: inboxRead,
     },
   };
 
   NW.ai = {
     models: models,
     proofread: proofread,
+    revise: revise,
     selftest: selftest,
   };
 })();
@@ -4423,6 +4488,26 @@ window.__ModuleLoader__.load({
 }
 
 /* -------------------------------------------------------------- versions -- */
+/* 读信 (R12 ④). The body is a <pre> because a submission reply quotes the
+   manuscript verbatim — reflowing it would destroy the line breaks the editor
+   is referring to. */
+.nw-mail{display:flex;flex-direction:column;gap:var(--nw-sp-3);min-height:0;}
+.nw-mail-meta{
+  display:flex;flex-direction:column;gap:4px;
+  padding-bottom:var(--nw-sp-3);border-bottom:1px solid var(--nw-line-soft);
+}
+.nw-mail-subject{font-size:var(--nw-fs-base);font-weight:600;line-height:1.5;color:var(--nw-fg);word-break:break-word;}
+.nw-mail-from{font-size:var(--nw-fs-second);color:var(--nw-fg-soft);}
+.nw-mail-date{font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);}
+.nw-mail-body{
+  margin:0;max-height:52vh;overflow:auto;
+  font-family:var(--nw-reading-font,inherit);font-size:var(--nw-fs-second);line-height:1.85;
+  white-space:pre-wrap;word-break:break-word;color:var(--nw-fg);
+}
+.nw-mail-loading{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
+  min-height:180px;text-align:center;font-size:var(--nw-fs-second);color:var(--nw-fg-soft);
+}
 .nw-version-list{
   display:flex;flex-direction:column;max-height:46vh;overflow:auto;border-radius:var(--nw-r-card);
 }
@@ -6559,23 +6644,35 @@ window.__ModuleLoader__.load({
         'ul',
         { className: 'nw-welcome-subs' },
         inboxMessages.slice(0, 6).map((row, index) =>
+          // R12 ④: these rows used to be plain <li> text — the list looked
+          // clickable and did nothing. Each one is now a button that opens the
+          // mail in a reader dialog (headers + decoded body).
           NW.h(
             'li',
-            {
-              key: String(row.uid || row.messageId || index),
-              className: 'nw-welcome-sub' + (row.unseen ? ' nw-welcome-sub-unread' : ''),
-            },
+            { key: String(row.uid || row.messageId || index) },
             NW.h(
-              'span',
-              { className: 'nw-welcome-submain' },
-              NW.h('span', { className: 'nw-welcome-subtitle' }, String(row.subject || '（无主题）')),
+              'button',
+              {
+                type: 'button',
+                className: 'nw-welcome-sub nw-welcome-subbtn' + (row.unseen ? ' nw-welcome-sub-unread' : ''),
+                title: `${String(row.subject || '（无主题）')} — 点击阅读`,
+                onClick: () => {
+                  if (typeof p.onOpenMail === 'function') p.onOpenMail(row);
+                },
+              },
               NW.h(
                 'span',
-                { className: 'nw-welcome-submeta' },
-                `${String(row.from || row.address || '未知发件人')} · ${mailStamp(row.date)}`,
+                { className: 'nw-welcome-submain' },
+                NW.h('span', { className: 'nw-welcome-subtitle' }, String(row.subject || '（无主题）')),
+                NW.h(
+                  'span',
+                  { className: 'nw-welcome-submeta' },
+                  `${String(row.from || row.address || '未知发件人')} · ${mailStamp(row.date)}`,
+                ),
               ),
+              row.unseen ? NW.h('span', { className: 'nw-badge', 'data-tone': 'brand' }, tr('未读')) : null,
+              NW.h('span', { className: 'nw-welcome-subarrow', 'aria-hidden': 'true' }, NW.icon('caret', { size: 13 })),
             ),
-            row.unseen ? NW.h('span', { className: 'nw-badge', 'data-tone': 'brand' }, tr('未读')) : null,
           ),
         ),
       );
@@ -6738,6 +6835,25 @@ window.__ModuleLoader__.load({
 .nw-welcome-sub-unread{
   background:color-mix(in srgb, var(--nw-brand) 8%, var(--nw-sunken));
   box-shadow:inset 2px 0 0 var(--nw-brand);
+}
+
+/* R12 ④: the row is a real button now, so it needs the button resets that the
+   generic .nw-welcome-sub never had (it started life as a static li). */
+.nw-welcome-subbtn{
+  width:100%;border:1px solid transparent;font-family:inherit;text-align:left;
+  color:var(--nw-fg);cursor:pointer;
+  transition:background .16s ease,border-color .16s ease,transform .16s ease;
+}
+.nw-welcome-subbtn:hover{
+  border-color:var(--nw-line-strong);
+  background:color-mix(in srgb, var(--nw-fg) 6%, var(--nw-sunken));
+}
+.nw-welcome-subbtn:hover .nw-welcome-subarrow{opacity:1;transform:none;}
+.nw-welcome-subbtn:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
+.nw-welcome-subarrow{
+  display:inline-flex;flex:0 0 auto;color:var(--nw-fg-soft);
+  opacity:0;transform:translateX(-3px);
+  transition:opacity .16s ease,transform .16s ease;
 }
 .nw-welcome-sub-unread .nw-welcome-subtitle{font-weight:600;}
 .nw-welcome-inboxbusy{padding:4px 0;}
@@ -7287,6 +7403,22 @@ window.__ModuleLoader__.load({
   background:var(--nw-panel);border:1px solid var(--nw-panel-border);box-shadow:var(--nw-panel-shadow);
   color:var(--nw-btn-fg);font-size:12px;
 }
+/* 首页 — the only way back to the welcome screen from the writing surface.
+   Sits above the paper, not in DSH chrome, because in immersive mode the
+   toolbar is gone and Esc only leaves immersive, not the chapter. */
+.nw-homebtn{
+  position:absolute;top:10px;left:14px;z-index:8;
+  display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 11px 0 9px;
+  border-radius:999px;border:1px solid var(--nw-btn-border);
+  background:var(--nw-panel);color:var(--nw-btn-fg);
+  font-family:inherit;font-size:12px;line-height:1;cursor:pointer;
+  opacity:.55;transition:opacity .16s ease,background .16s ease,border-color .16s ease;
+}
+.nw-homebtn:hover{opacity:1;background:var(--nw-btn-hover);border-color:var(--nw-find-ring);}
+.nw-homebtn:focus-visible{opacity:1;outline:2px solid var(--nw-find-ring);outline-offset:2px;}
+.nw-homebtn > svg{width:14px;height:14px;flex:0 0 auto;}
+.nw-surface[data-immersive="1"] .nw-homebtn{opacity:.28;}
+.nw-surface[data-immersive="1"] .nw-homebtn:hover{opacity:1;}
 .nw-findbar .nw-find-row{display:flex;align-items:center;gap:6px;}
 .nw-findbar .nw-find-input{
   flex:1 1 auto;min-width:0;height:27px;padding:0 8px;border-radius:6px;
@@ -7332,6 +7464,9 @@ window.__ModuleLoader__.load({
     // Immersive writing surface: explicit prop wins, settings.immersive is the
     // fallback (the app ships it in DEFAULT_SETTINGS but does not pass the prop).
     const immersive = p.immersive === true || (p.immersive !== false && settings.immersive === true);
+    // R12 ①: the writing surface needs its own way home — the toolbar has no
+    // back button, and in immersive mode there is no toolbar at all.
+    const onHome = typeof p.onHome === 'function' ? p.onHome : null;
     /** 灵感便签 lane (R10): the app mounts the notes column beside the text. */
     const notesLane = p.notesLane === true && !immersive;
     /** Page width actually applied; immersive mode guarantees a wide canvas. */
@@ -9246,6 +9381,27 @@ window.__ModuleLoader__.load({
       },
       h('div', { className: 'nw-scroll', ref: scrollRef, tabIndex: -1 }, body),
       findBar,
+      onHome
+        ? h(
+            'button',
+            {
+              type: 'button',
+              className: 'nw-homebtn',
+              title: NW.t('回到首页'),
+              'aria-label': NW.t('回到首页'),
+              onClick: (ev) => {
+                // Blur first: leaving the textarea while a save is pending would
+                // otherwise re-enter this handler through the blur flush.
+                if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+                onHome();
+              },
+            },
+            // `home` lives in 42-icons.js — reusing it keeps the stroke weight and
+            // optical size identical to the shelf and toolbar icons.
+            h(NW.icon, { name: 'home', size: 14 }),
+            h('span', null, NW.t('首页')),
+          )
+        : null,
     );
   };
 })();
@@ -9261,6 +9417,10 @@ window.__ModuleLoader__.load({
   const LS_TYPE_SCALE = 'nw.typeScale.v3';
   const LS_SIDEBAR_AUTO = 'nw.sidebarAutoCollapsed';
   const LS_SHELF_OPEN = 'nw.shelfOpen';
+// 修改建议 column (R12 ②): the writer who opens the critique panel usually
+// wants it back next session, so both the toggle and the drag width persist.
+const LS_ADVICE_OPEN = 'nw.adviceOpen';
+const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   const LS_NOTES_OPEN = 'nw.notesOpen';
   const DEFAULT_WIDTH = 272;
   // Host layout: the shell renders `data-sidebar-collapsed` on its frame and
@@ -9272,6 +9432,57 @@ window.__ModuleLoader__.load({
   // layout (which has no top bar at all — Esc is the only way out).
   NW.CSS_PARTS.push(`
 .nw-main{position:relative;}
+/* R12 ②: 修改建议 is a column beside the manuscript, not a modal. A dialog
+   hides the text it is talking about; a column keeps the passage and the advice
+   on screen at once, so 「这一段」 can actually be looked at while reading why. */
+.nw-bench{display:flex;flex:1 1 auto;min-height:0;min-width:0;position:relative;}
+.nw-bench-paper{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;min-height:0;position:relative;}
+.nw-suggest{
+  flex:0 0 auto;display:flex;flex-direction:column;min-height:0;
+  width:336px;max-width:46vw;
+  border-left:1px solid var(--dsw-alias-border-l1);
+  background:var(--dsw-alias-bg-layer-1);
+  animation:nw-slide-in .18s var(--nw-ease,ease);
+}
+@keyframes nw-slide-in{from{opacity:0;transform:translateX(14px);}to{opacity:1;transform:none;}}
+.nw-suggest-head{
+  display:flex;align-items:center;gap:8px;flex:0 0 auto;
+  padding:10px 10px 8px 14px;border-bottom:1px solid var(--dsw-alias-border-l1);
+}
+.nw-suggest-title{font-size:14px;font-weight:600;color:var(--dsw-alias-label-primary);}
+.nw-suggest-count{font-size:12px;color:var(--dsw-alias-label-secondary);}
+.nw-suggest-body{flex:1 1 auto;min-height:0;overflow:auto;padding:10px;display:flex;flex-direction:column;gap:8px;}
+.nw-advice{
+  display:flex;flex-direction:column;gap:6px;padding:11px 12px;
+  border-radius:10px;border:1px solid var(--dsw-alias-border-l1);
+  background:var(--dsw-alias-bg-base);cursor:pointer;text-align:left;
+  font-family:inherit;
+  transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease;
+}
+.nw-advice:hover{border-color:var(--dsw-alias-border-l2);transform:translateY(-1px);}
+.nw-advice[data-active="1"]{border-color:var(--dsw-alias-brand-primary);box-shadow:inset 0 0 0 1px var(--dsw-alias-brand-primary);}
+.nw-advice-quote{
+  font-family:var(--nw-reading-font,inherit);font-size:13px;line-height:1.7;
+  color:var(--dsw-alias-label-secondary);
+  border-left:3px solid var(--dsw-alias-border-l2);padding-left:9px;
+  max-height:4.8em;overflow:hidden;
+}
+.nw-advice-issue{font-size:13px;font-weight:600;line-height:1.55;color:var(--dsw-alias-label-primary);}
+.nw-advice-do{font-size:13px;line-height:1.65;color:var(--dsw-alias-label-primary);}
+.nw-advice-kind{
+  align-self:flex-start;font-size:11px;line-height:1;padding:3px 7px;border-radius:999px;
+  background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);
+}
+.nw-advice-foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.nw-suggest-empty{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
+  flex:1 1 auto;padding:24px 18px;text-align:center;
+  color:var(--dsw-alias-label-secondary);font-size:13px;line-height:1.7;
+}
+.nw-suggest-foot{
+  flex:0 0 auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:9px 12px;border-top:1px solid var(--dsw-alias-border-l1);
+}
 /* R6: 收起侧栏 曾是一扇单向门 —— 仓库头部的收起按钮随侧栏一起消失，回来只能靠
    浮动坞（先点圆钮再点「显示目录」）。这个把手常驻在写作列左缘，任何时刻一次点击
    就能把目录要回来。沉浸模式不渲染它（沉浸是纯画布，Esc 退出）。 */
@@ -9291,6 +9502,7 @@ window.__ModuleLoader__.load({
   opacity:1;color:var(--dsw-alias-label-primary);padding-left:10px;
 }
 .nw-shelfrestore-txt{writing-mode:vertical-rl;letter-spacing:.2em;max-height:72px;overflow:hidden;}
+.nw-shelfrestore-ico{display:inline-flex;flex:0 0 auto;}
 .nw-dock{
   position:absolute;z-index:40;
   right:20px;bottom:56px;
@@ -9531,6 +9743,15 @@ window.__ModuleLoader__.load({
     const [library, setLibrary] = useState({ dir: '', mirror: false, encrypt: false, lastMirrorAt: 0, dirExists: false });
     /** Studio's own sidebar (the chapter tree) can be hidden independently of the host rail. */
     const [shelfOpen, setShelfOpen] = useState(() => lsGet(LS_SHELF_OPEN) !== '0');
+    /**
+     * 修改建议 column (R12 ②). Off by default: it costs a model call and most
+     * sessions are spent writing, not reviewing.
+     */
+    const [adviceOpen, setAdviceOpen] = useState(() => lsGet(LS_ADVICE_OPEN) === '1');
+    const [adviceWidth, setAdviceWidth] = useState(() => {
+      const raw = Number(lsGet(LS_ADVICE_WIDTH));
+      return Number.isFinite(raw) && raw >= 260 && raw <= 600 ? raw : 336;
+    });
     /** Bottom-right action dock: collapsed to a single round button by default. */
     const [dockOpen, setDockOpen] = useState(false);
     /**
@@ -9720,6 +9941,12 @@ window.__ModuleLoader__.load({
     useEffect(() => {
       lsSet(LS_NOTES_OPEN, notesOpen ? '1' : '0');
     }, [notesOpen]);
+    useEffect(() => {
+      lsSet(LS_ADVICE_OPEN, adviceOpen ? '1' : '0');
+    }, [adviceOpen]);
+    useEffect(() => {
+      lsSet(LS_ADVICE_WIDTH, adviceWidth);
+    }, [adviceWidth]);
 
     /**
      * Home-screen data: the submission log and the journal count. Both are
@@ -10891,6 +11118,13 @@ window.__ModuleLoader__.load({
             setDockOpen(false);
             openDialog('typeset');
           },
+          onAdvice: () => {
+            setDockOpen(false);
+            // The column sits beside the paper, so it must be closable again by
+            // the same row — the toggle is the only affordance that survives
+            // after the panel takes a third of the width.
+            setAdviceOpen((v) => !v);
+          },
           onSubmit: () => {
             setDockOpen(false);
             openDialog('submit');
@@ -10987,6 +11221,10 @@ window.__ModuleLoader__.load({
                 submissions: submissions,
                 inbox: inbox,
                 onRefreshInbox: refreshInbox,
+                // R12 ④: the rows are clickable now; the reader is a dialog so
+                // the writing surface keeps its scroll position.
+                onOpenMail: (row) =>
+                  setDialog({ kind: 'mail', uid: Number(row && row.uid) || 0, message: row || null }),
                 onOpenNovel: (id) => {
                   selectNovel(id);
                 },
@@ -11002,19 +11240,39 @@ window.__ModuleLoader__.load({
                 onOpenSettings: () => openDialog('settings'),
               })
             : chapter
-              ? h(NW.Editor, {
-                  key: String(chapter.id),
-                  chapter: chapter,
-                  settings: settings,
-                  immersive: immersive,
-                  // R11: the 灵感便签 is now a full-bleed page that covers the
-                  // writing area while open, so the manuscript no longer needs a
-                  // reserved right lane — it keeps its full measure either way.
-                  notesLane: false,
-                  onSave: (content) => saveChapter(content, chapter.id),
-                  onSelectionChange: onSelectionChange,
-                  registerApi: registerEditor,
-                })
+              ? h(
+                  'div',
+                  { className: 'nw-bench' },
+                  h(
+                    'div',
+                    { className: 'nw-bench-paper' },
+                    h(NW.Editor, {
+                      key: String(chapter.id),
+                      chapter: chapter,
+                      settings: settings,
+                      immersive: immersive,
+                      // R11: the 灵感便签 is now a full-bleed page that covers the
+                      // writing area while open, so the manuscript no longer needs a
+                      // reserved right lane — it keeps its full measure either way.
+                      notesLane: false,
+                      // R12 ①: the paper owns its own 首页 button; the shelf
+                      // header is gone in immersive mode.
+                      onHome: () => setView('home'),
+                      onSave: (content) => saveChapter(content, chapter.id),
+                      onSelectionChange: onSelectionChange,
+                      registerApi: registerEditor,
+                    }),
+                  ),
+                  adviceOpen && !immersive
+                    ? h(Advice, {
+                        key: 'advice-' + String(chapter.id),
+                        chapter: chapter,
+                        editorApi: editorRef,
+                        width: adviceWidth,
+                        onClose: () => setAdviceOpen(false),
+                      })
+                    : null,
+                )
               : h(
                   'div',
                   { className: 'nw-center' },
@@ -11214,6 +11472,7 @@ window.__ModuleLoader__.load({
             { className: 'nw-dock-menu', 'data-open': '1', role: 'menu' },
             item('proofread', NW.t('AI 校对'), p.onProofread, true),
             item('typeset', NW.t('一键排版'), p.onTypeset, true),
+            item('sparkle', NW.t('修改建议'), p.onAdvice, true),
             item('send', NW.t('投稿'), p.onSubmit, true),
           )
         : null,
@@ -11246,6 +11505,254 @@ window.__ModuleLoader__.load({
    * gutter, so the two can be open at the same time. Collapsed it is a single
    * small tab, which is what the writer sees most of the time.
    */
+  /**
+   * 修改建议 (R12 ②) — an editorial column beside the manuscript.
+   *
+   * Deliberately not a dialog: the advice quotes a passage, and the writer has
+   * to look at that passage to judge the advice. A modal covers exactly the text
+   * being discussed. So this renders as a flex sibling of the editing surface
+   * inside `.nw-bench`, with its own scrollbar.
+   *
+   * The suggestions are advice, not replacements ("这一段节奏拖着"), so there is
+   * no accept/reject here — clicking one scrolls the manuscript to the quoted
+   * passage and selects it, which is the only mechanical action that makes
+   * sense for prose-level critique.
+   */
+  function Advice(props) {
+    const p = props || {};
+    const [focus, setFocus] = useState('all');
+    const [items, setItems] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+    const [activeId, setActiveId] = useState('');
+    const [model, setModel] = useState('');
+    const runRef = useRef(0);
+
+    const chapterId = p.chapter ? String(p.chapter.id) : '';
+
+    const run = useCallback(
+      async (nextFocus) => {
+        const api = p.editorApi && p.editorApi.current;
+        const text = api && typeof api.getContent === 'function' ? api.getContent() : '';
+        if (!String(text).trim()) {
+          setError('这一章还没有正文');
+          return;
+        }
+        const token = runRef.current + 1;
+        runRef.current = token;
+        setBusy(true);
+        setError('');
+        setActiveId('');
+        try {
+          const data = await NW.ai.revise({ text, focus: nextFocus || focus });
+          if (runRef.current !== token) return;
+          setItems(Array.isArray(data && data.suggestions) ? data.suggestions : []);
+          setModel(String((data && data.model) || ''));
+        } catch (err) {
+          if (runRef.current !== token) return;
+          setItems(null);
+          setError(errText(err, '获取修改建议失败'));
+        } finally {
+          if (runRef.current === token) setBusy(false);
+        }
+      },
+      [focus, p.editorApi],
+    );
+
+    // A fresh chapter starts blank: advice about the previous one is worse than
+    // no advice, because it quotes text that is no longer on screen.
+    React.useEffect(() => {
+      setItems(null);
+      setError('');
+      setActiveId('');
+      setBusy(false);
+      runRef.current += 1;
+    }, [chapterId]);
+
+    const reveal = useCallback(
+      (item) => {
+        setActiveId(item.id);
+        const api = p.editorApi && p.editorApi.current;
+        if (!api || typeof api.setHighlights !== 'function') return;
+        if (Number(item.start) >= 0) {
+          api.setHighlights([{ start: Number(item.start), end: Number(item.end), id: item.id, active: true }]);
+          if (typeof api.scrollTo === 'function' && typeof api.getScrollRatio === 'function') {
+            // No offset→scroll API, so approximate by the passage's position in
+            // the chapter; the highlight makes the exact line findable.
+            const ratio = p.chapter && p.chapter.content
+              ? clampRatio(Number(item.start) / Math.max(1, String(p.chapter.content).length))
+              : 0;
+            api.scrollTo(ratio);
+          }
+        }
+      },
+      [p.editorApi, p.chapter],
+    );
+
+    const clearHighlights = useCallback(() => {
+      const api = p.editorApi && p.editorApi.current;
+      if (api && typeof api.setHighlights === 'function') api.setHighlights([]);
+      setActiveId('');
+    }, [p.editorApi]);
+
+    React.useEffect(() => () => {
+      // Unmounting the column must not leave stale highlights on the paper.
+      const api = p.editorApi && p.editorApi.current;
+      if (api && typeof api.setHighlights === 'function') api.setHighlights([]);
+    }, [p.editorApi]);
+
+    const KIND_LABEL = {
+      rhythm: '节奏',
+      diction: '用词',
+      pov: '视角',
+      detail: '画面',
+      dialogue: '对话',
+    };
+    const FOCUS_OPTIONS = [
+      { value: 'all', label: '全部' },
+      { value: 'rhythm', label: '节奏' },
+      { value: 'diction', label: '用词' },
+      { value: 'pov', label: '视角' },
+      { value: 'detail', label: '画面' },
+      { value: 'dialogue', label: '对话' },
+    ];
+
+    const head = h(
+      'div',
+      { className: 'nw-suggest-head' },
+      h('span', { className: 'nw-suggest-title' }, NW.t('修改建议')),
+      items && items.length > 0 ? h('span', { className: 'nw-suggest-count' }, items.length + ' 条') : null,
+      h('span', { style: { flex: '1 1 auto' } }),
+      NW.ui.iconBtn(
+        NW.icon('x', { size: 16 }),
+        NW.t('关闭建议'),
+        () => {
+          clearHighlights();
+          p.onClose();
+        },
+      ),
+    );
+
+    const focusRow = h(
+      'div',
+      { className: 'nw-suggest-foot', style: { borderTop: 'none', borderBottom: '1px solid var(--dsw-alias-border-l1)', paddingTop: '8px', paddingBottom: '8px' } },
+      NW.ui.seg({
+        options: FOCUS_OPTIONS,
+        value: focus,
+        ariaLabel: '建议重点',
+        onChange: (value) => {
+          setFocus(value);
+          run(value);
+        },
+      }),
+    );
+
+    let body;
+    if (busy) {
+      body = h(
+        'div',
+        { className: 'nw-suggest-empty' },
+        NW.ui.spinner(),
+        h('span', null, NW.t('正在读这一章…')),
+        h('span', { style: { fontSize: '12px', opacity: '.7' } }, NW.t('模型要通读全文，通常十几秒。')),
+      );
+    } else if (error) {
+      body = h(
+        'div',
+        { className: 'nw-suggest-empty' },
+        h('span', { style: { color: 'var(--dsw-alias-state-error-primary)' } }, error),
+        NW.ui.btn({ kind: 'primary', onClick: () => run(focus), children: NW.t('重试') }),
+      );
+    } else if (!items) {
+      body = h(
+        'div',
+        { className: 'nw-suggest-empty' },
+        NW.icon('sparkle', { size: 26 }),
+        h('span', null, NW.t('让模型通读这一章，指出最值得改的地方。')),
+        h('span', { style: { fontSize: '12px', opacity: '.7' } }, NW.t('建议是意见，不是自动替换；点一条会把原文滚到那一段。')),
+        NW.ui.btn({ kind: 'primary', onClick: () => run(focus), children: NW.t('开始审读') }),
+      );
+    } else if (items.length === 0) {
+      body = h(
+        'div',
+        { className: 'nw-suggest-empty' },
+        NW.icon('success', { size: 26 }),
+        h('span', null, NW.t('这一章没有被标出的明显问题。')),
+        h('span', { style: { fontSize: '12px', opacity: '.7' } }, NW.t('换个重点再看看，或写下去。')),
+      );
+    } else {
+      body = h(
+        'div',
+        { className: 'nw-suggest-body' },
+        items.map((item) =>
+          h(
+            'button',
+            {
+              key: item.id,
+              type: 'button',
+              className: 'nw-advice',
+              'data-active': activeId === item.id ? '1' : '0',
+              onClick: () => reveal(item),
+            },
+            h('span', { className: 'nw-advice-quote' }, '「' + String(item.quote || '') + '」'),
+            h('span', { className: 'nw-advice-issue' }, String(item.issue || '')),
+            h('span', { className: 'nw-advice-do' }, String(item.advice || '')),
+            h(
+              'span',
+              { className: 'nw-advice-foot' },
+              h('span', { className: 'nw-advice-kind' }, KIND_LABEL[item.kind] || '表达'),
+              Number(item.start) >= 0
+                ? null
+                : h('span', { style: { fontSize: '11px', opacity: '.7' } }, NW.t('原文已改动，定位不到')),
+            ),
+          ),
+        ),
+      );
+    }
+
+    const foot =
+      items && items.length > 0
+        ? h(
+            'div',
+            { className: 'nw-suggest-foot' },
+            NW.ui.btn({ onClick: () => run(focus), disabled: busy, children: NW.t('重新审读') }),
+            clearHighlights && activeId ? NW.ui.btn({ kind: 'ghost', onClick: clearHighlights, children: NW.t('取消高亮') }) : null,
+            model ? h('span', { style: { fontSize: '11px', opacity: '.65', marginLeft: 'auto' } }, model) : null,
+          )
+        : null;
+
+    return h(
+      'aside',
+      {
+        className: 'nw-suggest',
+        'aria-label': NW.t('修改建议'),
+        style: { width: clampNum(Number(p.width) || 336, 260, 600) + 'px' },
+      },
+      head,
+      focusRow,
+      body,
+      foot,
+    );
+  }
+
+  /** Clamp a number into [lo, hi]; non-finite input falls back to `lo`. */
+  function clampNum(value, lo, hi) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return lo;
+    if (n < lo) return lo;
+    if (n > hi) return hi;
+    return n;
+  }
+
+  /** Keep a 0..1 scroll ratio inside its bounds (scrollTo multiplies it). */
+  function clampRatio(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    if (n < 0) return 0;
+    if (n > 1) return 1;
+    return n;
+  }
+
   /**
    * 灵感便签 (R11) — a solid-colour editing page and nothing else.
    *
@@ -14660,6 +15167,9 @@ window.__ModuleLoader__.load({
         if (typeof p.onToast === 'function') p.onToast('请先选择一家期刊', 'info');
         return;
       }
+      // R12 ③: after the journal is picked the letter is already being built
+      // (runPrepare fires on entering step 3), so "下一步" lands straight on the
+      // preview instead of asking the author to press 生成 first.
       setStep(Math.min(3, step + 1));
     };
 
@@ -15549,6 +16059,119 @@ window.__ModuleLoader__.load({
   };
 
   // =============================================================== Trash ====
+  /**
+   * 读信 (R12 ④) — the inbox rows were plain text and could not be opened.
+   *
+   * The list route only carries headers plus a 160-character snippet, so this
+   * dialog asks the host for the full body on mount. Two states matter:
+   * `loading` while the IMAP round trip runs (seconds, not milliseconds), and
+   * the failure state, which must show *why* — "读不到" alone leaves the writer
+   * unable to tell a network problem from an empty mailbox.
+   */
+  NW.dialogs.Mail = function Mail(props) {
+    const p = props || {};
+    const seed = (p.dialog && p.dialog.message) || p.message || {};
+    const uid = Number((p.dialog && p.dialog.uid) || seed.uid || 0);
+    const [state, setState] = useState({ loading: true, message: null, error: '', hint: '' });
+
+    useEffect(() => {
+      let alive = true;
+      if (!uid) {
+        setState({ loading: false, message: null, error: '这封邮件没有编号，无法读取', hint: '' });
+        return undefined;
+      }
+      NW.io.inbox
+        .read(uid)
+        .then((data) => {
+          if (!alive) return;
+          const message = data && data.message ? data.message : null;
+          setState({
+            loading: false,
+            message: message,
+            error: String((data && data.error) || (message ? '' : '服务器没有返回正文')),
+            hint: String((data && data.hint) || ''),
+          });
+        })
+        .catch((err) => {
+          if (!alive) return;
+          setState({ loading: false, message: null, error: errText(err, '读取邮件失败'), hint: '' });
+        });
+      return () => {
+        alive = false;
+      };
+    }, [uid]);
+
+    // The headers are already in the list payload, so show them while the body
+    // is still being fetched — the dialog never opens empty.
+    const header = state.message || seed;
+    const subject = String(header.subject || '（无主题）');
+    const from = String(header.from || header.address || '未知发件人');
+    const date = String(header.date || '');
+
+    let body;
+    if (state.loading) {
+      body = h(
+        'div',
+        { className: 'nw-mail-loading' },
+        NW.ui.spinner(),
+        h('span', null, NW.t('正在从服务器读取这封邮件…')),
+      );
+    } else if (state.error) {
+      body = h(
+        'div',
+        { className: 'nw-mail-loading' },
+        h('span', { style: { color: 'var(--dsw-alias-state-error-primary)' } }, state.error),
+        state.hint ? h('span', { className: 'nw-hint-block' }, state.hint) : null,
+        NW.ui.btn({
+          kind: 'primary',
+          onClick: () => {
+            setState({ loading: true, message: null, error: '', hint: '' });
+            NW.io.inbox
+              .read(uid)
+              .then((data) => {
+                const message = data && data.message ? data.message : null;
+                setState({
+                  loading: false,
+                  message: message,
+                  error: String((data && data.error) || (message ? '' : '服务器没有返回正文')),
+                  hint: String((data && data.hint) || ''),
+                });
+              })
+              .catch((err) => setState({ loading: false, message: null, error: errText(err, '读取邮件失败'), hint: '' }));
+          },
+          children: NW.t('重试'),
+        }),
+      );
+    } else {
+      body = h('pre', { className: 'nw-mail-body' }, String(state.message.text || '（这封邮件没有可显示的正文）'));
+    }
+
+    const meta = h(
+      'div',
+      { className: 'nw-mail-meta' },
+      h('span', { className: 'nw-mail-subject' }, subject),
+      h('span', { className: 'nw-mail-from' }, from),
+      date ? h('span', { className: 'nw-mail-date' }, date) : null,
+    );
+
+    return modal(
+      NW.t('邮件'),
+      h('div', { className: 'nw-mail' }, meta, body),
+      [
+        closeBtn(p),
+        h('span', { style: { flex: '1 1 auto' } }),
+        NW.ui.btn({
+          onClick: () => {
+            if (typeof p.onReply === 'function') p.onReply(header);
+          },
+          children: NW.t('去投稿'),
+        }),
+      ],
+      '760px',
+      p.onClose,
+    );
+  };
+
   NW.dialogs.Trash = function Trash(props) {
     const p = props || {};
     const [rows, setRows] = useState(null);

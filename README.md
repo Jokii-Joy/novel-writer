@@ -7,6 +7,9 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.2.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第十二轮（R12）改造：写作页左上角新增**首页按钮**；新增**修改建议栏**——大模型通读本章后给出可
+  点击定位的意见，面板与正文**左右并列**（不是弹窗）；投稿选定期刊后**直接生成整封邮件进预览**，
+  不用再手动点「生成」；**收件箱邮件可点击阅读**（补零依赖 IMAP `BODY.PEEK[]` 取全文 + 读信弹窗）。
 - 第十一轮（R11）改造：插件改名 **精神空间**；修首页「正在创作」点不进编辑页；修 163/126 收件箱
   `Unsafe Login`（补 RFC 2971 `ID` 握手）；**灵感便签改成纯色整页**；**光标可设置**（粗细/颜色/闪烁）；
   投稿邮件**不再复述期刊征稿要求**；**期刊库支持增删改查**；附带一键上传 GitHub 的脚本。
@@ -132,9 +135,10 @@ CSS 是用模板字符串写的，注释里多写一个反引号就会让整块�
 
 ### 侧栏顶部与右下坞
 侧栏 topbar 六个图标：`⌂` 首页 · `⛶` 沉浸 · `▥` 宿主侧栏 · `🔒` 锁定 · `⚙` 设置 · `‹` 收起目录。
-浮动坞 `.nw-dock`（`right:20px; bottom:56px`）默认半透明（`opacity:.35`），hover / 键盘聚焦时完全显现；展开后只有三项写作动作：
-`AI 校对 / 一键排版 / 投稿`。首页、主题、打字机、锁定、设置这类入口都在设置面板或侧栏里，坞不再扮演第二个工具栏（R10 精简）。
-写作面通过 `--nw-gutter-x` 自动让出右侧 ≥88px（灵感便签展开时 ≥212px），文本块仍然居中，浮层不压正文。
+浮动坞 `.nw-dock`（`right:20px; bottom:56px`）默认半透明（`opacity:.35`），hover / 键盘聚焦时完全显现；展开后只有四项写作动作：
+`AI 校对 / 一键排版 / 修改建议 / 投稿`。首页、主题、打字机、锁定、设置这类入口都在设置面板或侧栏里，坞不再扮演第二个工具栏（R10 精简）。
+写作面通过 `--nw-gutter-x` 自动让出右侧 ≥88px，文本块仍然居中，浮层不压正文。
+「修改建议」在正文**右侧另开一列**而不是浮在文字上，所以它占的是布局宽度、不是留白——正文列会相应收窄，不会被挡住。
 
 ### 沉浸模式
 `⛶` 或 `Esc` 进出（进入时 toast 提示「按 Esc 退出」）。**没有任何顶栏**：工具栏、目录、分隔条、状态栏、浮动坞全部卸载，只剩满屏写作面。
@@ -179,6 +183,9 @@ stroke 1.5、圆头圆角，60 个名字覆盖新建 / 编辑 / 导航 / 上传�
 
 ### 编辑器
 - 纯文本 / Markdown 源文编辑，三层叠放（高亮镜像层 + 粗光标层 + 透明 textarea），不引入富文本 contenteditable。
+- **首页按钮（R12 ①）**：纸张左上角常驻一枚半透明胶囊（`⌂ 首页`，`opacity .55` → hover 1），一键回到欢迎首页。
+  它是必需的而不是装饰：沉浸模式下侧栏与工具栏都会被卸载，没有它就只能靠 Esc 退出再找入口；
+  文字页上的按钮在沉浸态进一步降到 `opacity .28`，不抢注意力。
 - **加粗加黑光标**：`caret-color: transparent` + 绝对定位 `.nw-cursor`（默认 `--nw-caret-width: 3px`、高 = 1.2em、墨色 `--nw-caret-color` 近黑 `#0f0f0e`），位置复用同一套 `measureCaret()` 测量，`translate3d` 只在位置变化时写；有选区 / 输入法组合中 / 窗口失焦时自动隐藏；1.06s `step-end` 闪烁，切换两个等价 keyframes 重启闪烁且零 reflow。
 - **光标可设置（R11）**：设置 →「外观」里有三项 —— **粗细**（1–8px 滑块，默认 3px）、**颜色**（取色器 + 文本框，留空表示跟随主题；九套主题各自有一份默认墨色）、**闪烁**（开关，关掉后 `data-caret-blink="0"` 让 `animation: none`）。
   实现细节：粗细/颜色写进 `.nw-surface` 的 CSS 变量，闪烁写 `data-*` 属性而**不写内联 style** —— 因为 `paintCaret()` 每帧会改写 `animationName` 来重启闪烁周期，内联值会被它悄悄打开。
@@ -209,8 +216,22 @@ stroke 1.5、圆头圆角，60 个名字覆盖新建 / 编辑 / 导航 / 上传�
 - 建议逐条勾选，支持单条接受 / 拒绝 / 全部接受 / 全部拒绝；**先预览 diff 再应用**，`applyEdits` 从右往左写入，不覆盖未接受的原文。
 - 一键排版：统一省略号与破折号、中英文标点、引号、段落两字全角缩进、空行折叠、章节标题格式、对话分段。同样先出 diff 预览，`changed === 0` 时禁用应用。
 
-### 投稿助手（R8 三步 + 智能推荐）
+### 修改建议栏（R12 ② 新增）
+右下坞 `✦ 修改建议` 打开一块**与正文左右并列**的评论栏（`NW.Advice`，默认宽 336px，可拖宽 260–600px，
+开关与宽度都记在 `localStorage`）。它不是替换工具，而是「第二读者」：
+
+- 点「开始审读」后，Host 把当前章按 4000 字分块送模型（`lib/ai.js` 的 `revise()`），要求返回
+  `{quote, issue, advice, kind}` 四元组，`kind` 限 节奏 / 用词 / 视角 / 画面 / 对话 五类，每章最多 8 条。
+- 面板顶部一排「重点」分段控件（全部 / 节奏 / 用词 / 视角 / 画面 / 对话），换重点会重新审读。
+- 每条建议显示「原句 → 问题 → 怎么改」；**点一条会把编辑器滚到那一段并高亮**（`setHighlights`），
+  面板底部有「重新审读」与「取消高亮」。切章自动清空，避免建议引用屏幕上已经不在的文字。
+- 定位方式与校对一致：模型给的 `quote` 用 `indexOf` 回原文对齐，对不齐的条目标「原文已改动，定位不到」，
+  仍然显示意见但不做高亮——宁可少给一次跳转，也不跳到错的段落。
+
+### 投稿助手（R8 三步 + 智能推荐，R12 直达预览）
 右下坞 `✉ 投稿` 打开三步向导（`NW.dialogs.Submit`，宽 820px）：**先选小说 → 再选期刊 → 邮件预览**。
+选定期刊点「下一步」就直接落到预览页：进入第 3 步的 effect 会立刻跑 `submit.prepare`，
+模型按该刊征稿要求写好收件人、主题、正文与附件，作者只需要**审阅并改**，不用再点「生成」。
 
 1. **① 选小说**：小说列表（默认选中当前正在写的那本），右侧列出各章字数；可按「整本 / 当前章 / 自定义勾选章节」定稿。
    换了小说，体裁推荐与邮箱判定都会跟着重算。
@@ -303,6 +324,12 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
   所以「从文件夹恢复」和「从单个备份文件恢复」都能还原书目 + 正文 + 偏好设置，而不只是书名列表。
 - **两种恢复入口**：面板里的「从上面这个文件夹恢复…」，以及「从备份文件恢复」——后者接受任意
   `.nwe` / `.json`，客户端读成文本交给宿主 `library.restore({text, name})` 解密，不要求文件在保存目录里。
+- **「解密出明文副本」是什么意思**：自动保存写出去的是**加密的** `.docx.nwe`（`NWENC1` 容器，AES-256-GCM），
+  直接双击打不开 —— 这是有意的，别人拷走你的文件夹也读不到正文。按钮做的是「把加密的这批文件另存一份
+  **不加密**的到 `<保存目录>/plain/`」，文件名还原成 `书名.docx` 与 `library.json`，可以直接用 Word 打开、
+  发给编辑、或放进别的同步盘。**原件不动**：加密版继续留在外面，自动保存流程完全不受影响。
+  换句话说，它是「另存为可读副本」，不是「关掉加密」。确认不再需要时，把 `plain/` 整个删掉即可；
+  再次点按钮会重新生成一份最新的。
 - 「解密出明文副本」把 `.nwe` 解成 `<dir>/plain/*.docx` 与 `library.json` 供备份或交给别的编辑器，原件保留。
 
 ### 灵感便签（R10 / R11 改为纯色整页）
@@ -316,8 +343,13 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
   文本列重新居中（`notesLane` 固定为 `false`）。
 - 沉浸模式下不渲染（沉浸是纯写作画布）。
 
-### 收件箱（R9，R11 修 163/126）
+### 收件箱（R9，R11 修 163/126，R12 可点开读）
 - 首页右上「收件箱」卡片读收件箱最近 12 封，显示发件人 / 主题 / 摘要 / 未读点；`inbox.list` 是真实 IMAP 往返。
+- **点开读全文（R12 ④）**：列表行是真正的按钮（hover 出 `›`），点开走 `inbox.read` 取完整正文。
+  宿主用 `UID FETCH <uid> (FLAGS BODY.PEEK[])` —— **`PEEK` 是关键**，否则一读就把未读标成已读，用户就再也
+  找不到「哪封没看过」。正文解码链：`splitMessage` → 各段 `Content-Transfer-Encoding`（base64 / QP）→
+  `charset`（UTF-8 / GBK / Big5）→ `htmlToText`；`text/plain` 优先，只有 HTML 时才转纯文本。
+  读信弹窗（`NW.dialogs.Mail`，760px）把正文放 `<pre>`：投稿回信会逐字引用稿件，重排会破坏编辑所指的换行。
 - 零依赖 IMAP 客户端 `lib/imap.js`（只用 `node:net` / `node:tls`）：993 直连 TLS，143 强制 STARTTLS；
   自签证书先记录 `certBypassed` 再降级（与 SMTP 同一套错误码与中文提示）。
 - **默认沿用发信账号**：`useSmtp` 为真且没填主机时，把 `smtp.qq.com` 推成 `imap.qq.com`、`smtp-mail.*` 推成 `imap-mail.*`，
@@ -340,44 +372,40 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
 
 ## 3. 验收状态
 
-> **第十一轮（R11）按要求「不执行测试」**：本轮改造只做了构建、语法校验、bundle 加载校验，以及宿主接口的连通性冒烟；
+> **第十二轮（R12）按要求「不执行测试」**：本轮只做构建、语法校验、bundle 加载校验，以及宿主接口的连通性冒烟；
 > 界面上的点击验收由用户在真实 Harness 里自行完成。
 >
 > | 检查 | 命令 / 方式 | 结果 |
 > | --- | --- | --- |
 > | 每个 client part 语法 | `node --check client/src/*.js`（`00-boot`/`99-end` 为 factory 包装，单独 check 必然失败，属预期） | 19 个真实 part 全部 exit 0 |
-> | 构建产物语法 | `node scripts/build-client.mjs` + `node --check client/client.js` | **19 parts / 665094 bytes**，exit 0 |
-> | **bundle 能否被加载** | `node scripts/verify-client-load.mjs`（构建脚本自动跑） | `ok (id=@local/novel-writer, inject=["slots"])` |
 > | Host 模块语法 | `node --check index.js` + 12 个 `lib/*.js` | 全部 exit 0 |
-> | CSS 模板串完整性 | 自写扫描器查每个 `NW.CSS_PARTS.push(` 的闭合 | `ALL CSS TEMPLATES OK` |
-> | 图标完整性 | 比对 `42-icons.js` 的 PATHS 与全仓 `NW.icon(...)` 调用 | 定义 48 个，引用 26 个，缺失 **0** |
-> | 主题接线 | 扫三处主题声明（编辑器 / 外壳 / 设置项） | 九套 id 三处一致：`harness claude card eye night ink newspaper magazine guofeng` |
-> | 期刊多分类邮箱（离线） | `await list()` + `resolveEmail()` | 79 家中 **16 家带变体**，共 **32 条**按字数区间的收稿邮箱 |
-> | **落盘 docx 往返** | `library.mirror({encrypt:true})` → `readSnapshot` → `decryptTo` | 目录内是 `测试书.docx.nwe`；解密出 `测试书.docx`（4260B，`PK\x03\x04`，含 `第一章` / `正文一`）与 `library.json` |
-> | 解密副本可打开 | `unzipSync` 解析镜像出的 docx | 9 个部件齐全（document / styles / settings / footer / rels / core / app） |
-> | docx 版式结构（离线） | `buildDocx` + `unzipSync` 读 `word/document.xml` | 正文 `w:sz 28`（14pt）、首行缩进 560 twips、`第一章` 紧跟作者行、**相邻分页折叠**、空章跳过 |
-> | 期刊库自检（离线） | `selftest` | 内置 **79 家** |
-> | secrets / docx / epub / webServer | `selftest` | 8 项全 ok |
-> | GitHub 工具链 | `.tools\git\cmd\git.exe --version` | `2.56.0.windows.2`，可执行 |
-> | 本地仓库 | `git log --oneline` | 已提交三个 commit（`.tools/` 被 `.gitignore` 忽略）；**推送需要一次 GitHub 登录**，见下 |
+> | 构建产物 + 加载校验 | `node scripts/build-client.mjs`（内含 `verify-client-load.mjs`） | **19 parts / 690402 bytes**，`ok (id=@local/novel-writer, inject=["slots"])` |
+> | 方言覆盖率 | 扫全部 `NW.t(...)` / `tr(...)` 字面量 vs EN 词典 | 126 个 key，缺失 **0** |
+> | 样式覆盖率 | 扫全部 `className: 'nw-…'` vs 九个 CSS owner 文件 | 235 个渲染类，未加样式 **0** |
+> | **新增 `revise` 路由** | `POST /novel-writer/api/revise`（真实模型通读一段正文） | 200，返回 1 条建议，`model=xdpool/deepseek-v4.1-flash`（约 20s） |
+> | **新增 `inbox.read` 路由** | `POST /novel-writer/api/inbox.read {uid}`（真实 IMAP，163） | 200，取到正文 5851 字符原始 HTML → 清洗后 710 字符可读文本；不存在的 uid 返回结构化 `imap-not-found` 而非抛错 |
+> | selftest | `POST /novel-writer/api/selftest` | 7 项全 ok（webServer / docx 4301B / epub 2911B / secrets / ai 61 提供方 76 模型 / journals 79 家 / smtp 163:465） |
+> | HTML 邮件清洗 | 同上那封网易通知 | 表格噪声行清零，正文段落保留；`&#NNNN;` / `&#xHHHH;` 数值实体一并解码 |
+>
+> 除此之外**没有**跑 CDP GUI 套件、没有点界面。
 >
 > ### 为什么多了一个 `verify-client-load.mjs`
 >
 > `node --check` 只证明文件能解析，**不证明 factory 能跑**。R9 就踩过：某段 CSS 模板字符串的注释里出现了
 > 一个反引号，提前闭合了模板串 —— 语法依然合法，但 bundle 一被求值就抛 `ReferenceError`，整条模块图断掉，
-> 面板直接从界面上消失。所以现在 `scripts/build-client.mjs` 在写完文件后会**自动跑一次加载校验**，
-> 失败则构建以 exit 1 结束；这条检查已经用「故意改坏一个符号名的 bundle」验证过确实会拦下来。
->
-> 除此之外**没有**跑 `verify-*` 脚本、没有跑 CDP GUI 套件、没有点界面。
+> 面板直接从界面上消失。R12 又踩了同一个坑（`55-welcome.js` 的注释里写了 `` `.nw-welcome-sub` ``），
+> 这次是构建闸门当场拦下的。所以 `scripts/build-client.mjs` 写完文件后会**自动跑一次加载校验**，
+> 失败则构建以 exit 1 结束。
 
 **已经明确会变的东西**（自测时先知道，免得当成 bug）：
 
 | 变了什么 | 现在在哪 |
 | --- | --- |
-| 顶部工具栏整条没有 | 侧栏 topbar 六个图标 + 右下浮动坞（只剩 AI 校对 / 一键排版 / 投稿） |
+| 顶部工具栏整条没有 | 侧栏 topbar 六个图标 + 右下浮动坞（只剩 AI 校对 / 一键排版 / 修改建议 / 投稿） |
 | 打开插件先看到首页 | 首页四张卡（含收件箱）；点章节 / 继续写作才进编辑器 |
 | 设置不再是长滚动 | 左导航 + 右内容，右栏自己滚 |
 | 投稿向导是三步 | 选小说 → 选期刊 → 邮件预览（预览页所有字段都能改） |
+| **选定期刊就出邮件（R12）** | 点「下一步」直接落在预览页，不再需要手动点「按期刊要求生成」 |
 | 主题九套 | 设置·外观，色块两行（含 R10 新增「杂志」） |
 | **云备份没有了** | 改成「自动保存与恢复」：选本地文件夹，改动即写加密 `.docx.nwe` |
 | **保存默认加密** | 设置·导出与文件里可以关，关掉后写的是明文 `.docx` |
@@ -385,6 +413,9 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
 | **插件叫「精神空间」** | 侧栏按钮、锁屏标题、首页标题都换了；包名/entryId 仍是 `novel-writer` |
 | **灵感便签是整页** | 写作页右缘 `✦` 点开是纯色通栏，不再是浮动列表 |
 | **光标可调** | 设置·外观：粗细 / 颜色 / 闪烁 |
+| **首页按钮在纸上（R12）** | 写作页左上角 `⌂ 首页`；沉浸模式下也还在（那是唯一的出口提示） |
+| **修改建议是并排的（R12）** | 坞里 `✦ 修改建议` 在正文右侧开一列，正文列相应收窄 |
+| **收件箱能点开（R12）** | 首页收件箱每一行都是按钮，点开是「邮件」弹窗，`BODY.PEEK` 不标已读 |
 
 ### 历史验收数字（R2 / R3，仍可复跑但选择器部分已失效）
 
@@ -429,21 +460,22 @@ novel-writer/
 ├─ index.js                 Host 入口：ctx.inject(['webServer']) 延迟注册路由，异常不拖垮宿主
 ├─ cordis.patch.yml         `- insert: id: novel-writer, name: @local/novel-writer`
 ├─ lib/                     Host（Node 内置模块，零依赖）
-│  ├─ routes.js             /novel-writer/api/* 分派（39 个方法），恒 HTTP 200 {ok,data|error}
+│  ├─ routes.js             /novel-writer/api/* 分派（41 个方法），恒 HTTP 200 {ok,data|error}
 │  ├─ secrets.js            key.bin + store.enc（AES-256-GCM，原子写、单飞防并发铸钥）
-│  ├─ ai.js                 listModels / proofread / chatOnce（system 折进 user block）
+│  ├─ ai.js                 listModels / proofread / revise / chatOnce（system 折进 user block）
 │  ├─ library.js            保存目录：settings.json + docx 镜像 + NWENC1 加密镜像
 │  │                        readSnapshot / readSnapshotText（解密后交给客户端）/ pickFolder / decryptTo
 │  ├─ journals.js           内置 79 家文学期刊 + 用户覆盖；rank() 按体裁/字数/风格排序推荐
 │  ├─ smtp.js               纯 net/tls 发信：AUTH PLAIN/LOGIN、STARTTLS、multipart + base64 附件
-│  ├─ imap.js               纯 net/tls 收信：993 TLS / 143 STARTTLS、BODY.PEEK 头部+摘要、证书降级
+│  ├─ imap.js               纯 net/tls 收信：993 TLS / 143 STARTTLS、RFC2971 ID、BODY.PEEK 头部+摘要
+│  │                        readMessage（PEEK 取全文 + MIME/base64/QP/charset 解码 + htmlToText）
 │  ├─ zip.js                zipSync / unzipSync（自算 CRC32，zlib deflateRaw）
 │  ├─ docx.js               buildDocx / parseDocx（含 appendText 独立段落）
 │  ├─ epub.js               buildEpub / parseEpub（含 appendText 追加 <p>）
 │  ├─ pdf.js                docxToPdf（officeToPdf → libreoffice-kit 回退）
 │  └─ import-parse.js       parseImport（txt/md/docx/epub，GB18030 回退）
 ├─ client/
-│  ├─ client.js             构建产物（勿手改，19 parts 拼接 / 665094 bytes）
+│  ├─ client.js             构建产物（勿手改，19 parts 拼接 / 690402 bytes）
 │  └─ src/                  00→99 按文件名字典序拼接
 │     ├─ 00-boot / 99-end        __ModuleLoader__ 封装与 apply 导出
 │     ├─ 05-css                  设计 token 层（16/14/13px、圆角、控件高度、间距、阴影）
@@ -457,9 +489,9 @@ novel-writer/
 │     ├─ 45-dialogs-css          对话框层样式（含八主题色块、折叠区、diff、三步投稿向导）
 │     ├─ 50-shelf                小说章节树（可折叠、"⋯" 菜单、导入入口、40×40 页脚）
 │     ├─ 55-welcome              默认欢迎页（创作中小说/统计/投稿记录/收件箱/快捷入口）
-│     ├─ 60-editor               叠层编辑器 + 打字机 + 粗光标 + 沉浸写作面 + 88px 坞留白
-│     ├─ 90-app                  App 状态机（view = home | write）+ slot 注册 + 浮动坞 + 自动保存
-│     ├─ 95-dialogs              设置(两栏 6 分区)/自动保存与恢复/校对/排版/投稿/投稿管理/锁定/版本/回收站
+│     ├─ 60-editor               叠层编辑器 + 打字机 + 粗光标 + 首页按钮 + 沉浸写作面 + 88px 坞留白
+│     ├─ 90-app                  App 状态机（view = home | write）+ slot 注册 + 浮动坞 + 修改建议栏
+│     ├─ 95-dialogs              设置(两栏 6 分区)/自动保存与恢复/校对/排版/投稿/投稿管理/期刊/读信/锁定/版本/回收站
 │     ├─ 96-motion               动效 token 与 keyframes（nw-fade-up / toast-in / slide / pop）
 │     ├─ 97-theme               精修层（焦点环/模态/空态/滑块/色块/响应式）
 │     └─ 98-shell-theme         按 data-theme 重映射 --dsw-alias-*，让外壳跟随阅读主题
@@ -496,8 +528,10 @@ body 为 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`，错误绝不�
 14. **R3 起的改动均没有跑自动化测试**（用户要求「改完由我自己测试」），所以 `journals` / `smtp` / `imap` / `submit` / `library` / 导出 `appendText` / 九套主题 / 浮动坞 / 粗光标 / 灵感便签 / 落盘 docx / 欢迎页 / 收件箱这些新代码路径，只经过了 `node --check`、`build-client`（含加载闸门）、以及宿主接口的连通性冒烟，**没有逐条功能回归**。
 15. **SMTP / IMAP 只实现了明文 / STARTTLS 与 AUTH PLAIN/LOGIN**：OAuth2（Gmail 现代登录、Outlook）不支持，必须改用应用专用密码；服务端 15–20 秒墙钟超时，超时即失败不重试。
 16. **投稿记录只存在本机** `DSH_HOME/novel-writer/submissions.json`（最近 50 条），R5 已加入状态流转（`sent / pending / accepted / rejected / published / withdrawn`），但**不与期刊系统对接**——真正送达仍然是一封你确认后发出的邮件，状态需要你自己在「投稿管理」里更新。
-17. **收件箱只读最近 12 封的头部与 600 字节摘要**，不下载附件、不回信、不删除；被墙或服务器限流时首页会显示服务器原话而不是「没有回信」。Gmail 需要先在网页端开启 IMAP 并生成应用专用密码。
+17. **收件箱列表只读最近 12 封的头部与 600 字节摘要**；点开一封才会用 `BODY.PEEK[]` 拉全文（R12），附件不下载、不回信、不删除（`PEEK` 不改变已读状态，所以未读标记在插件里是稳定的）。被墙或服务器限流时首页会显示服务器原话而不是「没有回信」。Gmail 需要先在网页端开启 IMAP 并生成应用专用密码。
 18. **163 / 126 的 `Unsafe Login` 可能仍然存在**：R11 已补 RFC 2971 `ID` 握手（`name=novel-writer`），但网易的白名单是按客户端名审核的，握手之后仍可能被拒。此时错误码是 `imap-id-required`（不再是「密码错」），请按提示把客户端加入白名单，或换 QQ / Gmail 收信。QQ 邮箱的 IMAP 需要在网页端「设置 → 账户」里手动开启。
 19. **导出会跳过没有正文的章节**：只写了标题、正文还空着的章节（大纲占位）在 docx / epub / txt 里不会出现，否则会留下「一整页只有一个标题」或者干脆一页空白。这一条在 R11 定下，先前版本会把空章也排进去。
 20. **期刊「删除」是写墓碑而不是物理删除**：内置 79 家来自代码里的常量表，若只从用户覆盖层移除，下次 `merge()` 会把它们复活。墓碑存在 `settings.json` 的 `journals` 键里，跟着 `DSH_HOME` 走；换机不拷这个文件，删除会「复原」。
 21. **GitHub 上传需要你自己跑一次 `setup-github.cmd` 并粘一次 Token**：本机到 `github.com` 的连接间歇性中断（`api.github.com` 一直正常），所以浏览器 OAuth 设备流和 `git push` 都会随机失败。脚本因此改走 REST API，只访问 `api.github.com`；若某次仍失败，网络恢复后重跑即可（本地提交已保存）。仓库名默认 `novel-writer`，想换就改脚本里的 `REPO=`。
+22. **修改建议栏给的是意见，不是自动改稿**：它不会替你改写正文，也不会把建议写进文件；点一条只是把正文滚到那一段并高亮。模型每章最多返回 8 条、按 4000 字分块串行处理，所以很长的章会慢（一次审读十几到几十秒），且**同一章不同次审读结果会不一样**——这是生成式模型的常态，不是 bug。定位靠模型回引原文后 `indexOf` 对齐，作者随后手改过的段落会显示「原文已改动，定位不到」。
+23. **「首页」按钮是编辑器的一部分**，不跟随滚动；它在 `.nw-page` 之外、`.nw-surface` 之内绝对定位在左上角，因此换主题时会跟着变颜色，但不会与正文重叠（正文左右有 48px 内边距）。

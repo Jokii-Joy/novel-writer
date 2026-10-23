@@ -461,6 +461,26 @@
 }
 
 /* -------------------------------------------------------------- versions -- */
+/* 读信 (R12 ④). The body is a <pre> because a submission reply quotes the
+   manuscript verbatim — reflowing it would destroy the line breaks the editor
+   is referring to. */
+.nw-mail{display:flex;flex-direction:column;gap:var(--nw-sp-3);min-height:0;}
+.nw-mail-meta{
+  display:flex;flex-direction:column;gap:4px;
+  padding-bottom:var(--nw-sp-3);border-bottom:1px solid var(--nw-line-soft);
+}
+.nw-mail-subject{font-size:var(--nw-fs-base);font-weight:600;line-height:1.5;color:var(--nw-fg);word-break:break-word;}
+.nw-mail-from{font-size:var(--nw-fs-second);color:var(--nw-fg-soft);}
+.nw-mail-date{font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);}
+.nw-mail-body{
+  margin:0;max-height:52vh;overflow:auto;
+  font-family:var(--nw-reading-font,inherit);font-size:var(--nw-fs-second);line-height:1.85;
+  white-space:pre-wrap;word-break:break-word;color:var(--nw-fg);
+}
+.nw-mail-loading{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
+  min-height:180px;text-align:center;font-size:var(--nw-fs-second);color:var(--nw-fg-soft);
+}
 .nw-version-list{
   display:flex;flex-direction:column;max-height:46vh;overflow:auto;border-radius:var(--nw-r-card);
 }

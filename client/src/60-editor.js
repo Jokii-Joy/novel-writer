@@ -492,6 +492,22 @@
   background:var(--nw-panel);border:1px solid var(--nw-panel-border);box-shadow:var(--nw-panel-shadow);
   color:var(--nw-btn-fg);font-size:12px;
 }
+/* 首页 — the only way back to the welcome screen from the writing surface.
+   Sits above the paper, not in DSH chrome, because in immersive mode the
+   toolbar is gone and Esc only leaves immersive, not the chapter. */
+.nw-homebtn{
+  position:absolute;top:10px;left:14px;z-index:8;
+  display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 11px 0 9px;
+  border-radius:999px;border:1px solid var(--nw-btn-border);
+  background:var(--nw-panel);color:var(--nw-btn-fg);
+  font-family:inherit;font-size:12px;line-height:1;cursor:pointer;
+  opacity:.55;transition:opacity .16s ease,background .16s ease,border-color .16s ease;
+}
+.nw-homebtn:hover{opacity:1;background:var(--nw-btn-hover);border-color:var(--nw-find-ring);}
+.nw-homebtn:focus-visible{opacity:1;outline:2px solid var(--nw-find-ring);outline-offset:2px;}
+.nw-homebtn > svg{width:14px;height:14px;flex:0 0 auto;}
+.nw-surface[data-immersive="1"] .nw-homebtn{opacity:.28;}
+.nw-surface[data-immersive="1"] .nw-homebtn:hover{opacity:1;}
 .nw-findbar .nw-find-row{display:flex;align-items:center;gap:6px;}
 .nw-findbar .nw-find-input{
   flex:1 1 auto;min-width:0;height:27px;padding:0 8px;border-radius:6px;
@@ -537,6 +553,9 @@
     // Immersive writing surface: explicit prop wins, settings.immersive is the
     // fallback (the app ships it in DEFAULT_SETTINGS but does not pass the prop).
     const immersive = p.immersive === true || (p.immersive !== false && settings.immersive === true);
+    // R12 ①: the writing surface needs its own way home — the toolbar has no
+    // back button, and in immersive mode there is no toolbar at all.
+    const onHome = typeof p.onHome === 'function' ? p.onHome : null;
     /** 灵感便签 lane (R10): the app mounts the notes column beside the text. */
     const notesLane = p.notesLane === true && !immersive;
     /** Page width actually applied; immersive mode guarantees a wide canvas. */
@@ -2451,6 +2470,27 @@
       },
       h('div', { className: 'nw-scroll', ref: scrollRef, tabIndex: -1 }, body),
       findBar,
+      onHome
+        ? h(
+            'button',
+            {
+              type: 'button',
+              className: 'nw-homebtn',
+              title: NW.t('回到首页'),
+              'aria-label': NW.t('回到首页'),
+              onClick: (ev) => {
+                // Blur first: leaving the textarea while a save is pending would
+                // otherwise re-enter this handler through the blur flush.
+                if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+                onHome();
+              },
+            },
+            // `home` lives in 42-icons.js — reusing it keeps the stroke weight and
+            // optical size identical to the shelf and toolbar icons.
+            h(NW.icon, { name: 'home', size: 14 }),
+            h('span', null, NW.t('首页')),
+          )
+        : null,
     );
   };
 })();

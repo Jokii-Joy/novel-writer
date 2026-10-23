@@ -380,23 +380,35 @@
         'ul',
         { className: 'nw-welcome-subs' },
         inboxMessages.slice(0, 6).map((row, index) =>
+          // R12 ④: these rows used to be plain <li> text — the list looked
+          // clickable and did nothing. Each one is now a button that opens the
+          // mail in a reader dialog (headers + decoded body).
           NW.h(
             'li',
-            {
-              key: String(row.uid || row.messageId || index),
-              className: 'nw-welcome-sub' + (row.unseen ? ' nw-welcome-sub-unread' : ''),
-            },
+            { key: String(row.uid || row.messageId || index) },
             NW.h(
-              'span',
-              { className: 'nw-welcome-submain' },
-              NW.h('span', { className: 'nw-welcome-subtitle' }, String(row.subject || '（无主题）')),
+              'button',
+              {
+                type: 'button',
+                className: 'nw-welcome-sub nw-welcome-subbtn' + (row.unseen ? ' nw-welcome-sub-unread' : ''),
+                title: `${String(row.subject || '（无主题）')} — 点击阅读`,
+                onClick: () => {
+                  if (typeof p.onOpenMail === 'function') p.onOpenMail(row);
+                },
+              },
               NW.h(
                 'span',
-                { className: 'nw-welcome-submeta' },
-                `${String(row.from || row.address || '未知发件人')} · ${mailStamp(row.date)}`,
+                { className: 'nw-welcome-submain' },
+                NW.h('span', { className: 'nw-welcome-subtitle' }, String(row.subject || '（无主题）')),
+                NW.h(
+                  'span',
+                  { className: 'nw-welcome-submeta' },
+                  `${String(row.from || row.address || '未知发件人')} · ${mailStamp(row.date)}`,
+                ),
               ),
+              row.unseen ? NW.h('span', { className: 'nw-badge', 'data-tone': 'brand' }, tr('未读')) : null,
+              NW.h('span', { className: 'nw-welcome-subarrow', 'aria-hidden': 'true' }, NW.icon('caret', { size: 13 })),
             ),
-            row.unseen ? NW.h('span', { className: 'nw-badge', 'data-tone': 'brand' }, tr('未读')) : null,
           ),
         ),
       );
@@ -559,6 +571,25 @@
 .nw-welcome-sub-unread{
   background:color-mix(in srgb, var(--nw-brand) 8%, var(--nw-sunken));
   box-shadow:inset 2px 0 0 var(--nw-brand);
+}
+
+/* R12 ④: the row is a real button now, so it needs the button resets that the
+   generic .nw-welcome-sub never had (it started life as a static li). */
+.nw-welcome-subbtn{
+  width:100%;border:1px solid transparent;font-family:inherit;text-align:left;
+  color:var(--nw-fg);cursor:pointer;
+  transition:background .16s ease,border-color .16s ease,transform .16s ease;
+}
+.nw-welcome-subbtn:hover{
+  border-color:var(--nw-line-strong);
+  background:color-mix(in srgb, var(--nw-fg) 6%, var(--nw-sunken));
+}
+.nw-welcome-subbtn:hover .nw-welcome-subarrow{opacity:1;transform:none;}
+.nw-welcome-subbtn:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
+.nw-welcome-subarrow{
+  display:inline-flex;flex:0 0 auto;color:var(--nw-fg-soft);
+  opacity:0;transform:translateX(-3px);
+  transition:opacity .16s ease,transform .16s ease;
 }
 .nw-welcome-sub-unread .nw-welcome-subtitle{font-weight:600;}
 .nw-welcome-inboxbusy{padding:4px 0;}

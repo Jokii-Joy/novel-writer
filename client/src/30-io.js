@@ -672,6 +672,21 @@
     return api('inbox.list', { limit: Number(input.limit) || 12 });
   }
 
+  /** One message in full, by uid. The list only carries a 160-char snippet. */
+  function inboxRead(uid) {
+    return api('inbox.read', { uid: Number(uid) || 0 });
+  }
+
+  /** Editorial advice (not typo fixes) on one chapter. */
+  function revise(input) {
+    const body = input && typeof input === 'object' ? input : {};
+    const payload = { text: String(body.text == null ? '' : body.text) };
+    if (body.provider) payload.provider = String(body.provider);
+    if (body.model) payload.model = String(body.model);
+    if (body.focus) payload.focus = String(body.focus);
+    return api('revise', payload);
+  }
+
   NW.apiUrl = apiUrl;
   NW.api = api;
 
@@ -722,12 +737,14 @@
       test: imapTest,
       presets: imapPresets,
       list: inboxList,
+      read: inboxRead,
     },
   };
 
   NW.ai = {
     models: models,
     proofread: proofread,
+    revise: revise,
     selftest: selftest,
   };
 })();
