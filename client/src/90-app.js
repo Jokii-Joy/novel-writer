@@ -377,7 +377,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     const [busy, setBusy] = useState('');
     const [caps, setCaps] = useState({ docx: true, epub: true, pdf: true, txt: true });
     const [immersive, setImmersive] = useState(false);
-    const [library, setLibrary] = useState({ dir: '', mirror: false, encrypt: false, lastMirrorAt: 0, dirExists: false });
+    const [library, setLibrary] = useState({ dir: '', mirror: false, encrypt: false, plain: false, lastMirrorAt: 0, dirExists: false });
     /** Studio's own sidebar (the chapter tree) can be hidden independently of the host rail. */
     const [shelfOpen, setShelfOpen] = useState(() => lsGet(LS_SHELF_OPEN) !== '0');
     /**
@@ -662,6 +662,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           dir: String(data.dir || ''),
           mirror: data.mirror === true,
           encrypt: data.encrypt === true,
+          plain: data.plain === true,
           lastMirrorAt: Number(data.lastMirrorAt) || 0,
           dirExists: data.dirExists !== false,
         });
@@ -774,6 +775,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           chapters: snapshot.chapters || [],
           settings: snapshot.settings || {},
           encrypt: cfg.encrypt === true || settings.libraryEncrypt === true,
+          // R15: the plain twin follows the saved preference, so a silent
+          // autosave keeps writing it without the dialog being open.
+          plain: cfg.plain === true,
         });
         if (!aliveRef.current) return data;
         setLibrary((prev) =>
@@ -798,7 +802,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         pushToast(errText(err, '保存到本地目录失败'), 'error');
         return null;
       }
-    }, [pushToast, settings.libraryEncrypt, library.encrypt, library.dir, library.mirror]);
+    }, [pushToast, settings.libraryEncrypt, library.encrypt, library.plain, library.dir, library.mirror]);
 
     /**
      * Autosave: every change to the library data (or the editor's live content)
@@ -2024,6 +2028,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                 dir: String((next && next.dir) || ''),
                 mirror: next && next.mirror === true,
                 encrypt: next && next.encrypt === true,
+                plain: next && next.plain === true,
                 lastMirrorAt: Number(next && next.lastMirrorAt) || 0,
                 dirExists: true,
               };

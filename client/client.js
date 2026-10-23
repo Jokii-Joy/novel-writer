@@ -338,6 +338,9 @@ window.__ModuleLoader__.load({
     '设置': 'Settings',
     '保存': 'Save',
     '自动保存': 'Auto-saved',
+    '同时保存一份明文 .docx': 'Also keep a plain .docx',
+    '同时保留明文副本': 'plain copy kept',
+    '含明文副本': 'with plain copy',
     '已保存': 'Saved',
     '保存中…': 'Saving…',
     '未保存': 'Unsaved',
@@ -3217,11 +3220,15 @@ window.__ModuleLoader__.load({
    */
   function librarySet(patch) {
     const input = patch && typeof patch === 'object' ? patch : {};
-    return api('library.set', {
+    const body = {
       dir: input.dir == null ? '' : String(input.dir),
       mirror: input.mirror === true,
       encrypt: input.encrypt === true,
-    });
+    };
+    // R15: only sent when the caller actually owns the flag — a stale dialog
+    // that has never heard of `plain` must not silently switch it off.
+    if (input.plain !== undefined) body.plain = input.plain === true;
+    return api('library.set', body);
   }
 
   /**
@@ -3230,12 +3237,16 @@ window.__ModuleLoader__.load({
    */
   function libraryMirror(payload) {
     const input = payload && typeof payload === 'object' ? payload : {};
-    return api('library.mirror', {
+    const body = {
       novels: Array.isArray(input.novels) ? input.novels : [],
       chapters: Array.isArray(input.chapters) ? input.chapters : [],
       settings: input.settings && typeof input.settings === 'object' ? input.settings : null,
       encrypt: input.encrypt === true,
-    });
+    };
+    // R15: when omitted the host keeps its stored preference, which is what a
+    // silent autosave wants — the dialog owns the switch, not every save.
+    if (input.plain !== undefined) body.plain = input.plain === true;
+    return api('library.mirror', body);
   }
 
   /** Opens the native folder picker on the host; resolves `{dir}`. */
@@ -9857,7 +9868,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     const [busy, setBusy] = useState('');
     const [caps, setCaps] = useState({ docx: true, epub: true, pdf: true, txt: true });
     const [immersive, setImmersive] = useState(false);
-    const [library, setLibrary] = useState({ dir: '', mirror: false, encrypt: false, lastMirrorAt: 0, dirExists: false });
+    const [library, setLibrary] = useState({ dir: '', mirror: false, encrypt: false, plain: false, lastMirrorAt: 0, dirExists: false });
     /** Studio's own sidebar (the chapter tree) can be hidden independently of the host rail. */
     const [shelfOpen, setShelfOpen] = useState(() => lsGet(LS_SHELF_OPEN) !== '0');
     /**
@@ -10142,6 +10153,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           dir: String(data.dir || ''),
           mirror: data.mirror === true,
           encrypt: data.encrypt === true,
+          plain: data.plain === true,
           lastMirrorAt: Number(data.lastMirrorAt) || 0,
           dirExists: data.dirExists !== false,
         });
@@ -10254,6 +10266,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           chapters: snapshot.chapters || [],
           settings: snapshot.settings || {},
           encrypt: cfg.encrypt === true || settings.libraryEncrypt === true,
+          // R15: the plain twin follows the saved preference, so a silent
+          // autosave keeps writing it without the dialog being open.
+          plain: cfg.plain === true,
         });
         if (!aliveRef.current) return data;
         setLibrary((prev) =>
@@ -10278,7 +10293,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         pushToast(errText(err, '保存到本地目录失败'), 'error');
         return null;
       }
-    }, [pushToast, settings.libraryEncrypt, library.encrypt, library.dir, library.mirror]);
+    }, [pushToast, settings.libraryEncrypt, library.encrypt, library.plain, library.dir, library.mirror]);
 
     /**
      * Autosave: every change to the library data (or the editor's live content)
@@ -11504,6 +11519,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                 dir: String((next && next.dir) || ''),
                 mirror: next && next.mirror === true,
                 encrypt: next && next.encrypt === true,
+                plain: next && next.plain === true,
                 lastMirrorAt: Number(next && next.lastMirrorAt) || 0,
                 dirExists: true,
               };
@@ -12400,6 +12416,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     const state = lib || {};
     if (!state.dir) return lib && lib.busy ? String(lib.busy) : '未选择保存文件夹';
     const parts = [state.mirror === true ? '自动保存开' : '自动保存关', state.encrypt === true ? '加密' : '明文'];
+    if (state.encrypt === true && state.plain === true) parts.push('含明文副本');
     return parts.join(' · ');
   }
 
@@ -13296,6 +13313,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     const [dir, setDir] = useState(() => String(seed.dir || ''));
     const [auto, setAuto] = useState(() => seed.mirror === true);
     const [encrypt, setEncrypt] = useState(() => seed.encrypt !== false);
+    // R15: a readable .docx twin next to every encrypted book, refreshed on each
+    // save. Off by default — turning it on puts the book on disk in the clear.
+    const [plain, setPlain] = useState(() => seed.plain === true);
     const [lastAt, setLastAt] = useState(() => Number(seed.lastMirrorAt) || 0);
     const [files, setFiles] = useState([]);
 
@@ -13326,13 +13346,14 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       }
     };
 
-    /** Persists the folder / auto-save / encrypt triple, then mirrors once. */
+    /** Persists the folder / auto-save / encrypt / plain quad, then mirrors once. */
     const persist = async (patch) => {
       const next = await p.onLibrary(patch);
       if (!next) return null;
       setDir(String(next.dir || ''));
       setAuto(next.mirror === true);
       setEncrypt(next.encrypt === true);
+      setPlain(next.plain === true);
       setLastAt(Number(next.lastMirrorAt) || 0);
       refreshFiles();
       return next;
@@ -13368,7 +13389,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         const picked = await NW.io.library.pick();
         const folder = String((picked && picked.dir) || '');
         if (!folder) return null;
-        await persist({ dir: folder, mirror: true, encrypt: encrypt });
+        await persist({ dir: folder, mirror: true, encrypt: encrypt, plain: plain });
         setHint('已选择保存位置：之后每次修改都会自动覆盖这个文件夹里的文件。');
         return picked;
       });
@@ -13439,7 +13460,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
             onClick: () =>
               run('正在保存设置…', async () => {
                 if (!String(dir || '').trim()) throw new Error('请填写或选择一个文件夹');
-                await persist({ dir: String(dir).trim(), mirror: auto, encrypt: encrypt });
+                await persist({ dir: String(dir).trim(), mirror: auto, encrypt: encrypt, plain: plain });
               }),
             disabled: !!busy,
             children: NW.t('保存'),
@@ -13459,7 +13480,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
             setAuto(v);
             run('正在保存设置…', async () => {
               if (v && !String(dir || '').trim()) throw new Error('请先选择保存文件夹');
-              await persist({ dir: String(dir).trim(), mirror: v, encrypt: encrypt });
+              await persist({ dir: String(dir).trim(), mirror: v, encrypt: encrypt, plain: plain });
             });
           },
           label: '修改后自动保存',
@@ -13478,7 +13499,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
             setEncrypt(v);
             run('正在保存设置…', async () => {
               if (!String(dir || '').trim()) return;
-              await persist({ dir: String(dir).trim(), mirror: auto, encrypt: v });
+              await persist({ dir: String(dir).trim(), mirror: auto, encrypt: v, plain: plain });
             });
           },
           label: '加密保存',
@@ -13488,9 +13509,31 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 
     body.push(
       h(
+        'div',
+        { className: 'nw-row' },
+        h('span', null, '同时保存一份明文 .docx'),
+        NW.ui.toggle({
+          checked: plain,
+          disabled: !encrypt,
+          onChange: (v) => {
+            setPlain(v);
+            run('正在保存设置…', async () => {
+              if (!String(dir || '').trim()) return;
+              await persist({ dir: String(dir).trim(), mirror: auto, encrypt: encrypt, plain: v });
+            });
+          },
+          label: '同时保存明文 .docx',
+        }),
+      ),
+    );
+
+    body.push(
+      h(
         'p',
         { className: 'nw-hint-block' },
-        '加密后文件扩展名是 .docx.nwe，用其它编辑器打不开；密钥只保存在本机，换一台机器前请先用下面的「解密出明文副本」。',
+        encrypt
+          ? '加密后文件扩展名是 .docx.nwe，用其它编辑器打不开；密钥只保存在本机。打开上面的开关后，每次保存都会在旁边写一份能直接用 Word 打开的 .docx —— 那等于这本书也以明文躺在磁盘上；关掉开关，下一次保存会删掉这些明文副本。'
+          : '当前是明文存储，文件夹里的 .docx 可以直接用 Word 打开。',
       ),
     );
 
@@ -13533,6 +13576,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         auto ? '自动保存已开启' : '自动保存已关闭（只能手动保存）',
         encrypt ? '加密存储' : '明文存储',
       );
+      if (encrypt && plain) statusLine.push('同时保留明文副本');
       if (lastAt) statusLine.push('上次保存 ' + NW.fmtDate(lastAt));
     }
     body.push(h('p', { className: 'nw-hint-block' }, statusLine.join(' · ')));
@@ -13605,6 +13649,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       dir: (p.library && p.library.dir) || '',
       mirror: !!(p.library && p.library.mirror),
       encrypt: !!(p.library && p.library.encrypt),
+      plain: !!(p.library && p.library.plain),
       busy: '',
       error: '',
       files: null,
@@ -13719,6 +13764,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
               dir: String(data.dir || ''),
               mirror: data.mirror === true,
               encrypt: data.encrypt === true,
+              plain: data.plain === true,
             }),
           );
         })

@@ -205,6 +205,7 @@
     const state = lib || {};
     if (!state.dir) return lib && lib.busy ? String(lib.busy) : '未选择保存文件夹';
     const parts = [state.mirror === true ? '自动保存开' : '自动保存关', state.encrypt === true ? '加密' : '明文'];
+    if (state.encrypt === true && state.plain === true) parts.push('含明文副本');
     return parts.join(' · ');
   }
 
@@ -1101,6 +1102,9 @@
     const [dir, setDir] = useState(() => String(seed.dir || ''));
     const [auto, setAuto] = useState(() => seed.mirror === true);
     const [encrypt, setEncrypt] = useState(() => seed.encrypt !== false);
+    // R15: a readable .docx twin next to every encrypted book, refreshed on each
+    // save. Off by default — turning it on puts the book on disk in the clear.
+    const [plain, setPlain] = useState(() => seed.plain === true);
     const [lastAt, setLastAt] = useState(() => Number(seed.lastMirrorAt) || 0);
     const [files, setFiles] = useState([]);
 
@@ -1131,13 +1135,14 @@
       }
     };
 
-    /** Persists the folder / auto-save / encrypt triple, then mirrors once. */
+    /** Persists the folder / auto-save / encrypt / plain quad, then mirrors once. */
     const persist = async (patch) => {
       const next = await p.onLibrary(patch);
       if (!next) return null;
       setDir(String(next.dir || ''));
       setAuto(next.mirror === true);
       setEncrypt(next.encrypt === true);
+      setPlain(next.plain === true);
       setLastAt(Number(next.lastMirrorAt) || 0);
       refreshFiles();
       return next;
@@ -1173,7 +1178,7 @@
         const picked = await NW.io.library.pick();
         const folder = String((picked && picked.dir) || '');
         if (!folder) return null;
-        await persist({ dir: folder, mirror: true, encrypt: encrypt });
+        await persist({ dir: folder, mirror: true, encrypt: encrypt, plain: plain });
         setHint('已选择保存位置：之后每次修改都会自动覆盖这个文件夹里的文件。');
         return picked;
       });
@@ -1244,7 +1249,7 @@
             onClick: () =>
               run('正在保存设置…', async () => {
                 if (!String(dir || '').trim()) throw new Error('请填写或选择一个文件夹');
-                await persist({ dir: String(dir).trim(), mirror: auto, encrypt: encrypt });
+                await persist({ dir: String(dir).trim(), mirror: auto, encrypt: encrypt, plain: plain });
               }),
             disabled: !!busy,
             children: NW.t('保存'),
@@ -1264,7 +1269,7 @@
             setAuto(v);
             run('正在保存设置…', async () => {
               if (v && !String(dir || '').trim()) throw new Error('请先选择保存文件夹');
-              await persist({ dir: String(dir).trim(), mirror: v, encrypt: encrypt });
+              await persist({ dir: String(dir).trim(), mirror: v, encrypt: encrypt, plain: plain });
             });
           },
           label: '修改后自动保存',
@@ -1283,7 +1288,7 @@
             setEncrypt(v);
             run('正在保存设置…', async () => {
               if (!String(dir || '').trim()) return;
-              await persist({ dir: String(dir).trim(), mirror: auto, encrypt: v });
+              await persist({ dir: String(dir).trim(), mirror: auto, encrypt: v, plain: plain });
             });
           },
           label: '加密保存',
@@ -1293,9 +1298,31 @@
 
     body.push(
       h(
+        'div',
+        { className: 'nw-row' },
+        h('span', null, '同时保存一份明文 .docx'),
+        NW.ui.toggle({
+          checked: plain,
+          disabled: !encrypt,
+          onChange: (v) => {
+            setPlain(v);
+            run('正在保存设置…', async () => {
+              if (!String(dir || '').trim()) return;
+              await persist({ dir: String(dir).trim(), mirror: auto, encrypt: encrypt, plain: v });
+            });
+          },
+          label: '同时保存明文 .docx',
+        }),
+      ),
+    );
+
+    body.push(
+      h(
         'p',
         { className: 'nw-hint-block' },
-        '加密后文件扩展名是 .docx.nwe，用其它编辑器打不开；密钥只保存在本机，换一台机器前请先用下面的「解密出明文副本」。',
+        encrypt
+          ? '加密后文件扩展名是 .docx.nwe，用其它编辑器打不开；密钥只保存在本机。打开上面的开关后，每次保存都会在旁边写一份能直接用 Word 打开的 .docx —— 那等于这本书也以明文躺在磁盘上；关掉开关，下一次保存会删掉这些明文副本。'
+          : '当前是明文存储，文件夹里的 .docx 可以直接用 Word 打开。',
       ),
     );
 
@@ -1338,6 +1365,7 @@
         auto ? '自动保存已开启' : '自动保存已关闭（只能手动保存）',
         encrypt ? '加密存储' : '明文存储',
       );
+      if (encrypt && plain) statusLine.push('同时保留明文副本');
       if (lastAt) statusLine.push('上次保存 ' + NW.fmtDate(lastAt));
     }
     body.push(h('p', { className: 'nw-hint-block' }, statusLine.join(' · ')));
@@ -1410,6 +1438,7 @@
       dir: (p.library && p.library.dir) || '',
       mirror: !!(p.library && p.library.mirror),
       encrypt: !!(p.library && p.library.encrypt),
+      plain: !!(p.library && p.library.plain),
       busy: '',
       error: '',
       files: null,
@@ -1524,6 +1553,7 @@
               dir: String(data.dir || ''),
               mirror: data.mirror === true,
               encrypt: data.encrypt === true,
+              plain: data.plain === true,
             }),
           );
         })
