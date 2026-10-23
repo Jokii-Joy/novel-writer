@@ -597,6 +597,14 @@
     const trimmedAppend = String(appendText || '').replace(/\r\n|\r/g, '\n');
     const appendTooLong = trimmedAppend.length > APPEND_LIMIT;
 
+    // R14 ①: a short story is one continuous text, so its "chapters" are
+    // scaffolding, not structure. Default to continuous when the book has a
+    // single chapter — the user can still force chapter headings back on.
+    const chapterCount = Array.isArray(p.chapters)
+      ? p.chapters.filter((row) => row && String(row.novelId || '') === String(novel.id || '')).length
+      : 0;
+    const [continuous, setContinuous] = useState(chapterCount <= 1);
+
     // Chapter titles already read like "第一章 归途", so never wrap them in
     // another "第 … 章" here or the sentence stutters.
     const chapterLabel = String((chapter && chapter.title) || '当前章');
@@ -627,6 +635,10 @@
             pageBreak: !!pageBreaks,
             includeToc: !!includeToc,
             includeMeta: !!includeMeta,
+            // R14 ①: drop the chapter headings entirely for a single-piece
+            // story; `noPlaceholders` keeps real titles but strips 「新章节」.
+            continuous: !!continuous,
+            noPlaceholders: true,
           },
         };
         await p.onExport(payload);
@@ -690,6 +702,12 @@
             NW.ui.btn({ onClick: pickCover, disabled: busy, children: '选择…' }),
             cover ? NW.ui.btn({ kind: 'ghost', onClick: () => setCover(''), children: '清除' }) : null,
           ),
+        ),
+        h(
+          'div',
+          { className: 'nw-row' },
+          h('span', null, '不分章节（短篇连续排版）'),
+          NW.ui.toggle({ checked: continuous, onChange: setContinuous, label: '不分章节（短篇连续排版）' }),
         ),
         h(
           'div',
@@ -4063,6 +4081,10 @@
             error: String((data && data.error) || (message ? '' : '服务器没有返回正文')),
             hint: String((data && data.hint) || ''),
           });
+          // R14 ②: the host marks the mail \Seen while fetching it, so the home
+          // screen's 未读 badge is stale until it re-reads the mailbox. Refresh
+          // only on success — a failed read must not look like a status change.
+          if (message && typeof p.onMailRead === 'function') p.onMailRead(message);
         })
         .catch((err) => {
           if (!alive) return;
@@ -4108,6 +4130,7 @@
                   error: String((data && data.error) || (message ? '' : '服务器没有返回正文')),
                   hint: String((data && data.hint) || ''),
                 });
+                if (message && typeof p.onMailRead === 'function') p.onMailRead(message);
               })
               .catch((err) => setState({ loading: false, message: null, error: errText(err, '读取邮件失败'), hint: '' }));
           },

@@ -206,6 +206,10 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",serif;
   font-size:15px;line-height:1.85;
   caret-color:var(--dsw-alias-brand-primary);
+  /* R14 ③: height is set from scrollHeight on every change (auto-grow), so the
+     textarea itself must never scroll — the card's own max-height governs. */
+  overflow:hidden;
+  transition:height .12s ease;
 }
 .nw-notes-input::placeholder{color:var(--dsw-alias-label-secondary);opacity:.65;}
 .nw-notes-foot{
@@ -393,6 +397,8 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
      */
     const [notesOpen, setNotesOpen] = useState(() => lsGet(LS_NOTES_OPEN) === '1');
     const [notes, setNotes] = useState([]);
+    /** R14 ③: the open chapter's note, kept here so the card can render at once. */
+    const [noteText, setNoteText] = useState('');
     /**
      * Which screen the main column shows. R5 opens on the welcome screen —
      * picking a chapter (or 继续写作) switches to the editor. The editor stays
@@ -668,24 +674,33 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     }, [ready, locked, refreshLibrary]);
 
     /**
-     * 灵感便签 (R10): load the notes for the open book, and keep them in sync
-     * after every create/delete. Notes belong to a book (not a chapter) so an
-     * idea jotted down in chapter 3 is still there in chapter 9.
+     * 灵感便签 (R10, reworked in R14 ③): the card now belongs to the open
+     * chapter. `noteText` keeps the chapter's own draft, so switching chapters
+     * shows a different card instead of one growing blob for the whole book.
      */
     const refreshNotes = useCallback(async () => {
       try {
-        const rows = await NW.db.listNotes(activeNovelId || '');
+        const activeId = (chapterRef.current && chapterRef.current.id) || '';
+        const rows = await NW.db.listNotes(activeNovelId || '', activeId);
         if (!aliveRef.current) return;
-        setNotes(Array.isArray(rows) ? rows : []);
+        const list = Array.isArray(rows) ? rows : [];
+        setNotes(list);
+        setNoteText(list.length > 0 ? String(list[0].text || '') : '');
       } catch (err) {
-        if (aliveRef.current) setNotes([]);
+        if (aliveRef.current) {
+          setNotes([]);
+          setNoteText('');
+        }
       }
     }, [activeNovelId]);
 
     useEffect(() => {
       if (!ready || locked) return;
       refreshNotes();
-    }, [ready, locked, refreshNotes]);
+      // R14 ③: notes follow the chapter, so switching chapters must reload the
+      // card. Keyed on the id (not the object) so a save that returns a new
+      // chapter object with the same id does not blank the card mid-typing.
+    }, [ready, locked, refreshNotes, chapter && chapter.id]);
 
     const createNote = useCallback(
       async (text) => {
@@ -718,34 +733,20 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     );
 
     /**
-     * R11: the 灵感便签 is now one plain editing page, so saving means
-     * "make the stored notes equal this text". Collapsing many rows into one
-     * keeps the page identical every time it opens — a note list would put
-     * chrome back on a surface the user asked to keep empty.
+     * R14 ③: the note card autosaves on every keystroke (debounced), so there is
+     * no 保存 step any more. One row per chapter — the text is replaced, not
+     * appended, and clearing the box deletes the row.
      */
     const saveNotes = useCallback(
       async (text) => {
-        const body = String(text == null ? '' : text).trim();
         try {
-          const rows = await NW.db.listNotes(activeNovelId || '');
-          const list0 = Array.isArray(rows) ? rows : [];
-          if (!body) {
-            for (const row of list0) await NW.db.deleteNote(row.id);
-            await refreshNotes();
-            return;
-          }
-          if (list0.length === 0) {
-            await NW.db.createNote({
-              novelId: activeNovelId || '',
-              chapterId: (chapterRef.current && chapterRef.current.id) || '',
-              text: body,
-            });
-          } else {
-            // Keep the oldest row (stable id) and fold everything else into it.
-            const keep = list0[0];
-            await NW.db.updateNote(keep.id, { text: body });
-            for (let i = 1; i < list0.length; i += 1) await NW.db.deleteNote(list0[i].id);
-          }
+          const activeId = (chapterRef.current && chapterRef.current.id) || '';
+          if (!activeId) return;
+          await NW.db.saveChapterNote({
+            novelId: activeNovelId || '',
+            chapterId: activeId,
+            text: String(text == null ? '' : text),
+          });
           await refreshNotes();
         } catch (err) {
           pushToast('保存灵感失败', 'err');
@@ -1898,7 +1899,8 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                     // card would otherwise drift on top of the suggestions.
                     h(Notes, {
                       open: notesOpen,
-                      notes: notes,
+                      text: noteText,
+                      chapterId: chapter.id,
                       onToggle: () => setNotesOpen((v) => !v),
                       onSave: saveNotes,
                     }),
@@ -2021,6 +2023,13 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
               setDialog(null);
               pushToast('投稿已发送', 'ok');
               // Keep the home screen's 投稿记录 card honest without a reload.
+              refreshHomeFeed();
+            },
+            // R14 ②: opening a mail marks it \Seen on the server, so the card
+            // has to re-read the mailbox or it keeps showing the old 未读 count.
+            // Refreshed in the background — the reader is already open.
+            onMailRead: () => {
+              refreshInbox();
               refreshHomeFeed();
             },
             // 投稿管理 → 「重新投稿」 reopens the wizard on step 1 with that
@@ -2395,37 +2404,72 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
    */
   function Notes(props) {
     const p = props || {};
-    const list = Array.isArray(p.notes) ? p.notes : [];
     const [text, setText] = useState('');
-    const [dirty, setDirty] = useState(false);
+    const [state, setState] = useState('idle');
     const areaRef = useRef(null);
     const savedRef = useRef('');
+    const timerRef = useRef(0);
 
-    // Seed the page whenever it opens, or when the stored notes change while
-    // it is closed (e.g. another window wrote a note).
+    // R14 ③: the card is bound to one chapter, so the seed is a single string
+    // handed down by the App (`p.text`), not a list of rows to join. The text
+    // also arrives one render later (the App loads it from IndexedDB), which is
+    // why `p.text` is a dependency — the `savedRef` guard keeps a save that
+    // echoes our own keystrokes from resetting the caret.
     useEffect(() => {
-      if (!p.open) return;
-      const joined = list
-        .map((row) => String((row && row.text) || '').trim())
-        .filter(Boolean)
-        .join('\n\n');
-      savedRef.current = joined;
-      setText(joined);
-      setDirty(false);
-      const timer = setTimeout(() => {
-        if (areaRef.current) areaRef.current.focus();
-      }, 30);
-      return () => clearTimeout(timer);
+      const next = String(p.text == null ? '' : p.text);
+      if (next === savedRef.current) return;
+      savedRef.current = next;
+      // While the card has focus, a value echoed back by the save round trip
+      // must not overwrite what is being typed (it would jump the caret).
+      if (areaRef.current && document.activeElement === areaRef.current) return;
+      setText(next);
+      setState('idle');
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [p.open]);
+    }, [p.chapterId, p.open, p.text]);
 
-    const commit = () => {
-      const body = text;
+    // Autosave: 600ms after the last keystroke. Blur/Esc still commit at once so
+    // closing the card never loses the last sentence.
+    const flush = (value) => {
+      const body = String(value == null ? '' : value);
       if (body === savedRef.current) return;
       savedRef.current = body;
-      setDirty(false);
+      setState('saved');
       if (typeof p.onSave === 'function') p.onSave(body);
     };
+
+    const schedule = (value) => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      setState('typing');
+      timerRef.current = setTimeout(() => {
+        timerRef.current = 0;
+        flush(value);
+      }, 600);
+    };
+
+    const commit = (value) => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = 0;
+      }
+      flush(value);
+    };
+
+    useEffect(
+      () => () => {
+        if (timerRef.current) clearTimeout(timerRef.current);
+      },
+      [],
+    );
+
+    // Auto-grow: the box follows the text instead of scrolling inside a fixed
+    // 96px window. Re-measured on every value change and when the card opens
+    // (a chapter switch can change the text length without a keystroke).
+    useEffect(() => {
+      const el = areaRef.current;
+      if (!el) return;
+      el.style.height = 'auto';
+      el.style.height = `${Math.min(el.scrollHeight + 2, 420)}px`;
+    }, [text, p.open]);
 
     return h(
       'aside',
@@ -2461,14 +2505,14 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
               h(
                 'span',
                 { className: 'nw-notes-state' },
-                dirty ? NW.t('未保存') : text ? NW.t('已保存') : NW.t('空白'),
+                state === 'typing' ? NW.t('未保存') : text ? NW.t('已保存') : NW.t('空白'),
               ),
               NW.ui.btn({
                 kind: 'icon',
                 title: NW.t('收起灵感便签'),
                 ariaLabel: NW.t('收起灵感便签'),
                 onClick: () => {
-                  commit();
+                  commit(text);
                   if (typeof p.onToggle === 'function') p.onToggle();
                 },
                 children: NW.icon('x', { size: 14 }),
@@ -2478,25 +2522,21 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
               ref: areaRef,
               className: 'nw-notes-input',
               value: text,
+              rows: 3,
               spellCheck: false,
               placeholder: NW.t('随手记一句：一个画面、一句对白、一个转折…'),
               'aria-label': NW.t('灵感便签'),
               onChange: (ev) => {
                 setText(ev.target.value);
-                setDirty(ev.target.value !== savedRef.current);
+                schedule(ev.target.value);
               },
-              onBlur: commit,
+              onBlur: (ev) => commit(ev.target.value),
               onKeyDown: (ev) => {
-                // Ctrl/Cmd + Enter commits without leaving the keyboard.
-                if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) {
-                  ev.preventDefault();
-                  commit();
-                  return;
-                }
-                // Escape commits and closes the card, matching the rest of the app.
+                // Escape closes the card (and commits) — Enter is plain newline
+                // now that saving is automatic.
                 if (ev.key === 'Escape') {
                   ev.preventDefault();
-                  commit();
+                  commit(ev.target.value);
                   if (typeof p.onToggle === 'function') p.onToggle();
                 }
               },
@@ -2504,10 +2544,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
             h(
               'div',
               { className: 'nw-notes-foot' },
-              h('kbd', null, 'Ctrl'),
-              h('span', null, '+'),
-              h('kbd', null, 'Enter'),
-              h('span', null, NW.t('保存')),
+              h('span', null, NW.t('自动保存')),
               h('span', { className: 'nw-notes-spacer' }),
               h('span', null, NW.t('Esc 收起')),
             ),

@@ -18,6 +18,7 @@
     '回收站': 'Trash',
     '设置': 'Settings',
     '保存': 'Save',
+    '自动保存': 'Auto-saved',
     '已保存': 'Saved',
     '保存中…': 'Saving…',
     '未保存': 'Unsaved',

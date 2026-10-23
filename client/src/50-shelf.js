@@ -986,9 +986,8 @@
             makeIconBtn(icon('lock', 15), tr('锁定'), () => {
               if (typeof P.onLock === 'function') P.onLock();
             }),
-            makeIconBtn(icon('gear', 15), tr('设置'), () => {
-              if (typeof P.onOpenSettings === 'function') P.onOpenSettings();
-            }),
+            // R14 ④: 设置 left the top strip — it already sits in the footer,
+            // and two doors to the same dialog only made the header look busy.
             makeIconBtn(icon('chevleft', 15), tr('收起侧栏'), collapseShelf),
           ),
         ),

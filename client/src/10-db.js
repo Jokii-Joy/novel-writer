@@ -1006,17 +1006,65 @@
    * export. Notes ride along in `dump()`/`replaceAll()` so a folder backup still
    * restores them.
    */
-  async function listNotes(novelId) {
+  async function listNotes(novelId, chapterId) {
     const rows = novelId
       ? await readIndex('notes', 'byNovelId', novelId)
       : await readAll('notes');
+    // R14 ③: notes are per chapter now. `chapterId` is optional so callers that
+    // want the whole book (export, restore, diagnostics) still get everything.
+    const wantChapter = chapterId == null ? '' : String(chapterId);
     return (rows || [])
       .filter(function (row) {
-        return row && row.id;
+        if (!row || !row.id) return false;
+        if (!wantChapter) return true;
+        return String(row.chapterId || '') === wantChapter;
       })
       .sort(function (a, b) {
         return (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0);
       });
+  }
+
+  /**
+   * R14 ③: one note per chapter, written on every edit.
+   *
+   * The note is a single text blob keyed by `chapterId`, so switching chapters
+   * never mixes two drafts of your thinking. Empty text deletes the row instead
+   * of storing an empty one (an empty note would still render as a card).
+   */
+  async function saveChapterNote(input) {
+    const data = input || {};
+    const chapterId = String(data.chapterId || '');
+    const novelId = String(data.novelId || '');
+    const text = String(data.text == null ? '' : data.text);
+    if (!chapterId) return undefined;
+    const existing = await listNotes(novelId, chapterId);
+    const current = existing[0];
+    const trimmed = text.replace(/\s+$/, '');
+    if (!trimmed.trim()) {
+      if (current) await deleteNote(current.id);
+      return undefined;
+    }
+    if (current) {
+      if (current.text === trimmed) return current;
+      const next = Object.assign({}, current, { text: trimmed, updatedAt: now() });
+      const ok = await writeBatch([{ store: 'notes', type: 'put', value: next }]);
+      if (!ok) throw new Error('保存灵感失败');
+      notify();
+      return next;
+    }
+    const stamp = now();
+    const note = {
+      id: uid('note'),
+      novelId: novelId,
+      chapterId: chapterId,
+      text: trimmed,
+      createdAt: stamp,
+      updatedAt: stamp,
+    };
+    const ok = await writeBatch([{ store: 'notes', type: 'put', value: note }]);
+    if (!ok) throw new Error('保存灵感失败');
+    notify();
+    return note;
   }
 
   async function createNote(input) {
@@ -1189,6 +1237,7 @@
     getSettings: getSettings,
     saveSettings: saveSettings,
     listNotes: listNotes,
+    saveChapterNote: saveChapterNote,
     createNote: createNote,
     updateNote: updateNote,
     deleteNote: deleteNote,

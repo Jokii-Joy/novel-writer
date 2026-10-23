@@ -337,6 +337,7 @@ window.__ModuleLoader__.load({
     '回收站': 'Trash',
     '设置': 'Settings',
     '保存': 'Save',
+    '自动保存': 'Auto-saved',
     '已保存': 'Saved',
     '保存中…': 'Saving…',
     '未保存': 'Unsaved',
@@ -1630,17 +1631,65 @@ window.__ModuleLoader__.load({
    * export. Notes ride along in `dump()`/`replaceAll()` so a folder backup still
    * restores them.
    */
-  async function listNotes(novelId) {
+  async function listNotes(novelId, chapterId) {
     const rows = novelId
       ? await readIndex('notes', 'byNovelId', novelId)
       : await readAll('notes');
+    // R14 ③: notes are per chapter now. `chapterId` is optional so callers that
+    // want the whole book (export, restore, diagnostics) still get everything.
+    const wantChapter = chapterId == null ? '' : String(chapterId);
     return (rows || [])
       .filter(function (row) {
-        return row && row.id;
+        if (!row || !row.id) return false;
+        if (!wantChapter) return true;
+        return String(row.chapterId || '') === wantChapter;
       })
       .sort(function (a, b) {
         return (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0);
       });
+  }
+
+  /**
+   * R14 ③: one note per chapter, written on every edit.
+   *
+   * The note is a single text blob keyed by `chapterId`, so switching chapters
+   * never mixes two drafts of your thinking. Empty text deletes the row instead
+   * of storing an empty one (an empty note would still render as a card).
+   */
+  async function saveChapterNote(input) {
+    const data = input || {};
+    const chapterId = String(data.chapterId || '');
+    const novelId = String(data.novelId || '');
+    const text = String(data.text == null ? '' : data.text);
+    if (!chapterId) return undefined;
+    const existing = await listNotes(novelId, chapterId);
+    const current = existing[0];
+    const trimmed = text.replace(/\s+$/, '');
+    if (!trimmed.trim()) {
+      if (current) await deleteNote(current.id);
+      return undefined;
+    }
+    if (current) {
+      if (current.text === trimmed) return current;
+      const next = Object.assign({}, current, { text: trimmed, updatedAt: now() });
+      const ok = await writeBatch([{ store: 'notes', type: 'put', value: next }]);
+      if (!ok) throw new Error('保存灵感失败');
+      notify();
+      return next;
+    }
+    const stamp = now();
+    const note = {
+      id: uid('note'),
+      novelId: novelId,
+      chapterId: chapterId,
+      text: trimmed,
+      createdAt: stamp,
+      updatedAt: stamp,
+    };
+    const ok = await writeBatch([{ store: 'notes', type: 'put', value: note }]);
+    if (!ok) throw new Error('保存灵感失败');
+    notify();
+    return note;
   }
 
   async function createNote(input) {
@@ -1813,6 +1862,7 @@ window.__ModuleLoader__.load({
     getSettings: getSettings,
     saveSettings: saveSettings,
     listNotes: listNotes,
+    saveChapterNote: saveChapterNote,
     createNote: createNote,
     updateNote: updateNote,
     deleteNote: deleteNote,
@@ -5743,9 +5793,8 @@ window.__ModuleLoader__.load({
             makeIconBtn(icon('lock', 15), tr('锁定'), () => {
               if (typeof P.onLock === 'function') P.onLock();
             }),
-            makeIconBtn(icon('gear', 15), tr('设置'), () => {
-              if (typeof P.onOpenSettings === 'function') P.onOpenSettings();
-            }),
+            // R14 ④: 设置 left the top strip — it already sits in the footer,
+            // and two doors to the same dialog only made the header look busy.
             makeIconBtn(icon('chevleft', 15), tr('收起侧栏'), collapseShelf),
           ),
         ),
@@ -9637,6 +9686,10 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",serif;
   font-size:15px;line-height:1.85;
   caret-color:var(--dsw-alias-brand-primary);
+  /* R14 ③: height is set from scrollHeight on every change (auto-grow), so the
+     textarea itself must never scroll — the card's own max-height governs. */
+  overflow:hidden;
+  transition:height .12s ease;
 }
 .nw-notes-input::placeholder{color:var(--dsw-alias-label-secondary);opacity:.65;}
 .nw-notes-foot{
@@ -9824,6 +9877,8 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
      */
     const [notesOpen, setNotesOpen] = useState(() => lsGet(LS_NOTES_OPEN) === '1');
     const [notes, setNotes] = useState([]);
+    /** R14 ③: the open chapter's note, kept here so the card can render at once. */
+    const [noteText, setNoteText] = useState('');
     /**
      * Which screen the main column shows. R5 opens on the welcome screen —
      * picking a chapter (or 继续写作) switches to the editor. The editor stays
@@ -10099,24 +10154,33 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     }, [ready, locked, refreshLibrary]);
 
     /**
-     * 灵感便签 (R10): load the notes for the open book, and keep them in sync
-     * after every create/delete. Notes belong to a book (not a chapter) so an
-     * idea jotted down in chapter 3 is still there in chapter 9.
+     * 灵感便签 (R10, reworked in R14 ③): the card now belongs to the open
+     * chapter. `noteText` keeps the chapter's own draft, so switching chapters
+     * shows a different card instead of one growing blob for the whole book.
      */
     const refreshNotes = useCallback(async () => {
       try {
-        const rows = await NW.db.listNotes(activeNovelId || '');
+        const activeId = (chapterRef.current && chapterRef.current.id) || '';
+        const rows = await NW.db.listNotes(activeNovelId || '', activeId);
         if (!aliveRef.current) return;
-        setNotes(Array.isArray(rows) ? rows : []);
+        const list = Array.isArray(rows) ? rows : [];
+        setNotes(list);
+        setNoteText(list.length > 0 ? String(list[0].text || '') : '');
       } catch (err) {
-        if (aliveRef.current) setNotes([]);
+        if (aliveRef.current) {
+          setNotes([]);
+          setNoteText('');
+        }
       }
     }, [activeNovelId]);
 
     useEffect(() => {
       if (!ready || locked) return;
       refreshNotes();
-    }, [ready, locked, refreshNotes]);
+      // R14 ③: notes follow the chapter, so switching chapters must reload the
+      // card. Keyed on the id (not the object) so a save that returns a new
+      // chapter object with the same id does not blank the card mid-typing.
+    }, [ready, locked, refreshNotes, chapter && chapter.id]);
 
     const createNote = useCallback(
       async (text) => {
@@ -10149,34 +10213,20 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     );
 
     /**
-     * R11: the 灵感便签 is now one plain editing page, so saving means
-     * "make the stored notes equal this text". Collapsing many rows into one
-     * keeps the page identical every time it opens — a note list would put
-     * chrome back on a surface the user asked to keep empty.
+     * R14 ③: the note card autosaves on every keystroke (debounced), so there is
+     * no 保存 step any more. One row per chapter — the text is replaced, not
+     * appended, and clearing the box deletes the row.
      */
     const saveNotes = useCallback(
       async (text) => {
-        const body = String(text == null ? '' : text).trim();
         try {
-          const rows = await NW.db.listNotes(activeNovelId || '');
-          const list0 = Array.isArray(rows) ? rows : [];
-          if (!body) {
-            for (const row of list0) await NW.db.deleteNote(row.id);
-            await refreshNotes();
-            return;
-          }
-          if (list0.length === 0) {
-            await NW.db.createNote({
-              novelId: activeNovelId || '',
-              chapterId: (chapterRef.current && chapterRef.current.id) || '',
-              text: body,
-            });
-          } else {
-            // Keep the oldest row (stable id) and fold everything else into it.
-            const keep = list0[0];
-            await NW.db.updateNote(keep.id, { text: body });
-            for (let i = 1; i < list0.length; i += 1) await NW.db.deleteNote(list0[i].id);
-          }
+          const activeId = (chapterRef.current && chapterRef.current.id) || '';
+          if (!activeId) return;
+          await NW.db.saveChapterNote({
+            novelId: activeNovelId || '',
+            chapterId: activeId,
+            text: String(text == null ? '' : text),
+          });
           await refreshNotes();
         } catch (err) {
           pushToast('保存灵感失败', 'err');
@@ -11329,7 +11379,8 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                     // card would otherwise drift on top of the suggestions.
                     h(Notes, {
                       open: notesOpen,
-                      notes: notes,
+                      text: noteText,
+                      chapterId: chapter.id,
                       onToggle: () => setNotesOpen((v) => !v),
                       onSave: saveNotes,
                     }),
@@ -11452,6 +11503,13 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
               setDialog(null);
               pushToast('投稿已发送', 'ok');
               // Keep the home screen's 投稿记录 card honest without a reload.
+              refreshHomeFeed();
+            },
+            // R14 ②: opening a mail marks it \Seen on the server, so the card
+            // has to re-read the mailbox or it keeps showing the old 未读 count.
+            // Refreshed in the background — the reader is already open.
+            onMailRead: () => {
+              refreshInbox();
               refreshHomeFeed();
             },
             // 投稿管理 → 「重新投稿」 reopens the wizard on step 1 with that
@@ -11826,37 +11884,72 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
    */
   function Notes(props) {
     const p = props || {};
-    const list = Array.isArray(p.notes) ? p.notes : [];
     const [text, setText] = useState('');
-    const [dirty, setDirty] = useState(false);
+    const [state, setState] = useState('idle');
     const areaRef = useRef(null);
     const savedRef = useRef('');
+    const timerRef = useRef(0);
 
-    // Seed the page whenever it opens, or when the stored notes change while
-    // it is closed (e.g. another window wrote a note).
+    // R14 ③: the card is bound to one chapter, so the seed is a single string
+    // handed down by the App (`p.text`), not a list of rows to join. The text
+    // also arrives one render later (the App loads it from IndexedDB), which is
+    // why `p.text` is a dependency — the `savedRef` guard keeps a save that
+    // echoes our own keystrokes from resetting the caret.
     useEffect(() => {
-      if (!p.open) return;
-      const joined = list
-        .map((row) => String((row && row.text) || '').trim())
-        .filter(Boolean)
-        .join('\n\n');
-      savedRef.current = joined;
-      setText(joined);
-      setDirty(false);
-      const timer = setTimeout(() => {
-        if (areaRef.current) areaRef.current.focus();
-      }, 30);
-      return () => clearTimeout(timer);
+      const next = String(p.text == null ? '' : p.text);
+      if (next === savedRef.current) return;
+      savedRef.current = next;
+      // While the card has focus, a value echoed back by the save round trip
+      // must not overwrite what is being typed (it would jump the caret).
+      if (areaRef.current && document.activeElement === areaRef.current) return;
+      setText(next);
+      setState('idle');
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [p.open]);
+    }, [p.chapterId, p.open, p.text]);
 
-    const commit = () => {
-      const body = text;
+    // Autosave: 600ms after the last keystroke. Blur/Esc still commit at once so
+    // closing the card never loses the last sentence.
+    const flush = (value) => {
+      const body = String(value == null ? '' : value);
       if (body === savedRef.current) return;
       savedRef.current = body;
-      setDirty(false);
+      setState('saved');
       if (typeof p.onSave === 'function') p.onSave(body);
     };
+
+    const schedule = (value) => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      setState('typing');
+      timerRef.current = setTimeout(() => {
+        timerRef.current = 0;
+        flush(value);
+      }, 600);
+    };
+
+    const commit = (value) => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = 0;
+      }
+      flush(value);
+    };
+
+    useEffect(
+      () => () => {
+        if (timerRef.current) clearTimeout(timerRef.current);
+      },
+      [],
+    );
+
+    // Auto-grow: the box follows the text instead of scrolling inside a fixed
+    // 96px window. Re-measured on every value change and when the card opens
+    // (a chapter switch can change the text length without a keystroke).
+    useEffect(() => {
+      const el = areaRef.current;
+      if (!el) return;
+      el.style.height = 'auto';
+      el.style.height = `${Math.min(el.scrollHeight + 2, 420)}px`;
+    }, [text, p.open]);
 
     return h(
       'aside',
@@ -11892,14 +11985,14 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
               h(
                 'span',
                 { className: 'nw-notes-state' },
-                dirty ? NW.t('未保存') : text ? NW.t('已保存') : NW.t('空白'),
+                state === 'typing' ? NW.t('未保存') : text ? NW.t('已保存') : NW.t('空白'),
               ),
               NW.ui.btn({
                 kind: 'icon',
                 title: NW.t('收起灵感便签'),
                 ariaLabel: NW.t('收起灵感便签'),
                 onClick: () => {
-                  commit();
+                  commit(text);
                   if (typeof p.onToggle === 'function') p.onToggle();
                 },
                 children: NW.icon('x', { size: 14 }),
@@ -11909,25 +12002,21 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
               ref: areaRef,
               className: 'nw-notes-input',
               value: text,
+              rows: 3,
               spellCheck: false,
               placeholder: NW.t('随手记一句：一个画面、一句对白、一个转折…'),
               'aria-label': NW.t('灵感便签'),
               onChange: (ev) => {
                 setText(ev.target.value);
-                setDirty(ev.target.value !== savedRef.current);
+                schedule(ev.target.value);
               },
-              onBlur: commit,
+              onBlur: (ev) => commit(ev.target.value),
               onKeyDown: (ev) => {
-                // Ctrl/Cmd + Enter commits without leaving the keyboard.
-                if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) {
-                  ev.preventDefault();
-                  commit();
-                  return;
-                }
-                // Escape commits and closes the card, matching the rest of the app.
+                // Escape closes the card (and commits) — Enter is plain newline
+                // now that saving is automatic.
                 if (ev.key === 'Escape') {
                   ev.preventDefault();
-                  commit();
+                  commit(ev.target.value);
                   if (typeof p.onToggle === 'function') p.onToggle();
                 }
               },
@@ -11935,10 +12024,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
             h(
               'div',
               { className: 'nw-notes-foot' },
-              h('kbd', null, 'Ctrl'),
-              h('span', null, '+'),
-              h('kbd', null, 'Enter'),
-              h('span', null, NW.t('保存')),
+              h('span', null, NW.t('自动保存')),
               h('span', { className: 'nw-notes-spacer' }),
               h('span', null, NW.t('Esc 收起')),
             ),
@@ -12724,6 +12810,14 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     const trimmedAppend = String(appendText || '').replace(/\r\n|\r/g, '\n');
     const appendTooLong = trimmedAppend.length > APPEND_LIMIT;
 
+    // R14 ①: a short story is one continuous text, so its "chapters" are
+    // scaffolding, not structure. Default to continuous when the book has a
+    // single chapter — the user can still force chapter headings back on.
+    const chapterCount = Array.isArray(p.chapters)
+      ? p.chapters.filter((row) => row && String(row.novelId || '') === String(novel.id || '')).length
+      : 0;
+    const [continuous, setContinuous] = useState(chapterCount <= 1);
+
     // Chapter titles already read like "第一章 归途", so never wrap them in
     // another "第 … 章" here or the sentence stutters.
     const chapterLabel = String((chapter && chapter.title) || '当前章');
@@ -12754,6 +12848,10 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
             pageBreak: !!pageBreaks,
             includeToc: !!includeToc,
             includeMeta: !!includeMeta,
+            // R14 ①: drop the chapter headings entirely for a single-piece
+            // story; `noPlaceholders` keeps real titles but strips 「新章节」.
+            continuous: !!continuous,
+            noPlaceholders: true,
           },
         };
         await p.onExport(payload);
@@ -12817,6 +12915,12 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
             NW.ui.btn({ onClick: pickCover, disabled: busy, children: '选择…' }),
             cover ? NW.ui.btn({ kind: 'ghost', onClick: () => setCover(''), children: '清除' }) : null,
           ),
+        ),
+        h(
+          'div',
+          { className: 'nw-row' },
+          h('span', null, '不分章节（短篇连续排版）'),
+          NW.ui.toggle({ checked: continuous, onChange: setContinuous, label: '不分章节（短篇连续排版）' }),
         ),
         h(
           'div',
@@ -16190,6 +16294,10 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
             error: String((data && data.error) || (message ? '' : '服务器没有返回正文')),
             hint: String((data && data.hint) || ''),
           });
+          // R14 ②: the host marks the mail \Seen while fetching it, so the home
+          // screen's 未读 badge is stale until it re-reads the mailbox. Refresh
+          // only on success — a failed read must not look like a status change.
+          if (message && typeof p.onMailRead === 'function') p.onMailRead(message);
         })
         .catch((err) => {
           if (!alive) return;
@@ -16235,6 +16343,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                   error: String((data && data.error) || (message ? '' : '服务器没有返回正文')),
                   hint: String((data && data.hint) || ''),
                 });
+                if (message && typeof p.onMailRead === 'function') p.onMailRead(message);
               })
               .catch((err) => setState({ loading: false, message: null, error: errText(err, '读取邮件失败'), hint: '' }));
           },
