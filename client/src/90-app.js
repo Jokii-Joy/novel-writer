@@ -2060,6 +2060,17 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
               refreshInbox();
               refreshHomeFeed();
             },
+            // R17 ②: the reader's 「去投稿」 button used to call `p.onReply`,
+            // which DialogHost never passed — so the button was inert. Route it
+            // into the submit wizard the same way 「重新投稿」 does; the wizard
+            // defaults to the open novel and the mail's journal when known.
+            onReply: (mail) => {
+              setDialog({
+                kind: 'submit',
+                step: 1,
+                journalId: String((mail && mail.journalId) || ''),
+              });
+            },
             // 投稿管理 → 「重新投稿」 reopens the wizard on step 1 with that
             // journal already selected.
             onResubmit: (row) => {
@@ -2334,7 +2345,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       body = h(
         'div',
         { className: 'nw-suggest-empty' },
-        NW.icon('sparkle', { size: 26 }),
+        NW.icon('sparkle', { size: 24 }),
         h('span', null, NW.t('让模型通读这一章，指出最值得改的地方。')),
         h('span', { style: { fontSize: '12px', opacity: '.7' } }, NW.t('建议是意见，不是自动替换；点一条会把原文滚到那一段。')),
         NW.ui.btn({ kind: 'primary', onClick: () => run(focus), children: NW.t('开始审读') }),
@@ -2343,7 +2354,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       body = h(
         'div',
         { className: 'nw-suggest-empty' },
-        NW.icon('success', { size: 26 }),
+        NW.icon('success', { size: 24 }),
         h('span', null, NW.t('这一章没有被标出的明显问题。')),
         h('span', { style: { fontSize: '12px', opacity: '.7' } }, NW.t('换个重点再看看，或写下去。')),
       );
@@ -2523,7 +2534,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           'aria-label': p.open ? NW.t('收起灵感便签') : NW.t('展开灵感便签'),
           onClick: p.onToggle,
         },
-        h('span', { className: 'nw-notes-tabicon', 'aria-hidden': 'true' }, NW.icon('sparkle', { size: 15 })),
+        h('span', { className: 'nw-notes-tabicon', 'aria-hidden': 'true' }, NW.icon('sparkle', { size: 16 })),
         p.open ? null : h('span', { className: 'nw-notes-tabtxt' }, NW.t('灵感')),
       ),
       p.open

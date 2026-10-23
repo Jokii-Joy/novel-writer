@@ -67,6 +67,31 @@
     return Math.min(hi, Math.max(lo, value));
   }
 
+  /**
+   * Titles the editor must not print above the text.
+   *
+   * Mirrors `isPlaceholderTitle()` in `lib/routes.js`: chapters created with
+   * the toolbar are all called "新章节", so a short story written in one of
+   * them would otherwise open with a machine-generated heading. A real title
+   * ("第一章 起" / "雪夜") still shows.
+   */
+  const PLACEHOLDER_TITLES = {
+    '新章节': true,
+    '未命名': true,
+    '未命名章节': true,
+    '正文': true,
+    '无题': true,
+    '内容': true,
+  };
+  const PLACEHOLDER_RE = /^(?:新章节|未命名章节?)\s*\d*$|^第\s*[0-9零一二三四五六七八九十百]+\s*[章节回卷幕]$/;
+
+  function isPlaceholderTitle(title) {
+    const text = String(title == null ? '' : title).trim();
+    if (!text) return true;
+    if (PLACEHOLDER_TITLES[text]) return true;
+    return PLACEHOLDER_RE.test(text);
+  }
+
   function fontStackOf(value) {
     const raw = typeof value === 'string' ? value.trim() : '';
     if (!raw) return DEFAULT_FONT;
@@ -409,6 +434,27 @@
 }
 .nw-stack{position:relative;width:100%;contain:layout style;}
 
+/* ---- chapter heading (R17 ①) -------------------------------------------
+   The chapter name is printed as the first line of the manuscript, centred and
+   larger than the body. It lives inside .nw-page above .nw-stack so it scrolls
+   with the text, and it is deliberately NOT part of the textarea: the writer
+   renames it in the shelf, the editor only displays it. Its height is measured
+   by chapterTitleH() and subtracted from the typewriter room. */
+.nw-chaptertitle{
+  display:block;
+  padding:0 calc(var(--nw-pad-x) + var(--nw-gutter-x,0px));
+  margin:0 0 calc(var(--nw-line) * 0.75em);
+  font-family:var(--nw-font);
+  font-size:calc(var(--nw-size) * 1.28);
+  font-weight:700;
+  line-height:1.45;
+  letter-spacing:.01em;
+  text-align:center;
+  color:var(--nw-fg);
+  overflow-wrap:break-word;word-break:break-word;
+  user-select:none;
+}
+
 /* ---- shared typography for the textarea and BOTH mirrors -----------------
    Every wrapping-affecting property must be identical or the caret/highlight
    mirrors would disagree with the textarea. The extra right gutter keeps the
@@ -517,8 +563,11 @@
 .nw-actbtn:hover{opacity:1;background:var(--nw-btn-hover);border-color:var(--nw-find-ring);}
 .nw-homebtn:focus-visible,
 .nw-actbtn:focus-visible{opacity:1;outline:2px solid var(--nw-find-ring);outline-offset:2px;}
+/* The icon component owns its own size (42-icons snaps every request to one
+   ladder), so the corner buttons must not re-scale the svg here — doing both
+   was how neighbouring icons ended up 14/15/16px in the same row. */
 .nw-homebtn > svg,
-.nw-actbtn > svg{width:15px;height:15px;flex:0 0 auto;}
+.nw-actbtn > svg{flex:0 0 auto;}
 .nw-surface[data-immersive="1"] .nw-homebtn,
 .nw-surface[data-immersive="1"] .nw-actbtn{opacity:.28;}
 .nw-surface[data-immersive="1"] .nw-homebtn:hover,
@@ -587,6 +636,15 @@
     const chapter = p.chapter || null;
     const chapterId = chapter && chapter.id != null ? chapter.id : null;
 
+    // R17 ①: the chapter name is printed as the first line of the manuscript,
+    // centred and larger than the body. Placeholder titles ("新章节" and the
+    // like) are hidden — a short story written in the auto-created chapter
+    // should read as one continuous text, not as a machine-generated heading.
+    // Declared here (not next to the JSX) because the measuring effects below
+    // depend on it.
+    const chapterTitle = chapter ? String(chapter.title || '').trim() : '';
+    const showTitle = Boolean(chapterTitle) && !isPlaceholderTitle(chapterTitle);
+
     // ---- caret appearance (R11): width / colour / blink are user settings ----
     // The palette still owns `--nw-caret-color` per theme, so an empty
     // `settings.caretColor` means "follow the theme"; anything else overrides it.
@@ -608,6 +666,7 @@
     const surfaceRef = React.useRef(null);
     const scrollRef = React.useRef(null);
     const pageRef = React.useRef(null);
+    const titleRef = React.useRef(null);
     const stackRef = React.useRef(null);
     const hlRef = React.useRef(null);
     const caretRef = React.useRef(null);
@@ -847,6 +906,30 @@
     }
 
     /**
+     * Space the chapter heading takes above the first text line, in px.
+     *
+     * Measured from the heading itself (height + its bottom margin) rather than
+     * from the page's top edge: the page padding already contains the typewriter
+     * room, so deriving it that way would be circular. It is real content, so
+     * both the room and the textarea's minimum height have to discount it —
+     * otherwise the first line can never reach the middle and a short chapter
+     * grows a scrollbar it does not need.
+     */
+    function chapterTitleH() {
+      const el = titleRef.current;
+      if (!el) return 0;
+      const rect = el.getBoundingClientRect();
+      if (!rect || !Number.isFinite(rect.height) || rect.height <= 0) return 0;
+      let marginBottom = 0;
+      try {
+        marginBottom = parseFloat(window.getComputedStyle(el).marginBottom) || 0;
+      } catch (ignored) {
+        marginBottom = 0;
+      }
+      return rect.height + marginBottom;
+    }
+
+    /**
      * Blank scroll room needed above the first line and below the last one so
      * the caret line can reach the vertical middle anywhere in the document.
      *
@@ -862,9 +945,10 @@
       const viewH = (sc && sc.clientHeight) || window.innerHeight || 0;
       if (!viewH) return 0;
       const lh = lineHeightPx();
-      // padTop (= padY + room) must be >= viewH/2 - lh/2 for the first line to
-      // reach the middle; +2px absorbs rounding.
-      return Math.max(0, Math.ceil(viewH / 2 - lh / 2 - pageBasePadY() / 2) + 2);
+      // padTop (= padY + room + heading) must be >= viewH/2 - lh/2 for the first
+      // line to reach the middle; +2px absorbs rounding.
+      const head = chapterTitleH();
+      return Math.max(0, Math.ceil(viewH / 2 - lh / 2 - pageBasePadY() / 2 - head) + 2);
     }
 
     /**
@@ -999,8 +1083,12 @@
       const padY = pageBasePadY();
       const lh = lineHeightPx();
       const viewH = sc.clientHeight || 0;
-      const minH = Math.max(lh * 3, viewH - padY);
-      const env = [viewH, lh, padY, ta.clientWidth, typewriterRoom(v)].join('|');
+      // R17 ①: the heading above the first line is real content — the textarea
+      // only has to fill what is left of the viewport after it, otherwise a
+      // short chapter scrolls even though everything already fits.
+      const head = chapterTitleH();
+      const minH = Math.max(lh * 3, viewH - padY - head);
+      const env = [viewH, lh, padY, head, ta.clientWidth, typewriterRoom(v)].join('|');
       const envChanged = env !== autosizeEnvRef.current;
       autosizeEnvRef.current = env;
       const len = ta.value.length;
@@ -1166,7 +1254,25 @@
       const m = getM ? getM() : measureCaret(ta.selectionStart || 0, v);
       if (!m) return null;
       const viewH = sc.clientHeight || window.innerHeight || 0;
-      if (mode === 'center') return m.top + m.height / 2 - viewH / 2;
+      if (mode === 'center') {
+        const centered = m.top + m.height / 2 - viewH / 2;
+        // Typewriter mode pads the page by half a viewport so *any* line —
+        // including the first one — can be scrolled to the middle. Centring a
+        // caret that sits on the first line therefore resolves to scrollTop 0,
+        // which drops that line halfway down an otherwise blank pane: that is
+        // the "打开小说，首行从中间开始" report. It kept coming back because
+        // the chapter-switch effect scrolls to `room` and any later re-centre
+        // (onSelect fires when the effect re-sets the selection, onFocus, the
+        // 1.5 s scroller recheck) undid it.
+        //
+        // `room` is by definition the offset that puts line one back on its
+        // normal page margin, so it is also the floor for centring: the head of
+        // a chapter can never scroll above the head of the pane. Deeper carets
+        // are unaffected (their centred offset is already larger than room),
+        // and with typewriter off room is 0, so nothing changes there either.
+        const floor = typewriterRoom(v);
+        return centered < floor ? floor : centered;
+      }
       const pad = Math.max(28, m.height);
       const viewTop = sc.scrollTop || 0;
       const viewBottom = viewTop + viewH;
@@ -2124,6 +2230,19 @@
       emitSelection();
     }, [chapterId]);
 
+    // Renaming a chapter changes the heading's height (one line -> two), which
+    // changes both the typewriter room and the textarea's minimum height. The
+    // chapter effect above only runs on id changes, so re-measure here.
+    React.useEffect(() => {
+      if (!surfaceRef.current || !taRef.current) return;
+      const view = resolveScroller(false);
+      if (view) applyTypewriterRoom(view);
+      autosize();
+      rebuildHighlights();
+      scheduleMeasure(false);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [chapterTitle]);
+
     // The 灵感便签 column can be opened/closed at any time; re-reserve the lane
     // and re-measure so the text column never runs under the floating panel.
     React.useEffect(() => {
@@ -2421,6 +2540,9 @@
       ? h(
           'div',
           { className: 'nw-page', ref: pageRef },
+          showTitle
+            ? h('div', { className: 'nw-chaptertitle', ref: titleRef, role: 'heading', 'aria-level': 1 }, chapterTitle)
+            : null,
           h(
             'div',
             { className: 'nw-stack', ref: stackRef },
@@ -2523,7 +2645,11 @@
                   },
                   // `home` lives in 42-icons.js — reusing it keeps the stroke
                   // weight and optical size identical to the shelf icons.
-                  h(NW.icon, { name: 'home', size: 15 }),
+                  // NOTE: NW.icon is a plain function (name, opts), not a
+                  // component — h(NW.icon, {name}) would pass the props object
+                  // as `name` and draw an empty svg (that is exactly the "three
+                  // blank buttons" bug).
+                  NW.icon('home', { size: 16 }),
                 )
               : null,
             onToggleShelf
@@ -2540,7 +2666,7 @@
                       onToggleShelf();
                     },
                   },
-                  h(NW.icon, { name: shelfOpen ? 'chevleft' : 'chevright', size: 15 }),
+                  NW.icon(shelfOpen ? 'chevleft' : 'chevright', { size: 16 }),
                 )
               : null,
             onLock
@@ -2556,7 +2682,7 @@
                       onLock();
                     },
                   },
-                  h(NW.icon, { name: 'lock', size: 15 }),
+                  NW.icon('lock', { size: 16 }),
                 )
               : null,
           )

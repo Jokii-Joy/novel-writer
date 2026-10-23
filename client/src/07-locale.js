@@ -179,6 +179,8 @@
     '编辑部回信': 'Replies from journals',
     '未读': 'Unread',
     '刷新': 'Refresh',
+    '刷新收件箱': 'Refresh inbox',
+    '删除这封邮件': 'Delete this mail',
     '还没有回信': 'No replies yet',
     '启用收件箱': 'Enable inbox',
     '沿用发信账号': 'Reuse sending account',

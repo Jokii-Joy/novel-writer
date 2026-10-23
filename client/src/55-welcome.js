@@ -122,11 +122,19 @@
       .sort((a, b) => b.touched - a.touched);
   }
 
-  function card(titleText, children, tone) {
+  /**
+   * `extra` renders on the same baseline as the title, right-aligned. The inbox
+   * refresh link used to be its own row above the list, which cost a line of
+   * height and read as a stray button rather than a property of the card.
+   */
+  function card(titleText, children, tone, extra) {
+    const title = NW.h('h2', { className: 'nw-welcome-cardtitle' }, titleText);
     return NW.h(
       'section',
       { className: 'nw-welcome-card' + (tone ? ' nw-welcome-card-' + tone : '') },
-      NW.h('h2', { className: 'nw-welcome-cardtitle' }, titleText),
+      extra
+        ? NW.h('div', { className: 'nw-welcome-cardhead' }, title, NW.h('div', { className: 'nw-welcome-cardact' }, extra))
+        : title,
       children,
     );
   }
@@ -162,7 +170,7 @@
       NW.h(
         'span',
         { className: 'nw-welcome-moreico', 'aria-hidden': 'true' },
-        NW.icon(expanded ? 'chevup' : 'chevdown', { size: 13 }),
+        NW.icon(expanded ? 'chevup' : 'chevdown', { size: 14 }),
       ),
     );
   }
@@ -189,7 +197,7 @@
         disabled: !!disabled,
         children: iconName
           ? [
-              NW.h('span', { key: 'i', className: 'nw-btn-icon', 'aria-hidden': 'true' }, NW.icon(iconName, { size: 15 })),
+              NW.h('span', { key: 'i', className: 'nw-btn-icon', 'aria-hidden': 'true' }, NW.icon(iconName, { size: 16 })),
               NW.h('span', { key: 't' }, label),
             ]
           : label,
@@ -463,7 +471,7 @@
                   ),
                 ),
                 row.unseen ? NW.h('span', { className: 'nw-badge', 'data-tone': 'brand' }, tr('未读')) : null,
-                NW.h('span', { className: 'nw-welcome-subarrow', 'aria-hidden': 'true' }, NW.icon('caret', { size: 13 })),
+                NW.h('span', { className: 'nw-welcome-subarrow', 'aria-hidden': 'true' }, NW.icon('caret', { size: 14 })),
               ),
               NW.h(
                 'button',
@@ -476,7 +484,7 @@
                     if (typeof p.onDeleteMail === 'function') p.onDeleteMail(row);
                   },
                 },
-                NW.icon('trash', { size: 13 }),
+                NW.icon('trash', { size: 14 }),
               ),
             ),
           ),
@@ -487,32 +495,30 @@
 
     const inboxCard = card(
       '收件箱' + (inboxUnseen > 0 ? ` · ${inboxUnseen} 未读` : ''),
-      NW.h(
-        'div',
-        null,
-        inboxProp.configured
-          ? NW.h(
-              'div',
-              { className: 'nw-inline', style: { justifyContent: 'flex-end', marginBottom: '6px' } },
-              NW.h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'nw-link',
-                  onClick: () => typeof p.onRefreshInbox === 'function' && p.onRefreshInbox(),
-                },
-                inboxStatus === 'loading' ? '刷新中…' : tr('刷新'),
-              ),
-            )
-          : null,
-        inboxBody,
-      ),
+      NW.h('div', null, inboxBody),
       'inbox',
+      // R17: the refresh control sits on the title row instead of owning a row
+      // of its own above the list.
+      inboxProp.configured
+        ? NW.h(
+            'button',
+            {
+              type: 'button',
+              className: 'nw-welcome-refresh',
+              title: tr('刷新收件箱'),
+              'aria-label': tr('刷新收件箱'),
+              disabled: inboxStatus === 'loading',
+              onClick: () => typeof p.onRefreshInbox === 'function' && p.onRefreshInbox(),
+            },
+            NW.icon('refresh', { size: 14, className: 'nw-welcome-refreshicon' }),
+          )
+        : null,
     );
 
     // ---- 快捷入口 ---------------------------------------------------------
+    // R17: 继续写作 left this grid — the 「正在创作」 card above already opens
+    // the last chapter, so it was the same action twice on one screen.
     const quick = [
-      { icon: 'typewriter', label: '继续写作', onClick: p.onResume, disabled: !p.hasChapter },
       { icon: 'journal', label: '期刊库', onClick: p.onOpenJournals },
       { icon: 'mail', label: '投稿管理', onClick: p.onOpenSubmitManager },
       { icon: 'gear', label: tr('设置'), onClick: p.onOpenSettings },
@@ -740,17 +746,52 @@
 /* -------------------------------------------------------- 快捷入口 ----- */
 .nw-welcome-quick{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px,100%),1fr));gap:var(--nw-sp-2);}
 .nw-welcome-quickbtn{
-  display:flex;align-items:center;gap:8px;
-  padding:10px 12px;border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
+  display:flex;align-items:center;gap:10px;
+  padding:12px 14px;border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
   background:var(--nw-surface-1);color:var(--nw-fg);cursor:pointer;
   font-family:inherit;font-size:var(--nw-fs-second);text-align:left;
   transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    border-color var(--nw-dur,.18s) var(--nw-ease,ease);
+    border-color var(--nw-dur,.18s) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease),
+    transform var(--nw-dur,.18s) var(--nw-ease,ease);
 }
-.nw-welcome-quickbtn:hover:not(:disabled){background:var(--nw-surface-2);border-color:var(--nw-line-strong);}
+.nw-welcome-quickbtn:hover:not(:disabled){
+  background:var(--nw-surface-2);border-color:var(--nw-line-strong);
+  box-shadow:var(--nw-shadow-1);transform:translateY(-1px);
+}
+.nw-welcome-quickbtn:active:not(:disabled){transform:none;box-shadow:none;}
 .nw-welcome-quickbtn:disabled{opacity:.45;cursor:default;}
 .nw-welcome-quickbtn:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
-.nw-welcome-quickicon{color:var(--nw-fg-soft);display:flex;flex:0 0 auto;}
+.nw-welcome-quickicon{
+  color:var(--nw-fg-soft);display:flex;flex:0 0 auto;
+  width:26px;height:26px;align-items:center;justify-content:center;
+  border-radius:8px;background:color-mix(in srgb, var(--nw-fg) 6%, transparent);
+  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
+    color var(--nw-dur,.18s) var(--nw-ease,ease);
+}
+.nw-welcome-quickbtn:hover:not(:disabled) .nw-welcome-quickicon{background:var(--nw-brand);color:var(--nw-bg);}
+
+/* R17: card header row — title on the left, one inline action on the right. */
+.nw-welcome-cardhead{display:flex;align-items:center;justify-content:space-between;gap:var(--nw-sp-2);margin:0 0 var(--nw-sp-3);}
+.nw-welcome-cardhead .nw-welcome-cardtitle{margin:0;}
+.nw-welcome-cardact{display:inline-flex;align-items:center;gap:4px;flex:0 0 auto;}
+.nw-welcome-refresh{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:26px;height:26px;padding:0;
+  border:1px solid transparent;border-radius:8px;
+  background:transparent;color:var(--nw-fg-soft);cursor:pointer;
+  transition:background-color .16s ease,color .16s ease,border-color .16s ease;
+}
+.nw-welcome-refresh:hover:not(:disabled){background:var(--nw-sunken);border-color:var(--nw-line);color:var(--nw-fg);}
+.nw-welcome-refresh:disabled{opacity:.5;cursor:default;}
+.nw-welcome-refresh:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
+.nw-welcome-refresh:disabled .nw-welcome-refreshicon{animation:nw-refresh-spin 1s linear infinite;}
+@keyframes nw-refresh-spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+@media (prefers-reduced-motion: reduce){
+  .nw-welcome-quickbtn{transition:none;}
+  .nw-welcome-quickbtn:hover:not(:disabled){transform:none;}
+  .nw-welcome-refresh:disabled .nw-welcome-refreshicon{animation:none;}
+}
 
 /* R13: container tiers, not window tiers — the home screen is a column. */
 @container nw (max-width: 620px){

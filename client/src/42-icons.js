@@ -87,12 +87,51 @@
 
   const EMPTY = [];
 
+  /**
+   * One size ladder for the whole plugin.
+   *
+   * Call sites used to pass whatever looked right in isolation (13, 14, 15,
+   * 16, 17, 18 …), so icons sitting next to each other in the same toolbar had
+   * visibly different weights and heights. Snapping to a ladder keeps every
+   * row optically even, and it is the only place that has to change when the
+   * shell scale moves.
+   */
+  const SIZE_LADDER = [12, 14, 16, 18, 20, 24, 28, 32];
+
+  function snapSize(value) {
+    const want = Number(value) > 0 ? Number(value) : 16;
+    let best = SIZE_LADDER[0];
+    let bestGap = Infinity;
+    for (const step of SIZE_LADDER) {
+      const gap = Math.abs(step - want);
+      // Ties go to the larger step: an icon rendered 1px too small reads as
+      // broken next to its neighbours, one 1px too large still reads as bold.
+      if (gap < bestGap || (gap === bestGap && step > best)) {
+        best = step;
+        bestGap = gap;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Optical stroke weight: line art drawn at 16px needs a heavier stroke than
+   * the same paths scaled to 28px, otherwise big icons look washed out and
+   * small ones look faint. This is the usual optical-size compensation.
+   */
+  function strokeFor(size) {
+    if (size <= 14) return 1.65;
+    if (size <= 18) return 1.55;
+    if (size <= 24) return 1.45;
+    return 1.35;
+  }
+
   /** Draw one icon. `opts` = `{size, weight, className, title, style}`. */
   function icon(name, opts) {
     const options = opts && typeof opts === 'object' ? opts : {};
     const paths = PATHS[name] || EMPTY;
-    const size = Number(options.size) > 0 ? Number(options.size) : 16;
-    const weight = Number(options.weight) > 0 ? Number(options.weight) : 1.5;
+    const size = snapSize(options.size);
+    const weight = Number(options.weight) > 0 ? Number(options.weight) : strokeFor(size);
     const label = options.title ? String(options.title) : '';
     return NW.h(
       'svg',

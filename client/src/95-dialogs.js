@@ -4249,6 +4249,12 @@
         closeBtn(p),
         h('span', { style: { flex: '1 1 auto' } }),
         NW.ui.btn({
+          kind: 'primary',
+          // R17 ②: `onReply` is provided by DialogHost and opens the submit
+          // wizard with this mail's journal pre-selected. Disable instead of
+          // silently doing nothing when a host mounts the reader without it.
+          disabled: typeof p.onReply !== 'function',
+          title: NW.t('去投稿'),
           onClick: () => {
             if (typeof p.onReply === 'function') p.onReply(header);
           },

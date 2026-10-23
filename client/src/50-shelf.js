@@ -1254,7 +1254,8 @@
     color var(--nw-dur,.18s) var(--nw-ease,ease);
 }
 .nw-shelf-caret svg{
-  width:15px;height:15px;transform:rotate(90deg);
+  /* size comes from the icon ladder in 42-icons; only the rotation is ours */
+  transform:rotate(90deg);
   transition:transform var(--nw-dur,.18s) var(--nw-ease,ease);
 }
 .nw-shelf-caret[data-open="0"] svg{transform:rotate(0deg);}

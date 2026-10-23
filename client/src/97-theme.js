@@ -83,9 +83,11 @@
 .nw-btn[data-kind="icon"]:hover:not(:disabled){
   background:var(--nw-surface-2);border-color:transparent;color:var(--nw-fg);
 }
-/* the glyph span is rendered with an inline 15px from 90-app.js — only
-   !important can lift it, and 17px is the size a 34px icon button wants */
-.nw-btn[data-kind="icon"] > span{font-size:17px !important;line-height:1 !important;}
+/* R17 ③: the glyph span only ever carries a text fallback (emoji/letter) — real
+   icons are <svg> from 42-icons, which owns its own size on the shared ladder.
+   A blanket font-size here used to inflate the text fallbacks far past the
+   icons next to them. */
+.nw-btn[data-kind="icon"] > span{font-size:15px !important;line-height:1 !important;}
 .nw-btn[data-active="1"]{
   background:color-mix(in srgb, var(--nw-brand) 9%, var(--nw-surface-1));
   border-color:color-mix(in srgb, var(--nw-brand) 28%, var(--nw-line));

@@ -498,6 +498,8 @@ window.__ModuleLoader__.load({
     '编辑部回信': 'Replies from journals',
     '未读': 'Unread',
     '刷新': 'Refresh',
+    '刷新收件箱': 'Refresh inbox',
+    '删除这封邮件': 'Delete this mail',
     '还没有回信': 'No replies yet',
     '启用收件箱': 'Enable inbox',
     '沿用发信账号': 'Reuse sending account',
@@ -4088,12 +4090,51 @@ window.__ModuleLoader__.load({
 
   const EMPTY = [];
 
+  /**
+   * One size ladder for the whole plugin.
+   *
+   * Call sites used to pass whatever looked right in isolation (13, 14, 15,
+   * 16, 17, 18 …), so icons sitting next to each other in the same toolbar had
+   * visibly different weights and heights. Snapping to a ladder keeps every
+   * row optically even, and it is the only place that has to change when the
+   * shell scale moves.
+   */
+  const SIZE_LADDER = [12, 14, 16, 18, 20, 24, 28, 32];
+
+  function snapSize(value) {
+    const want = Number(value) > 0 ? Number(value) : 16;
+    let best = SIZE_LADDER[0];
+    let bestGap = Infinity;
+    for (const step of SIZE_LADDER) {
+      const gap = Math.abs(step - want);
+      // Ties go to the larger step: an icon rendered 1px too small reads as
+      // broken next to its neighbours, one 1px too large still reads as bold.
+      if (gap < bestGap || (gap === bestGap && step > best)) {
+        best = step;
+        bestGap = gap;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Optical stroke weight: line art drawn at 16px needs a heavier stroke than
+   * the same paths scaled to 28px, otherwise big icons look washed out and
+   * small ones look faint. This is the usual optical-size compensation.
+   */
+  function strokeFor(size) {
+    if (size <= 14) return 1.65;
+    if (size <= 18) return 1.55;
+    if (size <= 24) return 1.45;
+    return 1.35;
+  }
+
   /** Draw one icon. `opts` = `{size, weight, className, title, style}`. */
   function icon(name, opts) {
     const options = opts && typeof opts === 'object' ? opts : {};
     const paths = PATHS[name] || EMPTY;
-    const size = Number(options.size) > 0 ? Number(options.size) : 16;
-    const weight = Number(options.weight) > 0 ? Number(options.weight) : 1.5;
+    const size = snapSize(options.size);
+    const weight = Number(options.weight) > 0 ? Number(options.weight) : strokeFor(size);
     const label = options.title ? String(options.title) : '';
     return NW.h(
       'svg',
@@ -6122,7 +6163,8 @@ window.__ModuleLoader__.load({
     color var(--nw-dur,.18s) var(--nw-ease,ease);
 }
 .nw-shelf-caret svg{
-  width:15px;height:15px;transform:rotate(90deg);
+  /* size comes from the icon ladder in 42-icons; only the rotation is ours */
+  transform:rotate(90deg);
   transition:transform var(--nw-dur,.18s) var(--nw-ease,ease);
 }
 .nw-shelf-caret[data-open="0"] svg{transform:rotate(0deg);}
@@ -6474,11 +6516,19 @@ window.__ModuleLoader__.load({
       .sort((a, b) => b.touched - a.touched);
   }
 
-  function card(titleText, children, tone) {
+  /**
+   * `extra` renders on the same baseline as the title, right-aligned. The inbox
+   * refresh link used to be its own row above the list, which cost a line of
+   * height and read as a stray button rather than a property of the card.
+   */
+  function card(titleText, children, tone, extra) {
+    const title = NW.h('h2', { className: 'nw-welcome-cardtitle' }, titleText);
     return NW.h(
       'section',
       { className: 'nw-welcome-card' + (tone ? ' nw-welcome-card-' + tone : '') },
-      NW.h('h2', { className: 'nw-welcome-cardtitle' }, titleText),
+      extra
+        ? NW.h('div', { className: 'nw-welcome-cardhead' }, title, NW.h('div', { className: 'nw-welcome-cardact' }, extra))
+        : title,
       children,
     );
   }
@@ -6514,7 +6564,7 @@ window.__ModuleLoader__.load({
       NW.h(
         'span',
         { className: 'nw-welcome-moreico', 'aria-hidden': 'true' },
-        NW.icon(expanded ? 'chevup' : 'chevdown', { size: 13 }),
+        NW.icon(expanded ? 'chevup' : 'chevdown', { size: 14 }),
       ),
     );
   }
@@ -6541,7 +6591,7 @@ window.__ModuleLoader__.load({
         disabled: !!disabled,
         children: iconName
           ? [
-              NW.h('span', { key: 'i', className: 'nw-btn-icon', 'aria-hidden': 'true' }, NW.icon(iconName, { size: 15 })),
+              NW.h('span', { key: 'i', className: 'nw-btn-icon', 'aria-hidden': 'true' }, NW.icon(iconName, { size: 16 })),
               NW.h('span', { key: 't' }, label),
             ]
           : label,
@@ -6815,7 +6865,7 @@ window.__ModuleLoader__.load({
                   ),
                 ),
                 row.unseen ? NW.h('span', { className: 'nw-badge', 'data-tone': 'brand' }, tr('未读')) : null,
-                NW.h('span', { className: 'nw-welcome-subarrow', 'aria-hidden': 'true' }, NW.icon('caret', { size: 13 })),
+                NW.h('span', { className: 'nw-welcome-subarrow', 'aria-hidden': 'true' }, NW.icon('caret', { size: 14 })),
               ),
               NW.h(
                 'button',
@@ -6828,7 +6878,7 @@ window.__ModuleLoader__.load({
                     if (typeof p.onDeleteMail === 'function') p.onDeleteMail(row);
                   },
                 },
-                NW.icon('trash', { size: 13 }),
+                NW.icon('trash', { size: 14 }),
               ),
             ),
           ),
@@ -6839,32 +6889,30 @@ window.__ModuleLoader__.load({
 
     const inboxCard = card(
       '收件箱' + (inboxUnseen > 0 ? ` · ${inboxUnseen} 未读` : ''),
-      NW.h(
-        'div',
-        null,
-        inboxProp.configured
-          ? NW.h(
-              'div',
-              { className: 'nw-inline', style: { justifyContent: 'flex-end', marginBottom: '6px' } },
-              NW.h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'nw-link',
-                  onClick: () => typeof p.onRefreshInbox === 'function' && p.onRefreshInbox(),
-                },
-                inboxStatus === 'loading' ? '刷新中…' : tr('刷新'),
-              ),
-            )
-          : null,
-        inboxBody,
-      ),
+      NW.h('div', null, inboxBody),
       'inbox',
+      // R17: the refresh control sits on the title row instead of owning a row
+      // of its own above the list.
+      inboxProp.configured
+        ? NW.h(
+            'button',
+            {
+              type: 'button',
+              className: 'nw-welcome-refresh',
+              title: tr('刷新收件箱'),
+              'aria-label': tr('刷新收件箱'),
+              disabled: inboxStatus === 'loading',
+              onClick: () => typeof p.onRefreshInbox === 'function' && p.onRefreshInbox(),
+            },
+            NW.icon('refresh', { size: 14, className: 'nw-welcome-refreshicon' }),
+          )
+        : null,
     );
 
     // ---- 快捷入口 ---------------------------------------------------------
+    // R17: 继续写作 left this grid — the 「正在创作」 card above already opens
+    // the last chapter, so it was the same action twice on one screen.
     const quick = [
-      { icon: 'typewriter', label: '继续写作', onClick: p.onResume, disabled: !p.hasChapter },
       { icon: 'journal', label: '期刊库', onClick: p.onOpenJournals },
       { icon: 'mail', label: '投稿管理', onClick: p.onOpenSubmitManager },
       { icon: 'gear', label: tr('设置'), onClick: p.onOpenSettings },
@@ -7092,17 +7140,52 @@ window.__ModuleLoader__.load({
 /* -------------------------------------------------------- 快捷入口 ----- */
 .nw-welcome-quick{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px,100%),1fr));gap:var(--nw-sp-2);}
 .nw-welcome-quickbtn{
-  display:flex;align-items:center;gap:8px;
-  padding:10px 12px;border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
+  display:flex;align-items:center;gap:10px;
+  padding:12px 14px;border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
   background:var(--nw-surface-1);color:var(--nw-fg);cursor:pointer;
   font-family:inherit;font-size:var(--nw-fs-second);text-align:left;
   transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    border-color var(--nw-dur,.18s) var(--nw-ease,ease);
+    border-color var(--nw-dur,.18s) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease),
+    transform var(--nw-dur,.18s) var(--nw-ease,ease);
 }
-.nw-welcome-quickbtn:hover:not(:disabled){background:var(--nw-surface-2);border-color:var(--nw-line-strong);}
+.nw-welcome-quickbtn:hover:not(:disabled){
+  background:var(--nw-surface-2);border-color:var(--nw-line-strong);
+  box-shadow:var(--nw-shadow-1);transform:translateY(-1px);
+}
+.nw-welcome-quickbtn:active:not(:disabled){transform:none;box-shadow:none;}
 .nw-welcome-quickbtn:disabled{opacity:.45;cursor:default;}
 .nw-welcome-quickbtn:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
-.nw-welcome-quickicon{color:var(--nw-fg-soft);display:flex;flex:0 0 auto;}
+.nw-welcome-quickicon{
+  color:var(--nw-fg-soft);display:flex;flex:0 0 auto;
+  width:26px;height:26px;align-items:center;justify-content:center;
+  border-radius:8px;background:color-mix(in srgb, var(--nw-fg) 6%, transparent);
+  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
+    color var(--nw-dur,.18s) var(--nw-ease,ease);
+}
+.nw-welcome-quickbtn:hover:not(:disabled) .nw-welcome-quickicon{background:var(--nw-brand);color:var(--nw-bg);}
+
+/* R17: card header row — title on the left, one inline action on the right. */
+.nw-welcome-cardhead{display:flex;align-items:center;justify-content:space-between;gap:var(--nw-sp-2);margin:0 0 var(--nw-sp-3);}
+.nw-welcome-cardhead .nw-welcome-cardtitle{margin:0;}
+.nw-welcome-cardact{display:inline-flex;align-items:center;gap:4px;flex:0 0 auto;}
+.nw-welcome-refresh{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:26px;height:26px;padding:0;
+  border:1px solid transparent;border-radius:8px;
+  background:transparent;color:var(--nw-fg-soft);cursor:pointer;
+  transition:background-color .16s ease,color .16s ease,border-color .16s ease;
+}
+.nw-welcome-refresh:hover:not(:disabled){background:var(--nw-sunken);border-color:var(--nw-line);color:var(--nw-fg);}
+.nw-welcome-refresh:disabled{opacity:.5;cursor:default;}
+.nw-welcome-refresh:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
+.nw-welcome-refresh:disabled .nw-welcome-refreshicon{animation:nw-refresh-spin 1s linear infinite;}
+@keyframes nw-refresh-spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+@media (prefers-reduced-motion: reduce){
+  .nw-welcome-quickbtn{transition:none;}
+  .nw-welcome-quickbtn:hover:not(:disabled){transform:none;}
+  .nw-welcome-refresh:disabled .nw-welcome-refreshicon{animation:none;}
+}
 
 /* R13: container tiers, not window tiers — the home screen is a column. */
 @container nw (max-width: 620px){
@@ -7180,6 +7263,31 @@ window.__ModuleLoader__.load({
 
   function clampNum(value, lo, hi) {
     return Math.min(hi, Math.max(lo, value));
+  }
+
+  /**
+   * Titles the editor must not print above the text.
+   *
+   * Mirrors `isPlaceholderTitle()` in `lib/routes.js`: chapters created with
+   * the toolbar are all called "新章节", so a short story written in one of
+   * them would otherwise open with a machine-generated heading. A real title
+   * ("第一章 起" / "雪夜") still shows.
+   */
+  const PLACEHOLDER_TITLES = {
+    '新章节': true,
+    '未命名': true,
+    '未命名章节': true,
+    '正文': true,
+    '无题': true,
+    '内容': true,
+  };
+  const PLACEHOLDER_RE = /^(?:新章节|未命名章节?)\s*\d*$|^第\s*[0-9零一二三四五六七八九十百]+\s*[章节回卷幕]$/;
+
+  function isPlaceholderTitle(title) {
+    const text = String(title == null ? '' : title).trim();
+    if (!text) return true;
+    if (PLACEHOLDER_TITLES[text]) return true;
+    return PLACEHOLDER_RE.test(text);
   }
 
   function fontStackOf(value) {
@@ -7524,6 +7632,27 @@ window.__ModuleLoader__.load({
 }
 .nw-stack{position:relative;width:100%;contain:layout style;}
 
+/* ---- chapter heading (R17 ①) -------------------------------------------
+   The chapter name is printed as the first line of the manuscript, centred and
+   larger than the body. It lives inside .nw-page above .nw-stack so it scrolls
+   with the text, and it is deliberately NOT part of the textarea: the writer
+   renames it in the shelf, the editor only displays it. Its height is measured
+   by chapterTitleH() and subtracted from the typewriter room. */
+.nw-chaptertitle{
+  display:block;
+  padding:0 calc(var(--nw-pad-x) + var(--nw-gutter-x,0px));
+  margin:0 0 calc(var(--nw-line) * 0.75em);
+  font-family:var(--nw-font);
+  font-size:calc(var(--nw-size) * 1.28);
+  font-weight:700;
+  line-height:1.45;
+  letter-spacing:.01em;
+  text-align:center;
+  color:var(--nw-fg);
+  overflow-wrap:break-word;word-break:break-word;
+  user-select:none;
+}
+
 /* ---- shared typography for the textarea and BOTH mirrors -----------------
    Every wrapping-affecting property must be identical or the caret/highlight
    mirrors would disagree with the textarea. The extra right gutter keeps the
@@ -7632,8 +7761,11 @@ window.__ModuleLoader__.load({
 .nw-actbtn:hover{opacity:1;background:var(--nw-btn-hover);border-color:var(--nw-find-ring);}
 .nw-homebtn:focus-visible,
 .nw-actbtn:focus-visible{opacity:1;outline:2px solid var(--nw-find-ring);outline-offset:2px;}
+/* The icon component owns its own size (42-icons snaps every request to one
+   ladder), so the corner buttons must not re-scale the svg here — doing both
+   was how neighbouring icons ended up 14/15/16px in the same row. */
 .nw-homebtn > svg,
-.nw-actbtn > svg{width:15px;height:15px;flex:0 0 auto;}
+.nw-actbtn > svg{flex:0 0 auto;}
 .nw-surface[data-immersive="1"] .nw-homebtn,
 .nw-surface[data-immersive="1"] .nw-actbtn{opacity:.28;}
 .nw-surface[data-immersive="1"] .nw-homebtn:hover,
@@ -7702,6 +7834,15 @@ window.__ModuleLoader__.load({
     const chapter = p.chapter || null;
     const chapterId = chapter && chapter.id != null ? chapter.id : null;
 
+    // R17 ①: the chapter name is printed as the first line of the manuscript,
+    // centred and larger than the body. Placeholder titles ("新章节" and the
+    // like) are hidden — a short story written in the auto-created chapter
+    // should read as one continuous text, not as a machine-generated heading.
+    // Declared here (not next to the JSX) because the measuring effects below
+    // depend on it.
+    const chapterTitle = chapter ? String(chapter.title || '').trim() : '';
+    const showTitle = Boolean(chapterTitle) && !isPlaceholderTitle(chapterTitle);
+
     // ---- caret appearance (R11): width / colour / blink are user settings ----
     // The palette still owns `--nw-caret-color` per theme, so an empty
     // `settings.caretColor` means "follow the theme"; anything else overrides it.
@@ -7723,6 +7864,7 @@ window.__ModuleLoader__.load({
     const surfaceRef = React.useRef(null);
     const scrollRef = React.useRef(null);
     const pageRef = React.useRef(null);
+    const titleRef = React.useRef(null);
     const stackRef = React.useRef(null);
     const hlRef = React.useRef(null);
     const caretRef = React.useRef(null);
@@ -7962,6 +8104,30 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Space the chapter heading takes above the first text line, in px.
+     *
+     * Measured from the heading itself (height + its bottom margin) rather than
+     * from the page's top edge: the page padding already contains the typewriter
+     * room, so deriving it that way would be circular. It is real content, so
+     * both the room and the textarea's minimum height have to discount it —
+     * otherwise the first line can never reach the middle and a short chapter
+     * grows a scrollbar it does not need.
+     */
+    function chapterTitleH() {
+      const el = titleRef.current;
+      if (!el) return 0;
+      const rect = el.getBoundingClientRect();
+      if (!rect || !Number.isFinite(rect.height) || rect.height <= 0) return 0;
+      let marginBottom = 0;
+      try {
+        marginBottom = parseFloat(window.getComputedStyle(el).marginBottom) || 0;
+      } catch (ignored) {
+        marginBottom = 0;
+      }
+      return rect.height + marginBottom;
+    }
+
+    /**
      * Blank scroll room needed above the first line and below the last one so
      * the caret line can reach the vertical middle anywhere in the document.
      *
@@ -7977,9 +8143,10 @@ window.__ModuleLoader__.load({
       const viewH = (sc && sc.clientHeight) || window.innerHeight || 0;
       if (!viewH) return 0;
       const lh = lineHeightPx();
-      // padTop (= padY + room) must be >= viewH/2 - lh/2 for the first line to
-      // reach the middle; +2px absorbs rounding.
-      return Math.max(0, Math.ceil(viewH / 2 - lh / 2 - pageBasePadY() / 2) + 2);
+      // padTop (= padY + room + heading) must be >= viewH/2 - lh/2 for the first
+      // line to reach the middle; +2px absorbs rounding.
+      const head = chapterTitleH();
+      return Math.max(0, Math.ceil(viewH / 2 - lh / 2 - pageBasePadY() / 2 - head) + 2);
     }
 
     /**
@@ -8114,8 +8281,12 @@ window.__ModuleLoader__.load({
       const padY = pageBasePadY();
       const lh = lineHeightPx();
       const viewH = sc.clientHeight || 0;
-      const minH = Math.max(lh * 3, viewH - padY);
-      const env = [viewH, lh, padY, ta.clientWidth, typewriterRoom(v)].join('|');
+      // R17 ①: the heading above the first line is real content — the textarea
+      // only has to fill what is left of the viewport after it, otherwise a
+      // short chapter scrolls even though everything already fits.
+      const head = chapterTitleH();
+      const minH = Math.max(lh * 3, viewH - padY - head);
+      const env = [viewH, lh, padY, head, ta.clientWidth, typewriterRoom(v)].join('|');
       const envChanged = env !== autosizeEnvRef.current;
       autosizeEnvRef.current = env;
       const len = ta.value.length;
@@ -8281,7 +8452,25 @@ window.__ModuleLoader__.load({
       const m = getM ? getM() : measureCaret(ta.selectionStart || 0, v);
       if (!m) return null;
       const viewH = sc.clientHeight || window.innerHeight || 0;
-      if (mode === 'center') return m.top + m.height / 2 - viewH / 2;
+      if (mode === 'center') {
+        const centered = m.top + m.height / 2 - viewH / 2;
+        // Typewriter mode pads the page by half a viewport so *any* line —
+        // including the first one — can be scrolled to the middle. Centring a
+        // caret that sits on the first line therefore resolves to scrollTop 0,
+        // which drops that line halfway down an otherwise blank pane: that is
+        // the "打开小说，首行从中间开始" report. It kept coming back because
+        // the chapter-switch effect scrolls to `room` and any later re-centre
+        // (onSelect fires when the effect re-sets the selection, onFocus, the
+        // 1.5 s scroller recheck) undid it.
+        //
+        // `room` is by definition the offset that puts line one back on its
+        // normal page margin, so it is also the floor for centring: the head of
+        // a chapter can never scroll above the head of the pane. Deeper carets
+        // are unaffected (their centred offset is already larger than room),
+        // and with typewriter off room is 0, so nothing changes there either.
+        const floor = typewriterRoom(v);
+        return centered < floor ? floor : centered;
+      }
       const pad = Math.max(28, m.height);
       const viewTop = sc.scrollTop || 0;
       const viewBottom = viewTop + viewH;
@@ -9239,6 +9428,19 @@ window.__ModuleLoader__.load({
       emitSelection();
     }, [chapterId]);
 
+    // Renaming a chapter changes the heading's height (one line -> two), which
+    // changes both the typewriter room and the textarea's minimum height. The
+    // chapter effect above only runs on id changes, so re-measure here.
+    React.useEffect(() => {
+      if (!surfaceRef.current || !taRef.current) return;
+      const view = resolveScroller(false);
+      if (view) applyTypewriterRoom(view);
+      autosize();
+      rebuildHighlights();
+      scheduleMeasure(false);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [chapterTitle]);
+
     // The 灵感便签 column can be opened/closed at any time; re-reserve the lane
     // and re-measure so the text column never runs under the floating panel.
     React.useEffect(() => {
@@ -9536,6 +9738,9 @@ window.__ModuleLoader__.load({
       ? h(
           'div',
           { className: 'nw-page', ref: pageRef },
+          showTitle
+            ? h('div', { className: 'nw-chaptertitle', ref: titleRef, role: 'heading', 'aria-level': 1 }, chapterTitle)
+            : null,
           h(
             'div',
             { className: 'nw-stack', ref: stackRef },
@@ -9638,7 +9843,11 @@ window.__ModuleLoader__.load({
                   },
                   // `home` lives in 42-icons.js — reusing it keeps the stroke
                   // weight and optical size identical to the shelf icons.
-                  h(NW.icon, { name: 'home', size: 15 }),
+                  // NOTE: NW.icon is a plain function (name, opts), not a
+                  // component — h(NW.icon, {name}) would pass the props object
+                  // as `name` and draw an empty svg (that is exactly the "three
+                  // blank buttons" bug).
+                  NW.icon('home', { size: 16 }),
                 )
               : null,
             onToggleShelf
@@ -9655,7 +9864,7 @@ window.__ModuleLoader__.load({
                       onToggleShelf();
                     },
                   },
-                  h(NW.icon, { name: shelfOpen ? 'chevleft' : 'chevright', size: 15 }),
+                  NW.icon(shelfOpen ? 'chevleft' : 'chevright', { size: 16 }),
                 )
               : null,
             onLock
@@ -9671,7 +9880,7 @@ window.__ModuleLoader__.load({
                       onLock();
                     },
                   },
-                  h(NW.icon, { name: 'lock', size: 15 }),
+                  NW.icon('lock', { size: 16 }),
                 )
               : null,
           )
@@ -11743,6 +11952,17 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
               refreshInbox();
               refreshHomeFeed();
             },
+            // R17 ②: the reader's 「去投稿」 button used to call `p.onReply`,
+            // which DialogHost never passed — so the button was inert. Route it
+            // into the submit wizard the same way 「重新投稿」 does; the wizard
+            // defaults to the open novel and the mail's journal when known.
+            onReply: (mail) => {
+              setDialog({
+                kind: 'submit',
+                step: 1,
+                journalId: String((mail && mail.journalId) || ''),
+              });
+            },
             // 投稿管理 → 「重新投稿」 reopens the wizard on step 1 with that
             // journal already selected.
             onResubmit: (row) => {
@@ -12017,7 +12237,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       body = h(
         'div',
         { className: 'nw-suggest-empty' },
-        NW.icon('sparkle', { size: 26 }),
+        NW.icon('sparkle', { size: 24 }),
         h('span', null, NW.t('让模型通读这一章，指出最值得改的地方。')),
         h('span', { style: { fontSize: '12px', opacity: '.7' } }, NW.t('建议是意见，不是自动替换；点一条会把原文滚到那一段。')),
         NW.ui.btn({ kind: 'primary', onClick: () => run(focus), children: NW.t('开始审读') }),
@@ -12026,7 +12246,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       body = h(
         'div',
         { className: 'nw-suggest-empty' },
-        NW.icon('success', { size: 26 }),
+        NW.icon('success', { size: 24 }),
         h('span', null, NW.t('这一章没有被标出的明显问题。')),
         h('span', { style: { fontSize: '12px', opacity: '.7' } }, NW.t('换个重点再看看，或写下去。')),
       );
@@ -12206,7 +12426,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           'aria-label': p.open ? NW.t('收起灵感便签') : NW.t('展开灵感便签'),
           onClick: p.onToggle,
         },
-        h('span', { className: 'nw-notes-tabicon', 'aria-hidden': 'true' }, NW.icon('sparkle', { size: 15 })),
+        h('span', { className: 'nw-notes-tabicon', 'aria-hidden': 'true' }, NW.icon('sparkle', { size: 16 })),
         p.open ? null : h('span', { className: 'nw-notes-tabtxt' }, NW.t('灵感')),
       ),
       p.open
@@ -16692,6 +16912,12 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         closeBtn(p),
         h('span', { style: { flex: '1 1 auto' } }),
         NW.ui.btn({
+          kind: 'primary',
+          // R17 ②: `onReply` is provided by DialogHost and opens the submit
+          // wizard with this mail's journal pre-selected. Disable instead of
+          // silently doing nothing when a host mounts the reader without it.
+          disabled: typeof p.onReply !== 'function',
+          title: NW.t('去投稿'),
           onClick: () => {
             if (typeof p.onReply === 'function') p.onReply(header);
           },
@@ -17510,9 +17736,11 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-btn[data-kind="icon"]:hover:not(:disabled){
   background:var(--nw-surface-2);border-color:transparent;color:var(--nw-fg);
 }
-/* the glyph span is rendered with an inline 15px from 90-app.js — only
-   !important can lift it, and 17px is the size a 34px icon button wants */
-.nw-btn[data-kind="icon"] > span{font-size:17px !important;line-height:1 !important;}
+/* R17 ③: the glyph span only ever carries a text fallback (emoji/letter) — real
+   icons are <svg> from 42-icons, which owns its own size on the shared ladder.
+   A blanket font-size here used to inflate the text fallbacks far past the
+   icons next to them. */
+.nw-btn[data-kind="icon"] > span{font-size:15px !important;line-height:1 !important;}
 .nw-btn[data-active="1"]{
   background:color-mix(in srgb, var(--nw-brand) 9%, var(--nw-surface-1));
   border-color:color-mix(in srgb, var(--nw-brand) 28%, var(--nw-line));
