@@ -101,6 +101,12 @@ window.__ModuleLoader__.load({
   font-size:var(--nw-fs-base);line-height:var(--nw-lh-base);
   -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
   text-rendering:optimizeLegibility;overflow:hidden;
+  /* R13: the panel is a resizable column inside the host shell, so its width has
+     almost nothing to do with the window width. Everything below sizes itself
+     against this container instead of the viewport; the @media tiers in
+     97-theme.js only remain as a belt-and-braces fallback for old engines. */
+  container-type:inline-size;
+  container-name:nw;
   transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
     color var(--nw-dur,.18s) var(--nw-ease,ease);
 }
@@ -491,11 +497,13 @@ window.__ModuleLoader__.load({
     '测试收件箱': 'Test inbox',
     'IMAP 主机': 'IMAP host',
     '收件账号': 'Inbox account',
-    // R10 ④ / R11 ③: 灵感便签 — now a plain solid-colour editing page
+    // R10 ④ / R11 ③ / R13 ②: 灵感便签 — a floating card over the manuscript
     '灵感': 'Ideas',
     '灵感便签': 'Idea notes',
     '展开灵感便签': 'Open idea notes',
     '收起灵感便签': 'Collapse idea notes',
+    '空白': 'Empty',
+    'Esc 收起': 'Esc to close',
     '随手记一句：一个画面、一句对白、一个转折…': 'Jot down an image, a line of dialogue, a turn…',
     // R10 ⑥: every inbox a journal registers, not just the matching one
     '本稿用这个': 'For this manuscript',
@@ -4098,7 +4106,7 @@ window.__ModuleLoader__.load({
 .nw-genre-seg > .nw-btn[data-kind="primary"]:hover:not(:disabled){
   background:var(--nw-surface-overlay);color:var(--nw-fg);
 }
-.nw-grid2{display:grid;grid-template-columns:1fr 1fr;gap:var(--nw-sp-3);}
+.nw-grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:var(--nw-sp-3);}
 .nw-hint-block{
   margin:var(--nw-sp-1) 0 0;font-size:var(--nw-fs-second);line-height:1.7;color:var(--nw-fg-soft);
 }
@@ -4263,7 +4271,9 @@ window.__ModuleLoader__.load({
 .nw-settings-pane > .nw-settings-section{display:none;}
 .nw-settings-pane > .nw-settings-section[data-on="1"]{display:block;}
 
-@media (max-width: 640px){
+/* R13: measured against the plugin's own column, not the window (see 05-css
+   container-type / the tiers in 98b-responsive.js). */
+@container nw (max-width: 780px){
   .nw-settings{grid-template-columns:minmax(0,1fr);}
   .nw-settings-nav{flex-direction:row;flex-wrap:wrap;position:static;}
   .nw-settings-navbtn{width:auto;padding:0 12px;}
@@ -4523,13 +4533,15 @@ window.__ModuleLoader__.load({
 
 /* =================================================== submission (R3 new) == */
 /* Three steps: journal picker, manuscript picker, mail preview. */
+/* minmax(min(200px,100%),…) — a hard 200px floor overflows the moment the
+   dialog is wider than the panel it lives in. */
 .nw-submit-grid{
-  display:grid;grid-template-columns:minmax(200px,.92fr) minmax(0,1.08fr);
+  display:grid;grid-template-columns:minmax(min(200px,100%),.92fr) minmax(0,1.08fr);
   gap:var(--nw-sp-4);align-items:start;min-height:260px;
 }
 .nw-submit-grid > *{min-width:0;}
-@media (max-width:760px){
-  .nw-submit-grid{grid-template-columns:1fr;min-height:0;gap:var(--nw-sp-3);}
+@container nw (max-width: 780px){
+  .nw-submit-grid{grid-template-columns:minmax(0,1fr);min-height:0;gap:var(--nw-sp-3);}
 }
 
 .nw-journal-list{
@@ -6758,7 +6770,10 @@ window.__ModuleLoader__.load({
    (including 报纸 / 国风 / 极简卡片) restyles the home screen for free. */
 .nw-welcome{
   height:100%;min-height:0;overflow:auto;
-  padding:clamp(20px,4vh,48px) clamp(16px,4vw,40px);
+  /* R13: cqw, not vw — the home screen is a column inside the host shell, so a
+     1400px window with a 360px host sidebar still gets a ~480px panel. Vertical
+     padding stays in vh: an inline-size container has no height axis. */
+  padding:clamp(20px,4vh,48px) clamp(16px,4cqw,40px);
   background:var(--nw-bg);color:var(--nw-fg);
   font-family:var(--nw-ui-font);
   -webkit-font-smoothing:antialiased;
@@ -6770,12 +6785,15 @@ window.__ModuleLoader__.load({
 .nw-welcome-headtext{min-width:0;flex:1 1 320px;}
 .nw-welcome-title{
   margin:0 0 6px;font-family:var(--nw-reading-font);font-weight:600;
-  font-size:clamp(22px,2.6vw,28px);line-height:1.25;letter-spacing:.01em;color:var(--nw-fg);
+  font-size:clamp(22px,2.6cqw,28px);line-height:1.25;letter-spacing:.01em;color:var(--nw-fg);
 }
 .nw-welcome-sub{margin:0;font-size:var(--nw-fs-second);line-height:1.6;color:var(--nw-fg-soft);}
 .nw-welcome-actions{display:flex;align-items:center;gap:var(--nw-sp-2);flex-wrap:wrap;}
 
-.nw-welcome-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:var(--nw-sp-4);align-items:start;}
+/* min(280px,100%) — a plain minmax(280px,1fr) overflows as soon as the panel
+   itself is narrower than 280px, which happens the moment the host sidebar is
+   open on a laptop. */
+.nw-welcome-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:var(--nw-sp-4);align-items:start;}
 .nw-welcome-card{
   min-width:0;padding:var(--nw-sp-4);
   border:1px solid var(--nw-line-soft);
@@ -6808,7 +6826,7 @@ window.__ModuleLoader__.load({
 .nw-welcome-novelgo{color:var(--nw-idle);display:flex;flex:0 0 auto;}
 
 /* -------------------------------------------------------- 创作统计 ----- */
-.nw-welcome-stats{display:grid;grid-template-columns:1fr 1fr;gap:var(--nw-sp-3);margin:0;}
+.nw-welcome-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(120px,100%),1fr));gap:var(--nw-sp-3);margin:0;}
 .nw-welcome-stat{
   padding:var(--nw-sp-3);border-radius:var(--nw-r-control);
   background:var(--nw-sunken);
@@ -6887,7 +6905,7 @@ window.__ModuleLoader__.load({
 .nw-badge[data-tone="idle"]{background:color-mix(in srgb, var(--nw-fg-soft) 10%, transparent);color:var(--nw-fg-soft);}
 
 /* -------------------------------------------------------- 快捷入口 ----- */
-.nw-welcome-quick{display:grid;grid-template-columns:1fr 1fr;gap:var(--nw-sp-2);}
+.nw-welcome-quick{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px,100%),1fr));gap:var(--nw-sp-2);}
 .nw-welcome-quickbtn{
   display:flex;align-items:center;gap:8px;
   padding:10px 12px;border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
@@ -6901,9 +6919,10 @@ window.__ModuleLoader__.load({
 .nw-welcome-quickbtn:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
 .nw-welcome-quickicon{color:var(--nw-fg-soft);display:flex;flex:0 0 auto;}
 
-@media (max-width: 620px){
+/* R13: container tiers, not window tiers — the home screen is a column. */
+@container nw (max-width: 620px){
   .nw-welcome{padding:20px 14px;}
-  .nw-welcome-stats,.nw-welcome-quick{grid-template-columns:1fr;}
+  .nw-welcome-stats,.nw-welcome-quick{grid-template-columns:minmax(0,1fr);}
 }
 `);
 })();
@@ -7099,8 +7118,11 @@ window.__ModuleLoader__.load({
      near-white on the night surface). */
   --nw-caret-width:3px;--nw-caret-color:#0f0f0e;
 }
-/* Small hosts: the gutter shrinks, the 88px rule does not (22 + 66 = 88). */
-@media (max-width:720px){.nw-surface{--nw-pad-x:22px;--nw-pad-y:36px;--nw-gutter-x:66px;}}
+/* Small panes: the gutter shrinks, the 88px rule does not (22 + 66 = 88).
+   R13: keyed off the plugin's column (container "nw" in 05-css), not the
+   window — a 700px-wide editor inside a 1440px window still wants the tight
+   gutter. */
+@container nw (max-width: 720px){.nw-surface{--nw-pad-x:22px;--nw-pad-y:36px;--nw-gutter-x:66px;}}
 
 /* ---- five reading palettes (owned by the editor, not the host chrome) ----
    ids shared with 98-shell-theme.js: harness | claude | eye | night | ink.
@@ -7292,7 +7314,7 @@ window.__ModuleLoader__.load({
    palette also declares --nw-gutter-x and both selectors have the same
    specificity, so source order is what decides the winner. */
 .nw-surface[data-immersive="1"]{--nw-pad-x:96px;--nw-pad-y:96px;--nw-gutter-x:0px;}
-@media (max-width:720px){.nw-surface[data-immersive="1"]{--nw-pad-x:40px;--nw-pad-y:48px;--nw-gutter-x:48px;}}
+@container nw (max-width: 720px){.nw-surface[data-immersive="1"]{--nw-pad-x:40px;--nw-pad-y:48px;--nw-gutter-x:48px;}}
 
 /* ---- scroller + page ---- */
 .nw-scroll{
@@ -9439,7 +9461,11 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-bench-paper{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;min-height:0;position:relative;}
 .nw-suggest{
   flex:0 0 auto;display:flex;flex-direction:column;min-height:0;
-  width:336px;max-width:46vw;
+  width:336px;
+  /* R13: was 46vw. The panel lives inside a ~600px column most of the time, so
+     a viewport-relative cap let the advice column eat the manuscript on a wide
+     monitor. Percentages resolve against the bench, which is the real budget. */
+  max-width:46%;
   border-left:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-layer-1);
   animation:nw-slide-in .18s var(--nw-ease,ease);
@@ -9545,51 +9571,87 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-dock-sep{width:100%;height:1px;background:var(--dsw-alias-border-l1);margin:0;flex:0 0 auto;}
 .nw-dock-fabicon{display:inline-flex;align-items:center;justify-content:center;}
 @keyframes nw-pop{from{opacity:0;transform:translateY(8px) scale(.94)}to{opacity:1;transform:none}}
-/* 灵感便签 (R11). The user asked for a plain solid-colour editing page and
-   nothing else, so the open state is a full-bleed sheet of the theme's paper
-   colour holding one textarea — no header, no badge, no card, no button row.
-   Closed, only a small tab sits on the right edge. */
+/* 灵感便签 (R13). R11 把它做成一整页纸：一展开就把正文顶掉，用户说「不用分窗口
+   了，悬浮在编辑器上」，又说「看着好瘦长」—— 那是 196px 宽 × 整屏高 的结果。
+   现在是一张 420×最多 320 的悬浮卡片，钉在写作列右上角：写作时一直看得见正文，
+   关掉只留一枚小圆钮。整块不参与 .nw-main 的布局，所以永远不会把正文挤窄。 */
+/* Parked just under the find bar's corner (60-editor owns top:10px right:14px
+   there) and one layer *below* it, so opening 查找 covers the note card instead
+   of the card covering the search box. */
 .nw-notes{
-  position:absolute;z-index:35;top:16px;right:8px;bottom:104px;
+  position:absolute;z-index:7;top:52px;right:14px;
   display:flex;flex-direction:column;align-items:flex-end;gap:8px;
+  max-width:calc(100% - 28px);
   pointer-events:none;
 }
-.nw-notes[data-open="1"]{top:0;right:0;bottom:0;gap:0;}
 .nw-notes > *{pointer-events:auto;}
 .nw-notes-tab{
   display:inline-flex;align-items:center;gap:6px;
-  height:32px;padding:0 10px;border-radius:999px;
+  height:32px;padding:0 11px;border-radius:999px;
   border:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
   color:var(--dsw-alias-label-secondary);
   font-size:13px;cursor:pointer;opacity:.55;
+  box-shadow:0 1px 3px rgba(0,0,0,.06);
   transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease),
-             transform var(--nw-dur,.18s) var(--nw-ease,ease);
+             transform var(--nw-dur,.18s) var(--nw-ease,ease),
+             border-color var(--nw-dur,.18s) var(--nw-ease,ease);
 }
-.nw-notes[data-open="1"] .nw-notes-tab{
-  position:absolute;top:10px;right:10px;z-index:2;
-  background:transparent;border-color:transparent;
-}
-.nw-notes-tab:hover,.nw-notes-tab:focus-visible{opacity:1;transform:translateY(-1px);}
+.nw-notes-tab:hover,.nw-notes-tab:focus-visible{opacity:1;transform:translateY(-1px);border-color:var(--dsw-alias-border-l2);}
+.nw-notes-tab[aria-expanded="true"]{opacity:0;}
+.nw-notes-tab:focus-visible{opacity:1;}
 .nw-notes-tabicon{display:inline-flex;align-items:center;justify-content:center;}
 .nw-notes-tabtxt{white-space:nowrap;}
-/* The page itself: one solid colour, no border, no shadow, no texture. */
-.nw-notes-page{
-  position:absolute;inset:0;
-  display:flex;flex-direction:column;
-  background:var(--dsw-alias-bg-base);
-  animation:nw-fade-in .16s var(--nw-ease,ease);
+/* The card: paper, one hairline, one soft shadow. Deliberately not a full-bleed
+   sheet — it floats, so it must read as an object placed *on* the manuscript. */
+.nw-notes-card{
+  width:min(420px,100%);
+  max-height:min(320px,calc(100vh - 220px));
+  display:flex;flex-direction:column;min-height:0;
+  border-radius:12px;
+  border:1px solid var(--dsw-alias-border-l2);
+  background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
+  box-shadow:0 2px 8px rgba(0,0,0,.08), 0 18px 44px rgba(0,0,0,.14);
+  overflow:hidden;
+  animation:nw-notes-in .18s var(--nw-ease,ease);
 }
+@keyframes nw-notes-in{
+  from{opacity:0;transform:translateY(-6px) scale(.985);}
+  to{opacity:1;transform:none;}
+}
+.nw-notes-head{
+  display:flex;align-items:center;gap:8px;flex:0 0 auto;
+  padding:7px 8px 7px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);
+  background:var(--dsw-alias-bg-layer-1);
+  color:var(--dsw-alias-label-secondary);
+}
+.nw-notes-headicon{display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-brand-primary);}
+.nw-notes-headtitle{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary);white-space:nowrap;}
+.nw-notes-state{font-size:11.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap;opacity:.8;}
+.nw-notes-spacer{flex:1 1 auto;min-width:4px;}
 .nw-notes-input{
-  flex:1 1 auto;width:100%;box-sizing:border-box;
+  flex:1 1 auto;width:100%;min-height:96px;box-sizing:border-box;
   border:none;outline:none;resize:none;background:transparent;
   color:var(--dsw-alias-label-primary);
-  padding:56px max(48px, calc((100% - 760px) / 2)) 56px;
+  padding:12px 14px;
   font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",serif;
-  font-size:17px;line-height:1.9;
+  font-size:15px;line-height:1.85;
   caret-color:var(--dsw-alias-brand-primary);
 }
 .nw-notes-input::placeholder{color:var(--dsw-alias-label-secondary);opacity:.65;}
+.nw-notes-foot{
+  flex:0 0 auto;display:flex;align-items:center;gap:8px;
+  padding:6px 12px 8px;border-top:1px solid var(--dsw-alias-border-l1);
+  font-size:11.5px;color:var(--dsw-alias-label-secondary);
+}
+.nw-notes-foot kbd{
+  font-family:inherit;font-size:11px;padding:1px 5px;border-radius:4px;
+  border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);
+}
+@media (prefers-reduced-motion: reduce){
+  .nw-notes-card{animation:none;}
+  .nw-notes-tab{transition:none;}
+}
 .nw-root.nw-immersive{background:var(--dsw-alias-bg-base);}
 .nw-root.nw-immersive .nw-main{flex:1 1 auto;}
 `);
@@ -9755,10 +9817,10 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     /** Bottom-right action dock: collapsed to a single round button by default. */
     const [dockOpen, setDockOpen] = useState(false);
     /**
-     * 灵感便签 (R10): notes for the open book, plus whether the panel is
-     * expanded. The panel is a narrow column on the right edge of the writing
-     * area — collapsed by default so the manuscript keeps the full width, and
-     * it never overlaps the text column when open.
+     * 灵感便签 (R10): notes for the open book, plus whether the card is up.
+     * R13 turned it into a floating card anchored to the corner of the paper
+     * (see the Notes component): it never reserves a lane, never covers the
+     * line being typed, and collapses to a single round button.
      */
     const [notesOpen, setNotesOpen] = useState(() => lsGet(LS_NOTES_OPEN) === '1');
     const [notes, setNotes] = useState([]);
@@ -11251,9 +11313,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                       chapter: chapter,
                       settings: settings,
                       immersive: immersive,
-                      // R11: the 灵感便签 is now a full-bleed page that covers the
-                      // writing area while open, so the manuscript no longer needs a
-                      // reserved right lane — it keeps its full measure either way.
+                      // R13: the notes card floats over the paper without a
+                      // reserved lane, so the manuscript keeps its full measure
+                      // whether the card is open or closed.
                       notesLane: false,
                       // R12 ①: the paper owns its own 首页 button; the shelf
                       // header is gone in immersive mode.
@@ -11261,6 +11323,15 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                       onSave: (content) => saveChapter(content, chapter.id),
                       onSelectionChange: onSelectionChange,
                       registerApi: registerEditor,
+                    }),
+                    // R13: 灵感便签 floats over the paper itself, not over the
+                    // whole writing column — with the advice panel open the
+                    // card would otherwise drift on top of the suggestions.
+                    h(Notes, {
+                      open: notesOpen,
+                      notes: notes,
+                      onToggle: () => setNotesOpen((v) => !v),
+                      onSave: saveNotes,
                     }),
                   ),
                   adviceOpen && !immersive
@@ -11284,16 +11355,6 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                   ),
                 ),
           dock,
-          // 灵感便签: only alongside an actual manuscript — the home screen has
-          // its own cards and does not need a floating note page.
-          !immersive && chapter
-            ? h(Notes, {
-                open: notesOpen,
-                notes: notes,
-                onToggle: () => setNotesOpen((v) => !v),
-                onSave: saveNotes,
-              })
-            : null,
         ),
       ),
       // Immersive is a pure canvas: no toolbar, no shelf, no status bar. The only
@@ -11305,7 +11366,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
             saveText: statusText + (savedAt ? ' · ' + NW.fmtDate(savedAt) : ''),
             middle: h(
               'span',
-              { style: { display: 'inline-flex', gap: '14px', alignItems: 'center' } },
+              { className: 'nw-status-mid', style: { display: 'inline-flex', gap: '14px', alignItems: 'center' } },
               h('span', null, '本章 ' + NW.fmtWords(chapterWords) + ' 字'),
               h('span', null, '本书 ' + NW.fmtWords(wordCounts.novel) + ' 字'),
               h('span', null, '全部 ' + NW.fmtWords(wordCounts.book) + ' 字'),
@@ -11767,6 +11828,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     const p = props || {};
     const list = Array.isArray(p.notes) ? p.notes : [];
     const [text, setText] = useState('');
+    const [dirty, setDirty] = useState(false);
     const areaRef = useRef(null);
     const savedRef = useRef('');
 
@@ -11780,6 +11842,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         .join('\n\n');
       savedRef.current = joined;
       setText(joined);
+      setDirty(false);
       const timer = setTimeout(() => {
         if (areaRef.current) areaRef.current.focus();
       }, 30);
@@ -11791,6 +11854,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       const body = text;
       if (body === savedRef.current) return;
       savedRef.current = body;
+      setDirty(false);
       if (typeof p.onSave === 'function') p.onSave(body);
     };
 
@@ -11818,7 +11882,29 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       p.open
         ? h(
             'div',
-            { className: 'nw-notes-page' },
+            { className: 'nw-notes-card', role: 'dialog', 'aria-label': NW.t('灵感便签') },
+            h(
+              'div',
+              { className: 'nw-notes-head' },
+              h('span', { className: 'nw-notes-headicon', 'aria-hidden': 'true' }, NW.icon('sparkle', { size: 14 })),
+              h('span', { className: 'nw-notes-headtitle' }, NW.t('灵感便签')),
+              h('span', { className: 'nw-notes-spacer' }),
+              h(
+                'span',
+                { className: 'nw-notes-state' },
+                dirty ? NW.t('未保存') : text ? NW.t('已保存') : NW.t('空白'),
+              ),
+              NW.ui.btn({
+                kind: 'icon',
+                title: NW.t('收起灵感便签'),
+                ariaLabel: NW.t('收起灵感便签'),
+                onClick: () => {
+                  commit();
+                  if (typeof p.onToggle === 'function') p.onToggle();
+                },
+                children: NW.icon('x', { size: 14 }),
+              }),
+            ),
             h('textarea', {
               ref: areaRef,
               className: 'nw-notes-input',
@@ -11826,7 +11912,10 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
               spellCheck: false,
               placeholder: NW.t('随手记一句：一个画面、一句对白、一个转折…'),
               'aria-label': NW.t('灵感便签'),
-              onChange: (ev) => setText(ev.target.value),
+              onChange: (ev) => {
+                setText(ev.target.value);
+                setDirty(ev.target.value !== savedRef.current);
+              },
               onBlur: commit,
               onKeyDown: (ev) => {
                 // Ctrl/Cmd + Enter commits without leaving the keyboard.
@@ -11835,7 +11924,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                   commit();
                   return;
                 }
-                // Escape closes the page, matching the rest of the app.
+                // Escape commits and closes the card, matching the rest of the app.
                 if (ev.key === 'Escape') {
                   ev.preventDefault();
                   commit();
@@ -11843,6 +11932,16 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                 }
               },
             }),
+            h(
+              'div',
+              { className: 'nw-notes-foot' },
+              h('kbd', null, 'Ctrl'),
+              h('span', null, '+'),
+              h('kbd', null, 'Enter'),
+              h('span', null, NW.t('保存')),
+              h('span', { className: 'nw-notes-spacer' }),
+              h('span', null, NW.t('Esc 收起')),
+            ),
           )
         : null,
     );
@@ -17148,7 +17247,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-toast[data-kind="info"],
 .nw-toast[data-kind="default"]{
   display:inline-flex;align-items:center;gap:10px;
-  padding:11px 18px;max-width:min(600px,74vw);
+  padding:11px 18px;max-width:min(600px,74cqw);
   border-radius:var(--nw-r-pill);font-size:var(--nw-fs-second);font-weight:500;line-height:1.4;
   color:var(--nw-fg);background:var(--nw-surface-overlay);
   border:1px solid var(--nw-line);box-shadow:var(--nw-shadow-2);
@@ -17315,10 +17414,14 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-root.nw-immersive .nw-dock:focus-within{opacity:1;}
 
 /* ============================================================== narrow ====
-   The tool strip is the one place that must degrade: below ~900px the
-   breadcrumb suffix gives way so the actions keep their labels instead of the
-   novel title being clipped to a single glyph. */
-@media (max-width:900px){
+   The tool strip is the one place that must degrade: below ~980px of *panel*
+   the breadcrumb suffix gives way so the actions keep their labels instead of
+   the novel title being clipped to a single glyph.
+   R13: this used to be an @media (max-width:900px) rule, i.e. window width. The
+   toolbar lives inside the plugin's column, which can be 480px on a 1440px
+   screen (host sidebar + rightbar), so the tier is measured against the
+   container declared in 05-css. 98b-responsive.js refines the same tiers. */
+@container nw (max-width: 980px){
   .nw-toolbar{padding:0 var(--nw-sp-3);gap:6px;}
   .nw-title{max-width:40%;padding-right:var(--nw-sp-1);}
   .nw-title small{display:none;}
@@ -17333,6 +17436,18 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   .nw-modal-foot{padding:12px 16px;}
   .nw-dock{right:12px;bottom:52px;}
   .nw-dock-btn{height:38px;padding:0 15px;}
+}
+/* Belt and braces: engines without container queries still degrade on a narrow
+   window instead of clipping. */
+@supports not (container-type: inline-size){
+  @media (max-width:900px){
+    .nw-toolbar{padding:0 var(--nw-sp-3);gap:6px;}
+    .nw-title{max-width:40%;padding-right:var(--nw-sp-1);}
+    .nw-title small{display:none;}
+    .nw-toolbar .nw-btn{padding:0 11px;}
+    .nw-status{gap:var(--nw-sp-3);padding:0 var(--nw-sp-3);}
+    .nw-dock{right:12px;bottom:52px;}
+  }
 }
 
 /* ====================================================== motion preference == */
@@ -17698,6 +17813,125 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-root[data-theme="guofeng"] .nw-btn-primary{
   background:var(--dsw-alias-brand-primary);
   color:#faf6ea;
+}
+`);
+})();
+
+/* ==== 98b-responsive.js ==== */
+/* ==== 98b-responsive.js ====
+ *
+ * R13 ① — the plugin is a column inside the host shell, not a page.
+ *
+ * Before this file every breakpoint was a viewport one (@media), so on a
+ * 1400px window the plugin could still be squeezed into a 520px panel by the
+ * host sidebar and the fourty-some grids inside it had no idea. The measurement
+ * that actually matters is the width of .nw-root, so 05-css declares it a
+ * named container ("nw") and everything below sizes itself in cqw.
+ *
+ * Tiers (deliberately three, not seven):
+ *   <= 980  full shell still fine, chrome gets tighter
+ *   <= 780  two-column grids collapse, shelf starts overlaying
+ *   <= 560  single column everywhere, shelf and advice become overlays
+ *
+ * The @media blocks in 97-theme.js are kept as a fallback for engines without
+ * container queries; these rules come later in source order and win ties.
+ */
+;(() => {
+  'use strict';
+
+  NW.CSS_PARTS.push(`
+/* ------------------------------------------------------------ <= 980px -- */
+@container nw (max-width: 980px){
+  .nw-grid2{grid-template-columns:minmax(0,1fr);}
+  .nw-settings{grid-template-columns:132px minmax(0,1fr);gap:var(--nw-sp-3);}
+  .nw-submit-grid{grid-template-columns:minmax(0,1fr);min-height:0;gap:var(--nw-sp-3);}
+  .nw-journal-list{max-height:280px;}
+  .nw-dock{right:14px;bottom:52px;}
+  .nw-status{gap:var(--nw-sp-3);}
+}
+
+/* ------------------------------------------------------------ <= 780px -- */
+@container nw (max-width: 780px){
+  /* The modal is the one surface that must never be narrower than its content:
+     a 680px settings dialog inside a 700px panel leaves 10px of scrim. */
+  .nw-modal{max-width:100% !important;border-radius:var(--nw-r-card);}
+  .nw-modal-mask{padding:14px;}
+  .nw-modal-head{padding:15px 16px 13px;}
+  .nw-modal-body{padding:16px;}
+  .nw-modal-foot{padding:12px 16px;flex-wrap:wrap;}
+
+  /* Settings: the sticky left rail becomes a horizontal scroller on top. */
+  .nw-settings{grid-template-columns:minmax(0,1fr);gap:var(--nw-sp-2);}
+  .nw-settings-nav{
+    position:static;flex-direction:row;flex-wrap:nowrap;overflow-x:auto;
+    gap:6px;padding-bottom:6px;border-bottom:1px solid var(--nw-line-soft);
+  }
+  .nw-settings-navbtn{width:auto;flex:0 0 auto;padding:0 12px;}
+  .nw-settings-pane{max-height:none;overflow:visible;}
+
+  .nw-welcome-grid{grid-template-columns:minmax(0,1fr);}
+  .nw-welcome-stats,.nw-welcome-quick{grid-template-columns:minmax(0,1fr);}
+
+  /* The shelf width is a user preference (drag, up to 640px) written inline, so
+     a CSS cap is the only way to stop it starving the manuscript in a narrow
+     panel. The splitter still works — it just cannot exceed the cap. */
+  .nw-side{max-width:min(62%,300px);}
+
+  /* Tools: the dock shrinks to its FAB, the advice column narrows. The width is
+     an inline style (the user may have dragged it), so !important is the only
+     way a container tier can cap it. */
+  .nw-dock-btn{height:34px;padding:0 12px;font-size:13px;}
+  .nw-suggest{width:min(280px,40%) !important;}
+  .nw-suggest-body{padding:0 var(--nw-sp-2) var(--nw-sp-2);}
+}
+
+/* ------------------------------------------------------------ <= 560px -- */
+@container nw (max-width: 560px){
+  /* Below this the two-pane shell (shelf + paper) cannot both be readable, so
+     the shelf lifts out of the flow and floats over the paper, and the splitter
+     goes away because there is nothing left to drag. The width still comes from
+     the inline style (the user may have set 300px); it is simply no longer
+     taking room from the manuscript. */
+  .nw-side{
+    position:absolute;left:0;top:0;bottom:0;z-index:34;
+    max-width:min(88%,320px);
+    box-shadow:0 2px 8px rgba(0,0,0,.08), 0 18px 44px rgba(0,0,0,.18);
+  }
+  .nw-splitter{display:none !important;}
+
+  /* The advice panel does the same: overlay, anchored right. */
+  .nw-suggest{
+    position:absolute;right:0;top:0;bottom:0;z-index:33;
+    width:min(92%,360px) !important;max-width:92% !important;
+    box-shadow:0 2px 8px rgba(0,0,0,.08), 0 18px 44px rgba(0,0,0,.18);
+  }
+
+  /* Reading measure: 48px of gutter on a 520px panel eats a fifth of the line.
+     The dock lane is kept at 88px total (20 + 68) — the floating dock is still
+     there at this width, just closer to the edge. */
+  .nw-surface{--nw-pad-x:20px;--nw-pad-y:32px;--nw-gutter-x:68px;}
+
+  .nw-notes{left:8px;right:8px;top:48px;max-width:none;}
+  .nw-notes-card{width:100%;max-height:min(280px,calc(100vh - 200px));}
+
+  /* Below the shelf overlay (34) and the advice overlay (33): when the shelf is
+     lifted out of the flow it must be able to cover the dock, otherwise its
+     bottom buttons are unreachable on a phone-sized panel. */
+  .nw-dock{right:10px;bottom:46px;z-index:30;}
+  .nw-dock-fab{width:40px;height:40px;}
+  .nw-notes-tabtxt{display:none;}
+
+  .nw-status{padding:0 var(--nw-sp-2);font-size:12px;flex-wrap:wrap;row-gap:2px;height:auto;min-height:var(--nw-h-status);}
+  .nw-status .nw-status-mid{gap:8px !important;}
+}
+
+/* Touch and coarse pointers: no hover, so anything hidden behind :hover has to
+   be visible on its own. */
+@media (hover: none){
+  .nw-row-actions{opacity:1;}
+  .nw-notes-tab{opacity:.85;}
+  .nw-homebtn{opacity:.85;}
+  .nw-dock{opacity:.85;}
 }
 `);
 })();

@@ -188,8 +188,11 @@
      near-white on the night surface). */
   --nw-caret-width:3px;--nw-caret-color:#0f0f0e;
 }
-/* Small hosts: the gutter shrinks, the 88px rule does not (22 + 66 = 88). */
-@media (max-width:720px){.nw-surface{--nw-pad-x:22px;--nw-pad-y:36px;--nw-gutter-x:66px;}}
+/* Small panes: the gutter shrinks, the 88px rule does not (22 + 66 = 88).
+   R13: keyed off the plugin's column (container "nw" in 05-css), not the
+   window — a 700px-wide editor inside a 1440px window still wants the tight
+   gutter. */
+@container nw (max-width: 720px){.nw-surface{--nw-pad-x:22px;--nw-pad-y:36px;--nw-gutter-x:66px;}}
 
 /* ---- five reading palettes (owned by the editor, not the host chrome) ----
    ids shared with 98-shell-theme.js: harness | claude | eye | night | ink.
@@ -381,7 +384,7 @@
    palette also declares --nw-gutter-x and both selectors have the same
    specificity, so source order is what decides the winner. */
 .nw-surface[data-immersive="1"]{--nw-pad-x:96px;--nw-pad-y:96px;--nw-gutter-x:0px;}
-@media (max-width:720px){.nw-surface[data-immersive="1"]{--nw-pad-x:40px;--nw-pad-y:48px;--nw-gutter-x:48px;}}
+@container nw (max-width: 720px){.nw-surface[data-immersive="1"]{--nw-pad-x:40px;--nw-pad-y:48px;--nw-gutter-x:48px;}}
 
 /* ---- scroller + page ---- */
 .nw-scroll{

@@ -178,11 +178,13 @@
     '测试收件箱': 'Test inbox',
     'IMAP 主机': 'IMAP host',
     '收件账号': 'Inbox account',
-    // R10 ④ / R11 ③: 灵感便签 — now a plain solid-colour editing page
+    // R10 ④ / R11 ③ / R13 ②: 灵感便签 — a floating card over the manuscript
     '灵感': 'Ideas',
     '灵感便签': 'Idea notes',
     '展开灵感便签': 'Open idea notes',
     '收起灵感便签': 'Collapse idea notes',
+    '空白': 'Empty',
+    'Esc 收起': 'Esc to close',
     '随手记一句：一个画面、一句对白、一个转折…': 'Jot down an image, a line of dialogue, a turn…',
     // R10 ⑥: every inbox a journal registers, not just the matching one
     '本稿用这个': 'For this manuscript',

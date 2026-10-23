@@ -252,7 +252,7 @@
 .nw-toast[data-kind="info"],
 .nw-toast[data-kind="default"]{
   display:inline-flex;align-items:center;gap:10px;
-  padding:11px 18px;max-width:min(600px,74vw);
+  padding:11px 18px;max-width:min(600px,74cqw);
   border-radius:var(--nw-r-pill);font-size:var(--nw-fs-second);font-weight:500;line-height:1.4;
   color:var(--nw-fg);background:var(--nw-surface-overlay);
   border:1px solid var(--nw-line);box-shadow:var(--nw-shadow-2);
@@ -419,10 +419,14 @@
 .nw-root.nw-immersive .nw-dock:focus-within{opacity:1;}
 
 /* ============================================================== narrow ====
-   The tool strip is the one place that must degrade: below ~900px the
-   breadcrumb suffix gives way so the actions keep their labels instead of the
-   novel title being clipped to a single glyph. */
-@media (max-width:900px){
+   The tool strip is the one place that must degrade: below ~980px of *panel*
+   the breadcrumb suffix gives way so the actions keep their labels instead of
+   the novel title being clipped to a single glyph.
+   R13: this used to be an @media (max-width:900px) rule, i.e. window width. The
+   toolbar lives inside the plugin's column, which can be 480px on a 1440px
+   screen (host sidebar + rightbar), so the tier is measured against the
+   container declared in 05-css. 98b-responsive.js refines the same tiers. */
+@container nw (max-width: 980px){
   .nw-toolbar{padding:0 var(--nw-sp-3);gap:6px;}
   .nw-title{max-width:40%;padding-right:var(--nw-sp-1);}
   .nw-title small{display:none;}
@@ -437,6 +441,18 @@
   .nw-modal-foot{padding:12px 16px;}
   .nw-dock{right:12px;bottom:52px;}
   .nw-dock-btn{height:38px;padding:0 15px;}
+}
+/* Belt and braces: engines without container queries still degrade on a narrow
+   window instead of clipping. */
+@supports not (container-type: inline-size){
+  @media (max-width:900px){
+    .nw-toolbar{padding:0 var(--nw-sp-3);gap:6px;}
+    .nw-title{max-width:40%;padding-right:var(--nw-sp-1);}
+    .nw-title small{display:none;}
+    .nw-toolbar .nw-btn{padding:0 11px;}
+    .nw-status{gap:var(--nw-sp-3);padding:0 var(--nw-sp-3);}
+    .nw-dock{right:12px;bottom:52px;}
+  }
 }
 
 /* ====================================================== motion preference == */

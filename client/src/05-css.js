@@ -83,6 +83,12 @@
   font-size:var(--nw-fs-base);line-height:var(--nw-lh-base);
   -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
   text-rendering:optimizeLegibility;overflow:hidden;
+  /* R13: the panel is a resizable column inside the host shell, so its width has
+     almost nothing to do with the window width. Everything below sizes itself
+     against this container instead of the viewport; the @media tiers in
+     97-theme.js only remain as a belt-and-braces fallback for old engines. */
+  container-type:inline-size;
+  container-name:nw;
   transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
     color var(--nw-dur,.18s) var(--nw-ease,ease);
 }

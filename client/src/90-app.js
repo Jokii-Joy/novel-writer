@@ -30,7 +30,11 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-bench-paper{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;min-height:0;position:relative;}
 .nw-suggest{
   flex:0 0 auto;display:flex;flex-direction:column;min-height:0;
-  width:336px;max-width:46vw;
+  width:336px;
+  /* R13: was 46vw. The panel lives inside a ~600px column most of the time, so
+     a viewport-relative cap let the advice column eat the manuscript on a wide
+     monitor. Percentages resolve against the bench, which is the real budget. */
+  max-width:46%;
   border-left:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-layer-1);
   animation:nw-slide-in .18s var(--nw-ease,ease);
@@ -136,51 +140,87 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-dock-sep{width:100%;height:1px;background:var(--dsw-alias-border-l1);margin:0;flex:0 0 auto;}
 .nw-dock-fabicon{display:inline-flex;align-items:center;justify-content:center;}
 @keyframes nw-pop{from{opacity:0;transform:translateY(8px) scale(.94)}to{opacity:1;transform:none}}
-/* 灵感便签 (R11). The user asked for a plain solid-colour editing page and
-   nothing else, so the open state is a full-bleed sheet of the theme's paper
-   colour holding one textarea — no header, no badge, no card, no button row.
-   Closed, only a small tab sits on the right edge. */
+/* 灵感便签 (R13). R11 把它做成一整页纸：一展开就把正文顶掉，用户说「不用分窗口
+   了，悬浮在编辑器上」，又说「看着好瘦长」—— 那是 196px 宽 × 整屏高 的结果。
+   现在是一张 420×最多 320 的悬浮卡片，钉在写作列右上角：写作时一直看得见正文，
+   关掉只留一枚小圆钮。整块不参与 .nw-main 的布局，所以永远不会把正文挤窄。 */
+/* Parked just under the find bar's corner (60-editor owns top:10px right:14px
+   there) and one layer *below* it, so opening 查找 covers the note card instead
+   of the card covering the search box. */
 .nw-notes{
-  position:absolute;z-index:35;top:16px;right:8px;bottom:104px;
+  position:absolute;z-index:7;top:52px;right:14px;
   display:flex;flex-direction:column;align-items:flex-end;gap:8px;
+  max-width:calc(100% - 28px);
   pointer-events:none;
 }
-.nw-notes[data-open="1"]{top:0;right:0;bottom:0;gap:0;}
 .nw-notes > *{pointer-events:auto;}
 .nw-notes-tab{
   display:inline-flex;align-items:center;gap:6px;
-  height:32px;padding:0 10px;border-radius:999px;
+  height:32px;padding:0 11px;border-radius:999px;
   border:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
   color:var(--dsw-alias-label-secondary);
   font-size:13px;cursor:pointer;opacity:.55;
+  box-shadow:0 1px 3px rgba(0,0,0,.06);
   transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease),
-             transform var(--nw-dur,.18s) var(--nw-ease,ease);
+             transform var(--nw-dur,.18s) var(--nw-ease,ease),
+             border-color var(--nw-dur,.18s) var(--nw-ease,ease);
 }
-.nw-notes[data-open="1"] .nw-notes-tab{
-  position:absolute;top:10px;right:10px;z-index:2;
-  background:transparent;border-color:transparent;
-}
-.nw-notes-tab:hover,.nw-notes-tab:focus-visible{opacity:1;transform:translateY(-1px);}
+.nw-notes-tab:hover,.nw-notes-tab:focus-visible{opacity:1;transform:translateY(-1px);border-color:var(--dsw-alias-border-l2);}
+.nw-notes-tab[aria-expanded="true"]{opacity:0;}
+.nw-notes-tab:focus-visible{opacity:1;}
 .nw-notes-tabicon{display:inline-flex;align-items:center;justify-content:center;}
 .nw-notes-tabtxt{white-space:nowrap;}
-/* The page itself: one solid colour, no border, no shadow, no texture. */
-.nw-notes-page{
-  position:absolute;inset:0;
-  display:flex;flex-direction:column;
-  background:var(--dsw-alias-bg-base);
-  animation:nw-fade-in .16s var(--nw-ease,ease);
+/* The card: paper, one hairline, one soft shadow. Deliberately not a full-bleed
+   sheet — it floats, so it must read as an object placed *on* the manuscript. */
+.nw-notes-card{
+  width:min(420px,100%);
+  max-height:min(320px,calc(100vh - 220px));
+  display:flex;flex-direction:column;min-height:0;
+  border-radius:12px;
+  border:1px solid var(--dsw-alias-border-l2);
+  background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
+  box-shadow:0 2px 8px rgba(0,0,0,.08), 0 18px 44px rgba(0,0,0,.14);
+  overflow:hidden;
+  animation:nw-notes-in .18s var(--nw-ease,ease);
 }
+@keyframes nw-notes-in{
+  from{opacity:0;transform:translateY(-6px) scale(.985);}
+  to{opacity:1;transform:none;}
+}
+.nw-notes-head{
+  display:flex;align-items:center;gap:8px;flex:0 0 auto;
+  padding:7px 8px 7px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);
+  background:var(--dsw-alias-bg-layer-1);
+  color:var(--dsw-alias-label-secondary);
+}
+.nw-notes-headicon{display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-brand-primary);}
+.nw-notes-headtitle{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary);white-space:nowrap;}
+.nw-notes-state{font-size:11.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap;opacity:.8;}
+.nw-notes-spacer{flex:1 1 auto;min-width:4px;}
 .nw-notes-input{
-  flex:1 1 auto;width:100%;box-sizing:border-box;
+  flex:1 1 auto;width:100%;min-height:96px;box-sizing:border-box;
   border:none;outline:none;resize:none;background:transparent;
   color:var(--dsw-alias-label-primary);
-  padding:56px max(48px, calc((100% - 760px) / 2)) 56px;
+  padding:12px 14px;
   font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",serif;
-  font-size:17px;line-height:1.9;
+  font-size:15px;line-height:1.85;
   caret-color:var(--dsw-alias-brand-primary);
 }
 .nw-notes-input::placeholder{color:var(--dsw-alias-label-secondary);opacity:.65;}
+.nw-notes-foot{
+  flex:0 0 auto;display:flex;align-items:center;gap:8px;
+  padding:6px 12px 8px;border-top:1px solid var(--dsw-alias-border-l1);
+  font-size:11.5px;color:var(--dsw-alias-label-secondary);
+}
+.nw-notes-foot kbd{
+  font-family:inherit;font-size:11px;padding:1px 5px;border-radius:4px;
+  border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);
+}
+@media (prefers-reduced-motion: reduce){
+  .nw-notes-card{animation:none;}
+  .nw-notes-tab{transition:none;}
+}
 .nw-root.nw-immersive{background:var(--dsw-alias-bg-base);}
 .nw-root.nw-immersive .nw-main{flex:1 1 auto;}
 `);
@@ -346,10 +386,10 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     /** Bottom-right action dock: collapsed to a single round button by default. */
     const [dockOpen, setDockOpen] = useState(false);
     /**
-     * 灵感便签 (R10): notes for the open book, plus whether the panel is
-     * expanded. The panel is a narrow column on the right edge of the writing
-     * area — collapsed by default so the manuscript keeps the full width, and
-     * it never overlaps the text column when open.
+     * 灵感便签 (R10): notes for the open book, plus whether the card is up.
+     * R13 turned it into a floating card anchored to the corner of the paper
+     * (see the Notes component): it never reserves a lane, never covers the
+     * line being typed, and collapses to a single round button.
      */
     const [notesOpen, setNotesOpen] = useState(() => lsGet(LS_NOTES_OPEN) === '1');
     const [notes, setNotes] = useState([]);
@@ -1842,9 +1882,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                       chapter: chapter,
                       settings: settings,
                       immersive: immersive,
-                      // R11: the 灵感便签 is now a full-bleed page that covers the
-                      // writing area while open, so the manuscript no longer needs a
-                      // reserved right lane — it keeps its full measure either way.
+                      // R13: the notes card floats over the paper without a
+                      // reserved lane, so the manuscript keeps its full measure
+                      // whether the card is open or closed.
                       notesLane: false,
                       // R12 ①: the paper owns its own 首页 button; the shelf
                       // header is gone in immersive mode.
@@ -1852,6 +1892,15 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                       onSave: (content) => saveChapter(content, chapter.id),
                       onSelectionChange: onSelectionChange,
                       registerApi: registerEditor,
+                    }),
+                    // R13: 灵感便签 floats over the paper itself, not over the
+                    // whole writing column — with the advice panel open the
+                    // card would otherwise drift on top of the suggestions.
+                    h(Notes, {
+                      open: notesOpen,
+                      notes: notes,
+                      onToggle: () => setNotesOpen((v) => !v),
+                      onSave: saveNotes,
                     }),
                   ),
                   adviceOpen && !immersive
@@ -1875,16 +1924,6 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                   ),
                 ),
           dock,
-          // 灵感便签: only alongside an actual manuscript — the home screen has
-          // its own cards and does not need a floating note page.
-          !immersive && chapter
-            ? h(Notes, {
-                open: notesOpen,
-                notes: notes,
-                onToggle: () => setNotesOpen((v) => !v),
-                onSave: saveNotes,
-              })
-            : null,
         ),
       ),
       // Immersive is a pure canvas: no toolbar, no shelf, no status bar. The only
@@ -1896,7 +1935,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
             saveText: statusText + (savedAt ? ' · ' + NW.fmtDate(savedAt) : ''),
             middle: h(
               'span',
-              { style: { display: 'inline-flex', gap: '14px', alignItems: 'center' } },
+              { className: 'nw-status-mid', style: { display: 'inline-flex', gap: '14px', alignItems: 'center' } },
               h('span', null, '本章 ' + NW.fmtWords(chapterWords) + ' 字'),
               h('span', null, '本书 ' + NW.fmtWords(wordCounts.novel) + ' 字'),
               h('span', null, '全部 ' + NW.fmtWords(wordCounts.book) + ' 字'),
@@ -2358,6 +2397,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     const p = props || {};
     const list = Array.isArray(p.notes) ? p.notes : [];
     const [text, setText] = useState('');
+    const [dirty, setDirty] = useState(false);
     const areaRef = useRef(null);
     const savedRef = useRef('');
 
@@ -2371,6 +2411,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         .join('\n\n');
       savedRef.current = joined;
       setText(joined);
+      setDirty(false);
       const timer = setTimeout(() => {
         if (areaRef.current) areaRef.current.focus();
       }, 30);
@@ -2382,6 +2423,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       const body = text;
       if (body === savedRef.current) return;
       savedRef.current = body;
+      setDirty(false);
       if (typeof p.onSave === 'function') p.onSave(body);
     };
 
@@ -2409,7 +2451,29 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       p.open
         ? h(
             'div',
-            { className: 'nw-notes-page' },
+            { className: 'nw-notes-card', role: 'dialog', 'aria-label': NW.t('灵感便签') },
+            h(
+              'div',
+              { className: 'nw-notes-head' },
+              h('span', { className: 'nw-notes-headicon', 'aria-hidden': 'true' }, NW.icon('sparkle', { size: 14 })),
+              h('span', { className: 'nw-notes-headtitle' }, NW.t('灵感便签')),
+              h('span', { className: 'nw-notes-spacer' }),
+              h(
+                'span',
+                { className: 'nw-notes-state' },
+                dirty ? NW.t('未保存') : text ? NW.t('已保存') : NW.t('空白'),
+              ),
+              NW.ui.btn({
+                kind: 'icon',
+                title: NW.t('收起灵感便签'),
+                ariaLabel: NW.t('收起灵感便签'),
+                onClick: () => {
+                  commit();
+                  if (typeof p.onToggle === 'function') p.onToggle();
+                },
+                children: NW.icon('x', { size: 14 }),
+              }),
+            ),
             h('textarea', {
               ref: areaRef,
               className: 'nw-notes-input',
@@ -2417,7 +2481,10 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
               spellCheck: false,
               placeholder: NW.t('随手记一句：一个画面、一句对白、一个转折…'),
               'aria-label': NW.t('灵感便签'),
-              onChange: (ev) => setText(ev.target.value),
+              onChange: (ev) => {
+                setText(ev.target.value);
+                setDirty(ev.target.value !== savedRef.current);
+              },
               onBlur: commit,
               onKeyDown: (ev) => {
                 // Ctrl/Cmd + Enter commits without leaving the keyboard.
@@ -2426,7 +2493,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                   commit();
                   return;
                 }
-                // Escape closes the page, matching the rest of the app.
+                // Escape commits and closes the card, matching the rest of the app.
                 if (ev.key === 'Escape') {
                   ev.preventDefault();
                   commit();
@@ -2434,6 +2501,16 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                 }
               },
             }),
+            h(
+              'div',
+              { className: 'nw-notes-foot' },
+              h('kbd', null, 'Ctrl'),
+              h('span', null, '+'),
+              h('kbd', null, 'Enter'),
+              h('span', null, NW.t('保存')),
+              h('span', { className: 'nw-notes-spacer' }),
+              h('span', null, NW.t('Esc 收起')),
+            ),
           )
         : null,
     );

@@ -71,7 +71,7 @@
 .nw-genre-seg > .nw-btn[data-kind="primary"]:hover:not(:disabled){
   background:var(--nw-surface-overlay);color:var(--nw-fg);
 }
-.nw-grid2{display:grid;grid-template-columns:1fr 1fr;gap:var(--nw-sp-3);}
+.nw-grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:var(--nw-sp-3);}
 .nw-hint-block{
   margin:var(--nw-sp-1) 0 0;font-size:var(--nw-fs-second);line-height:1.7;color:var(--nw-fg-soft);
 }
@@ -236,7 +236,9 @@
 .nw-settings-pane > .nw-settings-section{display:none;}
 .nw-settings-pane > .nw-settings-section[data-on="1"]{display:block;}
 
-@media (max-width: 640px){
+/* R13: measured against the plugin's own column, not the window (see 05-css
+   container-type / the tiers in 98b-responsive.js). */
+@container nw (max-width: 780px){
   .nw-settings{grid-template-columns:minmax(0,1fr);}
   .nw-settings-nav{flex-direction:row;flex-wrap:wrap;position:static;}
   .nw-settings-navbtn{width:auto;padding:0 12px;}
@@ -496,13 +498,15 @@
 
 /* =================================================== submission (R3 new) == */
 /* Three steps: journal picker, manuscript picker, mail preview. */
+/* minmax(min(200px,100%),…) — a hard 200px floor overflows the moment the
+   dialog is wider than the panel it lives in. */
 .nw-submit-grid{
-  display:grid;grid-template-columns:minmax(200px,.92fr) minmax(0,1.08fr);
+  display:grid;grid-template-columns:minmax(min(200px,100%),.92fr) minmax(0,1.08fr);
   gap:var(--nw-sp-4);align-items:start;min-height:260px;
 }
 .nw-submit-grid > *{min-width:0;}
-@media (max-width:760px){
-  .nw-submit-grid{grid-template-columns:1fr;min-height:0;gap:var(--nw-sp-3);}
+@container nw (max-width: 780px){
+  .nw-submit-grid{grid-template-columns:minmax(0,1fr);min-height:0;gap:var(--nw-sp-3);}
 }
 
 .nw-journal-list{

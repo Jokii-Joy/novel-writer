@@ -494,7 +494,10 @@
    (including 报纸 / 国风 / 极简卡片) restyles the home screen for free. */
 .nw-welcome{
   height:100%;min-height:0;overflow:auto;
-  padding:clamp(20px,4vh,48px) clamp(16px,4vw,40px);
+  /* R13: cqw, not vw — the home screen is a column inside the host shell, so a
+     1400px window with a 360px host sidebar still gets a ~480px panel. Vertical
+     padding stays in vh: an inline-size container has no height axis. */
+  padding:clamp(20px,4vh,48px) clamp(16px,4cqw,40px);
   background:var(--nw-bg);color:var(--nw-fg);
   font-family:var(--nw-ui-font);
   -webkit-font-smoothing:antialiased;
@@ -506,12 +509,15 @@
 .nw-welcome-headtext{min-width:0;flex:1 1 320px;}
 .nw-welcome-title{
   margin:0 0 6px;font-family:var(--nw-reading-font);font-weight:600;
-  font-size:clamp(22px,2.6vw,28px);line-height:1.25;letter-spacing:.01em;color:var(--nw-fg);
+  font-size:clamp(22px,2.6cqw,28px);line-height:1.25;letter-spacing:.01em;color:var(--nw-fg);
 }
 .nw-welcome-sub{margin:0;font-size:var(--nw-fs-second);line-height:1.6;color:var(--nw-fg-soft);}
 .nw-welcome-actions{display:flex;align-items:center;gap:var(--nw-sp-2);flex-wrap:wrap;}
 
-.nw-welcome-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:var(--nw-sp-4);align-items:start;}
+/* min(280px,100%) — a plain minmax(280px,1fr) overflows as soon as the panel
+   itself is narrower than 280px, which happens the moment the host sidebar is
+   open on a laptop. */
+.nw-welcome-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:var(--nw-sp-4);align-items:start;}
 .nw-welcome-card{
   min-width:0;padding:var(--nw-sp-4);
   border:1px solid var(--nw-line-soft);
@@ -544,7 +550,7 @@
 .nw-welcome-novelgo{color:var(--nw-idle);display:flex;flex:0 0 auto;}
 
 /* -------------------------------------------------------- 创作统计 ----- */
-.nw-welcome-stats{display:grid;grid-template-columns:1fr 1fr;gap:var(--nw-sp-3);margin:0;}
+.nw-welcome-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(120px,100%),1fr));gap:var(--nw-sp-3);margin:0;}
 .nw-welcome-stat{
   padding:var(--nw-sp-3);border-radius:var(--nw-r-control);
   background:var(--nw-sunken);
@@ -623,7 +629,7 @@
 .nw-badge[data-tone="idle"]{background:color-mix(in srgb, var(--nw-fg-soft) 10%, transparent);color:var(--nw-fg-soft);}
 
 /* -------------------------------------------------------- 快捷入口 ----- */
-.nw-welcome-quick{display:grid;grid-template-columns:1fr 1fr;gap:var(--nw-sp-2);}
+.nw-welcome-quick{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px,100%),1fr));gap:var(--nw-sp-2);}
 .nw-welcome-quickbtn{
   display:flex;align-items:center;gap:8px;
   padding:10px 12px;border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
@@ -637,9 +643,10 @@
 .nw-welcome-quickbtn:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
 .nw-welcome-quickicon{color:var(--nw-fg-soft);display:flex;flex:0 0 auto;}
 
-@media (max-width: 620px){
+/* R13: container tiers, not window tiers — the home screen is a column. */
+@container nw (max-width: 620px){
   .nw-welcome{padding:20px 14px;}
-  .nw-welcome-stats,.nw-welcome-quick{grid-template-columns:1fr;}
+  .nw-welcome-stats,.nw-welcome-quick{grid-template-columns:minmax(0,1fr);}
 }
 `);
 })();
