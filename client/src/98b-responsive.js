@@ -92,7 +92,7 @@
   .nw-surface{--nw-pad-x:20px;--nw-pad-y:32px;--nw-gutter-x:68px;}
 
   .nw-notes{left:8px;right:8px;top:48px;max-width:none;}
-  .nw-notes-card{width:100%;max-height:min(280px,calc(100vh - 200px));}
+  .nw-notes-card{width:100%;max-height:min(420px,calc(100vh - 180px));}
 
   /* Below the shelf overlay (34) and the advice overlay (33): when the shelf is
      lifted out of the flow it must be able to cover the dock, otherwise its

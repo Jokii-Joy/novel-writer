@@ -175,7 +175,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
    sheet — it floats, so it must read as an object placed *on* the manuscript. */
 .nw-notes-card{
   width:min(420px,100%);
-  max-height:min(320px,calc(100vh - 220px));
+  /* R14 ③: the card grows with the note instead of showing a fixed window —
+     the textarea drives its own height, the card only caps how far it may go. */
+  max-height:min(560px,calc(100vh - 200px));
   display:flex;flex-direction:column;min-height:0;
   border-radius:12px;
   border:1px solid var(--dsw-alias-border-l2);
@@ -702,52 +704,26 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       // chapter object with the same id does not blank the card mid-typing.
     }, [ready, locked, refreshNotes, chapter && chapter.id]);
 
-    const createNote = useCallback(
-      async (text) => {
-        const body = String(text == null ? '' : text).trim();
-        if (!body) return;
-        try {
-          await NW.db.createNote({
-            novelId: activeNovelId || '',
-            chapterId: (chapterRef.current && chapterRef.current.id) || '',
-            text: body,
-          });
-          await refreshNotes();
-        } catch (err) {
-          pushToast('保存灵感失败', 'err');
-        }
-      },
-      [activeNovelId, refreshNotes, pushToast],
-    );
-
-    const deleteNote = useCallback(
-      async (id) => {
-        try {
-          await NW.db.deleteNote(id);
-          await refreshNotes();
-        } catch (err) {
-          /* a failed delete just leaves the note in place */
-        }
-      },
-      [refreshNotes],
-    );
-
     /**
      * R14 ③: the note card autosaves on every keystroke (debounced), so there is
      * no 保存 step any more. One row per chapter — the text is replaced, not
      * appended, and clearing the box deletes the row.
      */
     const saveNotes = useCallback(
-      async (text) => {
+      async (text, chapterId) => {
         try {
-          const activeId = (chapterRef.current && chapterRef.current.id) || '';
-          if (!activeId) return;
+          // R14 ③: the caller passes the chapter the text was typed in. Reading
+          // it from `chapterRef` here would file the last keystrokes of chapter
+          // A under chapter B when the user switches before the debounce fires.
+          const targetId = chapterId != null ? String(chapterId) : (chapterRef.current && chapterRef.current.id) || '';
+          if (!targetId) return;
           await NW.db.saveChapterNote({
             novelId: activeNovelId || '',
-            chapterId: activeId,
+            chapterId: targetId,
             text: String(text == null ? '' : text),
           });
-          await refreshNotes();
+          // Only refresh the card if we are still looking at that chapter.
+          if ((chapterRef.current && String(chapterRef.current.id)) === targetId) await refreshNotes();
         } catch (err) {
           pushToast('保存灵感失败', 'err');
         }
@@ -2408,6 +2384,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     const [state, setState] = useState('idle');
     const areaRef = useRef(null);
     const savedRef = useRef('');
+    const lastChapterRef = useRef(p.chapterId);
     const timerRef = useRef(0);
 
     // R14 ③: the card is bound to one chapter, so the seed is a single string
@@ -2417,11 +2394,14 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     // echoes our own keystrokes from resetting the caret.
     useEffect(() => {
       const next = String(p.text == null ? '' : p.text);
-      if (next === savedRef.current) return;
+      const switched = lastChapterRef.current !== p.chapterId;
+      lastChapterRef.current = p.chapterId;
+      if (!switched && next === savedRef.current) return;
       savedRef.current = next;
       // While the card has focus, a value echoed back by the save round trip
-      // must not overwrite what is being typed (it would jump the caret).
-      if (areaRef.current && document.activeElement === areaRef.current) return;
+      // must not overwrite what is being typed (it would jump the caret). A
+      // chapter switch is the exception — that content is a different note.
+      if (!switched && areaRef.current && document.activeElement === areaRef.current) return;
       setText(next);
       setState('idle');
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2434,7 +2414,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       if (body === savedRef.current) return;
       savedRef.current = body;
       setState('saved');
-      if (typeof p.onSave === 'function') p.onSave(body);
+      // Hand the chapter along: the debounce can outlive a chapter switch, and
+      // the note must land on the chapter it was typed in.
+      if (typeof p.onSave === 'function') p.onSave(body, p.chapterId);
     };
 
     const schedule = (value) => {
