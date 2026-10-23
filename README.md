@@ -413,7 +413,7 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
 > | --- | --- | --- |
 > | 每个 client part 语法 | `node --check client/src/*.js`（`00-boot`/`99-end` 为 factory 包装，单独 check 必然失败，属预期） | 20 个真实 part 全部 exit 0 |
 > | Host 模块语法 | `node --check index.js` + 12 个 `lib/*.js` | 全部 exit 0 |
-> | 构建产物 + 加载校验 | `node scripts/build-client.mjs`（内含 `verify-client-load.mjs`） | **20 parts / 701499 bytes**，`ok (id=@local/novel-writer, inject=["slots"])` |
+> | 构建产物 + 加载校验 | `node scripts/build-client.mjs`（内含 `verify-client-load.mjs`） | **20 parts / 701499 字符**（落盘 724004 字节，中文按 UTF-8 三字节计），`ok (id=@local/novel-writer, inject=["slots"])` |
 > | 方言覆盖率 | 扫全部 `NW.t(...)` / `tr(...)` 字面量 vs EN 词典 | 95 个 key，缺失 **0** |
 > | 样式覆盖率 | 扫全部 `className: 'nw-…'` / `class="nw-…"` vs CSS 文件 | 242 个渲染类，未加样式 **0** |
 > | **容器查询落点** | `Select-String -Pattern '@container'` | 9 处：`05-css`（声明容器）、`45-dialogs-css`×2、`55-welcome`、`60-editor`×2、`97-theme`、`98b-responsive`×3 |
@@ -509,7 +509,7 @@ novel-writer/
 │  ├─ pdf.js                docxToPdf（officeToPdf → libreoffice-kit 回退）
 │  └─ import-parse.js       parseImport（txt/md/docx/epub，GB18030 回退）
 ├─ client/
-│  ├─ client.js             构建产物（勿手改，20 parts 拼接 / 701499 bytes）
+│  ├─ client.js             构建产物（勿手改，20 parts 拼接 / 701499 字符 → 724004 字节落盘）
 │  └─ src/                  00→99 按文件名字典序拼接
 │     ├─ 00-boot / 99-end        __ModuleLoader__ 封装与 apply 导出
 │     ├─ 05-css                  设计 token 层（16/14/13px、圆角、控件高度、间距、阴影）
@@ -570,3 +570,6 @@ body 为 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`，错误绝不�
 21. **GitHub 上传需要你自己跑一次 `setup-github.cmd` 并粘一次 Token**：本机到 `github.com` 的连接间歇性中断（`api.github.com` 一直正常），所以浏览器 OAuth 设备流和 `git push` 都会随机失败。脚本因此改走 REST API，只访问 `api.github.com`；若某次仍失败，网络恢复后重跑即可（本地提交已保存）。仓库名默认 `novel-writer`，想换就改脚本里的 `REPO=`。
 22. **修改建议栏给的是意见，不是自动改稿**：它不会替你改写正文，也不会把建议写进文件；点一条只是把正文滚到那一段并高亮。模型每章最多返回 8 条、按 4000 字分块串行处理，所以很长的章会慢（一次审读十几到几十秒），且**同一章不同次审读结果会不一样**——这是生成式模型的常态，不是 bug。定位靠模型回引原文后 `indexOf` 对齐，作者随后手改过的段落会显示「原文已改动，定位不到」。
 23. **「首页」按钮是编辑器的一部分**，不跟随滚动；它在 `.nw-page` 之外、`.nw-surface` 之内绝对定位在左上角，因此换主题时会跟着变颜色，但不会与正文重叠（正文左右有 48px 内边距）。
+24. **响应式的度量单位是「面板宽度」不是「窗口宽度」**：`.nw-root` 声明了 `container-type:inline-size`，三档断点写的是 `@container nw (max-width: …)`。所以**把宿主侧栏拉开、或把 Harness 窗口调窄，插件会换档；把窗口调宽但宿主右栏占着，插件不会换档**——这是有意的，插件在 shell 里就是一列。用不支持容器查询的旧引擎时，`97-theme.js` 里留了一份 `@media (max-width:900px)` 的兜底，但 780 / 560 两档会失效。
+25. **窄面板（≤560px）下侧栏与修改建议栏改成浮层**：它们不再占正文宽度，而是盖在正文上，进去后要再点一次按钮才收起（不像宽面板里是并排常驻）。侧栏浮层的 `z-index` 故意高于浮动坞，否则窄面板里侧栏底部的按钮会被坞压住、点不到。
+26. **灵感便签是绝对定位的悬浮卡**，不参与布局，所以它**不会把正文挤开**；代价是面板很矮时（窗口高度 &lt; 约 600px 且侧栏展开）卡片可能压住正文顶部，此时正文仍可滚动、卡片可随时 `Esc` 收起。卡片内容在打开时合并自该书的全部便签，保存时折回一条 —— 所以**不支持多条并列**，这是 R10 起就有的取舍（用户要的是「随手记一页」而不是笔记列表）。
