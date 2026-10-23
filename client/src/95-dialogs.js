@@ -150,6 +150,29 @@
   }
 
   /**
+   * R16 ⑩: 期刊水平等级 chip. The code comes from the host (`tierOfTags`), the
+   * label is localised here so the same code can render in either language.
+   */
+  const TIER_TEXT = {
+    national: '国家级',
+    provincial: '省级',
+    municipal: '市级',
+    other: '其他',
+  };
+
+  const TIER_KIND = {
+    national: 'brand',
+    provincial: 'ok',
+    municipal: 'info',
+    other: 'info',
+  };
+
+  function tierBadge(tier) {
+    const code = String(tier || 'other');
+    return badge(NW.t(TIER_TEXT[code] || TIER_TEXT.other), TIER_KIND[code] || 'info');
+  }
+
+  /**
    * Theme chip: a colour swatch plus its label. The actual colours live in the
    * stylesheet (data-theme-swatch attributes), so this stays theme-agnostic.
    */
@@ -204,8 +227,7 @@
   function summaryOf(lib) {
     const state = lib || {};
     if (!state.dir) return lib && lib.busy ? String(lib.busy) : '未选择保存文件夹';
-    const parts = [state.mirror === true ? '自动保存开' : '自动保存关', state.encrypt === true ? '加密' : '明文'];
-    if (state.encrypt === true && state.plain === true) parts.push('含明文副本');
+    const parts = [state.mirror === true ? '自动保存开' : '自动保存关', state.encrypt === true ? '加密 .nwe' : '明文'];
     return parts.join(' · ');
   }
 
@@ -261,10 +283,23 @@
     return 'changpian';
   }
 
-  /** Whitespace-excluded character count, matching the host's countChars(). */
+  /**
+   * Character count matching the host's countChars().
+   *
+   * R16 ⑥: both halves honour the 标点 setting now. This used to strip
+   * whitespace only while NW.format.wordCount also skipped punctuation, which is
+   * why the same manuscript read as two different lengths on the home screen and
+   * in the submission preview.
+   */
   function countCharsOf(text) {
     try {
-      return Array.from(String(text == null ? '' : text).replace(/\s/g, '')).length;
+      const body = String(text == null ? '' : text).replace(/\s/g, '');
+      const withPunctuation =
+        NW.format && typeof NW.format.includePunctuation === 'function'
+          ? NW.format.includePunctuation()
+          : true;
+      if (!withPunctuation) return Array.from(body.replace(/[\p{P}\p{S}]/gu, '')).length;
+      return Array.from(body).length;
     } catch (err) {
       return 0;
     }
@@ -1102,9 +1137,6 @@
     const [dir, setDir] = useState(() => String(seed.dir || ''));
     const [auto, setAuto] = useState(() => seed.mirror === true);
     const [encrypt, setEncrypt] = useState(() => seed.encrypt !== false);
-    // R15: a readable .docx twin next to every encrypted book, refreshed on each
-    // save. Off by default — turning it on puts the book on disk in the clear.
-    const [plain, setPlain] = useState(() => seed.plain === true);
     const [lastAt, setLastAt] = useState(() => Number(seed.lastMirrorAt) || 0);
     const [files, setFiles] = useState([]);
 
@@ -1135,14 +1167,13 @@
       }
     };
 
-    /** Persists the folder / auto-save / encrypt / plain quad, then mirrors once. */
+    /** Persists the folder / auto-save / encrypt trio, then mirrors once. */
     const persist = async (patch) => {
       const next = await p.onLibrary(patch);
       if (!next) return null;
       setDir(String(next.dir || ''));
       setAuto(next.mirror === true);
       setEncrypt(next.encrypt === true);
-      setPlain(next.plain === true);
       setLastAt(Number(next.lastMirrorAt) || 0);
       refreshFiles();
       return next;
@@ -1178,7 +1209,7 @@
         const picked = await NW.io.library.pick();
         const folder = String((picked && picked.dir) || '');
         if (!folder) return null;
-        await persist({ dir: folder, mirror: true, encrypt: encrypt, plain: plain });
+        await persist({ dir: folder, mirror: true, encrypt: encrypt });
         setHint('已选择保存位置：之后每次修改都会自动覆盖这个文件夹里的文件。');
         return picked;
       });
@@ -1215,14 +1246,6 @@
         return await restoreSnapshot(res);
       });
 
-    const decryptMirror = () =>
-      run('正在解密…', async () => {
-        if (!dir) throw new Error('请先选择保存文件夹');
-        const data = await NW.io.library.decryptTo({ dir: dir, outDir: '' });
-        setHint('已解密 ' + (Number(data && data.count) || 0) + ' 个文件到 ' + String((data && data.outDir) || 'plain') + '。');
-        return data;
-      });
-
     // ---- render --------------------------------------------------------
     const body = [];
 
@@ -1249,7 +1272,7 @@
             onClick: () =>
               run('正在保存设置…', async () => {
                 if (!String(dir || '').trim()) throw new Error('请填写或选择一个文件夹');
-                await persist({ dir: String(dir).trim(), mirror: auto, encrypt: encrypt, plain: plain });
+                await persist({ dir: String(dir).trim(), mirror: auto, encrypt: encrypt });
               }),
             disabled: !!busy,
             children: NW.t('保存'),
@@ -1269,7 +1292,7 @@
             setAuto(v);
             run('正在保存设置…', async () => {
               if (v && !String(dir || '').trim()) throw new Error('请先选择保存文件夹');
-              await persist({ dir: String(dir).trim(), mirror: v, encrypt: encrypt, plain: plain });
+              await persist({ dir: String(dir).trim(), mirror: v, encrypt: encrypt });
             });
           },
           label: '修改后自动保存',
@@ -1288,7 +1311,7 @@
             setEncrypt(v);
             run('正在保存设置…', async () => {
               if (!String(dir || '').trim()) return;
-              await persist({ dir: String(dir).trim(), mirror: auto, encrypt: v, plain: plain });
+              await persist({ dir: String(dir).trim(), mirror: auto, encrypt: v });
             });
           },
           label: '加密保存',
@@ -1298,30 +1321,10 @@
 
     body.push(
       h(
-        'div',
-        { className: 'nw-row' },
-        h('span', null, '同时保存一份明文 .docx'),
-        NW.ui.toggle({
-          checked: plain,
-          disabled: !encrypt,
-          onChange: (v) => {
-            setPlain(v);
-            run('正在保存设置…', async () => {
-              if (!String(dir || '').trim()) return;
-              await persist({ dir: String(dir).trim(), mirror: auto, encrypt: encrypt, plain: v });
-            });
-          },
-          label: '同时保存明文 .docx',
-        }),
-      ),
-    );
-
-    body.push(
-      h(
         'p',
         { className: 'nw-hint-block' },
         encrypt
-          ? '加密后文件扩展名是 .docx.nwe，用其它编辑器打不开；密钥只保存在本机。打开上面的开关后，每次保存都会在旁边写一份能直接用 Word 打开的 .docx —— 那等于这本书也以明文躺在磁盘上；关掉开关，下一次保存会删掉这些明文副本。'
+          ? '加密后文件扩展名是 .docx.nwe，用其它编辑器打不开；密钥只保存在本机，换台电脑要先恢复密码。'
           : '当前是明文存储，文件夹里的 .docx 可以直接用 Word 打开。',
       ),
     );
@@ -1335,7 +1338,6 @@
           'span',
           { className: 'nw-inline', style: { gap: '6px' } },
           NW.ui.btn({ onClick: saveNow, disabled: !!busy || !dir, children: '立即保存' }),
-          NW.ui.btn({ onClick: decryptMirror, disabled: !!busy || !dir || !encrypt, children: '解密出明文副本' }),
         ),
       ),
     );
@@ -1363,9 +1365,8 @@
     else {
       statusLine.push(
         auto ? '自动保存已开启' : '自动保存已关闭（只能手动保存）',
-        encrypt ? '加密存储' : '明文存储',
+        encrypt ? '加密存储 .docx.nwe' : '明文存储 .docx',
       );
-      if (encrypt && plain) statusLine.push('同时保留明文副本');
       if (lastAt) statusLine.push('上次保存 ' + NW.fmtDate(lastAt));
     }
     body.push(h('p', { className: 'nw-hint-block' }, statusLine.join(' · ')));
@@ -1438,7 +1439,6 @@
       dir: (p.library && p.library.dir) || '',
       mirror: !!(p.library && p.library.mirror),
       encrypt: !!(p.library && p.library.encrypt),
-      plain: !!(p.library && p.library.plain),
       busy: '',
       error: '',
       files: null,
@@ -1553,7 +1553,6 @@
               dir: String(data.dir || ''),
               mirror: data.mirror === true,
               encrypt: data.encrypt === true,
-              plain: data.plain === true,
             }),
           );
         })
@@ -1983,11 +1982,19 @@
       );
     };
 
+    // R16 ⑥: a 4th `hint` argument now renders as a real note under the row —
+    // before it only reached the tooltip, and the 标点 switch needs to explain
+    // what it changes.
     const rowToggle = (label, checked, onChange, hint) =>
       h(
         'div',
         { className: 'nw-row' },
-        h('span', null, label),
+        h(
+          'span',
+          { className: 'nw-rowlabel' },
+          h('span', null, label),
+          hint ? h('span', { className: 'nw-dim nw-rowhint' }, hint) : null,
+        ),
         NW.ui.toggle({ checked: !!checked, onChange: onChange, label: label, title: hint || label }),
       );
 
@@ -2115,6 +2122,12 @@
           h(
             'div',
             null,
+            rowToggle(
+              '统计字数包含标点符号',
+              draft.countPunctuation !== false,
+              (v) => set('countPunctuation', v),
+              '关闭后，状态栏、书籍总字数和投稿预览里的字数都会扣掉标点。默认包含，与常见中文写作软件一致。',
+            ),
             NW.ui.field({
               label: '自动保存间隔（毫秒）',
               children: NW.ui.input({
@@ -2665,6 +2678,22 @@
       (String(openedNovel.id || '') === String(novelId) ? openedNovel : null) ||
       {};
     const chapters = allChapters.filter((row) => String(row.novelId) === String(novelId));
+    /**
+     * R16 ⑧: novels carry no word count of their own — only chapters do — so the
+     * book picker used to print `0 字` for every title. Sum the chapter counts
+     * once here and use that everywhere the book's size is shown.
+     */
+    const bookWords = (() => {
+      const map = {};
+      for (let i = 0; i < allChapters.length; i += 1) {
+        const row = allChapters[i];
+        if (!row) continue;
+        const key = String(row.novelId || '');
+        if (!key) continue;
+        map[key] = (map[key] || 0) + (Number(row.wordCount) || 0);
+      }
+      return map;
+    })();
     const currentChapter =
       p.chapter && String(p.chapter.novelId == null ? novelId : p.chapter.novelId) === String(novelId) ? p.chapter : null;
 
@@ -2681,6 +2710,7 @@
     const [manage, setManage] = useState(false);
     const [editEmail, setEditEmail] = useState('');
     const [editRange, setEditRange] = useState('');
+    const [editTier, setEditTier] = useState('other');
     const [editRequirements, setEditRequirements] = useState('');
     const [manageBusy, setManageBusy] = useState('');
 
@@ -3011,6 +3041,11 @@
             email: form.email,
             signature: form.signature,
           },
+          // R16 ⑥: the host counts the manuscript for the subject line and the
+          // preview, so it has to know whether 标点 is included.
+          countPunctuation: !(
+            p.settings && p.settings.countPunctuation === false
+          ),
         });
         setPrepared(data || null);
         setSubject(String((data && data.subject) || ''));
@@ -3135,6 +3170,7 @@
       }
       setEditEmail(String(selected.email || ''));
       setEditRange(String(selected.wordRange || ''));
+      setEditTier(String(selected.tier || 'other'));
       const requirements = Array.isArray(selected.requirements) ? selected.requirements : [];
       setEditRequirements(requirements.join('\n'));
       setManage(true);
@@ -3153,6 +3189,7 @@
           email: String(editEmail || '').trim(),
           wordRange: String(editRange || '').trim(),
           requirements: lines,
+          tier: String(editTier || 'other'),
         });
         await NW.io.journals.save([entry]);
         await loadJournals();
@@ -3222,7 +3259,11 @@
               },
             },
             h('span', null, String(row.title || '未命名小说')),
-            h('span', { className: 'nw-dim nw-nowrap' }, NW.fmtWords(Number(row.wordCount) || 0) + ' 字'),
+            h(
+              'span',
+              { className: 'nw-dim nw-nowrap' },
+              NW.fmtWords(Number(bookWords[String(row.id)]) || 0) + ' 字',
+            ),
           ),
         );
         const detail = h(
@@ -3358,6 +3399,22 @@
           'div',
           null,
           h('h4', null, '编辑期刊信息'),
+          // R16 ⑩: 期刊水平等级 — the badge the author weighs first.
+          NW.ui.field({
+            label: NW.t('期刊等级'),
+            hint: '国家级 / 省级 / 市级只是常见的投稿难度参考，具体以期刊官方说明为准。',
+            children: NW.ui.select({
+              value: editTier,
+              ariaLabel: NW.t('期刊等级'),
+              options: [
+                { value: 'national', label: '国家级' },
+                { value: 'provincial', label: '省级' },
+                { value: 'municipal', label: '市级' },
+                { value: 'other', label: '其他' },
+              ],
+              onChange: (v) => setEditTier(v),
+            }),
+          }),
           NW.ui.field({
             label: '投稿邮箱',
             children: NW.ui.input({
@@ -3403,6 +3460,10 @@
           h(
             'dl',
             null,
+            // R16 ⑩: the tier sits first — it is the fastest read on "how hard
+            // is this to get into".
+            h('dt', null, NW.t('期刊等级')),
+            h('dd', null, tierBadge(selected.tier)),
             h('dt', null, NW.t('体裁')),
             h('dd', null, genreCodesOf(selected).map((code) => genreLabelOf(code)).join(' / ') || '不限'),
             h('dt', null, '字数范围'),
@@ -3467,7 +3528,9 @@
               setManage(false);
             },
           },
-          h('span', null, String(entry.name || '未命名期刊')),
+          h('span', { className: 'nw-journal-name' }, String(entry.name || '未命名期刊')),
+          // R16 ⑩: the tier is the first thing an author weighs a journal by.
+          h('span', { className: 'nw-journal-tags' }, tierBadge(entry.tier)),
           String(entry.email || '').trim() ? null : badge('待核对', 'warn'),
         ),
       );

@@ -412,15 +412,11 @@
    */
   function librarySet(patch) {
     const input = patch && typeof patch === 'object' ? patch : {};
-    const body = {
+    return api('library.set', {
       dir: input.dir == null ? '' : String(input.dir),
       mirror: input.mirror === true,
       encrypt: input.encrypt === true,
-    };
-    // R15: only sent when the caller actually owns the flag — a stale dialog
-    // that has never heard of `plain` must not silently switch it off.
-    if (input.plain !== undefined) body.plain = input.plain === true;
-    return api('library.set', body);
+    });
   }
 
   /**
@@ -429,16 +425,12 @@
    */
   function libraryMirror(payload) {
     const input = payload && typeof payload === 'object' ? payload : {};
-    const body = {
+    return api('library.mirror', {
       novels: Array.isArray(input.novels) ? input.novels : [],
       chapters: Array.isArray(input.chapters) ? input.chapters : [],
       settings: input.settings && typeof input.settings === 'object' ? input.settings : null,
       encrypt: input.encrypt === true,
-    };
-    // R15: when omitted the host keeps its stored preference, which is what a
-    // silent autosave wants — the dialog owns the switch, not every save.
-    if (input.plain !== undefined) body.plain = input.plain === true;
-    return api('library.mirror', body);
+    });
   }
 
   /** Opens the native folder picker on the host; resolves `{dir}`. */
@@ -685,6 +677,11 @@
     return api('inbox.read', { uid: Number(uid) || 0 });
   }
 
+  /** R16 ⑤: drops one message from the mailbox (mark \Deleted + expunge). */
+  function inboxDelete(uid) {
+    return api('inbox.delete', { uid: Number(uid) || 0 });
+  }
+
   /** Editorial advice (not typo fixes) on one chapter. */
   function revise(input) {
     const body = input && typeof input === 'object' ? input : {};
@@ -746,6 +743,7 @@
       presets: imapPresets,
       list: inboxList,
       read: inboxRead,
+      remove: inboxDelete,
     },
   };
 

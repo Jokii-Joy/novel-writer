@@ -1018,6 +1018,8 @@
       h(
         'div',
         { className: 'nw-shelf-foot' },
+        // R16 ⑨: the wide 「导入小说」 button below this bar did exactly what the
+        // upload key does, so the bar keeps the key and the button is gone.
         h(
           'div',
           { className: 'nw-shelf-footbar', role: 'toolbar', 'aria-label': tr('目录操作') },
@@ -1027,23 +1029,11 @@
           makeIconBtn(icon('plus', 18), tr('新建章节'), () => {
             if (typeof P.onCreateChapter === 'function') P.onCreateChapter(null);
           }),
-          makeIconBtn(icon('upload', 18), tr('导入'), importNovel),
+          makeIconBtn(icon('upload', 18), tr('导入小说'), importNovel),
           makeIconBtn(icon('trash', 18), tr('回收站'), openTrash),
           makeIconBtn(icon('gear', 18), tr('设置'), () => {
             if (typeof P.onOpenSettings === 'function') P.onOpenSettings();
           }),
-        ),
-        h(
-          'button',
-          {
-            type: 'button',
-            className: 'nw-shelf-import',
-            title: tr('导入小说'),
-            'aria-label': tr('导入小说'),
-            onClick: importNovel,
-          },
-          icon('upload', 18),
-          h('span', { className: 'nw-shelf-import-label' }, tr('导入小说')),
         ),
       ),
     );
@@ -1406,29 +1396,6 @@
   background:var(--nw-surface-2);color:var(--nw-fg);
   transform:translateY(-1px);box-shadow:var(--nw-shadow-1);
 }
-/* 左下「导入小说」大按钮：图标 + 文案，整宽、40px 高。 */
-.nw-shelf-import{
-  display:flex;align-items:center;justify-content:center;gap:var(--nw-sp-1);
-  width:100%;height:40px;padding:0 var(--nw-sp-3);margin:0;
-  border:1px solid var(--nw-line);border-radius:var(--nw-r-control);
-  background:var(--nw-surface-2);color:var(--nw-fg);
-  font-family:var(--nw-ui-font);font-size:var(--nw-fs-second);font-weight:600;
-  line-height:1;cursor:pointer;appearance:none;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    border-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease),
-    transform var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease);
-}
-.nw-shelf-import:hover{
-  background:var(--nw-surface-overlay);border-color:var(--nw-line-strong);
-  transform:translateY(-1px);box-shadow:var(--nw-shadow-1);
-}
-.nw-shelf-import:active{transform:none;box-shadow:none;}
-.nw-shelf-import:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
-.nw-shelf-import-label{
-  min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-}
 
 /* ------------------------------------------------------------ 空态 ---- */
 .nw-shelf-empty{
@@ -1506,7 +1473,6 @@
     animation-iteration-count:1 !important;
     transition-duration:.001ms !important;
   }
-  .nw-shelf-import:hover,
   .nw-shelf-foot .nw-btn[data-kind="icon"]:hover:not(:disabled){
     transform:none !important;
     box-shadow:none !important;

@@ -259,6 +259,9 @@
 /* rows now live inside the card, so they shed the doubled outer rule */
 .nw-settings-section .nw-row{padding:12px 0;border-bottom-color:var(--nw-line-soft);}
 .nw-settings-section .nw-row:last-child{border-bottom:none;padding-bottom:6px;}
+/* R16 ⑥: a row may carry an explanation under its label. */
+.nw-rowlabel{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.nw-rowhint{font-size:var(--nw-fs-micro);line-height:1.45;max-width:52ch;}
 
 /* SMTP provider presets — small pill buttons, one per mail service. */
 .nw-preset-wrap{display:flex;flex-wrap:wrap;gap:6px;}
@@ -529,6 +532,12 @@
   font-weight:600;
 }
 .nw-journal-item > span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* R16 ⑩: name keeps its room; the tier chip never truncates. */
+.nw-journal-item > .nw-journal-name{flex:1 1 auto;}
+.nw-journal-item > .nw-journal-tags{
+  display:inline-flex;flex:0 0 auto;align-items:center;gap:4px;
+  overflow:visible;white-space:nowrap;
+}
 
 .nw-journal-detail{
   padding:var(--nw-sp-3) var(--nw-sp-4);border-radius:var(--nw-r-card);

@@ -338,9 +338,6 @@ window.__ModuleLoader__.load({
     '设置': 'Settings',
     '保存': 'Save',
     '自动保存': 'Auto-saved',
-    '同时保存一份明文 .docx': 'Also keep a plain .docx',
-    '同时保留明文副本': 'plain copy kept',
-    '含明文副本': 'with plain copy',
     '已保存': 'Saved',
     '保存中…': 'Saving…',
     '未保存': 'Unsaved',
@@ -438,6 +435,12 @@ window.__ModuleLoader__.load({
     '投稿': 'Submit',
     '投稿助手': 'Submission assistant',
     '期刊': 'Journal',
+    /* R16 ⑩: 期刊水平等级 — the codes live in the host, these are the labels. */
+    '期刊等级': 'Tier',
+    '国家级': 'National',
+    '省级': 'Provincial',
+    '市级': 'Municipal',
+    '其他': 'Other',
     '体裁': 'Genre',
     '微小说': 'Micro fiction',
     '短篇': 'Short story',
@@ -670,6 +673,13 @@ window.__ModuleLoader__.load({
     caretColor: '',
     caretBlink: true,
     autoSaveMs: 1200,
+    /**
+     * R16 ⑥: whether 字数 counts punctuation marks. Chinese word processors count
+     * them, so this ships on; turning it off drops the marks from the status bar,
+     * the book totals and the submission preview alike (the host reads the same
+     * setting, so the two halves cannot disagree).
+     */
+    countPunctuation: true,
     proofreadModel: null,
     autoLockMinutes: 15,
     lockEnabled: false,
@@ -2307,12 +2317,40 @@ window.__ModuleLoader__.load({
   // ------------------------------- word count --------------------------------
 
   /**
-   * CJK characters count individually; runs of latin/other word characters count as one word.
-   * Whitespace and punctuation are ignored, mirroring the way Chinese editors report 字数.
+   * R16 ⑥: module-level mirror of the `countPunctuation` setting.
+   *
+   * Every counter in the app funnels through wordCount(), and the setting can be
+   * flipped from Settings at any time. Threading an option through a dozen call
+   * sites would leave one of them stale (that is exactly how the status bar and
+   * the submission preview disagreed before), so the flag lives here and the app
+   * pushes it in whenever settings load or change.
    */
-  function wordCount(text) {
+  let countPunctuation = true;
+
+  function setCountPunctuation(on) {
+    countPunctuation = on !== false;
+  }
+
+  /** Current value of the 标点 switch, for callers with their own counter. */
+  function includePunctuation() {
+    return countPunctuation;
+  }
+
+  /**
+   * CJK characters count individually; runs of latin/other word characters count as one word.
+   * Whitespace is ignored, mirroring the way Chinese editors report 字数.
+   *
+   * R16 ⑥: punctuation counts as one character each unless the setting is off.
+   * The base algorithm is untouched — marks are *added on top* — so switching the
+   * setting never changes what a "word" means, it only drops the marks.
+   */
+  function wordCount(text, options) {
     if (text == null || text === '') return 0;
     const value = String(text);
+    const withPunctuation =
+      options && options.includePunctuation !== undefined
+        ? options.includePunctuation !== false
+        : countPunctuation;
     let count = 0;
     let inWord = false;
     for (let i = 0; i < value.length; i += 1) {
@@ -2332,6 +2370,9 @@ window.__ModuleLoader__.load({
         inWord = false;
         i += 1;
       } else {
+        // Punctuation and symbols land here. CJK punctuation (。，「」…) is in
+        // the CJK blocks but not in CJK_ONLY_RE, so it is counted here too.
+        if (withPunctuation) count += 1;
         inWord = false;
       }
     }
@@ -2794,6 +2835,8 @@ window.__ModuleLoader__.load({
 
   NW.format = {
     wordCount: wordCount,
+    setCountPunctuation: setCountPunctuation,
+    includePunctuation: includePunctuation,
     typeset: typeset,
     diffPreview: diffPreview,
     autoChapterSplit: autoChapterSplit,
@@ -3220,15 +3263,11 @@ window.__ModuleLoader__.load({
    */
   function librarySet(patch) {
     const input = patch && typeof patch === 'object' ? patch : {};
-    const body = {
+    return api('library.set', {
       dir: input.dir == null ? '' : String(input.dir),
       mirror: input.mirror === true,
       encrypt: input.encrypt === true,
-    };
-    // R15: only sent when the caller actually owns the flag — a stale dialog
-    // that has never heard of `plain` must not silently switch it off.
-    if (input.plain !== undefined) body.plain = input.plain === true;
-    return api('library.set', body);
+    });
   }
 
   /**
@@ -3237,16 +3276,12 @@ window.__ModuleLoader__.load({
    */
   function libraryMirror(payload) {
     const input = payload && typeof payload === 'object' ? payload : {};
-    const body = {
+    return api('library.mirror', {
       novels: Array.isArray(input.novels) ? input.novels : [],
       chapters: Array.isArray(input.chapters) ? input.chapters : [],
       settings: input.settings && typeof input.settings === 'object' ? input.settings : null,
       encrypt: input.encrypt === true,
-    };
-    // R15: when omitted the host keeps its stored preference, which is what a
-    // silent autosave wants — the dialog owns the switch, not every save.
-    if (input.plain !== undefined) body.plain = input.plain === true;
-    return api('library.mirror', body);
+    });
   }
 
   /** Opens the native folder picker on the host; resolves `{dir}`. */
@@ -3493,6 +3528,11 @@ window.__ModuleLoader__.load({
     return api('inbox.read', { uid: Number(uid) || 0 });
   }
 
+  /** R16 ⑤: drops one message from the mailbox (mark \Deleted + expunge). */
+  function inboxDelete(uid) {
+    return api('inbox.delete', { uid: Number(uid) || 0 });
+  }
+
   /** Editorial advice (not typo fixes) on one chapter. */
   function revise(input) {
     const body = input && typeof input === 'object' ? input : {};
@@ -3554,6 +3594,7 @@ window.__ModuleLoader__.load({
       presets: imapPresets,
       list: inboxList,
       read: inboxRead,
+      remove: inboxDelete,
     },
   };
 
@@ -4355,6 +4396,9 @@ window.__ModuleLoader__.load({
 /* rows now live inside the card, so they shed the doubled outer rule */
 .nw-settings-section .nw-row{padding:12px 0;border-bottom-color:var(--nw-line-soft);}
 .nw-settings-section .nw-row:last-child{border-bottom:none;padding-bottom:6px;}
+/* R16 ⑥: a row may carry an explanation under its label. */
+.nw-rowlabel{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.nw-rowhint{font-size:var(--nw-fs-micro);line-height:1.45;max-width:52ch;}
 
 /* SMTP provider presets — small pill buttons, one per mail service. */
 .nw-preset-wrap{display:flex;flex-wrap:wrap;gap:6px;}
@@ -4625,6 +4669,12 @@ window.__ModuleLoader__.load({
   font-weight:600;
 }
 .nw-journal-item > span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* R16 ⑩: name keeps its room; the tier chip never truncates. */
+.nw-journal-item > .nw-journal-name{flex:1 1 auto;}
+.nw-journal-item > .nw-journal-tags{
+  display:inline-flex;flex:0 0 auto;align-items:center;gap:4px;
+  overflow:visible;white-space:nowrap;
+}
 
 .nw-journal-detail{
   padding:var(--nw-sp-3) var(--nw-sp-4);border-radius:var(--nw-r-card);
@@ -5836,6 +5886,8 @@ window.__ModuleLoader__.load({
       h(
         'div',
         { className: 'nw-shelf-foot' },
+        // R16 ⑨: the wide 「导入小说」 button below this bar did exactly what the
+        // upload key does, so the bar keeps the key and the button is gone.
         h(
           'div',
           { className: 'nw-shelf-footbar', role: 'toolbar', 'aria-label': tr('目录操作') },
@@ -5845,23 +5897,11 @@ window.__ModuleLoader__.load({
           makeIconBtn(icon('plus', 18), tr('新建章节'), () => {
             if (typeof P.onCreateChapter === 'function') P.onCreateChapter(null);
           }),
-          makeIconBtn(icon('upload', 18), tr('导入'), importNovel),
+          makeIconBtn(icon('upload', 18), tr('导入小说'), importNovel),
           makeIconBtn(icon('trash', 18), tr('回收站'), openTrash),
           makeIconBtn(icon('gear', 18), tr('设置'), () => {
             if (typeof P.onOpenSettings === 'function') P.onOpenSettings();
           }),
-        ),
-        h(
-          'button',
-          {
-            type: 'button',
-            className: 'nw-shelf-import',
-            title: tr('导入小说'),
-            'aria-label': tr('导入小说'),
-            onClick: importNovel,
-          },
-          icon('upload', 18),
-          h('span', { className: 'nw-shelf-import-label' }, tr('导入小说')),
         ),
       ),
     );
@@ -6224,29 +6264,6 @@ window.__ModuleLoader__.load({
   background:var(--nw-surface-2);color:var(--nw-fg);
   transform:translateY(-1px);box-shadow:var(--nw-shadow-1);
 }
-/* 左下「导入小说」大按钮：图标 + 文案，整宽、40px 高。 */
-.nw-shelf-import{
-  display:flex;align-items:center;justify-content:center;gap:var(--nw-sp-1);
-  width:100%;height:40px;padding:0 var(--nw-sp-3);margin:0;
-  border:1px solid var(--nw-line);border-radius:var(--nw-r-control);
-  background:var(--nw-surface-2);color:var(--nw-fg);
-  font-family:var(--nw-ui-font);font-size:var(--nw-fs-second);font-weight:600;
-  line-height:1;cursor:pointer;appearance:none;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    border-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease),
-    transform var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease);
-}
-.nw-shelf-import:hover{
-  background:var(--nw-surface-overlay);border-color:var(--nw-line-strong);
-  transform:translateY(-1px);box-shadow:var(--nw-shadow-1);
-}
-.nw-shelf-import:active{transform:none;box-shadow:none;}
-.nw-shelf-import:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
-.nw-shelf-import-label{
-  min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-}
 
 /* ------------------------------------------------------------ 空态 ---- */
 .nw-shelf-empty{
@@ -6324,7 +6341,6 @@ window.__ModuleLoader__.load({
     animation-iteration-count:1 !important;
     transition-duration:.001ms !important;
   }
-  .nw-shelf-import:hover,
   .nw-shelf-foot .nw-btn[data-kind="icon"]:hover:not(:disabled){
     transform:none !important;
     box-shadow:none !important;
@@ -6471,6 +6487,38 @@ window.__ModuleLoader__.load({
     return NW.h('p', { className: 'nw-welcome-empty' }, text);
   }
 
+  /**
+   * R16 ⑤: every home card shows at most three rows. The rest stay one click
+   * away instead of pushing the page down — a writer opening the plugin wants
+   * "what was I doing", not a scrollable archive.
+   */
+  const HOME_LIMIT = 3;
+
+  function foldRows(items, expanded) {
+    const all = Array.isArray(items) ? items : [];
+    if (expanded || all.length <= HOME_LIMIT) return { visible: all, hidden: 0 };
+    return { visible: all.slice(0, HOME_LIMIT), hidden: all.length - HOME_LIMIT };
+  }
+
+  function moreRow(hidden, expanded, onToggle) {
+    if (hidden <= 0 && !expanded) return null;
+    return NW.h(
+      'button',
+      {
+        type: 'button',
+        className: 'nw-welcome-more',
+        onClick: onToggle,
+        'aria-expanded': expanded ? 'true' : 'false',
+      },
+      expanded ? '收起' : `展开全部 ${hidden} 条`,
+      NW.h(
+        'span',
+        { className: 'nw-welcome-moreico', 'aria-hidden': 'true' },
+        NW.icon(expanded ? 'chevup' : 'chevdown', { size: 13 }),
+      ),
+    );
+  }
+
   function Welcome(props) {
     const p = props || {};
     const novels = Array.isArray(p.novels) ? p.novels.filter(Boolean) : [];
@@ -6479,6 +6527,10 @@ window.__ModuleLoader__.load({
     const stats = computeStats(chapters, p.activeNovelId);
     const rollups = rollupNovels(novels, chapters);
     const journalCount = Number(p.journalCount) || 0;
+    // R16 ⑤: each card folds to three rows and remembers its own state.
+    const [novelOpen, setNovelOpen] = NW.React.useState(false);
+    const [subsOpen, setSubsOpen] = NW.React.useState(false);
+    const [inboxOpen, setInboxOpen] = NW.React.useState(false);
 
     // NW.ui.btn renders `children` verbatim, so the icon is prepended as a
     // keyed sibling span rather than passed as a separate prop.
@@ -6526,39 +6578,47 @@ window.__ModuleLoader__.load({
     );
 
     // ---- 正在创作 ---------------------------------------------------------
+    // R16 ⑤: three rows, newest first (rollupNovels already sorts by touched),
+    // and the remainder behind one 「展开全部」 click.
+    const novelFold = foldRows(rollups, novelOpen);
     const novelCard = card(
       '正在创作',
       rollups.length === 0
         ? emptyLine('新建一部小说后，这里会列出最近在写的作品。')
         : NW.h(
-            'ul',
-            { className: 'nw-welcome-novels' },
-            rollups.slice(0, 6).map((row) =>
-              NW.h(
-                'li',
-                { key: String(row.novel.id) },
+            'div',
+            null,
+            NW.h(
+              'ul',
+              { className: 'nw-welcome-novels' },
+              novelFold.visible.map((row) =>
                 NW.h(
-                  'button',
-                  {
-                    type: 'button',
-                    className: 'nw-welcome-novel',
-                    onClick: () => typeof p.onOpenNovel === 'function' && p.onOpenNovel(row.novel.id),
-                  },
-                  NW.h('span', { className: 'nw-welcome-novelmark', 'aria-hidden': 'true' }, NW.icon('book', { size: 16 })),
+                  'li',
+                  { key: String(row.novel.id) },
                   NW.h(
-                    'span',
-                    { className: 'nw-welcome-novelmain' },
-                    NW.h('span', { className: 'nw-welcome-novelname' }, row.novel.title || '未命名作品'),
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'nw-welcome-novel',
+                      onClick: () => typeof p.onOpenNovel === 'function' && p.onOpenNovel(row.novel.id),
+                    },
+                    NW.h('span', { className: 'nw-welcome-novelmark', 'aria-hidden': 'true' }, NW.icon('book', { size: 16 })),
                     NW.h(
                       'span',
-                      { className: 'nw-welcome-novelmeta' },
-                      `${row.chapters} 章 · ${fmtWords(row.words)} 字 · ${shortDate(row.touched)}`,
+                      { className: 'nw-welcome-novelmain' },
+                      NW.h('span', { className: 'nw-welcome-novelname' }, row.novel.title || '未命名作品'),
+                      NW.h(
+                        'span',
+                        { className: 'nw-welcome-novelmeta' },
+                        `${row.chapters} 章 · ${fmtWords(row.words)} 字 · ${shortDate(row.touched)}`,
+                      ),
                     ),
+                    NW.h('span', { className: 'nw-welcome-novelgo', 'aria-hidden': 'true' }, NW.icon('chevright', { size: 14 })),
                   ),
-                  NW.h('span', { className: 'nw-welcome-novelgo', 'aria-hidden': 'true' }, NW.icon('chevright', { size: 14 })),
                 ),
               ),
             ),
+            moreRow(novelFold.hidden, novelOpen, () => setNovelOpen((v) => !v)),
           ),
       'wide',
     );
@@ -6587,38 +6647,44 @@ window.__ModuleLoader__.load({
     );
 
     // ---- 投稿记录 ---------------------------------------------------------
-    const subRows = submissions.slice(0, 5);
+    // R16 ⑤: same three-row fold as the other cards.
+    const subsFold = foldRows(submissions, subsOpen);
     const subsCard = card(
       '投稿记录',
-      subRows.length === 0
+      submissions.length === 0
         ? emptyLine(
             journalCount > 0
               ? `期刊库已收录 ${journalCount} 家，选中一个章节即可开始投稿。`
               : '还没有投稿记录。完成一次投稿后，这里会显示期刊、日期与状态。',
           )
         : NW.h(
-            'ul',
-            { className: 'nw-welcome-subs' },
-            subRows.map((row) => {
-              const meta = statusOf(row);
-              const days = Number(row.daysAgo);
-              return NW.h(
-                'li',
-                { key: String(row.id), className: 'nw-welcome-sub' },
-                NW.h(
-                  'span',
-                  { className: 'nw-welcome-submain' },
-                  NW.h('span', { className: 'nw-welcome-subtitle' }, row.title || row.subject || '未命名稿件'),
+            'div',
+            null,
+            NW.h(
+              'ul',
+              { className: 'nw-welcome-subs' },
+              subsFold.visible.map((row) => {
+                const meta = statusOf(row);
+                const days = Number(row.daysAgo);
+                return NW.h(
+                  'li',
+                  { key: String(row.id), className: 'nw-welcome-sub' },
                   NW.h(
                     'span',
-                    { className: 'nw-welcome-submeta' },
-                    `${row.journalName || '未指定期刊'} · ${dayStamp(row.at)}` +
-                      (Number.isFinite(days) && days > 0 ? ` · ${days} 天前` : ''),
+                    { className: 'nw-welcome-submain' },
+                    NW.h('span', { className: 'nw-welcome-subtitle' }, row.title || row.subject || '未命名稿件'),
+                    NW.h(
+                      'span',
+                      { className: 'nw-welcome-submeta' },
+                      `${row.journalName || '未指定期刊'} · ${dayStamp(row.at)}` +
+                        (Number.isFinite(days) && days > 0 ? ` · ${days} 天前` : ''),
+                    ),
                   ),
-                ),
-                NW.h('span', { className: 'nw-badge', 'data-tone': meta.tone }, meta.label),
-              );
-            }),
+                  NW.h('span', { className: 'nw-badge', 'data-tone': meta.tone }, meta.label),
+                );
+              }),
+            ),
+            moreRow(subsFold.hidden, subsOpen, () => setSubsOpen((v) => !v)),
           ),
       'subs',
     );
@@ -6712,41 +6778,62 @@ window.__ModuleLoader__.load({
     } else if (inboxMessages.length === 0) {
       inboxBody = emptyLine('收件箱是空的。投稿之后，编辑部的回复会出现在这里。');
     } else {
+      // R16 ⑤: newest first (the host already sorts by UID descending), three
+      // rows, and a per-row delete button.
+      const inboxFold = foldRows(inboxMessages, inboxOpen);
       inboxBody = NW.h(
-        'ul',
-        { className: 'nw-welcome-subs' },
-        inboxMessages.slice(0, 6).map((row, index) =>
-          // R12 ④: these rows used to be plain <li> text — the list looked
-          // clickable and did nothing. Each one is now a button that opens the
-          // mail in a reader dialog (headers + decoded body).
-          NW.h(
-            'li',
-            { key: String(row.uid || row.messageId || index) },
+        'div',
+        null,
+        NW.h(
+          'ul',
+          { className: 'nw-welcome-subs' },
+          inboxFold.visible.map((row, index) =>
+            // R12 ④: these rows used to be plain <li> text — the list looked
+            // clickable and did nothing. Each one is now a button that opens the
+            // mail in a reader dialog (headers + decoded body).
             NW.h(
-              'button',
-              {
-                type: 'button',
-                className: 'nw-welcome-sub nw-welcome-subbtn' + (row.unseen ? ' nw-welcome-sub-unread' : ''),
-                title: `${String(row.subject || '（无主题）')} — 点击阅读`,
-                onClick: () => {
-                  if (typeof p.onOpenMail === 'function') p.onOpenMail(row);
-                },
-              },
+              'li',
+              { key: String(row.uid || row.messageId || index), className: 'nw-welcome-subrow' },
               NW.h(
-                'span',
-                { className: 'nw-welcome-submain' },
-                NW.h('span', { className: 'nw-welcome-subtitle' }, String(row.subject || '（无主题）')),
+                'button',
+                {
+                  type: 'button',
+                  className: 'nw-welcome-sub nw-welcome-subbtn' + (row.unseen ? ' nw-welcome-sub-unread' : ''),
+                  title: `${String(row.subject || '（无主题）')} — 点击阅读`,
+                  onClick: () => {
+                    if (typeof p.onOpenMail === 'function') p.onOpenMail(row);
+                  },
+                },
                 NW.h(
                   'span',
-                  { className: 'nw-welcome-submeta' },
-                  `${String(row.from || row.address || '未知发件人')} · ${mailStamp(row.date)}`,
+                  { className: 'nw-welcome-submain' },
+                  NW.h('span', { className: 'nw-welcome-subtitle' }, String(row.subject || '（无主题）')),
+                  NW.h(
+                    'span',
+                    { className: 'nw-welcome-submeta' },
+                    `${String(row.from || row.address || '未知发件人')} · ${mailStamp(row.date)}`,
+                  ),
                 ),
+                row.unseen ? NW.h('span', { className: 'nw-badge', 'data-tone': 'brand' }, tr('未读')) : null,
+                NW.h('span', { className: 'nw-welcome-subarrow', 'aria-hidden': 'true' }, NW.icon('caret', { size: 13 })),
               ),
-              row.unseen ? NW.h('span', { className: 'nw-badge', 'data-tone': 'brand' }, tr('未读')) : null,
-              NW.h('span', { className: 'nw-welcome-subarrow', 'aria-hidden': 'true' }, NW.icon('caret', { size: 13 })),
+              NW.h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'nw-welcome-subdel',
+                  title: tr('删除这封邮件'),
+                  'aria-label': tr('删除这封邮件'),
+                  onClick: () => {
+                    if (typeof p.onDeleteMail === 'function') p.onDeleteMail(row);
+                  },
+                },
+                NW.icon('trash', { size: 13 }),
+              ),
             ),
           ),
         ),
+        moreRow(inboxFold.hidden, inboxOpen, () => setInboxOpen((v) => !v)),
       );
     }
 
@@ -6934,6 +7021,44 @@ window.__ModuleLoader__.load({
   transition:opacity .16s ease,transform .16s ease;
 }
 .nw-welcome-sub-unread .nw-welcome-subtitle{font-weight:600;}
+
+/* R16 ⑤: an inbox row is now button + delete button side by side. The delete
+   sits outside the reading button so a mis-click never opens the mail, and it
+   only becomes visible on hover/focus — the list stays quiet until you aim. */
+.nw-welcome-subrow{display:flex;align-items:stretch;gap:4px;}
+.nw-welcome-subrow > .nw-welcome-subbtn{flex:1 1 auto;min-width:0;}
+.nw-welcome-subdel{
+  flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+  width:30px;padding:0;border-radius:var(--nw-r-control);
+  border:1px solid transparent;background:transparent;
+  color:var(--nw-fg-soft);font-family:inherit;cursor:pointer;
+  opacity:0;transition:opacity .16s ease,color .16s ease,background .16s ease,border-color .16s ease;
+}
+.nw-welcome-subrow:hover .nw-welcome-subdel,
+.nw-welcome-subdel:focus-visible{opacity:1;}
+.nw-welcome-subdel:hover{
+  color:var(--nw-danger);
+  border-color:color-mix(in srgb, var(--nw-danger) 34%, transparent);
+  background:color-mix(in srgb, var(--nw-danger) 10%, transparent);
+}
+.nw-welcome-subdel:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
+
+/* R16 ⑤: the fold footer shared by all three cards. */
+.nw-welcome-more{
+  display:flex;align-items:center;justify-content:center;gap:5px;
+  width:100%;margin-top:8px;padding:6px 10px;
+  border-radius:var(--nw-r-control);border:1px solid var(--nw-line);
+  background:transparent;color:var(--nw-fg-soft);
+  font-family:inherit;font-size:var(--nw-fs-micro);cursor:pointer;
+  transition:color .16s ease,border-color .16s ease,background .16s ease;
+}
+.nw-welcome-more:hover{
+  color:var(--nw-fg);
+  border-color:var(--nw-line-strong);
+  background:color-mix(in srgb, var(--nw-fg) 5%, transparent);
+}
+.nw-welcome-more:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
+.nw-welcome-moreico{display:inline-flex;flex:0 0 auto;}
 .nw-welcome-inboxbusy{padding:4px 0;}
 .nw-welcome-inboxerr{color:var(--nw-danger);}
 /* .nw-link is written for anchors; on a <button> the UA background/border/padding
@@ -7485,22 +7610,34 @@ window.__ModuleLoader__.load({
   background:var(--nw-panel);border:1px solid var(--nw-panel-border);box-shadow:var(--nw-panel-shadow);
   color:var(--nw-btn-fg);font-size:12px;
 }
-/* 首页 — the only way back to the welcome screen from the writing surface.
-   Sits above the paper, not in DSH chrome, because in immersive mode the
-   toolbar is gone and Esc only leaves immersive, not the chapter. */
-.nw-homebtn{
+/* 首页 / 目录 / 锁定 — the corner controls of the writing surface.
+   R16: the home button lost its label and this row also hosts the shelf handle
+   and the lock button, so the writer never has to reach into DSH chrome (in
+   immersive mode there is no toolbar at all, and a collapsed shelf would
+   otherwise be unrecoverable from this view). */
+.nw-surface-acts{
   position:absolute;top:10px;left:14px;z-index:8;
-  display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 11px 0 9px;
-  border-radius:999px;border:1px solid var(--nw-btn-border);
+  display:inline-flex;align-items:center;gap:4px;
+}
+.nw-homebtn,
+.nw-actbtn{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:28px;height:28px;padding:0;
+  border-radius:8px;border:1px solid var(--nw-btn-border);
   background:var(--nw-panel);color:var(--nw-btn-fg);
   font-family:inherit;font-size:12px;line-height:1;cursor:pointer;
   opacity:.55;transition:opacity .16s ease,background .16s ease,border-color .16s ease;
 }
-.nw-homebtn:hover{opacity:1;background:var(--nw-btn-hover);border-color:var(--nw-find-ring);}
-.nw-homebtn:focus-visible{opacity:1;outline:2px solid var(--nw-find-ring);outline-offset:2px;}
-.nw-homebtn > svg{width:14px;height:14px;flex:0 0 auto;}
-.nw-surface[data-immersive="1"] .nw-homebtn{opacity:.28;}
-.nw-surface[data-immersive="1"] .nw-homebtn:hover{opacity:1;}
+.nw-homebtn:hover,
+.nw-actbtn:hover{opacity:1;background:var(--nw-btn-hover);border-color:var(--nw-find-ring);}
+.nw-homebtn:focus-visible,
+.nw-actbtn:focus-visible{opacity:1;outline:2px solid var(--nw-find-ring);outline-offset:2px;}
+.nw-homebtn > svg,
+.nw-actbtn > svg{width:15px;height:15px;flex:0 0 auto;}
+.nw-surface[data-immersive="1"] .nw-homebtn,
+.nw-surface[data-immersive="1"] .nw-actbtn{opacity:.28;}
+.nw-surface[data-immersive="1"] .nw-homebtn:hover,
+.nw-surface[data-immersive="1"] .nw-actbtn:hover{opacity:1;}
 .nw-findbar .nw-find-row{display:flex;align-items:center;gap:6px;}
 .nw-findbar .nw-find-input{
   flex:1 1 auto;min-width:0;height:27px;padding:0 8px;border-radius:6px;
@@ -7549,6 +7686,14 @@ window.__ModuleLoader__.load({
     // R12 ①: the writing surface needs its own way home — the toolbar has no
     // back button, and in immersive mode there is no toolbar at all.
     const onHome = typeof p.onHome === 'function' ? p.onHome : null;
+    // R16 ③: the shelf handle and the lock button live next to the home button
+    // so the writing surface keeps its own controls even when DSH chrome is
+    // hidden (immersive) or the shelf is collapsed.
+    const onToggleShelf = typeof p.onToggleShelf === 'function' ? p.onToggleShelf : null;
+    const onLock = typeof p.onLock === 'function' ? p.onLock : null;
+    // Which glyph the shelf handle shows: a collapsed shelf needs 展开, an open
+    // one 收起. The app passes `shelfOpen` so the button never lies.
+    const shelfOpen = p.shelfOpen !== false;
     /** 灵感便签 lane (R10): the app mounts the notes column beside the text. */
     const notesLane = p.notesLane === true && !immersive;
     /** Page width actually applied; immersive mode guarantees a wide canvas. */
@@ -9075,10 +9220,19 @@ window.__ModuleLoader__.load({
         // out for the first time; it is cheap and idempotent.
         applyDockLane();
         if (view) {
-          expectedScrollTopRef.current = 0;
-          view.scrollTop = 0;
+          // Publish the typewriter room before measuring so the padding is final.
+          applyTypewriterRoom(view);
         }
         autosize();
+        if (view) {
+          // R16 ⑦: typewriter mode pads the page by half a viewport above the
+          // first line, so scrolling to 0 lands the text halfway down the pane —
+          // which is what "导入后第一行从中间开始" was. Scrolling past exactly
+          // that padding leaves the normal page margin and starts at line one.
+          const start = typewriterRoom(view);
+          expectedScrollTopRef.current = start;
+          view.scrollTop = start;
+        }
         rebuildHighlights();
         scheduleMeasure(false);
       }
@@ -9463,25 +9617,63 @@ window.__ModuleLoader__.load({
       },
       h('div', { className: 'nw-scroll', ref: scrollRef, tabIndex: -1 }, body),
       findBar,
-      onHome
+      onHome || onToggleShelf || onLock
         ? h(
-            'button',
-            {
-              type: 'button',
-              className: 'nw-homebtn',
-              title: NW.t('回到首页'),
-              'aria-label': NW.t('回到首页'),
-              onClick: (ev) => {
-                // Blur first: leaving the textarea while a save is pending would
-                // otherwise re-enter this handler through the blur flush.
-                if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-                onHome();
-              },
-            },
-            // `home` lives in 42-icons.js — reusing it keeps the stroke weight and
-            // optical size identical to the shelf and toolbar icons.
-            h(NW.icon, { name: 'home', size: 14 }),
-            h('span', null, NW.t('首页')),
+            'div',
+            { className: 'nw-surface-acts' },
+            onHome
+              ? h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'nw-homebtn',
+                    title: NW.t('回到首页'),
+                    'aria-label': NW.t('回到首页'),
+                    onClick: (ev) => {
+                      // Blur first: leaving the textarea while a save is pending
+                      // would otherwise re-enter this handler through the blur flush.
+                      if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+                      onHome();
+                    },
+                  },
+                  // `home` lives in 42-icons.js — reusing it keeps the stroke
+                  // weight and optical size identical to the shelf icons.
+                  h(NW.icon, { name: 'home', size: 15 }),
+                )
+              : null,
+            onToggleShelf
+              ? h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'nw-actbtn',
+                    title: shelfOpen ? NW.t('隐藏目录') : NW.t('显示目录'),
+                    'aria-label': shelfOpen ? NW.t('隐藏目录') : NW.t('显示目录'),
+                    'aria-expanded': shelfOpen ? 'true' : 'false',
+                    onClick: (ev) => {
+                      if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+                      onToggleShelf();
+                    },
+                  },
+                  h(NW.icon, { name: shelfOpen ? 'chevleft' : 'chevright', size: 15 }),
+                )
+              : null,
+            onLock
+              ? h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'nw-actbtn',
+                    title: NW.t('锁定'),
+                    'aria-label': NW.t('锁定'),
+                    onClick: (ev) => {
+                      if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+                      onLock();
+                    },
+                  },
+                  h(NW.icon, { name: 'lock', size: 15 }),
+                )
+              : null,
           )
         : null,
     );
@@ -9663,8 +9855,12 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-notes-tabicon{display:inline-flex;align-items:center;justify-content:center;}
 .nw-notes-tabtxt{white-space:nowrap;}
 /* The card: paper, one hairline, one soft shadow. Deliberately not a full-bleed
-   sheet — it floats, so it must read as an object placed *on* the manuscript. */
+   sheet — it floats, so it must read as an object placed *on* the manuscript.
+   R16 ④: no header strip and no footer strip — the card is just paper and a
+   textarea. The state word and the close button float over the top-right corner
+   instead, so the note gets the whole card. */
 .nw-notes-card{
+  position:relative;
   width:min(420px,100%);
   /* R14 ③: the card grows with the note instead of showing a fixed window —
      the textarea drives its own height, the card only caps how far it may go. */
@@ -9681,20 +9877,23 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   from{opacity:0;transform:translateY(-6px) scale(.985);}
   to{opacity:1;transform:none;}
 }
-.nw-notes-head{
-  display:flex;align-items:center;gap:8px;flex:0 0 auto;
-  padding:7px 8px 7px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);
-  background:var(--dsw-alias-bg-layer-1);
-  color:var(--dsw-alias-label-secondary);
+/* Floating corner: state word + close. Fades in on hover/focus so it never
+   competes with the text, but stays reachable for keyboard users. */
+.nw-notes-tools{
+  position:absolute;top:6px;right:6px;z-index:2;
+  display:inline-flex;align-items:center;gap:4px;
+  padding:2px 4px 2px 8px;border-radius:999px;
+  background:color-mix(in srgb, var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base)) 88%, transparent);
+  opacity:0;transition:opacity .16s ease;
 }
-.nw-notes-headicon{display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-brand-primary);}
-.nw-notes-headtitle{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary);white-space:nowrap;}
-.nw-notes-state{font-size:11.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap;opacity:.8;}
-.nw-notes-spacer{flex:1 1 auto;min-width:4px;}
+.nw-notes-card:hover .nw-notes-tools,
+.nw-notes-card:focus-within .nw-notes-tools{opacity:1;}
+.nw-notes-state{font-size:11.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap;opacity:.85;}
 .nw-notes-input{
   flex:1 1 auto;width:100%;min-height:96px;box-sizing:border-box;
   border:none;outline:none;resize:none;background:transparent;
   color:var(--dsw-alias-label-primary);
+  /* R16 ④: right padding clears the floating corner controls on the first line. */
   padding:12px 14px;
   font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",serif;
   font-size:15px;line-height:1.85;
@@ -9705,18 +9904,10 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   transition:height .12s ease;
 }
 .nw-notes-input::placeholder{color:var(--dsw-alias-label-secondary);opacity:.65;}
-.nw-notes-foot{
-  flex:0 0 auto;display:flex;align-items:center;gap:8px;
-  padding:6px 12px 8px;border-top:1px solid var(--dsw-alias-border-l1);
-  font-size:11.5px;color:var(--dsw-alias-label-secondary);
-}
-.nw-notes-foot kbd{
-  font-family:inherit;font-size:11px;padding:1px 5px;border-radius:4px;
-  border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);
-}
 @media (prefers-reduced-motion: reduce){
   .nw-notes-card{animation:none;}
   .nw-notes-tab{transition:none;}
+  .nw-notes-tools{transition:none;}
 }
 .nw-root.nw-immersive{background:var(--dsw-alias-bg-base);}
 .nw-root.nw-immersive .nw-main{flex:1 1 auto;}
@@ -9868,7 +10059,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     const [busy, setBusy] = useState('');
     const [caps, setCaps] = useState({ docx: true, epub: true, pdf: true, txt: true });
     const [immersive, setImmersive] = useState(false);
-    const [library, setLibrary] = useState({ dir: '', mirror: false, encrypt: false, plain: false, lastMirrorAt: 0, dirExists: false });
+    const [library, setLibrary] = useState({ dir: '', mirror: false, encrypt: false, lastMirrorAt: 0, dirExists: false });
     /** Studio's own sidebar (the chapter tree) can be hidden independently of the host rail. */
     const [shelfOpen, setShelfOpen] = useState(() => lsGet(LS_SHELF_OPEN) !== '0');
     /**
@@ -10050,6 +10241,17 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    /**
+     * R16 ⑥: push the 标点 setting into NW.format before anything counts words.
+     * wordCount() reads it as its default, so this one effect keeps the status
+     * bar, the book totals and every recomputed chapter count in agreement.
+     */
+    useEffect(() => {
+      if (NW.format && typeof NW.format.setCountPunctuation === 'function') {
+        NW.format.setCountPunctuation(settings.countPunctuation !== false);
+      }
+    }, [settings.countPunctuation]);
+
     // Reflect active ids to localStorage — but never before boot() has restored
     // them, and never while locked. On the very first render both ids are null,
     // and an unguarded write erased `nw.activeChapter` before pickInitial() could
@@ -10142,6 +10344,40 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       refreshInbox();
     }, [ready, locked, refreshHomeFeed, refreshInbox]);
 
+    /**
+     * R16 ⑤: drop one mail from the mailbox, then re-read the box so the unread
+     * badge and the row count come from the server instead of being guessed.
+     */
+    const deleteMail = useCallback(
+      async (row) => {
+        const uid = Number(row && row.uid) || 0;
+        if (!uid) {
+          pushToast('这封邮件没有编号，无法删除', 'error');
+          return;
+        }
+        const ok = await NW.ui.confirm('删除这封邮件？删除后需要到你自己的邮箱里才能找回。', {
+          title: '删除邮件',
+          danger: true,
+          okText: '删除',
+        });
+        if (!ok) return;
+        try {
+          const data = await NW.io.inbox.remove(uid);
+          if (data && data.deleted === false) {
+            pushToast(String(data.error || '删除这封邮件失败'), 'error');
+            return;
+          }
+          if (data && data.hint) pushToast(String(data.hint), 'info');
+          else pushToast('已删除这封邮件', 'ok');
+        } catch (err) {
+          pushToast(errText(err, '删除这封邮件失败'), 'error');
+          return;
+        }
+        await refreshInbox();
+      },
+      [pushToast, refreshInbox],
+    );
+
     // Library folder (host-side on-disk mirror). Best effort: an older host
     // half without lib/library.js answers `unknown-method`, which must not
     // surface as a startup error.
@@ -10153,7 +10389,6 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           dir: String(data.dir || ''),
           mirror: data.mirror === true,
           encrypt: data.encrypt === true,
-          plain: data.plain === true,
           lastMirrorAt: Number(data.lastMirrorAt) || 0,
           dirExists: data.dirExists !== false,
         });
@@ -10266,9 +10501,6 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           chapters: snapshot.chapters || [],
           settings: snapshot.settings || {},
           encrypt: cfg.encrypt === true || settings.libraryEncrypt === true,
-          // R15: the plain twin follows the saved preference, so a silent
-          // autosave keeps writing it without the dialog being open.
-          plain: cfg.plain === true,
         });
         if (!aliveRef.current) return data;
         setLibrary((prev) =>
@@ -10293,7 +10525,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         pushToast(errText(err, '保存到本地目录失败'), 'error');
         return null;
       }
-    }, [pushToast, settings.libraryEncrypt, library.encrypt, library.plain, library.dir, library.mirror]);
+    }, [pushToast, settings.libraryEncrypt, library.encrypt, library.dir, library.mirror]);
 
     /**
      * Autosave: every change to the library data (or the editor's live content)
@@ -11294,7 +11526,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           // shelf used to remove every in-panel route back (dock needs two clicks
           // and reads as a writing tool, not a layout control). This handle stays
           // pinned to the left edge for as long as the shelf is hidden.
-          !showShelf && !immersive
+          // R16 ③: the editor grew its own 目录 button, so this edge handle is
+          // only needed on screens that have no writing surface (home, empty).
+          !showShelf && !immersive && !(view === 'write' && chapter)
             ? h(
                 'button',
                 {
@@ -11328,6 +11562,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                 // the writing surface keeps its scroll position.
                 onOpenMail: (row) =>
                   setDialog({ kind: 'mail', uid: Number(row && row.uid) || 0, message: row || null }),
+                onDeleteMail: deleteMail,
                 onOpenNovel: (id) => {
                   selectNovel(id);
                 },
@@ -11361,6 +11596,11 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                       // R12 ①: the paper owns its own 首页 button; the shelf
                       // header is gone in immersive mode.
                       onHome: () => setView('home'),
+                      // R16 ③: 展开目录 + 锁定 now sit beside it, so the writing
+                      // surface never depends on DSH chrome or an open shelf.
+                      onToggleShelf: () => setShelfOpen((v) => !v),
+                      shelfOpen: shelfOpen,
+                      onLock: doLock,
                       onSave: (content) => saveChapter(content, chapter.id),
                       onSelectionChange: onSelectionChange,
                       registerApi: registerEditor,
@@ -11519,7 +11759,6 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                 dir: String((next && next.dir) || ''),
                 mirror: next && next.mirror === true,
                 encrypt: next && next.encrypt === true,
-                plain: next && next.plain === true,
                 lastMirrorAt: Number(next && next.lastMirrorAt) || 0,
                 dirExists: true,
               };
@@ -11974,12 +12213,12 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         ? h(
             'div',
             { className: 'nw-notes-card', role: 'dialog', 'aria-label': NW.t('灵感便签') },
+            // R16 ④: no header/footer strips. The state word and the close button
+            // float over the corner and only surface on hover or keyboard focus,
+            // so the card is nothing but paper and the note itself.
             h(
               'div',
-              { className: 'nw-notes-head' },
-              h('span', { className: 'nw-notes-headicon', 'aria-hidden': 'true' }, NW.icon('sparkle', { size: 14 })),
-              h('span', { className: 'nw-notes-headtitle' }, NW.t('灵感便签')),
-              h('span', { className: 'nw-notes-spacer' }),
+              { className: 'nw-notes-tools' },
               h(
                 'span',
                 { className: 'nw-notes-state' },
@@ -12019,13 +12258,6 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                 }
               },
             }),
-            h(
-              'div',
-              { className: 'nw-notes-foot' },
-              h('span', null, NW.t('自动保存')),
-              h('span', { className: 'nw-notes-spacer' }),
-              h('span', null, NW.t('Esc 收起')),
-            ),
           )
         : null,
     );
@@ -12361,6 +12593,29 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   }
 
   /**
+   * R16 ⑩: 期刊水平等级 chip. The code comes from the host (`tierOfTags`), the
+   * label is localised here so the same code can render in either language.
+   */
+  const TIER_TEXT = {
+    national: '国家级',
+    provincial: '省级',
+    municipal: '市级',
+    other: '其他',
+  };
+
+  const TIER_KIND = {
+    national: 'brand',
+    provincial: 'ok',
+    municipal: 'info',
+    other: 'info',
+  };
+
+  function tierBadge(tier) {
+    const code = String(tier || 'other');
+    return badge(NW.t(TIER_TEXT[code] || TIER_TEXT.other), TIER_KIND[code] || 'info');
+  }
+
+  /**
    * Theme chip: a colour swatch plus its label. The actual colours live in the
    * stylesheet (data-theme-swatch attributes), so this stays theme-agnostic.
    */
@@ -12415,8 +12670,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   function summaryOf(lib) {
     const state = lib || {};
     if (!state.dir) return lib && lib.busy ? String(lib.busy) : '未选择保存文件夹';
-    const parts = [state.mirror === true ? '自动保存开' : '自动保存关', state.encrypt === true ? '加密' : '明文'];
-    if (state.encrypt === true && state.plain === true) parts.push('含明文副本');
+    const parts = [state.mirror === true ? '自动保存开' : '自动保存关', state.encrypt === true ? '加密 .nwe' : '明文'];
     return parts.join(' · ');
   }
 
@@ -12472,10 +12726,23 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     return 'changpian';
   }
 
-  /** Whitespace-excluded character count, matching the host's countChars(). */
+  /**
+   * Character count matching the host's countChars().
+   *
+   * R16 ⑥: both halves honour the 标点 setting now. This used to strip
+   * whitespace only while NW.format.wordCount also skipped punctuation, which is
+   * why the same manuscript read as two different lengths on the home screen and
+   * in the submission preview.
+   */
   function countCharsOf(text) {
     try {
-      return Array.from(String(text == null ? '' : text).replace(/\s/g, '')).length;
+      const body = String(text == null ? '' : text).replace(/\s/g, '');
+      const withPunctuation =
+        NW.format && typeof NW.format.includePunctuation === 'function'
+          ? NW.format.includePunctuation()
+          : true;
+      if (!withPunctuation) return Array.from(body.replace(/[\p{P}\p{S}]/gu, '')).length;
+      return Array.from(body).length;
     } catch (err) {
       return 0;
     }
@@ -13313,9 +13580,6 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     const [dir, setDir] = useState(() => String(seed.dir || ''));
     const [auto, setAuto] = useState(() => seed.mirror === true);
     const [encrypt, setEncrypt] = useState(() => seed.encrypt !== false);
-    // R15: a readable .docx twin next to every encrypted book, refreshed on each
-    // save. Off by default — turning it on puts the book on disk in the clear.
-    const [plain, setPlain] = useState(() => seed.plain === true);
     const [lastAt, setLastAt] = useState(() => Number(seed.lastMirrorAt) || 0);
     const [files, setFiles] = useState([]);
 
@@ -13346,14 +13610,13 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       }
     };
 
-    /** Persists the folder / auto-save / encrypt / plain quad, then mirrors once. */
+    /** Persists the folder / auto-save / encrypt trio, then mirrors once. */
     const persist = async (patch) => {
       const next = await p.onLibrary(patch);
       if (!next) return null;
       setDir(String(next.dir || ''));
       setAuto(next.mirror === true);
       setEncrypt(next.encrypt === true);
-      setPlain(next.plain === true);
       setLastAt(Number(next.lastMirrorAt) || 0);
       refreshFiles();
       return next;
@@ -13389,7 +13652,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         const picked = await NW.io.library.pick();
         const folder = String((picked && picked.dir) || '');
         if (!folder) return null;
-        await persist({ dir: folder, mirror: true, encrypt: encrypt, plain: plain });
+        await persist({ dir: folder, mirror: true, encrypt: encrypt });
         setHint('已选择保存位置：之后每次修改都会自动覆盖这个文件夹里的文件。');
         return picked;
       });
@@ -13426,14 +13689,6 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         return await restoreSnapshot(res);
       });
 
-    const decryptMirror = () =>
-      run('正在解密…', async () => {
-        if (!dir) throw new Error('请先选择保存文件夹');
-        const data = await NW.io.library.decryptTo({ dir: dir, outDir: '' });
-        setHint('已解密 ' + (Number(data && data.count) || 0) + ' 个文件到 ' + String((data && data.outDir) || 'plain') + '。');
-        return data;
-      });
-
     // ---- render --------------------------------------------------------
     const body = [];
 
@@ -13460,7 +13715,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
             onClick: () =>
               run('正在保存设置…', async () => {
                 if (!String(dir || '').trim()) throw new Error('请填写或选择一个文件夹');
-                await persist({ dir: String(dir).trim(), mirror: auto, encrypt: encrypt, plain: plain });
+                await persist({ dir: String(dir).trim(), mirror: auto, encrypt: encrypt });
               }),
             disabled: !!busy,
             children: NW.t('保存'),
@@ -13480,7 +13735,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
             setAuto(v);
             run('正在保存设置…', async () => {
               if (v && !String(dir || '').trim()) throw new Error('请先选择保存文件夹');
-              await persist({ dir: String(dir).trim(), mirror: v, encrypt: encrypt, plain: plain });
+              await persist({ dir: String(dir).trim(), mirror: v, encrypt: encrypt });
             });
           },
           label: '修改后自动保存',
@@ -13499,7 +13754,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
             setEncrypt(v);
             run('正在保存设置…', async () => {
               if (!String(dir || '').trim()) return;
-              await persist({ dir: String(dir).trim(), mirror: auto, encrypt: v, plain: plain });
+              await persist({ dir: String(dir).trim(), mirror: auto, encrypt: v });
             });
           },
           label: '加密保存',
@@ -13509,30 +13764,10 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 
     body.push(
       h(
-        'div',
-        { className: 'nw-row' },
-        h('span', null, '同时保存一份明文 .docx'),
-        NW.ui.toggle({
-          checked: plain,
-          disabled: !encrypt,
-          onChange: (v) => {
-            setPlain(v);
-            run('正在保存设置…', async () => {
-              if (!String(dir || '').trim()) return;
-              await persist({ dir: String(dir).trim(), mirror: auto, encrypt: encrypt, plain: v });
-            });
-          },
-          label: '同时保存明文 .docx',
-        }),
-      ),
-    );
-
-    body.push(
-      h(
         'p',
         { className: 'nw-hint-block' },
         encrypt
-          ? '加密后文件扩展名是 .docx.nwe，用其它编辑器打不开；密钥只保存在本机。打开上面的开关后，每次保存都会在旁边写一份能直接用 Word 打开的 .docx —— 那等于这本书也以明文躺在磁盘上；关掉开关，下一次保存会删掉这些明文副本。'
+          ? '加密后文件扩展名是 .docx.nwe，用其它编辑器打不开；密钥只保存在本机，换台电脑要先恢复密码。'
           : '当前是明文存储，文件夹里的 .docx 可以直接用 Word 打开。',
       ),
     );
@@ -13546,7 +13781,6 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           'span',
           { className: 'nw-inline', style: { gap: '6px' } },
           NW.ui.btn({ onClick: saveNow, disabled: !!busy || !dir, children: '立即保存' }),
-          NW.ui.btn({ onClick: decryptMirror, disabled: !!busy || !dir || !encrypt, children: '解密出明文副本' }),
         ),
       ),
     );
@@ -13574,9 +13808,8 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     else {
       statusLine.push(
         auto ? '自动保存已开启' : '自动保存已关闭（只能手动保存）',
-        encrypt ? '加密存储' : '明文存储',
+        encrypt ? '加密存储 .docx.nwe' : '明文存储 .docx',
       );
-      if (encrypt && plain) statusLine.push('同时保留明文副本');
       if (lastAt) statusLine.push('上次保存 ' + NW.fmtDate(lastAt));
     }
     body.push(h('p', { className: 'nw-hint-block' }, statusLine.join(' · ')));
@@ -13649,7 +13882,6 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       dir: (p.library && p.library.dir) || '',
       mirror: !!(p.library && p.library.mirror),
       encrypt: !!(p.library && p.library.encrypt),
-      plain: !!(p.library && p.library.plain),
       busy: '',
       error: '',
       files: null,
@@ -13764,7 +13996,6 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
               dir: String(data.dir || ''),
               mirror: data.mirror === true,
               encrypt: data.encrypt === true,
-              plain: data.plain === true,
             }),
           );
         })
@@ -14194,11 +14425,19 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       );
     };
 
+    // R16 ⑥: a 4th `hint` argument now renders as a real note under the row —
+    // before it only reached the tooltip, and the 标点 switch needs to explain
+    // what it changes.
     const rowToggle = (label, checked, onChange, hint) =>
       h(
         'div',
         { className: 'nw-row' },
-        h('span', null, label),
+        h(
+          'span',
+          { className: 'nw-rowlabel' },
+          h('span', null, label),
+          hint ? h('span', { className: 'nw-dim nw-rowhint' }, hint) : null,
+        ),
         NW.ui.toggle({ checked: !!checked, onChange: onChange, label: label, title: hint || label }),
       );
 
@@ -14326,6 +14565,12 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           h(
             'div',
             null,
+            rowToggle(
+              '统计字数包含标点符号',
+              draft.countPunctuation !== false,
+              (v) => set('countPunctuation', v),
+              '关闭后，状态栏、书籍总字数和投稿预览里的字数都会扣掉标点。默认包含，与常见中文写作软件一致。',
+            ),
             NW.ui.field({
               label: '自动保存间隔（毫秒）',
               children: NW.ui.input({
@@ -14876,6 +15121,22 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       (String(openedNovel.id || '') === String(novelId) ? openedNovel : null) ||
       {};
     const chapters = allChapters.filter((row) => String(row.novelId) === String(novelId));
+    /**
+     * R16 ⑧: novels carry no word count of their own — only chapters do — so the
+     * book picker used to print `0 字` for every title. Sum the chapter counts
+     * once here and use that everywhere the book's size is shown.
+     */
+    const bookWords = (() => {
+      const map = {};
+      for (let i = 0; i < allChapters.length; i += 1) {
+        const row = allChapters[i];
+        if (!row) continue;
+        const key = String(row.novelId || '');
+        if (!key) continue;
+        map[key] = (map[key] || 0) + (Number(row.wordCount) || 0);
+      }
+      return map;
+    })();
     const currentChapter =
       p.chapter && String(p.chapter.novelId == null ? novelId : p.chapter.novelId) === String(novelId) ? p.chapter : null;
 
@@ -14892,6 +15153,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     const [manage, setManage] = useState(false);
     const [editEmail, setEditEmail] = useState('');
     const [editRange, setEditRange] = useState('');
+    const [editTier, setEditTier] = useState('other');
     const [editRequirements, setEditRequirements] = useState('');
     const [manageBusy, setManageBusy] = useState('');
 
@@ -15222,6 +15484,11 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
             email: form.email,
             signature: form.signature,
           },
+          // R16 ⑥: the host counts the manuscript for the subject line and the
+          // preview, so it has to know whether 标点 is included.
+          countPunctuation: !(
+            p.settings && p.settings.countPunctuation === false
+          ),
         });
         setPrepared(data || null);
         setSubject(String((data && data.subject) || ''));
@@ -15346,6 +15613,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       }
       setEditEmail(String(selected.email || ''));
       setEditRange(String(selected.wordRange || ''));
+      setEditTier(String(selected.tier || 'other'));
       const requirements = Array.isArray(selected.requirements) ? selected.requirements : [];
       setEditRequirements(requirements.join('\n'));
       setManage(true);
@@ -15364,6 +15632,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           email: String(editEmail || '').trim(),
           wordRange: String(editRange || '').trim(),
           requirements: lines,
+          tier: String(editTier || 'other'),
         });
         await NW.io.journals.save([entry]);
         await loadJournals();
@@ -15433,7 +15702,11 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
               },
             },
             h('span', null, String(row.title || '未命名小说')),
-            h('span', { className: 'nw-dim nw-nowrap' }, NW.fmtWords(Number(row.wordCount) || 0) + ' 字'),
+            h(
+              'span',
+              { className: 'nw-dim nw-nowrap' },
+              NW.fmtWords(Number(bookWords[String(row.id)]) || 0) + ' 字',
+            ),
           ),
         );
         const detail = h(
@@ -15569,6 +15842,22 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           'div',
           null,
           h('h4', null, '编辑期刊信息'),
+          // R16 ⑩: 期刊水平等级 — the badge the author weighs first.
+          NW.ui.field({
+            label: NW.t('期刊等级'),
+            hint: '国家级 / 省级 / 市级只是常见的投稿难度参考，具体以期刊官方说明为准。',
+            children: NW.ui.select({
+              value: editTier,
+              ariaLabel: NW.t('期刊等级'),
+              options: [
+                { value: 'national', label: '国家级' },
+                { value: 'provincial', label: '省级' },
+                { value: 'municipal', label: '市级' },
+                { value: 'other', label: '其他' },
+              ],
+              onChange: (v) => setEditTier(v),
+            }),
+          }),
           NW.ui.field({
             label: '投稿邮箱',
             children: NW.ui.input({
@@ -15614,6 +15903,10 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           h(
             'dl',
             null,
+            // R16 ⑩: the tier sits first — it is the fastest read on "how hard
+            // is this to get into".
+            h('dt', null, NW.t('期刊等级')),
+            h('dd', null, tierBadge(selected.tier)),
             h('dt', null, NW.t('体裁')),
             h('dd', null, genreCodesOf(selected).map((code) => genreLabelOf(code)).join(' / ') || '不限'),
             h('dt', null, '字数范围'),
@@ -15678,7 +15971,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
               setManage(false);
             },
           },
-          h('span', null, String(entry.name || '未命名期刊')),
+          h('span', { className: 'nw-journal-name' }, String(entry.name || '未命名期刊')),
+          // R16 ⑩: the tier is the first thing an author weighs a journal by.
+          h('span', { className: 'nw-journal-tags' }, tierBadge(entry.tier)),
           String(entry.email || '').trim() ? null : badge('待核对', 'warn'),
         ),
       );

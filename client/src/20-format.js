@@ -51,12 +51,40 @@
   // ------------------------------- word count --------------------------------
 
   /**
-   * CJK characters count individually; runs of latin/other word characters count as one word.
-   * Whitespace and punctuation are ignored, mirroring the way Chinese editors report 字数.
+   * R16 ⑥: module-level mirror of the `countPunctuation` setting.
+   *
+   * Every counter in the app funnels through wordCount(), and the setting can be
+   * flipped from Settings at any time. Threading an option through a dozen call
+   * sites would leave one of them stale (that is exactly how the status bar and
+   * the submission preview disagreed before), so the flag lives here and the app
+   * pushes it in whenever settings load or change.
    */
-  function wordCount(text) {
+  let countPunctuation = true;
+
+  function setCountPunctuation(on) {
+    countPunctuation = on !== false;
+  }
+
+  /** Current value of the 标点 switch, for callers with their own counter. */
+  function includePunctuation() {
+    return countPunctuation;
+  }
+
+  /**
+   * CJK characters count individually; runs of latin/other word characters count as one word.
+   * Whitespace is ignored, mirroring the way Chinese editors report 字数.
+   *
+   * R16 ⑥: punctuation counts as one character each unless the setting is off.
+   * The base algorithm is untouched — marks are *added on top* — so switching the
+   * setting never changes what a "word" means, it only drops the marks.
+   */
+  function wordCount(text, options) {
     if (text == null || text === '') return 0;
     const value = String(text);
+    const withPunctuation =
+      options && options.includePunctuation !== undefined
+        ? options.includePunctuation !== false
+        : countPunctuation;
     let count = 0;
     let inWord = false;
     for (let i = 0; i < value.length; i += 1) {
@@ -76,6 +104,9 @@
         inWord = false;
         i += 1;
       } else {
+        // Punctuation and symbols land here. CJK punctuation (。，「」…) is in
+        // the CJK blocks but not in CJK_ONLY_RE, so it is counted here too.
+        if (withPunctuation) count += 1;
         inWord = false;
       }
     }
@@ -538,6 +569,8 @@
 
   NW.format = {
     wordCount: wordCount,
+    setCountPunctuation: setCountPunctuation,
+    includePunctuation: includePunctuation,
     typeset: typeset,
     diffPreview: diffPreview,
     autoChapterSplit: autoChapterSplit,

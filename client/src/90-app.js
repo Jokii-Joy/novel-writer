@@ -172,8 +172,12 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-notes-tabicon{display:inline-flex;align-items:center;justify-content:center;}
 .nw-notes-tabtxt{white-space:nowrap;}
 /* The card: paper, one hairline, one soft shadow. Deliberately not a full-bleed
-   sheet — it floats, so it must read as an object placed *on* the manuscript. */
+   sheet — it floats, so it must read as an object placed *on* the manuscript.
+   R16 ④: no header strip and no footer strip — the card is just paper and a
+   textarea. The state word and the close button float over the top-right corner
+   instead, so the note gets the whole card. */
 .nw-notes-card{
+  position:relative;
   width:min(420px,100%);
   /* R14 ③: the card grows with the note instead of showing a fixed window —
      the textarea drives its own height, the card only caps how far it may go. */
@@ -190,20 +194,23 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   from{opacity:0;transform:translateY(-6px) scale(.985);}
   to{opacity:1;transform:none;}
 }
-.nw-notes-head{
-  display:flex;align-items:center;gap:8px;flex:0 0 auto;
-  padding:7px 8px 7px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);
-  background:var(--dsw-alias-bg-layer-1);
-  color:var(--dsw-alias-label-secondary);
+/* Floating corner: state word + close. Fades in on hover/focus so it never
+   competes with the text, but stays reachable for keyboard users. */
+.nw-notes-tools{
+  position:absolute;top:6px;right:6px;z-index:2;
+  display:inline-flex;align-items:center;gap:4px;
+  padding:2px 4px 2px 8px;border-radius:999px;
+  background:color-mix(in srgb, var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base)) 88%, transparent);
+  opacity:0;transition:opacity .16s ease;
 }
-.nw-notes-headicon{display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-brand-primary);}
-.nw-notes-headtitle{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary);white-space:nowrap;}
-.nw-notes-state{font-size:11.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap;opacity:.8;}
-.nw-notes-spacer{flex:1 1 auto;min-width:4px;}
+.nw-notes-card:hover .nw-notes-tools,
+.nw-notes-card:focus-within .nw-notes-tools{opacity:1;}
+.nw-notes-state{font-size:11.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap;opacity:.85;}
 .nw-notes-input{
   flex:1 1 auto;width:100%;min-height:96px;box-sizing:border-box;
   border:none;outline:none;resize:none;background:transparent;
   color:var(--dsw-alias-label-primary);
+  /* R16 ④: right padding clears the floating corner controls on the first line. */
   padding:12px 14px;
   font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",serif;
   font-size:15px;line-height:1.85;
@@ -214,18 +221,10 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   transition:height .12s ease;
 }
 .nw-notes-input::placeholder{color:var(--dsw-alias-label-secondary);opacity:.65;}
-.nw-notes-foot{
-  flex:0 0 auto;display:flex;align-items:center;gap:8px;
-  padding:6px 12px 8px;border-top:1px solid var(--dsw-alias-border-l1);
-  font-size:11.5px;color:var(--dsw-alias-label-secondary);
-}
-.nw-notes-foot kbd{
-  font-family:inherit;font-size:11px;padding:1px 5px;border-radius:4px;
-  border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);
-}
 @media (prefers-reduced-motion: reduce){
   .nw-notes-card{animation:none;}
   .nw-notes-tab{transition:none;}
+  .nw-notes-tools{transition:none;}
 }
 .nw-root.nw-immersive{background:var(--dsw-alias-bg-base);}
 .nw-root.nw-immersive .nw-main{flex:1 1 auto;}
@@ -377,7 +376,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     const [busy, setBusy] = useState('');
     const [caps, setCaps] = useState({ docx: true, epub: true, pdf: true, txt: true });
     const [immersive, setImmersive] = useState(false);
-    const [library, setLibrary] = useState({ dir: '', mirror: false, encrypt: false, plain: false, lastMirrorAt: 0, dirExists: false });
+    const [library, setLibrary] = useState({ dir: '', mirror: false, encrypt: false, lastMirrorAt: 0, dirExists: false });
     /** Studio's own sidebar (the chapter tree) can be hidden independently of the host rail. */
     const [shelfOpen, setShelfOpen] = useState(() => lsGet(LS_SHELF_OPEN) !== '0');
     /**
@@ -559,6 +558,17 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    /**
+     * R16 ⑥: push the 标点 setting into NW.format before anything counts words.
+     * wordCount() reads it as its default, so this one effect keeps the status
+     * bar, the book totals and every recomputed chapter count in agreement.
+     */
+    useEffect(() => {
+      if (NW.format && typeof NW.format.setCountPunctuation === 'function') {
+        NW.format.setCountPunctuation(settings.countPunctuation !== false);
+      }
+    }, [settings.countPunctuation]);
+
     // Reflect active ids to localStorage — but never before boot() has restored
     // them, and never while locked. On the very first render both ids are null,
     // and an unguarded write erased `nw.activeChapter` before pickInitial() could
@@ -651,6 +661,40 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       refreshInbox();
     }, [ready, locked, refreshHomeFeed, refreshInbox]);
 
+    /**
+     * R16 ⑤: drop one mail from the mailbox, then re-read the box so the unread
+     * badge and the row count come from the server instead of being guessed.
+     */
+    const deleteMail = useCallback(
+      async (row) => {
+        const uid = Number(row && row.uid) || 0;
+        if (!uid) {
+          pushToast('这封邮件没有编号，无法删除', 'error');
+          return;
+        }
+        const ok = await NW.ui.confirm('删除这封邮件？删除后需要到你自己的邮箱里才能找回。', {
+          title: '删除邮件',
+          danger: true,
+          okText: '删除',
+        });
+        if (!ok) return;
+        try {
+          const data = await NW.io.inbox.remove(uid);
+          if (data && data.deleted === false) {
+            pushToast(String(data.error || '删除这封邮件失败'), 'error');
+            return;
+          }
+          if (data && data.hint) pushToast(String(data.hint), 'info');
+          else pushToast('已删除这封邮件', 'ok');
+        } catch (err) {
+          pushToast(errText(err, '删除这封邮件失败'), 'error');
+          return;
+        }
+        await refreshInbox();
+      },
+      [pushToast, refreshInbox],
+    );
+
     // Library folder (host-side on-disk mirror). Best effort: an older host
     // half without lib/library.js answers `unknown-method`, which must not
     // surface as a startup error.
@@ -662,7 +706,6 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           dir: String(data.dir || ''),
           mirror: data.mirror === true,
           encrypt: data.encrypt === true,
-          plain: data.plain === true,
           lastMirrorAt: Number(data.lastMirrorAt) || 0,
           dirExists: data.dirExists !== false,
         });
@@ -775,9 +818,6 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           chapters: snapshot.chapters || [],
           settings: snapshot.settings || {},
           encrypt: cfg.encrypt === true || settings.libraryEncrypt === true,
-          // R15: the plain twin follows the saved preference, so a silent
-          // autosave keeps writing it without the dialog being open.
-          plain: cfg.plain === true,
         });
         if (!aliveRef.current) return data;
         setLibrary((prev) =>
@@ -802,7 +842,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         pushToast(errText(err, '保存到本地目录失败'), 'error');
         return null;
       }
-    }, [pushToast, settings.libraryEncrypt, library.encrypt, library.plain, library.dir, library.mirror]);
+    }, [pushToast, settings.libraryEncrypt, library.encrypt, library.dir, library.mirror]);
 
     /**
      * Autosave: every change to the library data (or the editor's live content)
@@ -1803,7 +1843,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           // shelf used to remove every in-panel route back (dock needs two clicks
           // and reads as a writing tool, not a layout control). This handle stays
           // pinned to the left edge for as long as the shelf is hidden.
-          !showShelf && !immersive
+          // R16 ③: the editor grew its own 目录 button, so this edge handle is
+          // only needed on screens that have no writing surface (home, empty).
+          !showShelf && !immersive && !(view === 'write' && chapter)
             ? h(
                 'button',
                 {
@@ -1837,6 +1879,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                 // the writing surface keeps its scroll position.
                 onOpenMail: (row) =>
                   setDialog({ kind: 'mail', uid: Number(row && row.uid) || 0, message: row || null }),
+                onDeleteMail: deleteMail,
                 onOpenNovel: (id) => {
                   selectNovel(id);
                 },
@@ -1870,6 +1913,11 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                       // R12 ①: the paper owns its own 首页 button; the shelf
                       // header is gone in immersive mode.
                       onHome: () => setView('home'),
+                      // R16 ③: 展开目录 + 锁定 now sit beside it, so the writing
+                      // surface never depends on DSH chrome or an open shelf.
+                      onToggleShelf: () => setShelfOpen((v) => !v),
+                      shelfOpen: shelfOpen,
+                      onLock: doLock,
                       onSave: (content) => saveChapter(content, chapter.id),
                       onSelectionChange: onSelectionChange,
                       registerApi: registerEditor,
@@ -2028,7 +2076,6 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                 dir: String((next && next.dir) || ''),
                 mirror: next && next.mirror === true,
                 encrypt: next && next.encrypt === true,
-                plain: next && next.plain === true,
                 lastMirrorAt: Number(next && next.lastMirrorAt) || 0,
                 dirExists: true,
               };
@@ -2483,12 +2530,12 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         ? h(
             'div',
             { className: 'nw-notes-card', role: 'dialog', 'aria-label': NW.t('灵感便签') },
+            // R16 ④: no header/footer strips. The state word and the close button
+            // float over the corner and only surface on hover or keyboard focus,
+            // so the card is nothing but paper and the note itself.
             h(
               'div',
-              { className: 'nw-notes-head' },
-              h('span', { className: 'nw-notes-headicon', 'aria-hidden': 'true' }, NW.icon('sparkle', { size: 14 })),
-              h('span', { className: 'nw-notes-headtitle' }, NW.t('灵感便签')),
-              h('span', { className: 'nw-notes-spacer' }),
+              { className: 'nw-notes-tools' },
               h(
                 'span',
                 { className: 'nw-notes-state' },
@@ -2528,13 +2575,6 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                 }
               },
             }),
-            h(
-              'div',
-              { className: 'nw-notes-foot' },
-              h('span', null, NW.t('自动保存')),
-              h('span', { className: 'nw-notes-spacer' }),
-              h('span', null, NW.t('Esc 收起')),
-            ),
           )
         : null,
     );

@@ -42,6 +42,13 @@
     caretColor: '',
     caretBlink: true,
     autoSaveMs: 1200,
+    /**
+     * R16 ⑥: whether 字数 counts punctuation marks. Chinese word processors count
+     * them, so this ships on; turning it off drops the marks from the status bar,
+     * the book totals and the submission preview alike (the host reads the same
+     * setting, so the two halves cannot disagree).
+     */
+    countPunctuation: true,
     proofreadModel: null,
     autoLockMinutes: 15,
     lockEnabled: false,

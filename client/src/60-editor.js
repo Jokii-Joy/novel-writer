@@ -495,22 +495,34 @@
   background:var(--nw-panel);border:1px solid var(--nw-panel-border);box-shadow:var(--nw-panel-shadow);
   color:var(--nw-btn-fg);font-size:12px;
 }
-/* 首页 — the only way back to the welcome screen from the writing surface.
-   Sits above the paper, not in DSH chrome, because in immersive mode the
-   toolbar is gone and Esc only leaves immersive, not the chapter. */
-.nw-homebtn{
+/* 首页 / 目录 / 锁定 — the corner controls of the writing surface.
+   R16: the home button lost its label and this row also hosts the shelf handle
+   and the lock button, so the writer never has to reach into DSH chrome (in
+   immersive mode there is no toolbar at all, and a collapsed shelf would
+   otherwise be unrecoverable from this view). */
+.nw-surface-acts{
   position:absolute;top:10px;left:14px;z-index:8;
-  display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 11px 0 9px;
-  border-radius:999px;border:1px solid var(--nw-btn-border);
+  display:inline-flex;align-items:center;gap:4px;
+}
+.nw-homebtn,
+.nw-actbtn{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:28px;height:28px;padding:0;
+  border-radius:8px;border:1px solid var(--nw-btn-border);
   background:var(--nw-panel);color:var(--nw-btn-fg);
   font-family:inherit;font-size:12px;line-height:1;cursor:pointer;
   opacity:.55;transition:opacity .16s ease,background .16s ease,border-color .16s ease;
 }
-.nw-homebtn:hover{opacity:1;background:var(--nw-btn-hover);border-color:var(--nw-find-ring);}
-.nw-homebtn:focus-visible{opacity:1;outline:2px solid var(--nw-find-ring);outline-offset:2px;}
-.nw-homebtn > svg{width:14px;height:14px;flex:0 0 auto;}
-.nw-surface[data-immersive="1"] .nw-homebtn{opacity:.28;}
-.nw-surface[data-immersive="1"] .nw-homebtn:hover{opacity:1;}
+.nw-homebtn:hover,
+.nw-actbtn:hover{opacity:1;background:var(--nw-btn-hover);border-color:var(--nw-find-ring);}
+.nw-homebtn:focus-visible,
+.nw-actbtn:focus-visible{opacity:1;outline:2px solid var(--nw-find-ring);outline-offset:2px;}
+.nw-homebtn > svg,
+.nw-actbtn > svg{width:15px;height:15px;flex:0 0 auto;}
+.nw-surface[data-immersive="1"] .nw-homebtn,
+.nw-surface[data-immersive="1"] .nw-actbtn{opacity:.28;}
+.nw-surface[data-immersive="1"] .nw-homebtn:hover,
+.nw-surface[data-immersive="1"] .nw-actbtn:hover{opacity:1;}
 .nw-findbar .nw-find-row{display:flex;align-items:center;gap:6px;}
 .nw-findbar .nw-find-input{
   flex:1 1 auto;min-width:0;height:27px;padding:0 8px;border-radius:6px;
@@ -559,6 +571,14 @@
     // R12 ①: the writing surface needs its own way home — the toolbar has no
     // back button, and in immersive mode there is no toolbar at all.
     const onHome = typeof p.onHome === 'function' ? p.onHome : null;
+    // R16 ③: the shelf handle and the lock button live next to the home button
+    // so the writing surface keeps its own controls even when DSH chrome is
+    // hidden (immersive) or the shelf is collapsed.
+    const onToggleShelf = typeof p.onToggleShelf === 'function' ? p.onToggleShelf : null;
+    const onLock = typeof p.onLock === 'function' ? p.onLock : null;
+    // Which glyph the shelf handle shows: a collapsed shelf needs 展开, an open
+    // one 收起. The app passes `shelfOpen` so the button never lies.
+    const shelfOpen = p.shelfOpen !== false;
     /** 灵感便签 lane (R10): the app mounts the notes column beside the text. */
     const notesLane = p.notesLane === true && !immersive;
     /** Page width actually applied; immersive mode guarantees a wide canvas. */
@@ -2085,10 +2105,19 @@
         // out for the first time; it is cheap and idempotent.
         applyDockLane();
         if (view) {
-          expectedScrollTopRef.current = 0;
-          view.scrollTop = 0;
+          // Publish the typewriter room before measuring so the padding is final.
+          applyTypewriterRoom(view);
         }
         autosize();
+        if (view) {
+          // R16 ⑦: typewriter mode pads the page by half a viewport above the
+          // first line, so scrolling to 0 lands the text halfway down the pane —
+          // which is what "导入后第一行从中间开始" was. Scrolling past exactly
+          // that padding leaves the normal page margin and starts at line one.
+          const start = typewriterRoom(view);
+          expectedScrollTopRef.current = start;
+          view.scrollTop = start;
+        }
         rebuildHighlights();
         scheduleMeasure(false);
       }
@@ -2473,25 +2502,63 @@
       },
       h('div', { className: 'nw-scroll', ref: scrollRef, tabIndex: -1 }, body),
       findBar,
-      onHome
+      onHome || onToggleShelf || onLock
         ? h(
-            'button',
-            {
-              type: 'button',
-              className: 'nw-homebtn',
-              title: NW.t('回到首页'),
-              'aria-label': NW.t('回到首页'),
-              onClick: (ev) => {
-                // Blur first: leaving the textarea while a save is pending would
-                // otherwise re-enter this handler through the blur flush.
-                if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-                onHome();
-              },
-            },
-            // `home` lives in 42-icons.js — reusing it keeps the stroke weight and
-            // optical size identical to the shelf and toolbar icons.
-            h(NW.icon, { name: 'home', size: 14 }),
-            h('span', null, NW.t('首页')),
+            'div',
+            { className: 'nw-surface-acts' },
+            onHome
+              ? h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'nw-homebtn',
+                    title: NW.t('回到首页'),
+                    'aria-label': NW.t('回到首页'),
+                    onClick: (ev) => {
+                      // Blur first: leaving the textarea while a save is pending
+                      // would otherwise re-enter this handler through the blur flush.
+                      if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+                      onHome();
+                    },
+                  },
+                  // `home` lives in 42-icons.js — reusing it keeps the stroke
+                  // weight and optical size identical to the shelf icons.
+                  h(NW.icon, { name: 'home', size: 15 }),
+                )
+              : null,
+            onToggleShelf
+              ? h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'nw-actbtn',
+                    title: shelfOpen ? NW.t('隐藏目录') : NW.t('显示目录'),
+                    'aria-label': shelfOpen ? NW.t('隐藏目录') : NW.t('显示目录'),
+                    'aria-expanded': shelfOpen ? 'true' : 'false',
+                    onClick: (ev) => {
+                      if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+                      onToggleShelf();
+                    },
+                  },
+                  h(NW.icon, { name: shelfOpen ? 'chevleft' : 'chevright', size: 15 }),
+                )
+              : null,
+            onLock
+              ? h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'nw-actbtn',
+                    title: NW.t('锁定'),
+                    'aria-label': NW.t('锁定'),
+                    onClick: (ev) => {
+                      if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+                      onLock();
+                    },
+                  },
+                  h(NW.icon, { name: 'lock', size: 15 }),
+                )
+              : null,
           )
         : null,
     );

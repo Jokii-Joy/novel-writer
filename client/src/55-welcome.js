@@ -135,6 +135,38 @@
     return NW.h('p', { className: 'nw-welcome-empty' }, text);
   }
 
+  /**
+   * R16 ⑤: every home card shows at most three rows. The rest stay one click
+   * away instead of pushing the page down — a writer opening the plugin wants
+   * "what was I doing", not a scrollable archive.
+   */
+  const HOME_LIMIT = 3;
+
+  function foldRows(items, expanded) {
+    const all = Array.isArray(items) ? items : [];
+    if (expanded || all.length <= HOME_LIMIT) return { visible: all, hidden: 0 };
+    return { visible: all.slice(0, HOME_LIMIT), hidden: all.length - HOME_LIMIT };
+  }
+
+  function moreRow(hidden, expanded, onToggle) {
+    if (hidden <= 0 && !expanded) return null;
+    return NW.h(
+      'button',
+      {
+        type: 'button',
+        className: 'nw-welcome-more',
+        onClick: onToggle,
+        'aria-expanded': expanded ? 'true' : 'false',
+      },
+      expanded ? '收起' : `展开全部 ${hidden} 条`,
+      NW.h(
+        'span',
+        { className: 'nw-welcome-moreico', 'aria-hidden': 'true' },
+        NW.icon(expanded ? 'chevup' : 'chevdown', { size: 13 }),
+      ),
+    );
+  }
+
   function Welcome(props) {
     const p = props || {};
     const novels = Array.isArray(p.novels) ? p.novels.filter(Boolean) : [];
@@ -143,6 +175,10 @@
     const stats = computeStats(chapters, p.activeNovelId);
     const rollups = rollupNovels(novels, chapters);
     const journalCount = Number(p.journalCount) || 0;
+    // R16 ⑤: each card folds to three rows and remembers its own state.
+    const [novelOpen, setNovelOpen] = NW.React.useState(false);
+    const [subsOpen, setSubsOpen] = NW.React.useState(false);
+    const [inboxOpen, setInboxOpen] = NW.React.useState(false);
 
     // NW.ui.btn renders `children` verbatim, so the icon is prepended as a
     // keyed sibling span rather than passed as a separate prop.
@@ -190,39 +226,47 @@
     );
 
     // ---- 正在创作 ---------------------------------------------------------
+    // R16 ⑤: three rows, newest first (rollupNovels already sorts by touched),
+    // and the remainder behind one 「展开全部」 click.
+    const novelFold = foldRows(rollups, novelOpen);
     const novelCard = card(
       '正在创作',
       rollups.length === 0
         ? emptyLine('新建一部小说后，这里会列出最近在写的作品。')
         : NW.h(
-            'ul',
-            { className: 'nw-welcome-novels' },
-            rollups.slice(0, 6).map((row) =>
-              NW.h(
-                'li',
-                { key: String(row.novel.id) },
+            'div',
+            null,
+            NW.h(
+              'ul',
+              { className: 'nw-welcome-novels' },
+              novelFold.visible.map((row) =>
                 NW.h(
-                  'button',
-                  {
-                    type: 'button',
-                    className: 'nw-welcome-novel',
-                    onClick: () => typeof p.onOpenNovel === 'function' && p.onOpenNovel(row.novel.id),
-                  },
-                  NW.h('span', { className: 'nw-welcome-novelmark', 'aria-hidden': 'true' }, NW.icon('book', { size: 16 })),
+                  'li',
+                  { key: String(row.novel.id) },
                   NW.h(
-                    'span',
-                    { className: 'nw-welcome-novelmain' },
-                    NW.h('span', { className: 'nw-welcome-novelname' }, row.novel.title || '未命名作品'),
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'nw-welcome-novel',
+                      onClick: () => typeof p.onOpenNovel === 'function' && p.onOpenNovel(row.novel.id),
+                    },
+                    NW.h('span', { className: 'nw-welcome-novelmark', 'aria-hidden': 'true' }, NW.icon('book', { size: 16 })),
                     NW.h(
                       'span',
-                      { className: 'nw-welcome-novelmeta' },
-                      `${row.chapters} 章 · ${fmtWords(row.words)} 字 · ${shortDate(row.touched)}`,
+                      { className: 'nw-welcome-novelmain' },
+                      NW.h('span', { className: 'nw-welcome-novelname' }, row.novel.title || '未命名作品'),
+                      NW.h(
+                        'span',
+                        { className: 'nw-welcome-novelmeta' },
+                        `${row.chapters} 章 · ${fmtWords(row.words)} 字 · ${shortDate(row.touched)}`,
+                      ),
                     ),
+                    NW.h('span', { className: 'nw-welcome-novelgo', 'aria-hidden': 'true' }, NW.icon('chevright', { size: 14 })),
                   ),
-                  NW.h('span', { className: 'nw-welcome-novelgo', 'aria-hidden': 'true' }, NW.icon('chevright', { size: 14 })),
                 ),
               ),
             ),
+            moreRow(novelFold.hidden, novelOpen, () => setNovelOpen((v) => !v)),
           ),
       'wide',
     );
@@ -251,38 +295,44 @@
     );
 
     // ---- 投稿记录 ---------------------------------------------------------
-    const subRows = submissions.slice(0, 5);
+    // R16 ⑤: same three-row fold as the other cards.
+    const subsFold = foldRows(submissions, subsOpen);
     const subsCard = card(
       '投稿记录',
-      subRows.length === 0
+      submissions.length === 0
         ? emptyLine(
             journalCount > 0
               ? `期刊库已收录 ${journalCount} 家，选中一个章节即可开始投稿。`
               : '还没有投稿记录。完成一次投稿后，这里会显示期刊、日期与状态。',
           )
         : NW.h(
-            'ul',
-            { className: 'nw-welcome-subs' },
-            subRows.map((row) => {
-              const meta = statusOf(row);
-              const days = Number(row.daysAgo);
-              return NW.h(
-                'li',
-                { key: String(row.id), className: 'nw-welcome-sub' },
-                NW.h(
-                  'span',
-                  { className: 'nw-welcome-submain' },
-                  NW.h('span', { className: 'nw-welcome-subtitle' }, row.title || row.subject || '未命名稿件'),
+            'div',
+            null,
+            NW.h(
+              'ul',
+              { className: 'nw-welcome-subs' },
+              subsFold.visible.map((row) => {
+                const meta = statusOf(row);
+                const days = Number(row.daysAgo);
+                return NW.h(
+                  'li',
+                  { key: String(row.id), className: 'nw-welcome-sub' },
                   NW.h(
                     'span',
-                    { className: 'nw-welcome-submeta' },
-                    `${row.journalName || '未指定期刊'} · ${dayStamp(row.at)}` +
-                      (Number.isFinite(days) && days > 0 ? ` · ${days} 天前` : ''),
+                    { className: 'nw-welcome-submain' },
+                    NW.h('span', { className: 'nw-welcome-subtitle' }, row.title || row.subject || '未命名稿件'),
+                    NW.h(
+                      'span',
+                      { className: 'nw-welcome-submeta' },
+                      `${row.journalName || '未指定期刊'} · ${dayStamp(row.at)}` +
+                        (Number.isFinite(days) && days > 0 ? ` · ${days} 天前` : ''),
+                    ),
                   ),
-                ),
-                NW.h('span', { className: 'nw-badge', 'data-tone': meta.tone }, meta.label),
-              );
-            }),
+                  NW.h('span', { className: 'nw-badge', 'data-tone': meta.tone }, meta.label),
+                );
+              }),
+            ),
+            moreRow(subsFold.hidden, subsOpen, () => setSubsOpen((v) => !v)),
           ),
       'subs',
     );
@@ -376,41 +426,62 @@
     } else if (inboxMessages.length === 0) {
       inboxBody = emptyLine('收件箱是空的。投稿之后，编辑部的回复会出现在这里。');
     } else {
+      // R16 ⑤: newest first (the host already sorts by UID descending), three
+      // rows, and a per-row delete button.
+      const inboxFold = foldRows(inboxMessages, inboxOpen);
       inboxBody = NW.h(
-        'ul',
-        { className: 'nw-welcome-subs' },
-        inboxMessages.slice(0, 6).map((row, index) =>
-          // R12 ④: these rows used to be plain <li> text — the list looked
-          // clickable and did nothing. Each one is now a button that opens the
-          // mail in a reader dialog (headers + decoded body).
-          NW.h(
-            'li',
-            { key: String(row.uid || row.messageId || index) },
+        'div',
+        null,
+        NW.h(
+          'ul',
+          { className: 'nw-welcome-subs' },
+          inboxFold.visible.map((row, index) =>
+            // R12 ④: these rows used to be plain <li> text — the list looked
+            // clickable and did nothing. Each one is now a button that opens the
+            // mail in a reader dialog (headers + decoded body).
             NW.h(
-              'button',
-              {
-                type: 'button',
-                className: 'nw-welcome-sub nw-welcome-subbtn' + (row.unseen ? ' nw-welcome-sub-unread' : ''),
-                title: `${String(row.subject || '（无主题）')} — 点击阅读`,
-                onClick: () => {
-                  if (typeof p.onOpenMail === 'function') p.onOpenMail(row);
-                },
-              },
+              'li',
+              { key: String(row.uid || row.messageId || index), className: 'nw-welcome-subrow' },
               NW.h(
-                'span',
-                { className: 'nw-welcome-submain' },
-                NW.h('span', { className: 'nw-welcome-subtitle' }, String(row.subject || '（无主题）')),
+                'button',
+                {
+                  type: 'button',
+                  className: 'nw-welcome-sub nw-welcome-subbtn' + (row.unseen ? ' nw-welcome-sub-unread' : ''),
+                  title: `${String(row.subject || '（无主题）')} — 点击阅读`,
+                  onClick: () => {
+                    if (typeof p.onOpenMail === 'function') p.onOpenMail(row);
+                  },
+                },
                 NW.h(
                   'span',
-                  { className: 'nw-welcome-submeta' },
-                  `${String(row.from || row.address || '未知发件人')} · ${mailStamp(row.date)}`,
+                  { className: 'nw-welcome-submain' },
+                  NW.h('span', { className: 'nw-welcome-subtitle' }, String(row.subject || '（无主题）')),
+                  NW.h(
+                    'span',
+                    { className: 'nw-welcome-submeta' },
+                    `${String(row.from || row.address || '未知发件人')} · ${mailStamp(row.date)}`,
+                  ),
                 ),
+                row.unseen ? NW.h('span', { className: 'nw-badge', 'data-tone': 'brand' }, tr('未读')) : null,
+                NW.h('span', { className: 'nw-welcome-subarrow', 'aria-hidden': 'true' }, NW.icon('caret', { size: 13 })),
               ),
-              row.unseen ? NW.h('span', { className: 'nw-badge', 'data-tone': 'brand' }, tr('未读')) : null,
-              NW.h('span', { className: 'nw-welcome-subarrow', 'aria-hidden': 'true' }, NW.icon('caret', { size: 13 })),
+              NW.h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'nw-welcome-subdel',
+                  title: tr('删除这封邮件'),
+                  'aria-label': tr('删除这封邮件'),
+                  onClick: () => {
+                    if (typeof p.onDeleteMail === 'function') p.onDeleteMail(row);
+                  },
+                },
+                NW.icon('trash', { size: 13 }),
+              ),
             ),
           ),
         ),
+        moreRow(inboxFold.hidden, inboxOpen, () => setInboxOpen((v) => !v)),
       );
     }
 
@@ -598,6 +669,44 @@
   transition:opacity .16s ease,transform .16s ease;
 }
 .nw-welcome-sub-unread .nw-welcome-subtitle{font-weight:600;}
+
+/* R16 ⑤: an inbox row is now button + delete button side by side. The delete
+   sits outside the reading button so a mis-click never opens the mail, and it
+   only becomes visible on hover/focus — the list stays quiet until you aim. */
+.nw-welcome-subrow{display:flex;align-items:stretch;gap:4px;}
+.nw-welcome-subrow > .nw-welcome-subbtn{flex:1 1 auto;min-width:0;}
+.nw-welcome-subdel{
+  flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+  width:30px;padding:0;border-radius:var(--nw-r-control);
+  border:1px solid transparent;background:transparent;
+  color:var(--nw-fg-soft);font-family:inherit;cursor:pointer;
+  opacity:0;transition:opacity .16s ease,color .16s ease,background .16s ease,border-color .16s ease;
+}
+.nw-welcome-subrow:hover .nw-welcome-subdel,
+.nw-welcome-subdel:focus-visible{opacity:1;}
+.nw-welcome-subdel:hover{
+  color:var(--nw-danger);
+  border-color:color-mix(in srgb, var(--nw-danger) 34%, transparent);
+  background:color-mix(in srgb, var(--nw-danger) 10%, transparent);
+}
+.nw-welcome-subdel:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
+
+/* R16 ⑤: the fold footer shared by all three cards. */
+.nw-welcome-more{
+  display:flex;align-items:center;justify-content:center;gap:5px;
+  width:100%;margin-top:8px;padding:6px 10px;
+  border-radius:var(--nw-r-control);border:1px solid var(--nw-line);
+  background:transparent;color:var(--nw-fg-soft);
+  font-family:inherit;font-size:var(--nw-fs-micro);cursor:pointer;
+  transition:color .16s ease,border-color .16s ease,background .16s ease;
+}
+.nw-welcome-more:hover{
+  color:var(--nw-fg);
+  border-color:var(--nw-line-strong);
+  background:color-mix(in srgb, var(--nw-fg) 5%, transparent);
+}
+.nw-welcome-more:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
+.nw-welcome-moreico{display:inline-flex;flex:0 0 auto;}
 .nw-welcome-inboxbusy{padding:4px 0;}
 .nw-welcome-inboxerr{color:var(--nw-danger);}
 /* .nw-link is written for anchors; on a <button> the UA background/border/padding
