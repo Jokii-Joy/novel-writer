@@ -7,6 +7,10 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.2.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第十三轮（R13）改造：**整套布局改成按「面板宽度」响应** —— `.nw-root` 声明为命名容器
+  `container:nw / inline-size`，新增三档 `@container` 断点（≤980 / ≤780 / ≤560），此前 10 处断点全是
+  视口断点（宿主侧栏一拉开、窗口再宽，正文列仍会被挤坏）；**灵感便签从整页改回悬浮卡片**
+  （420×320 以内、钉在写作列右上角、让开查找栏、不占正文留白），修掉「看着好瘦长」。
 - 第十二轮（R12）改造：写作页左上角新增**首页按钮**；新增**修改建议栏**——大模型通读本章后给出可
   点击定位的意见，面板与正文**左右并列**（不是弹窗）；投稿选定期刊后**直接生成整封邮件进预览**，
   不用再手动点「生成」；**收件箱邮件可点击阅读**（补零依赖 IMAP `BODY.PEEK[]` 取全文 + 读信弹窗）。
@@ -125,6 +129,28 @@ CSS 是用模板字符串写的，注释里多写一个反引号就会让整块�
   状态记在 `localStorage['nw.shelfOpen']`；隐藏后写作面占满宽度。
 - **进入面板时自动收起宿主左侧栏**（`layout.toggleSidebar()`，用 `sessionStorage` 做一次性守卫）；侧栏头 `▥` 随时切回，并给出「已收起 / 已展开宿主左侧栏」的 toast。
 - 底部状态栏一行显示保存状态、保存时间、本章 / 本书 / 全部字数、自动保存状态、光标行列。
+
+### 响应式（R13 ①：按面板宽度，不按窗口宽度）
+插件的实际宽度与浏览器窗口几乎无关 —— 它在宿主 shell 里只是一列（宿主侧栏 264–420px + 右栏），
+1440px 的窗口里正文列经常只有 500–700px。所以所有排版断点都量 `.nw-root` 而不是视口：
+- `.nw-root` 在 `05-css.js` 里声明为命名容器：`container-type:inline-size; container-name:nw`，
+  新增的断点全部写成 `@container nw (max-width: …)`；旧写法里 `97-theme.js` 那段还留了一份
+  `@supports not (container-type:inline-size)` 的视口兜底，给不支持容器查询的引擎用。
+- **三档**（`client/src/98b-responsive.js`）：
+  - `≤980`：`.nw-grid2` 单列、设置左导航收窄到 132px、投稿列表限高、坞贴边、状态栏间距收紧；
+  - `≤780`：**对话框撑满面板**（`max-width:100%`）、设置从「左栏 + 右栏」变成「顶部横向滚动标签 + 内容」
+    （导航 `position:static; overflow-x:auto`，内容不再内滚，改由对话框整体滚）、首页三块 grid 单列、
+    侧栏加 `max-width:min(62%,300px)` 的软上限（宽度来自行内 style，CSS 只能设上限）、修改建议栏收到 `min(280px,40%)`；
+  - `≤560`：**侧栏与修改建议栏都不再占位，改为浮层**（侧栏 `z-index:34` 盖住 `z-index:30` 的坞，
+    否则窄面板里侧栏底部的按钮会被坞压住），分隔条隐藏（没得拖），正文左右内边距收到 20px，
+    灵感便签变成左右各 8px 的通条，状态栏允许换行、隐藏「灵感」文字标签。
+- 原有五处视口断点也逐个换成了容器查询：编辑器页边距（`60-editor.js`）、设置两栏（`45-dialogs-css.js`）、
+  投稿两栏、首页卡片（`55-welcome.js`）、精修层的窄屏规则（`97-theme.js`）。
+- 尺寸里凡是原先用 `vw` / `vh` 的，横向一律换成 `cqw`（`padding` 的横向分量、标题 `font-size`、
+  toast 的 `max-width`）；**纵向仍用 `vh`**，因为 `inline-size` 容器没有高度轴。
+- 所有 `grid-template-columns` 的硬下限都套了 `min(…,100%)`（如 `minmax(min(280px,100%),1fr)`），
+  这样在比下限还窄的面板里是「一列」而不是「溢出」。
+- 触屏（`@media (hover: none)`）把平时靠 hover 才显现的控件（章节行动作、便签胶囊、首页按钮、坞）改为常显。
 
 ### 欢迎首页（R5 默认屏）
 - 打开插件先到**首页**而不是上次的章节：`view: 'home' | 'write'`，默认 `home`；选中章节 / 新建首章 / 进沉浸 / 点「继续写作」才切到 `write`。
@@ -332,15 +358,23 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
   再次点按钮会重新生成一份最新的。
 - 「解密出明文副本」把 `.nwe` 解成 `<dir>/plain/*.docx` 与 `library.json` 供备份或交给别的编辑器，原件保留。
 
-### 灵感便签（R10 / R11 改为纯色整页）
-写作页右侧常驻一枚小标签（`✦ 灵感`）。点开后是**一整页纯色写作面**：没有标题、没有计数、没有按钮，
-只有一个通栏输入框，背景就是当前主题的纸色（跟随九套主题，纯色无纹理）。
+### 灵感便签（R13 改为悬浮卡片）
+写作页右上角常驻一枚小胶囊（`✦ 灵感`，收起态半透明，hover 才实心）。点开后是**一张悬浮在正文上方的卡片**，
+不是整页、也不分窗口：
+- **尺寸**：宽 `min(420px,100%)`、高最多 `min(320px, calc(100vh - 220px))`。R11 的整页版是 196px 宽 × 整屏高，
+  这就是「看着好瘦长」的来源；现在是一张 420×320 以内的纸片，正文始终在它周围可见。
+- **位置**：钉在写作列右上角 `top:52px; right:14px`，**刚好让开查找栏**（`60-editor` 的 `.nw-findbar` 在
+  `top:10px`），且 `z-index:7` 低于查找栏的 8 —— 打开「查找」会盖住便签而不是反过来。窄面板（≤560px）下改为
+  左右各留 8px 的通条。
+- **卡片内容**：头部一行（灵感图标 + 「灵感便签」+ 状态字「未保存 / 已保存 / 空白」+ 收起按钮）、中间是自动撑高的
+  输入区（15px / 行高 1.85）、底部一行键位提示。
 - **怎么存**：`Ctrl/Cmd + Enter` 或点别处（失焦）即写回；`Esc` 收起。内容存在 IndexedDB 的 `notes` store，
   随书库一起进导出与文件夹备份。
-- **一页一本书**：整页内容在打开时由该书的便签合并而成，保存时折回一条，所以下次打开看到的就是同一份文本，
+- **一卡一本书**：卡片内容在打开时由该书的便签合并而成，保存时折回一条，所以下次打开看到的就是同一份文本，
   不会有列表、时间戳这些额外东西。
-- **不再占正文留白**：R10 的浮动便签列会给正文让出 212px；改成整页后编辑器的右侧留白恢复为坞的 88px，
-  文本列重新居中（`notesLane` 固定为 `false`）。
+- **不占正文留白**：卡片绝对定位、不参与 `.nw-main` 的布局，`notesLane` 固定为 `false`，正文的右侧留白始终是坞的 88px。
+  卡片挂在 `.nw-bench-paper` 内而不是整个写作列，这样修改建议栏展开时它不会漂到建议上面去。
+
 - 沉浸模式下不渲染（沉浸是纯写作画布）。
 
 ### 收件箱（R9，R11 修 163/126，R12 可点开读）
@@ -372,20 +406,20 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
 
 ## 3. 验收状态
 
-> **第十二轮（R12）按要求「不执行测试」**：本轮只做构建、语法校验、bundle 加载校验，以及宿主接口的连通性冒烟；
+> **第十三轮（R13）按要求「不执行测试」**：本轮只做构建、语法校验、bundle 加载校验，以及宿主接口的连通性冒烟；
 > 界面上的点击验收由用户在真实 Harness 里自行完成。
 >
 > | 检查 | 命令 / 方式 | 结果 |
 > | --- | --- | --- |
-> | 每个 client part 语法 | `node --check client/src/*.js`（`00-boot`/`99-end` 为 factory 包装，单独 check 必然失败，属预期） | 19 个真实 part 全部 exit 0 |
+> | 每个 client part 语法 | `node --check client/src/*.js`（`00-boot`/`99-end` 为 factory 包装，单独 check 必然失败，属预期） | 20 个真实 part 全部 exit 0 |
 > | Host 模块语法 | `node --check index.js` + 12 个 `lib/*.js` | 全部 exit 0 |
-> | 构建产物 + 加载校验 | `node scripts/build-client.mjs`（内含 `verify-client-load.mjs`） | **19 parts / 690402 bytes**，`ok (id=@local/novel-writer, inject=["slots"])` |
-> | 方言覆盖率 | 扫全部 `NW.t(...)` / `tr(...)` 字面量 vs EN 词典 | 126 个 key，缺失 **0** |
-> | 样式覆盖率 | 扫全部 `className: 'nw-…'` vs 九个 CSS owner 文件 | 235 个渲染类，未加样式 **0** |
-> | **新增 `revise` 路由** | `POST /novel-writer/api/revise`（真实模型通读一段正文） | 200，返回 1 条建议，`model=xdpool/deepseek-v4.1-flash`（约 20s） |
-> | **新增 `inbox.read` 路由** | `POST /novel-writer/api/inbox.read {uid}`（真实 IMAP，163） | 200，取到正文 5851 字符原始 HTML → 清洗后 710 字符可读文本；不存在的 uid 返回结构化 `imap-not-found` 而非抛错 |
-> | selftest | `POST /novel-writer/api/selftest` | 7 项全 ok（webServer / docx 4301B / epub 2911B / secrets / ai 61 提供方 76 模型 / journals 79 家 / smtp 163:465） |
-> | HTML 邮件清洗 | 同上那封网易通知 | 表格噪声行清零，正文段落保留；`&#NNNN;` / `&#xHHHH;` 数值实体一并解码 |
+> | 构建产物 + 加载校验 | `node scripts/build-client.mjs`（内含 `verify-client-load.mjs`） | **20 parts / 701499 bytes**，`ok (id=@local/novel-writer, inject=["slots"])` |
+> | 方言覆盖率 | 扫全部 `NW.t(...)` / `tr(...)` 字面量 vs EN 词典 | 95 个 key，缺失 **0** |
+> | 样式覆盖率 | 扫全部 `className: 'nw-…'` / `class="nw-…"` vs CSS 文件 | 242 个渲染类，未加样式 **0** |
+> | **容器查询落点** | `Select-String -Pattern '@container'` | 9 处：`05-css`（声明容器）、`45-dialogs-css`×2、`55-welcome`、`60-editor`×2、`97-theme`、`98b-responsive`×3 |
+> | **视口断点残留** | `Select-String -Pattern '@media'` | 只剩 `prefers-reduced-motion`×6、`hover:none`×1，以及 `97-theme` 里包在 `@supports not (container-type)` 里的那一个 `max-width:900px` 兜底；常规宽度断点 **0** |
+> | **构建闸门拦过一次** | `build-client` | 抓到 `97-theme.js` 注释里的反引号（第四次同类事故），修后 20 parts 通过 |
+> | selftest | `POST /novel-writer/api/selftest` | 全项 ok（webServer / docx / epub / secrets / ai / journals / smtp） |
 >
 > 除此之外**没有**跑 CDP GUI 套件、没有点界面。
 >
@@ -411,7 +445,7 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
 | **保存默认加密** | 设置·导出与文件里可以关，关掉后写的是明文 `.docx` |
 | 图标换了 | 全部内联 SVG，跟随 `color` |
 | **插件叫「精神空间」** | 侧栏按钮、锁屏标题、首页标题都换了；包名/entryId 仍是 `novel-writer` |
-| **灵感便签是整页** | 写作页右缘 `✦` 点开是纯色通栏，不再是浮动列表 |
+| **灵感便签是悬浮卡片（R13）** | 写作页右上角 `✦` 点开一张 420×320 以内的纸片，浮在正文上方，可随手记 |
 | **光标可调** | 设置·外观：粗细 / 颜色 / 闪烁 |
 | **首页按钮在纸上（R12）** | 写作页左上角 `⌂ 首页`；沉浸模式下也还在（那是唯一的出口提示） |
 | **修改建议是并排的（R12）** | 坞里 `✦ 修改建议` 在正文右侧开一列，正文列相应收窄 |
@@ -475,7 +509,7 @@ novel-writer/
 │  ├─ pdf.js                docxToPdf（officeToPdf → libreoffice-kit 回退）
 │  └─ import-parse.js       parseImport（txt/md/docx/epub，GB18030 回退）
 ├─ client/
-│  ├─ client.js             构建产物（勿手改，19 parts 拼接 / 690402 bytes）
+│  ├─ client.js             构建产物（勿手改，20 parts 拼接 / 701499 bytes）
 │  └─ src/                  00→99 按文件名字典序拼接
 │     ├─ 00-boot / 99-end        __ModuleLoader__ 封装与 apply 导出
 │     ├─ 05-css                  设计 token 层（16/14/13px、圆角、控件高度、间距、阴影）
@@ -493,8 +527,9 @@ novel-writer/
 │     ├─ 90-app                  App 状态机（view = home | write）+ slot 注册 + 浮动坞 + 修改建议栏
 │     ├─ 95-dialogs              设置(两栏 6 分区)/自动保存与恢复/校对/排版/投稿/投稿管理/期刊/读信/锁定/版本/回收站
 │     ├─ 96-motion               动效 token 与 keyframes（nw-fade-up / toast-in / slide / pop）
-│     ├─ 97-theme               精修层（焦点环/模态/空态/滑块/色块/响应式）
-│     └─ 98-shell-theme         按 data-theme 重映射 --dsw-alias-*，让外壳跟随阅读主题
+│     ├─ 97-theme               精修层（焦点环/模态/空态/滑块/色块/响应式兜底）
+│     ├─ 98-shell-theme         按 data-theme 重映射 --dsw-alias-*，让外壳跟随阅读主题
+│     └─ 98b-responsive         三档容器查询（≤980 / ≤780 / ≤560），按面板宽度而非窗口宽度排版
 ├─ locale/{zh,en}.json      侧栏与面板标题（「精神空间」/ Mindspace）
 ├─ icon.svg                 侧栏图标
 ├─ setup-github.cmd         双击即可：存 Token → 建仓 → 上传（走 api.github.com，不碰 github.com）
