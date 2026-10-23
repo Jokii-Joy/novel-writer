@@ -689,6 +689,7 @@
     if (body.provider) payload.provider = String(body.provider);
     if (body.model) payload.model = String(body.model);
     if (body.focus) payload.focus = String(body.focus);
+    if (body.note) payload.note = String(body.note);
     return api('revise', payload);
   }
 

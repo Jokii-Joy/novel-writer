@@ -522,6 +522,17 @@ window.__ModuleLoader__.load({
     '首页': 'Home',
     '回到首页': 'Back to home',
     // R12 ②: the critique column beside the manuscript
+    '补充要求': 'Extra instructions',
+    '补充要求，例如：只看结尾三段 / 别动对话 / 主角口吻再冷一点': 'Extra instructions, e.g. only the last three paragraphs / leave dialogue alone / colder voice',
+    'Enter 按这个要求重来': 'Enter to re-run with this',
+    '清空': 'Clear',
+    '重要': 'Important',
+    '可改可不改': 'Optional',
+    '结构': 'Structure',
+    '人物': 'Character',
+    '逻辑': 'Logic',
+    '情绪': 'Emotion',
+    '冗余': 'Redundancy',
     '修改建议': 'Suggestions',
     '关闭建议': 'Close suggestions',
     '建议重点': 'Focus',
@@ -3542,6 +3553,7 @@ window.__ModuleLoader__.load({
     if (body.provider) payload.provider = String(body.provider);
     if (body.model) payload.model = String(body.model);
     if (body.focus) payload.focus = String(body.focus);
+    if (body.note) payload.note = String(body.note);
     return api('revise', payload);
   }
 
@@ -9955,12 +9967,67 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   max-height:4.8em;overflow:hidden;
 }
 .nw-advice-issue{font-size:13px;font-weight:600;line-height:1.55;color:var(--dsw-alias-label-primary);}
+.nw-advice-why{font-size:12.5px;line-height:1.65;color:var(--dsw-alias-label-secondary);}
 .nw-advice-do{font-size:13px;line-height:1.65;color:var(--dsw-alias-label-primary);}
+/* The suggested rewrite is quoted prose, so it gets the reading face and a
+   tinted block instead of another paragraph of grey — it is the one part of the
+   card the writer may copy straight into the manuscript. */
+.nw-advice-example{
+  font-family:var(--nw-reading-font,inherit);font-size:13px;line-height:1.75;
+  padding:7px 10px;border-radius:8px;
+  background:color-mix(in srgb, var(--dsw-alias-brand-primary) 7%, var(--dsw-alias-bg-layer-1));
+  border:1px dashed color-mix(in srgb, var(--dsw-alias-brand-primary) 26%, var(--dsw-alias-border-l1));
+  color:var(--dsw-alias-label-primary);
+  white-space:pre-wrap;word-break:break-word;
+}
 .nw-advice-kind{
   align-self:flex-start;font-size:11px;line-height:1;padding:3px 7px;border-radius:999px;
   background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);
 }
+.nw-advice-kind[data-sev="high"]{
+  background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent);
+  color:var(--dsw-alias-state-error-primary);
+}
+.nw-advice-kind[data-sev="low"]{opacity:.72;}
 .nw-advice-foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+/* Ten dimensions do not fit one segmented control, and a <select> would hide
+   nine tenths of them behind a click. Chips wrap onto as many rows as needed. */
+.nw-advice-focus{
+  flex:0 0 auto;display:flex;flex-wrap:wrap;gap:5px;
+  padding:8px 12px 9px;border-bottom:1px solid var(--dsw-alias-border-l1);
+}
+.nw-advice-chip{
+  height:24px;padding:0 10px;border-radius:999px;
+  border:1px solid var(--dsw-alias-border-l1);
+  background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary);
+  font-family:inherit;font-size:12px;line-height:22px;cursor:pointer;
+  transition:background .14s ease,border-color .14s ease,color .14s ease;
+}
+.nw-advice-chip:hover:not(:disabled){border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);}
+.nw-advice-chip[data-on="1"]{
+  background:color-mix(in srgb, var(--dsw-alias-brand-primary) 12%, var(--dsw-alias-bg-base));
+  border-color:color-mix(in srgb, var(--dsw-alias-brand-primary) 46%, var(--dsw-alias-border-l1));
+  color:var(--dsw-alias-brand-primary);font-weight:600;
+}
+.nw-advice-chip:disabled{opacity:.5;cursor:default;}
+.nw-advice-chip:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px;}
+/* The writer's own instruction. It sits above the list, not in a dialog: the
+   whole point of typing 「只看结尾」 is to re-run with it immediately. */
+.nw-advice-note{flex:0 0 auto;padding:0 12px 9px;}
+.nw-advice-note textarea{
+  width:100%;box-sizing:border-box;min-height:34px;max-height:96px;resize:vertical;
+  padding:7px 9px;border-radius:8px;
+  border:1px solid var(--dsw-alias-border-l1);
+  background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);
+  font-family:inherit;font-size:12.5px;line-height:1.6;
+}
+.nw-advice-note textarea:focus{
+  outline:none;border-color:var(--dsw-alias-brand-primary);
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent);
+}
+.nw-advice-note textarea::placeholder{color:var(--dsw-alias-label-secondary);opacity:.8;}
+.nw-advice-notebar{display:flex;align-items:center;gap:6px;margin-top:5px;}
+.nw-advice-notehint{font-size:11px;color:var(--dsw-alias-label-secondary);opacity:.8;}
 .nw-suggest-empty{
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
   flex:1 1 auto;padding:24px 18px;text-align:center;
@@ -12091,17 +12158,20 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   function Advice(props) {
     const p = props || {};
     const [focus, setFocus] = useState('all');
+    const [note, setNote] = useState('');
     const [items, setItems] = useState(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
     const [activeId, setActiveId] = useState('');
     const [model, setModel] = useState('');
     const runRef = useRef(0);
+    const noteRef = useRef('');
+    noteRef.current = note;
 
     const chapterId = p.chapter ? String(p.chapter.id) : '';
 
     const run = useCallback(
-      async (nextFocus) => {
+      async (nextFocus, nextNote) => {
         const api = p.editorApi && p.editorApi.current;
         const text = api && typeof api.getContent === 'function' ? api.getContent() : '';
         if (!String(text).trim()) {
@@ -12114,7 +12184,13 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         setError('');
         setActiveId('');
         try {
-          const data = await NW.ai.revise({ text, focus: nextFocus || focus });
+          const data = await NW.ai.revise({
+            text,
+            focus: nextFocus || focus,
+            // `undefined` rather than '' so a stale caller cannot wipe a note
+            // the writer typed after pressing Enter.
+            note: nextNote == null ? noteRef.current : nextNote,
+          });
           if (runRef.current !== token) return;
           setItems(Array.isArray(data && data.suggestions) ? data.suggestions : []);
           setModel(String((data && data.model) || ''));
@@ -12177,7 +12253,13 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       pov: '视角',
       detail: '画面',
       dialogue: '对话',
+      structure: '结构',
+      character: '人物',
+      logic: '逻辑',
+      emotion: '情绪',
+      redundancy: '冗余',
     };
+    const SEVERITY_LABEL = { high: '重要', medium: '', low: '可改可不改' };
     const FOCUS_OPTIONS = [
       { value: 'all', label: '全部' },
       { value: 'rhythm', label: '节奏' },
@@ -12185,6 +12267,11 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       { value: 'pov', label: '视角' },
       { value: 'detail', label: '画面' },
       { value: 'dialogue', label: '对话' },
+      { value: 'structure', label: '结构' },
+      { value: 'character', label: '人物' },
+      { value: 'logic', label: '逻辑' },
+      { value: 'emotion', label: '情绪' },
+      { value: 'redundancy', label: '冗余' },
     ];
 
     const head = h(
@@ -12203,18 +12290,62 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       ),
     );
 
+    // Focus chips: eleven dimensions as wrapping pills. A segmented control was
+    // the previous shape and it silently cut the list at five.
     const focusRow = h(
       'div',
-      { className: 'nw-suggest-foot', style: { borderTop: 'none', borderBottom: '1px solid var(--dsw-alias-border-l1)', paddingTop: '8px', paddingBottom: '8px' } },
-      NW.ui.seg({
-        options: FOCUS_OPTIONS,
-        value: focus,
-        ariaLabel: '建议重点',
-        onChange: (value) => {
-          setFocus(value);
-          run(value);
+      { className: 'nw-advice-focus', role: 'group', 'aria-label': NW.t('建议重点') },
+      FOCUS_OPTIONS.map((opt) =>
+        h(
+          'button',
+          {
+            key: opt.value,
+            type: 'button',
+            className: 'nw-advice-chip',
+            'data-on': focus === opt.value ? '1' : '0',
+            'aria-pressed': focus === opt.value ? 'true' : 'false',
+            disabled: busy,
+            onClick: () => {
+              setFocus(opt.value);
+              run(opt.value);
+            },
+          },
+          opt.label,
+        ),
+      ),
+    );
+
+    // Free-text instruction. Enter submits (Shift+Enter inserts a newline) so the
+    // common case is type → Enter → new advice, without moving the hand.
+    const noteBox = h(
+      'div',
+      { className: 'nw-advice-note' },
+      h('textarea', {
+        value: note,
+        rows: 2,
+        placeholder: NW.t('补充要求，例如：只看结尾三段 / 别动对话 / 主角口吻再冷一点'),
+        'aria-label': NW.t('补充要求'),
+        onChange: (ev) => setNote(ev.target.value),
+        onKeyDown: (ev) => {
+          if (ev.key === 'Enter' && !ev.shiftKey) {
+            ev.preventDefault();
+            run(focus, ev.currentTarget.value);
+          }
         },
       }),
+      h(
+        'div',
+        { className: 'nw-advice-notebar' },
+        h('span', { className: 'nw-advice-notehint' }, NW.t('Enter 按这个要求重来')),
+        h('span', { style: { flex: '1 1 auto' } }),
+        note
+          ? NW.ui.btn({
+              kind: 'ghost',
+              onClick: () => setNote(''),
+              children: NW.t('清空'),
+            })
+          : null,
+      ),
     );
 
     let body;
@@ -12262,15 +12393,27 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
               type: 'button',
               className: 'nw-advice',
               'data-active': activeId === item.id ? '1' : '0',
+              'data-sev': item.severity || 'medium',
               onClick: () => reveal(item),
             },
             h('span', { className: 'nw-advice-quote' }, '「' + String(item.quote || '') + '」'),
             h('span', { className: 'nw-advice-issue' }, String(item.issue || '')),
+            item.why ? h('span', { className: 'nw-advice-why' }, String(item.why)) : null,
             h('span', { className: 'nw-advice-do' }, String(item.advice || '')),
+            item.example
+              ? h('span', { className: 'nw-advice-example' }, String(item.example))
+              : null,
             h(
               'span',
               { className: 'nw-advice-foot' },
-              h('span', { className: 'nw-advice-kind' }, KIND_LABEL[item.kind] || '表达'),
+              h(
+                'span',
+                { className: 'nw-advice-kind', 'data-sev': item.severity || 'medium' },
+                KIND_LABEL[item.kind] || '表达',
+              ),
+              SEVERITY_LABEL[item.severity || 'medium']
+                ? h('span', { className: 'nw-advice-notehint' }, SEVERITY_LABEL[item.severity || 'medium'])
+                : null,
               Number(item.start) >= 0
                 ? null
                 : h('span', { style: { fontSize: '11px', opacity: '.7' } }, NW.t('原文已改动，定位不到')),
@@ -12300,6 +12443,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       },
       head,
       focusRow,
+      noteBox,
       body,
       foot,
     );
