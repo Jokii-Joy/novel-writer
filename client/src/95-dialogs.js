@@ -2722,8 +2722,11 @@
     const [genreTouched, setGenreTouched] = useState(false);
     const [workRows, setWorkRows] = useState(null);
     const [workBusy, setWorkBusy] = useState(false);
-    /** Ranked journal candidates for this manuscript (`[{journal, score, reasons}]`). */
+    /** Ranked journal candidates for this manuscript (`[{journal, score, reasons, match?}]`). */
     const [recos, setRecos] = useState(null);
+    /** `'model' | 'rules'` + optional note — surfaced so the card never overclaims. */
+    const [recoMeta, setRecoMeta] = useState(null);
+    const [recoBusy, setRecoBusy] = useState(false);
 
     /** Mail identity — editable in the preview, prefilled from settings. */
     const [form, setForm] = useState({
@@ -2929,19 +2932,39 @@
     const workCount = (workRows || []).reduce((sum, row) => sum + countCharsOf(row.content), 0);
     const recommendedGenre = suggestGenreOf(workCount);
 
-    // Rank the journal directory for this manuscript so step 2 can show a
-    // shortlist instead of demanding the user scroll 79 names.
+    // R27 ③: hand the opening of the manuscript to the model and let it judge
+    // fit + quality, instead of ranking journals by arithmetic. The rule ranker
+    // still runs on the Host as the shortlist filter and as the fallback — the
+    // response says which one answered (`by`), so the card can be honest about
+    // whether a model actually read this manuscript.
     useEffect(() => {
       let alive = true;
       if (workRows == null || !(NW.io && NW.io.journals && NW.io.journals.recommend)) return undefined;
-      const count = (workRows || []).reduce((sum, row) => sum + countCharsOf(row.content), 0);
+      const rows = workRows || [];
+      const count = rows.reduce((sum, row) => sum + countCharsOf(row.content), 0);
+      // First ~2400 characters of the piece: enough for voice and subject, cheap
+      // enough to run on every entry to step 2. `textOfChapter` already handles
+      // the "content was dropped by the lock" case by reading it back from IDB.
+      const excerpt = rows.map((row) => textOfChapter(row)).join('\n\n').slice(0, 2400);
+      setRecoBusy(true);
       NW.io.journals
-        .recommend({ wordCount: count, genre: suggestGenreOf(count) }, 6)
+        .recommend(
+          { wordCount: count, genre: suggestGenreOf(count), title: String((activeNovel && activeNovel.title) || '') },
+          6,
+          { excerpt, provider: settings.proofreadProvider, model: settings.proofreadModel },
+        )
         .then((data) => {
-          if (alive) setRecos(Array.isArray(data && data.recommendations) ? data.recommendations : []);
+          if (!alive) return;
+          setRecos(Array.isArray(data && data.recommendations) ? data.recommendations : []);
+          setRecoMeta({ by: String((data && data.by) || 'rules'), note: String((data && data.note) || '') });
         })
         .catch(() => {
-          if (alive) setRecos([]);
+          if (!alive) return;
+          setRecos([]);
+          setRecoMeta(null);
+        })
+        .then(() => {
+          if (alive) setRecoBusy(false);
         });
       return () => {
         alive = false;
@@ -3363,12 +3386,14 @@
         const recoButtons = recos.map((row) => {
           const entry = (row && row.journal) || {};
           const reasons = Array.isArray(row && row.reasons) ? row.reasons : [];
+          const match = row && row.match && typeof row.match === 'object' ? row.match : null;
           // R26: only the first two reasons used to be shown, which hid every
           // discriminating signal behind the generic "有公开投稿邮箱（待核对）"
           // tail. Drop that note (it is true for almost every journal) and show
           // up to three reasons, so the ordering explains itself.
           const shown = reasons.filter((text) => String(text).indexOf('邮箱') < 0).slice(0, 3);
           const why = (shown.length ? shown : reasons).join('·');
+          const badge = match && match.quality ? h('span', { className: 'nw-reco-fit' }, match.quality) : null;
           return h(
             'button',
             {
@@ -3381,10 +3406,23 @@
                 setManage(false);
               },
             },
-            h('span', { className: 'nw-reco-name' }, String(entry.name || '')),
+            h(
+              'span',
+              { className: 'nw-reco-line' },
+              h('span', { className: 'nw-reco-name' }, String(entry.name || '')),
+              badge,
+            ),
             h('span', { className: 'nw-reco-why' }, why),
           );
         });
+        // Say who ranked these: a model that read the manuscript, or the rule
+        // ranker because the model was unavailable. Never let the card imply a
+        // judgement that did not happen.
+        const byModel = !!(recoMeta && recoMeta.by === 'model');
+        const headText = byModel
+          ? NW.t('大模型读过开头，按契合度与水准推荐')
+          : NW.t('为你推荐（按字数、体裁与题材匹配）');
+        const noteText = String((recoMeta && recoMeta.note) || '');
         stepBody.push(
           h(
             'div',
@@ -3393,8 +3431,10 @@
               'div',
               { className: 'nw-reco-head' },
               NW.icon('sparkle', { size: 14 }),
-              h('span', null, '为你推荐（按字数、体裁与题材匹配）'),
+              h('span', null, headText),
+              recoBusy ? NW.ui.spinner() : null,
             ),
+            noteText ? h('div', { className: 'nw-reco-note' }, noteText) : null,
             h('div', { className: 'nw-reco-list' }, recoButtons),
           ),
         );

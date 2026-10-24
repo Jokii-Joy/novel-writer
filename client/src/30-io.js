@@ -540,12 +540,18 @@
   }
 
   /**
-   * Rule-based journal ranking for one manuscript.
-   * `work` = `{wordCount, genre, tags:[…]}`; resolves `{recommendations:[{journal,score,reasons}]}`.
+   * Journal matching for one manuscript.
+   *
+   * `work` = `{wordCount, genre, tags:[…], title}`; `extra` may carry
+   * `{excerpt, provider, model, limit}`. When an excerpt is supplied the Host
+   * lets the model read it and judge fit + quality; otherwise (or if the model
+   * is down) it answers from the rule ranker and says so via `by:'rules'`.
+   * Resolves `{recommendations:[{journal,score,reasons,match?,rules?}], by, note?}`.
    */
-  function journalsRecommend(work, limit) {
+  function journalsRecommend(work, limit, extra) {
     const input = work && typeof work === 'object' ? work : {};
-    return api('journals.recommend', {
+    const opts = extra && typeof extra === 'object' ? extra : {};
+    const body = {
       work: {
         wordCount: Number(input.wordCount) || 0,
         genre: String(input.genre || ''),
@@ -553,7 +559,11 @@
         title: String(input.title || ''),
       },
       limit: Number(limit) || 8,
-    });
+    };
+    if (opts.excerpt) body.excerpt = String(opts.excerpt);
+    if (opts.provider) body.provider = String(opts.provider);
+    if (opts.model) body.model = String(opts.model);
+    return api('journals.recommend', body);
   }
 
   // ---------------------------------- submit ---------------------------------

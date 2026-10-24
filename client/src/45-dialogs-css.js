@@ -581,6 +581,21 @@
 }
 .nw-reco-item:hover{background:var(--nw-surface-2);border-color:var(--nw-line);}
 .nw-reco-item:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
+/* R27 ③: the model reports a quality verdict per journal, so the row is now
+   name + verdict badge on one line and the reason underneath. The badge is a
+   chip, not a score: a number here would read as a promise the editor cannot
+   make. */
+.nw-reco-line{display:flex;align-items:center;gap:6px;min-width:0;}
+.nw-reco-fit{
+  flex:0 0 auto;padding:0 5px;border-radius:var(--nw-r-pill);
+  font-size:var(--nw-fs-tiny);line-height:1.6;font-weight:500;
+  color:var(--nw-fg-soft);background:var(--nw-sunken);
+  border:1px solid var(--nw-line-soft);
+}
+.nw-reco-note{
+  margin:0 0 var(--nw-sp-1);font-size:var(--nw-fs-tiny);line-height:1.45;
+  color:var(--nw-fg-soft);
+}
 .nw-reco-name{font-size:var(--nw-fs-second);font-weight:500;}
 .nw-reco-why{font-size:var(--nw-fs-tiny);line-height:1.3;color:var(--nw-fg-soft);}
 

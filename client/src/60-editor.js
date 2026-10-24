@@ -507,6 +507,11 @@
 .nw-surface-acts{
   position:absolute;top:10px;left:14px;z-index:var(--nw-z-float);
   display:inline-flex;align-items:center;gap:4px;
+  /* R27 ①: the notes lane used to be a left padding on the writing column,
+     which slid the whole surface (and this row, anchored to its left edge)
+     348px to the right the moment the card opened — the buttons appeared to
+     jump onto the paper. The lane is now an inset on the surface itself, so the
+     surface keeps the column's real left edge and this row simply never moves. */
 }
 .nw-homebtn,
 .nw-actbtn{

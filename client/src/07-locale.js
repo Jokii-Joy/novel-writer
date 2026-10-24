@@ -254,6 +254,13 @@
     '导出入口尚未接入': 'Export is not wired up yet',
     '导入入口尚未接入': 'Import is not wired up yet',
     '收起侧栏尚未接入': 'Sidebar collapse is not wired up yet',
+    // R27 ③: the model's journal verdict, shown as a chip on the reco row.
+    '大模型读过开头，按契合度与水准推荐': 'The model read the opening — ranked by fit and quality',
+    '为你推荐（按字数、体裁与题材匹配）': 'Recommended by length, genre and subject',
+    '够格': 'Ready',
+    '略欠': 'Not quite',
+    '尚不足': 'Not yet',
+    '收起': 'Collapse',
   };
 
   const DICT = { zh: {}, en: EN };

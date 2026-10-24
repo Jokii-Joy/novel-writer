@@ -36,7 +36,11 @@
    lane needs 348px, so it may only exist while at least ~470px of page is left —
    below that the card floats over the paper again (and keeps its 320px ceiling). */
 @container bench (max-width: 820px){
-  .nw-bench-paper[data-notes-lane="1"]{padding-left:0;}
+  /* R27 ①: below this width the lane is released and the card floats over the
+     paper again. The lane is an inset on the surface now, so releasing it means
+     simply dropping that padding — the corner buttons never moved in the first
+     place. */
+  .nw-bench-paper[data-notes-lane="1"] .nw-surface{padding-left:0;}
 }
 
 /* ------------------------------------------------------------ <= 780px -- */

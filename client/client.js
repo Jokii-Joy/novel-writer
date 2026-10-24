@@ -599,6 +599,13 @@ window.__ModuleLoader__.load({
     '导出入口尚未接入': 'Export is not wired up yet',
     '导入入口尚未接入': 'Import is not wired up yet',
     '收起侧栏尚未接入': 'Sidebar collapse is not wired up yet',
+    // R27 ③: the model's journal verdict, shown as a chip on the reco row.
+    '大模型读过开头，按契合度与水准推荐': 'The model read the opening — ranked by fit and quality',
+    '为你推荐（按字数、体裁与题材匹配）': 'Recommended by length, genre and subject',
+    '够格': 'Ready',
+    '略欠': 'Not quite',
+    '尚不足': 'Not yet',
+    '收起': 'Collapse',
   };
 
   const DICT = { zh: {}, en: EN };
@@ -3445,12 +3452,18 @@ window.__ModuleLoader__.load({
   }
 
   /**
-   * Rule-based journal ranking for one manuscript.
-   * `work` = `{wordCount, genre, tags:[…]}`; resolves `{recommendations:[{journal,score,reasons}]}`.
+   * Journal matching for one manuscript.
+   *
+   * `work` = `{wordCount, genre, tags:[…], title}`; `extra` may carry
+   * `{excerpt, provider, model, limit}`. When an excerpt is supplied the Host
+   * lets the model read it and judge fit + quality; otherwise (or if the model
+   * is down) it answers from the rule ranker and says so via `by:'rules'`.
+   * Resolves `{recommendations:[{journal,score,reasons,match?,rules?}], by, note?}`.
    */
-  function journalsRecommend(work, limit) {
+  function journalsRecommend(work, limit, extra) {
     const input = work && typeof work === 'object' ? work : {};
-    return api('journals.recommend', {
+    const opts = extra && typeof extra === 'object' ? extra : {};
+    const body = {
       work: {
         wordCount: Number(input.wordCount) || 0,
         genre: String(input.genre || ''),
@@ -3458,7 +3471,11 @@ window.__ModuleLoader__.load({
         title: String(input.title || ''),
       },
       limit: Number(limit) || 8,
-    });
+    };
+    if (opts.excerpt) body.excerpt = String(opts.excerpt);
+    if (opts.provider) body.provider = String(opts.provider);
+    if (opts.model) body.model = String(opts.model);
+    return api('journals.recommend', body);
   }
 
   // ---------------------------------- submit ---------------------------------
@@ -4901,6 +4918,21 @@ window.__ModuleLoader__.load({
 }
 .nw-reco-item:hover{background:var(--nw-surface-2);border-color:var(--nw-line);}
 .nw-reco-item:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
+/* R27 ③: the model reports a quality verdict per journal, so the row is now
+   name + verdict badge on one line and the reason underneath. The badge is a
+   chip, not a score: a number here would read as a promise the editor cannot
+   make. */
+.nw-reco-line{display:flex;align-items:center;gap:6px;min-width:0;}
+.nw-reco-fit{
+  flex:0 0 auto;padding:0 5px;border-radius:var(--nw-r-pill);
+  font-size:var(--nw-fs-tiny);line-height:1.6;font-weight:500;
+  color:var(--nw-fg-soft);background:var(--nw-sunken);
+  border:1px solid var(--nw-line-soft);
+}
+.nw-reco-note{
+  margin:0 0 var(--nw-sp-1);font-size:var(--nw-fs-tiny);line-height:1.45;
+  color:var(--nw-fg-soft);
+}
 .nw-reco-name{font-size:var(--nw-fs-second);font-weight:500;}
 .nw-reco-why{font-size:var(--nw-fs-tiny);line-height:1.3;color:var(--nw-fg-soft);}
 
@@ -7927,6 +7959,11 @@ window.__ModuleLoader__.load({
 .nw-surface-acts{
   position:absolute;top:10px;left:14px;z-index:var(--nw-z-float);
   display:inline-flex;align-items:center;gap:4px;
+  /* R27 ①: the notes lane used to be a left padding on the writing column,
+     which slid the whole surface (and this row, anchored to its left edge)
+     348px to the right the moment the card opened — the buttons appeared to
+     jump onto the paper. The lane is now an inset on the surface itself, so the
+     surface keeps the column's real left edge and this row simply never moves. */
 }
 .nw-homebtn,
 .nw-actbtn{
@@ -10202,8 +10239,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    occupies (14px margin + 320px card + 14px gap = 348px); when the bench gets too
    narrow for that plus a readable page the card goes back to overlaying (see the
    bench container query in 98b-responsive). Closed card = no lane, so nothing
-   moves unless the writer asks for it. */
-.nw-bench-paper[data-notes-lane="1"]{padding-left:348px;}
+   moves unless the writer asks for it.
+   R27 ①: the lane is inset on the SURFACE, not on the bench-paper. Padding the
+   paper moved the whole surface right by 348px, and since the surface owns
+   overflow:hidden its own corner buttons (anchored at its left edge) got pushed
+   out and clipped away entirely. Insetting the surface keeps the surface — and
+   therefore the buttons — on the column's real left edge, while the scroll area
+   and the page inside it start where the lane ends. */
+.nw-bench-paper[data-notes-lane="1"] .nw-surface{
+  padding-left:348px;
+}
 /* R25: with the advice column open the manuscript stops growing — it pins itself
    to the page measure — and the advice column takes the rest, up to a ceiling.
    The pair is then centred as a unit, so the text and the suggestions always meet
@@ -10501,7 +10546,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
              border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-notes-tab:hover,.nw-notes-tab:focus-visible{opacity:1;transform:translateY(-1px);border-color:var(--dsw-alias-border-l2);}
-.nw-notes-tab[aria-expanded="true"]{opacity:0;}
+/* R27 ②: the tab used to fade to nothing once the card opened, which left the
+   card with no visible way to close it — the only affordance was a hover-only
+   button in the corner. The tab now stays as the collapse handle and sits just
+   above the card, so "click to fold it away" is always reachable. */
+.nw-notes-tab[aria-expanded="true"]{opacity:.72;}
+.nw-notes-tab[aria-expanded="true"]:hover,
+.nw-notes-tab[aria-expanded="true"]:focus-visible{opacity:1;}
 .nw-notes-tab:focus-visible{opacity:1;}
 .nw-notes-tabicon{display:inline-flex;align-items:center;justify-content:center;}
 .nw-notes-tabtxt{white-space:nowrap;}
@@ -13219,7 +13270,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           onClick: p.onToggle,
         },
         h('span', { className: 'nw-notes-tabicon', 'aria-hidden': 'true' }, NW.icon('sparkle', { size: 16 })),
-        p.open ? null : h('span', { className: 'nw-notes-tabtxt' }, NW.t('灵感')),
+        // The label doubles as the state: closed it invites you in, open it is
+        // the collapse handle the card itself does not otherwise have.
+        h('span', { className: 'nw-notes-tabtxt' }, p.open ? NW.t('收起') : NW.t('灵感')),
       ),
       p.open
         ? h(
@@ -16202,8 +16255,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [genreTouched, setGenreTouched] = useState(false);
     const [workRows, setWorkRows] = useState(null);
     const [workBusy, setWorkBusy] = useState(false);
-    /** Ranked journal candidates for this manuscript (`[{journal, score, reasons}]`). */
+    /** Ranked journal candidates for this manuscript (`[{journal, score, reasons, match?}]`). */
     const [recos, setRecos] = useState(null);
+    /** `'model' | 'rules'` + optional note — surfaced so the card never overclaims. */
+    const [recoMeta, setRecoMeta] = useState(null);
+    const [recoBusy, setRecoBusy] = useState(false);
 
     /** Mail identity — editable in the preview, prefilled from settings. */
     const [form, setForm] = useState({
@@ -16409,19 +16465,39 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const workCount = (workRows || []).reduce((sum, row) => sum + countCharsOf(row.content), 0);
     const recommendedGenre = suggestGenreOf(workCount);
 
-    // Rank the journal directory for this manuscript so step 2 can show a
-    // shortlist instead of demanding the user scroll 79 names.
+    // R27 ③: hand the opening of the manuscript to the model and let it judge
+    // fit + quality, instead of ranking journals by arithmetic. The rule ranker
+    // still runs on the Host as the shortlist filter and as the fallback — the
+    // response says which one answered (`by`), so the card can be honest about
+    // whether a model actually read this manuscript.
     useEffect(() => {
       let alive = true;
       if (workRows == null || !(NW.io && NW.io.journals && NW.io.journals.recommend)) return undefined;
-      const count = (workRows || []).reduce((sum, row) => sum + countCharsOf(row.content), 0);
+      const rows = workRows || [];
+      const count = rows.reduce((sum, row) => sum + countCharsOf(row.content), 0);
+      // First ~2400 characters of the piece: enough for voice and subject, cheap
+      // enough to run on every entry to step 2. `textOfChapter` already handles
+      // the "content was dropped by the lock" case by reading it back from IDB.
+      const excerpt = rows.map((row) => textOfChapter(row)).join('\n\n').slice(0, 2400);
+      setRecoBusy(true);
       NW.io.journals
-        .recommend({ wordCount: count, genre: suggestGenreOf(count) }, 6)
+        .recommend(
+          { wordCount: count, genre: suggestGenreOf(count), title: String((activeNovel && activeNovel.title) || '') },
+          6,
+          { excerpt, provider: settings.proofreadProvider, model: settings.proofreadModel },
+        )
         .then((data) => {
-          if (alive) setRecos(Array.isArray(data && data.recommendations) ? data.recommendations : []);
+          if (!alive) return;
+          setRecos(Array.isArray(data && data.recommendations) ? data.recommendations : []);
+          setRecoMeta({ by: String((data && data.by) || 'rules'), note: String((data && data.note) || '') });
         })
         .catch(() => {
-          if (alive) setRecos([]);
+          if (!alive) return;
+          setRecos([]);
+          setRecoMeta(null);
+        })
+        .then(() => {
+          if (alive) setRecoBusy(false);
         });
       return () => {
         alive = false;
@@ -16843,12 +16919,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const recoButtons = recos.map((row) => {
           const entry = (row && row.journal) || {};
           const reasons = Array.isArray(row && row.reasons) ? row.reasons : [];
+          const match = row && row.match && typeof row.match === 'object' ? row.match : null;
           // R26: only the first two reasons used to be shown, which hid every
           // discriminating signal behind the generic "有公开投稿邮箱（待核对）"
           // tail. Drop that note (it is true for almost every journal) and show
           // up to three reasons, so the ordering explains itself.
           const shown = reasons.filter((text) => String(text).indexOf('邮箱') < 0).slice(0, 3);
           const why = (shown.length ? shown : reasons).join('·');
+          const badge = match && match.quality ? h('span', { className: 'nw-reco-fit' }, match.quality) : null;
           return h(
             'button',
             {
@@ -16861,10 +16939,23 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 setManage(false);
               },
             },
-            h('span', { className: 'nw-reco-name' }, String(entry.name || '')),
+            h(
+              'span',
+              { className: 'nw-reco-line' },
+              h('span', { className: 'nw-reco-name' }, String(entry.name || '')),
+              badge,
+            ),
             h('span', { className: 'nw-reco-why' }, why),
           );
         });
+        // Say who ranked these: a model that read the manuscript, or the rule
+        // ranker because the model was unavailable. Never let the card imply a
+        // judgement that did not happen.
+        const byModel = !!(recoMeta && recoMeta.by === 'model');
+        const headText = byModel
+          ? NW.t('大模型读过开头，按契合度与水准推荐')
+          : NW.t('为你推荐（按字数、体裁与题材匹配）');
+        const noteText = String((recoMeta && recoMeta.note) || '');
         stepBody.push(
           h(
             'div',
@@ -16873,8 +16964,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               'div',
               { className: 'nw-reco-head' },
               NW.icon('sparkle', { size: 14 }),
-              h('span', null, '为你推荐（按字数、体裁与题材匹配）'),
+              h('span', null, headText),
+              recoBusy ? NW.ui.spinner() : null,
             ),
+            noteText ? h('div', { className: 'nw-reco-note' }, noteText) : null,
             h('div', { className: 'nw-reco-list' }, recoButtons),
           ),
         );
@@ -19248,7 +19341,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    lane needs 348px, so it may only exist while at least ~470px of page is left —
    below that the card floats over the paper again (and keeps its 320px ceiling). */
 @container bench (max-width: 820px){
-  .nw-bench-paper[data-notes-lane="1"]{padding-left:0;}
+  /* R27 ①: below this width the lane is released and the card floats over the
+     paper again. The lane is an inset on the surface now, so releasing it means
+     simply dropping that padding — the corner buttons never moved in the first
+     place. */
+  .nw-bench-paper[data-notes-lane="1"] .nw-surface{padding-left:0;}
 }
 
 /* ------------------------------------------------------------ <= 780px -- */

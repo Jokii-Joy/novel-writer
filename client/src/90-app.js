@@ -41,8 +41,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    occupies (14px margin + 320px card + 14px gap = 348px); when the bench gets too
    narrow for that plus a readable page the card goes back to overlaying (see the
    bench container query in 98b-responsive). Closed card = no lane, so nothing
-   moves unless the writer asks for it. */
-.nw-bench-paper[data-notes-lane="1"]{padding-left:348px;}
+   moves unless the writer asks for it.
+   R27 ①: the lane is inset on the SURFACE, not on the bench-paper. Padding the
+   paper moved the whole surface right by 348px, and since the surface owns
+   overflow:hidden its own corner buttons (anchored at its left edge) got pushed
+   out and clipped away entirely. Insetting the surface keeps the surface — and
+   therefore the buttons — on the column's real left edge, while the scroll area
+   and the page inside it start where the lane ends. */
+.nw-bench-paper[data-notes-lane="1"] .nw-surface{
+  padding-left:348px;
+}
 /* R25: with the advice column open the manuscript stops growing — it pins itself
    to the page measure — and the advice column takes the rest, up to a ceiling.
    The pair is then centred as a unit, so the text and the suggestions always meet
@@ -340,7 +348,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
              border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-notes-tab:hover,.nw-notes-tab:focus-visible{opacity:1;transform:translateY(-1px);border-color:var(--dsw-alias-border-l2);}
-.nw-notes-tab[aria-expanded="true"]{opacity:0;}
+/* R27 ②: the tab used to fade to nothing once the card opened, which left the
+   card with no visible way to close it — the only affordance was a hover-only
+   button in the corner. The tab now stays as the collapse handle and sits just
+   above the card, so "click to fold it away" is always reachable. */
+.nw-notes-tab[aria-expanded="true"]{opacity:.72;}
+.nw-notes-tab[aria-expanded="true"]:hover,
+.nw-notes-tab[aria-expanded="true"]:focus-visible{opacity:1;}
 .nw-notes-tab:focus-visible{opacity:1;}
 .nw-notes-tabicon{display:inline-flex;align-items:center;justify-content:center;}
 .nw-notes-tabtxt{white-space:nowrap;}
@@ -3058,7 +3072,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           onClick: p.onToggle,
         },
         h('span', { className: 'nw-notes-tabicon', 'aria-hidden': 'true' }, NW.icon('sparkle', { size: 16 })),
-        p.open ? null : h('span', { className: 'nw-notes-tabtxt' }, NW.t('灵感')),
+        // The label doubles as the state: closed it invites you in, open it is
+        // the collapse handle the card itself does not otherwise have.
+        h('span', { className: 'nw-notes-tabtxt' }, p.open ? NW.t('收起') : NW.t('灵感')),
       ),
       p.open
         ? h(
