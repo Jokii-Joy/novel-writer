@@ -313,8 +313,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 /* R24: 挪到左边。用户说「左侧没东西」—— 右边挤着修改建议栏和浮动坞，左边那片
    只有三个 28px 的角落按钮。放在 left:14px 还顺手解决了和查找栏的争位：查找栏
    占的是 top:10px right:14px，两者现在各占一角，谁都不用压谁。
-   宽面板下这条 lane 会被 .nw-bench-paper 的 padding-left 让出来，卡片不会压住正文
-   第一行；窄面板（见 98b-responsive）没有这条 lane，卡片回到浮层并收窄。 */
+   R28/R30: 早期版本让 .nw-bench-paper 用 padding-left 让出一条 348px 的车道，
+   结果是卡片开着的瞬间纸面被挤窄、正文整体右移 —— 用户明确说不要这样。现在
+   卡片是绝对定位的浮层，宽度直接取纸面左侧那段空白，纸面的宽度和位置都不依赖它。 */
 .nw-notes{
   position:absolute;z-index:var(--nw-z-float);top:52px;left:14px;
   display:flex;flex-direction:column;align-items:flex-start;gap:var(--nw-sp-1);
