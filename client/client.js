@@ -12545,6 +12545,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                         key: 'advice-' + String(chapter.id),
                         chapter: chapter,
                         editorApi: editorRef,
+                        settings: settings,
                         width: adviceWidth,
                         onResize: setAdviceWidth,
                         onClose: () => setAdviceOpen(false),
