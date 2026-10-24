@@ -91,7 +91,9 @@
      there at this width, just closer to the edge. */
   .nw-surface{--nw-pad-x:20px;--nw-pad-y:32px;--nw-gutter-x:68px;}
 
-  .nw-notes{left:8px;right:8px;top:48px;max-width:none;}
+  /* R21: the base rule now sets an explicit width, so the narrow tier has to
+     release it (left+right already pin the box edge to edge). */
+  .nw-notes{left:8px;right:8px;top:48px;width:auto;}
   .nw-notes-card{width:100%;max-height:min(420px,calc(100vh - 180px));}
 
   /* Below the shelf overlay (34) and the advice overlay (33): when the shelf is

@@ -348,6 +348,12 @@
 }
 @container nw (min-width: 780px){
   .nw-page{
+    /* R21: the sheet needs its own fill, not just a border and a shadow. It was
+       transparent, so the drop shadow had nothing to sit under and the "paper"
+       read as a flat patch the same colour as the desk around it — the lift was
+       invisible. --nw-panel is the palette's one step above the surface, which
+       is exactly the difference a sheet of paper has against a desk. */
+    background:var(--nw-panel);
     border:1px solid var(--nw-line-soft);
     box-shadow:var(--nw-shadow-paper);
   }
@@ -500,7 +506,11 @@
   border-radius:var(--nw-r-control);border:1px solid var(--nw-btn-border);
   background:var(--nw-panel);color:var(--nw-btn-fg);
   font-family:inherit;font-size:12px;line-height:1;cursor:pointer;
-  opacity:.55;transition:opacity var(--nw-dur) ease,background var(--nw-dur) ease,border-color var(--nw-dur) ease;
+  /* R21: 0.55 was meant as "quiet until hovered", but on the warm palettes it
+     reads as disabled — the glyph sits at ~45% contrast against the paper and
+     the writer has to hunt for it. 0.78 is still clearly secondary next to the
+     body text while staying legible; hover takes it to 1. */
+  opacity:.78;transition:opacity var(--nw-dur) ease,background var(--nw-dur) ease,border-color var(--nw-dur) ease;
 }
 .nw-homebtn:hover,
 .nw-actbtn:hover{opacity:1;background:var(--nw-btn-hover);border-color:var(--nw-find-ring);}

@@ -31,13 +31,20 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-suggest{
   position:relative;
   flex:0 0 auto;display:flex;flex-direction:column;min-height:0;
+  /* R21: this class name is shared with the proofread suggestion *card*
+     (45-dialogs-css.js), which sets align-items:flex-start + gap:8px. On the
+     panel that made every child shrink to its text width (the note box came out
+     181px inside a 336px panel). Both are pinned back here. */
+  align-items:stretch;gap:0;
   width:336px;
   /* R13: was 46vw. The panel lives inside a ~600px column most of the time, so
      a viewport-relative cap let the advice column eat the manuscript on a wide
      monitor. Percentages resolve against the bench, which is the real budget. */
   max-width:46%;
-  border-left:1px solid var(--dsw-alias-border-l1);
-  background:var(--dsw-alias-bg-layer-1);
+  /* R21: palette tokens, so the column follows the reading theme (it used to be
+     a white strip beside a dark page). */
+  border-left:1px solid var(--nw-line);
+  background:var(--nw-panel);
   animation:nw-slide-in var(--nw-dur) var(--nw-ease,ease);
 }
 /* R19 B2: adviceWidth and its localStorage key have existed since R12, but
@@ -144,20 +151,25 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 /* The writer's own instruction. It sits above the list, not in a dialog: the
    whole point of typing 「只看结尾」 is to re-run with it immediately. */
 .nw-advice-note{flex:0 0 auto;padding:0 12px 9px;}
+/* R21: min-height was 34px, i.e. one clipped line — the two-line placeholder was
+   cut in half and the field read as a broken input. It now starts at two rows
+   and grows with the text up to 96px. Colours also come from the reading palette
+   instead of the host aliases, or the box stays white on the night theme. */
 .nw-advice-note textarea{
-  width:100%;box-sizing:border-box;min-height:34px;max-height:96px;resize:vertical;
-  padding:7px 9px;border-radius:var(--nw-r-control);
-  border:1px solid var(--dsw-alias-border-l1);
-  background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);
-  font-family:inherit;font-size:12.5px;line-height:1.6;
+  display:block;width:100%;box-sizing:border-box;
+  min-height:52px;max-height:96px;resize:vertical;overflow:auto;
+  padding:8px 10px;border-radius:var(--nw-r-control);
+  border:1px solid var(--nw-line);
+  background:var(--nw-sunken);color:var(--nw-fg);
+  font-family:inherit;font-size:var(--nw-fs-tiny);line-height:1.65;
 }
 .nw-advice-note textarea:focus{
-  outline:none;border-color:var(--dsw-alias-brand-primary);
-  box-shadow:0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent);
+  outline:none;border-color:var(--nw-brand);
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-brand) 18%, transparent);
 }
-.nw-advice-note textarea::placeholder{color:var(--dsw-alias-label-secondary);opacity:.8;}
+.nw-advice-note textarea::placeholder{color:var(--nw-fg-soft);opacity:.85;}
 .nw-advice-notebar{display:flex;align-items:center;gap:var(--nw-sp-0);margin-top:var(--nw-sp-0);}
-.nw-advice-notehint{font-size:var(--nw-fs-tiny);color:var(--dsw-alias-label-secondary);opacity:.8;}
+.nw-advice-notehint{font-size:var(--nw-fs-tiny);color:var(--nw-fg-soft);opacity:.85;}
 .nw-suggest-empty{
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--nw-sp-2);
   flex:1 1 auto;padding:24px 18px;text-align:center;
@@ -191,35 +203,48 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   position:absolute;z-index:var(--nw-z-float);
   right:20px;bottom:56px;
   display:flex;flex-direction:column;align-items:flex-end;gap:var(--nw-sp-1);
-  opacity:.35;
+  /* R21: .35 was invisible on the warm paper — the FAB read as a smudge and
+     nobody would guess it was a button. At rest the dock only ever shows the
+     FAB (the menu is display-gated behind data-open), so dimming it was dimming
+     the one thing that had to stay legible. .88 keeps it out of the way without
+     washing the brand fill into the page. */
+  opacity:.88;
   transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock:hover,.nw-dock:focus-within,.nw-dock[data-open="1"]{opacity:1;}
 .nw-dock-fab{
   width:44px;height:44px;border-radius:var(--nw-r-pill);
   display:inline-flex;align-items:center;justify-content:center;
-  border:1px solid var(--dsw-alias-border-l1);
-  background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
-  color:var(--dsw-alias-label-primary);
-  box-shadow:0 2px 6px rgba(0,0,0,.08),0 12px 30px rgba(0,0,0,.10);
+  /* R21: this used the host aliases and a literal black shadow, so it was the
+     one control that did not follow the reading theme — on night it stayed a
+     pale chip, on paper it kept a grey halo. Worse, once it moved onto --nw-panel
+     it matched the sheet exactly and disappeared into it.
+     A floating action button has to be an action: it is now the one brand-filled
+     element in the writing view, which also balances the 新建小说 button on the
+     home screen. The dock's 0.55 opacity keeps it from shouting until hovered. */
+  border:1px solid color-mix(in srgb, var(--nw-brand) 82%, var(--nw-fg));
+  background:var(--nw-brand);
+  color:var(--nw-panel);
+  box-shadow:var(--nw-shadow-2);
   cursor:pointer;font-size:18px;line-height:1;
   transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
-.nw-dock-fab:hover{transform:translateY(-2px);box-shadow:0 4px 10px rgba(0,0,0,.1),0 16px 36px rgba(0,0,0,.14);}
+.nw-dock-fab:hover{transform:translateY(-2px);box-shadow:var(--nw-shadow-3);}
 .nw-dock-fab:active{transform:translateY(0) scale(.97);}
 .nw-dock-menu{display:flex;flex-direction:column;align-items:flex-end;gap:var(--nw-sp-1);}
 .nw-dock-menu[data-open="1"]{animation:nw-pop var(--nw-dur) var(--nw-ease,ease);}
 .nw-dock-btn{
   display:inline-flex;align-items:center;gap:var(--nw-sp-1);
   height:38px;padding:0 16px;border-radius:var(--nw-r-pill);
-  border:1px solid var(--dsw-alias-border-l1);
-  background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
-  color:var(--dsw-alias-label-primary);
+  /* R21: same host-alias leak as the FAB — the menu rows stayed white on night. */
+  border:1px solid var(--nw-line-strong);
+  background:var(--nw-panel);
+  color:var(--nw-fg);
   font-size:14px;cursor:pointer;white-space:nowrap;
   box-shadow:var(--nw-shadow-1);
   transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
-.nw-dock-btn:hover{transform:translateY(-1px);background:var(--dsw-alias-bg-layer-2);}
+.nw-dock-btn:hover{transform:translateY(-1px);background:var(--nw-surface-2);}
 .nw-dock-btn[disabled]{opacity:.45;cursor:default;transform:none;}
 /* The dock carries nine rows in R5 (three writing tools + a 「更多」 group), so
    the icon column is fixed-width to keep every label on the same baseline. */
@@ -239,18 +264,25 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-notes{
   position:absolute;z-index:var(--nw-z-float);top:52px;right:14px;
   display:flex;flex-direction:column;align-items:flex-end;gap:var(--nw-sp-1);
-  max-width:calc(100% - 28px);
+  /* R21: this box is absolutely positioned, so its width was shrink-to-fit —
+     and a percentage width inside a shrink-to-fit parent is circular, which is
+     why the card collapsed to its longest text run (200px, a narrow column).
+     The container now owns the width and the card fills it. */
+  width:min(420px,calc(100% - 28px));
   pointer-events:none;
 }
 .nw-notes > *{pointer-events:auto;}
 .nw-notes-tab{
   display:inline-flex;align-items:center;gap:var(--nw-sp-0);
   height:32px;padding:0 11px;border-radius:var(--nw-r-pill);
-  border:1px solid var(--dsw-alias-border-l1);
-  background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
-  color:var(--dsw-alias-label-secondary);
-  font-size:13px;cursor:pointer;opacity:.55;
-  box-shadow:0 1px 3px rgba(0,0,0,.06);
+  /* R21: same story as the dock — host aliases plus a black shadow meant the
+     tab ignored the reading theme entirely (a white pill floating on night).
+     It now uses the palette's own panel/line/ink. */
+  border:1px solid var(--nw-line-strong);
+  background:var(--nw-panel);
+  color:var(--nw-fg-soft);
+  font-size:13px;cursor:pointer;opacity:.62;
+  box-shadow:var(--nw-shadow-1);
   transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
              transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
              border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
@@ -267,14 +299,16 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
    instead, so the note gets the whole card. */
 .nw-notes-card{
   position:relative;
-  width:min(420px,100%);
+  /* R21: fills .nw-notes, which now carries the 420px ceiling. */
+  width:100%;
   /* R14 ③: the card grows with the note instead of showing a fixed window —
      the textarea drives its own height, the card only caps how far it may go. */
   max-height:min(560px,calc(100vh - 200px));
   display:flex;flex-direction:column;min-height:0;
   border-radius:var(--nw-r-card);
-  border:1px solid var(--dsw-alias-border-l2);
-  background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
+  /* R21: host alias → palette token, so the card belongs to the reading theme. */
+  border:1px solid var(--nw-line-strong);
+  background:var(--nw-panel);
   box-shadow:var(--nw-shadow-3);
   overflow:hidden;
   animation:nw-notes-in var(--nw-dur) var(--nw-ease,ease);

@@ -1154,18 +1154,36 @@
   transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-novel.is-active::after{opacity:1;}
-/* 纯 CSS 封面：品牌色线性渐变 + 一道中性书脊，不用图片。 */
+/* 纯 CSS 封面，不用图片。
+   R21: 两道横向书页线在 34px 下读作「减号 / 暂停键」，所以不再画横线 ——
+   书靠**比例**认出来：略高于宽、左侧一道深书脊、右侧一道浅书口，
+   圆角只给右半边（书脊一侧是方的）。缩到 28×34 也还是一本立着的书。 */
 .nw-shelf-cover{
   position:relative;grid-column:1;grid-row:1 / span 2;
-  width:34px;height:34px;border-radius:var(--nw-r-control);
-  background-image:linear-gradient(135deg,
-    var(--nw-brand) 0%,
-    color-mix(in srgb, var(--nw-brand) 62%, var(--nw-bg)) 100%);
-  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--nw-bg) 24%, transparent);
+  justify-self:center;
+  width:27px;height:34px;
+  border-radius:var(--nw-r-hair) var(--nw-r-control) var(--nw-r-control) var(--nw-r-hair);
+  overflow:hidden;
+  background-image:
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--nw-bg) 26%, transparent) 0%,
+      transparent 34%),
+    linear-gradient(160deg,
+      var(--nw-brand) 0%,
+      color-mix(in srgb, var(--nw-brand) 68%, var(--nw-bg)) 100%);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--nw-bg) 22%, transparent);
 }
+/* 书脊：整条左缘，比封面深一档 */
+.nw-shelf-cover::before{
+  content:'';position:absolute;left:0;top:0;bottom:0;width:5px;
+  background:color-mix(in srgb, var(--nw-fg) 26%, transparent);
+  box-shadow:inset -1px 0 0 color-mix(in srgb, var(--nw-bg) 30%, transparent);
+}
+/* 书口：右缘一道浅线，暗示纸页厚度 */
 .nw-shelf-cover::after{
-  content:'';position:absolute;left:8px;top:9px;bottom:9px;width:2px;
-  border-radius:var(--nw-r-hair);background:color-mix(in srgb, var(--nw-bg) 55%, transparent);
+  content:'';position:absolute;right:0;top:2px;bottom:2px;width:2px;
+  border-radius:var(--nw-r-hair);
+  background:color-mix(in srgb, var(--nw-bg) 46%, transparent);
 }
 .nw-shelf-novel-title{
   grid-column:2;grid-row:1;min-width:0;
@@ -1200,7 +1218,15 @@
 }
 .nw-shelf-row:hover{background:var(--nw-surface-2);}
 .nw-shelf-row:focus-visible{outline:2px solid var(--nw-brand);outline-offset:-2px;}
-.nw-shelf-row.is-active{background:var(--nw-surface-2);color:var(--nw-fg);font-weight:500;}
+.nw-shelf-row.is-active{
+  /* R21: the book card and the chapter row used to share the exact same fill
+     (--nw-surface-2), so at a glance the selected book and the selected
+     chapter looked like one and the same thing. The card keeps the stronger
+     tint and a brand hairline; the row drops to a lighter wash and leans on
+     its 3px bar, which keeps the hierarchy readable when both are selected. */
+  background:color-mix(in srgb, var(--nw-brand) 7%, transparent);
+  color:var(--nw-fg);font-weight:500;
+}
 .nw-shelf-row.is-active::after{
   content:'';position:absolute;left:2px;top:7px;bottom:7px;width:3px;
   border-radius:var(--nw-r-hair);background:var(--nw-brand);

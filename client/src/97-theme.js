@@ -389,19 +389,23 @@
   right:24px;bottom:64px;gap:var(--nw-sp-2);
   transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
+/* R21: the FAB is the one control in the writing view that has to be findable
+   without hovering, so it is the brand fill — same role as 新建小说 on the home
+   screen. The earlier overlay fill sat within ~4% of the paper and vanished. */
 .nw-dock-fab{
   width:46px;height:46px;border-radius:var(--nw-r-pill);
-  border:1px solid var(--nw-line-soft);
-  background:var(--nw-surface-overlay);color:var(--nw-fg);
-  box-shadow:var(--nw-shadow-1),var(--nw-shadow-2);
+  border:1px solid color-mix(in srgb, var(--nw-brand) 82%, var(--nw-fg));
+  background:var(--nw-brand);color:var(--nw-panel);
+  box-shadow:var(--nw-shadow-2);
   font-size:19px;
   transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease-pop,ease),
     box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
     background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock-fab:hover{
-  transform:translateY(-2px);background:var(--nw-surface-overlay);
-  box-shadow:var(--nw-shadow-2);
+  transform:translateY(-2px);
+  background:color-mix(in srgb, var(--nw-brand) 88%, var(--nw-fg));
+  box-shadow:var(--nw-shadow-3);
 }
 .nw-dock-fab:active{transform:translateY(0) scale(.97);}
 .nw-dock-fab:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}

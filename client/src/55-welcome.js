@@ -212,7 +212,7 @@
         NW.h('h1', { className: 'nw-welcome-title' }, tr('精神空间')),
         NW.h(
           'p',
-          { className: 'nw-welcome-sub' },
+          { className: 'nw-welcome-lead' },
           novels.length === 0
             ? '还没有小说。新建一部，或者把已有的 txt / md / docx / epub 导入进来。'
             : `共 ${novels.length} 部作品、${stats.count} 个章节、${fmtWords(stats.total)} 字。`,
@@ -609,12 +609,19 @@
   margin:0 0 var(--nw-sp-0);font-family:var(--nw-reading-font);font-weight:600;
   font-size:clamp(24px,2.9cqw,31px);line-height:1.2;letter-spacing:.005em;color:var(--nw-fg);
 }
-.nw-welcome-sub{margin:0;font-size:var(--nw-fs-second);line-height:1.6;color:var(--nw-fg-soft);}
+/* R21: this rule used to live on .nw-welcome-sub, which is ALSO the class of a
+   submission / mail row (flex, 8px padding, --nw-sunken fill). The header line
+   therefore rendered as a grey capsule with the summary text floating inside
+   it. The header keeps its own name now. */
+.nw-welcome-lead{margin:0;font-size:var(--nw-fs-second);line-height:1.6;color:var(--nw-fg-soft);}
 .nw-welcome-actions{display:flex;align-items:center;gap:var(--nw-sp-2);flex-wrap:wrap;}
 
 /* min(280px,100%) — a plain minmax(280px,1fr) overflows as soon as the panel
    itself is narrower than 280px, which happens the moment the host sidebar is
    open on a laptop. */
+/* R21: cards hug their own content (align-items:start). Stretching them made a
+   one-row card (正在创作 with a single novel) into a half-empty panel, which read
+   worse than a shorter card. */
 .nw-welcome-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:var(--nw-sp-4);align-items:start;}
 .nw-welcome-card{
   min-width:0;padding:var(--nw-sp-4);
@@ -661,15 +668,18 @@
 .nw-welcome-novelgo{color:var(--nw-idle);display:flex;flex:0 0 auto;}
 
 /* -------------------------------------------------------- 创作统计 ----- */
-.nw-welcome-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(120px,100%),1fr));gap:var(--nw-sp-3);margin:0;}
+/* R21: auto-fit gave three columns inside the card, so the fourth cell (今天)
+   dropped alone onto a second row and the block looked broken. Four cells want
+   a deliberate 2x2, not whatever the width happens to allow. */
+.nw-welcome-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--nw-sp-2);margin:0;}
 .nw-welcome-stat{
-  padding:var(--nw-sp-3);border-radius:var(--nw-r-control);
+  padding:var(--nw-sp-2) var(--nw-sp-3);border-radius:var(--nw-r-control);
   background:var(--nw-sunken);
 }
 .nw-welcome-stat dt{font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);}
 .nw-welcome-stat dd{
-  margin:4px 0 0;font-family:var(--nw-reading-font);font-weight:600;
-  font-size:15px;line-height:1.3;color:var(--nw-fg);font-variant-numeric:tabular-nums;
+  margin:2px 0 0;font-family:var(--nw-reading-font);font-weight:600;
+  font-size:16px;line-height:1.3;color:var(--nw-fg);font-variant-numeric:tabular-nums;
 }
 
 /* -------------------------------------------------------- 投稿记录 ----- */

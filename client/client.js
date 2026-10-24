@@ -6155,18 +6155,36 @@ window.__ModuleLoader__.load({
   transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-novel.is-active::after{opacity:1;}
-/* 纯 CSS 封面：品牌色线性渐变 + 一道中性书脊，不用图片。 */
+/* 纯 CSS 封面，不用图片。
+   R21: 两道横向书页线在 34px 下读作「减号 / 暂停键」，所以不再画横线 ——
+   书靠**比例**认出来：略高于宽、左侧一道深书脊、右侧一道浅书口，
+   圆角只给右半边（书脊一侧是方的）。缩到 28×34 也还是一本立着的书。 */
 .nw-shelf-cover{
   position:relative;grid-column:1;grid-row:1 / span 2;
-  width:34px;height:34px;border-radius:var(--nw-r-control);
-  background-image:linear-gradient(135deg,
-    var(--nw-brand) 0%,
-    color-mix(in srgb, var(--nw-brand) 62%, var(--nw-bg)) 100%);
-  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--nw-bg) 24%, transparent);
+  justify-self:center;
+  width:27px;height:34px;
+  border-radius:var(--nw-r-hair) var(--nw-r-control) var(--nw-r-control) var(--nw-r-hair);
+  overflow:hidden;
+  background-image:
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--nw-bg) 26%, transparent) 0%,
+      transparent 34%),
+    linear-gradient(160deg,
+      var(--nw-brand) 0%,
+      color-mix(in srgb, var(--nw-brand) 68%, var(--nw-bg)) 100%);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--nw-bg) 22%, transparent);
 }
+/* 书脊：整条左缘，比封面深一档 */
+.nw-shelf-cover::before{
+  content:'';position:absolute;left:0;top:0;bottom:0;width:5px;
+  background:color-mix(in srgb, var(--nw-fg) 26%, transparent);
+  box-shadow:inset -1px 0 0 color-mix(in srgb, var(--nw-bg) 30%, transparent);
+}
+/* 书口：右缘一道浅线，暗示纸页厚度 */
 .nw-shelf-cover::after{
-  content:'';position:absolute;left:8px;top:9px;bottom:9px;width:2px;
-  border-radius:var(--nw-r-hair);background:color-mix(in srgb, var(--nw-bg) 55%, transparent);
+  content:'';position:absolute;right:0;top:2px;bottom:2px;width:2px;
+  border-radius:var(--nw-r-hair);
+  background:color-mix(in srgb, var(--nw-bg) 46%, transparent);
 }
 .nw-shelf-novel-title{
   grid-column:2;grid-row:1;min-width:0;
@@ -6201,7 +6219,15 @@ window.__ModuleLoader__.load({
 }
 .nw-shelf-row:hover{background:var(--nw-surface-2);}
 .nw-shelf-row:focus-visible{outline:2px solid var(--nw-brand);outline-offset:-2px;}
-.nw-shelf-row.is-active{background:var(--nw-surface-2);color:var(--nw-fg);font-weight:500;}
+.nw-shelf-row.is-active{
+  /* R21: the book card and the chapter row used to share the exact same fill
+     (--nw-surface-2), so at a glance the selected book and the selected
+     chapter looked like one and the same thing. The card keeps the stronger
+     tint and a brand hairline; the row drops to a lighter wash and leans on
+     its 3px bar, which keeps the hierarchy readable when both are selected. */
+  background:color-mix(in srgb, var(--nw-brand) 7%, transparent);
+  color:var(--nw-fg);font-weight:500;
+}
 .nw-shelf-row.is-active::after{
   content:'';position:absolute;left:2px;top:7px;bottom:7px;width:3px;
   border-radius:var(--nw-r-hair);background:var(--nw-brand);
@@ -6671,7 +6697,7 @@ window.__ModuleLoader__.load({
         NW.h('h1', { className: 'nw-welcome-title' }, tr('精神空间')),
         NW.h(
           'p',
-          { className: 'nw-welcome-sub' },
+          { className: 'nw-welcome-lead' },
           novels.length === 0
             ? '还没有小说。新建一部，或者把已有的 txt / md / docx / epub 导入进来。'
             : `共 ${novels.length} 部作品、${stats.count} 个章节、${fmtWords(stats.total)} 字。`,
@@ -7068,12 +7094,19 @@ window.__ModuleLoader__.load({
   margin:0 0 var(--nw-sp-0);font-family:var(--nw-reading-font);font-weight:600;
   font-size:clamp(24px,2.9cqw,31px);line-height:1.2;letter-spacing:.005em;color:var(--nw-fg);
 }
-.nw-welcome-sub{margin:0;font-size:var(--nw-fs-second);line-height:1.6;color:var(--nw-fg-soft);}
+/* R21: this rule used to live on .nw-welcome-sub, which is ALSO the class of a
+   submission / mail row (flex, 8px padding, --nw-sunken fill). The header line
+   therefore rendered as a grey capsule with the summary text floating inside
+   it. The header keeps its own name now. */
+.nw-welcome-lead{margin:0;font-size:var(--nw-fs-second);line-height:1.6;color:var(--nw-fg-soft);}
 .nw-welcome-actions{display:flex;align-items:center;gap:var(--nw-sp-2);flex-wrap:wrap;}
 
 /* min(280px,100%) — a plain minmax(280px,1fr) overflows as soon as the panel
    itself is narrower than 280px, which happens the moment the host sidebar is
    open on a laptop. */
+/* R21: cards hug their own content (align-items:start). Stretching them made a
+   one-row card (正在创作 with a single novel) into a half-empty panel, which read
+   worse than a shorter card. */
 .nw-welcome-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:var(--nw-sp-4);align-items:start;}
 .nw-welcome-card{
   min-width:0;padding:var(--nw-sp-4);
@@ -7120,15 +7153,18 @@ window.__ModuleLoader__.load({
 .nw-welcome-novelgo{color:var(--nw-idle);display:flex;flex:0 0 auto;}
 
 /* -------------------------------------------------------- 创作统计 ----- */
-.nw-welcome-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(120px,100%),1fr));gap:var(--nw-sp-3);margin:0;}
+/* R21: auto-fit gave three columns inside the card, so the fourth cell (今天)
+   dropped alone onto a second row and the block looked broken. Four cells want
+   a deliberate 2x2, not whatever the width happens to allow. */
+.nw-welcome-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--nw-sp-2);margin:0;}
 .nw-welcome-stat{
-  padding:var(--nw-sp-3);border-radius:var(--nw-r-control);
+  padding:var(--nw-sp-2) var(--nw-sp-3);border-radius:var(--nw-r-control);
   background:var(--nw-sunken);
 }
 .nw-welcome-stat dt{font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);}
 .nw-welcome-stat dd{
-  margin:4px 0 0;font-family:var(--nw-reading-font);font-weight:600;
-  font-size:15px;line-height:1.3;color:var(--nw-fg);font-variant-numeric:tabular-nums;
+  margin:2px 0 0;font-family:var(--nw-reading-font);font-weight:600;
+  font-size:16px;line-height:1.3;color:var(--nw-fg);font-variant-numeric:tabular-nums;
 }
 
 /* -------------------------------------------------------- 投稿记录 ----- */
@@ -7646,6 +7682,12 @@ window.__ModuleLoader__.load({
 }
 @container nw (min-width: 780px){
   .nw-page{
+    /* R21: the sheet needs its own fill, not just a border and a shadow. It was
+       transparent, so the drop shadow had nothing to sit under and the "paper"
+       read as a flat patch the same colour as the desk around it — the lift was
+       invisible. --nw-panel is the palette's one step above the surface, which
+       is exactly the difference a sheet of paper has against a desk. */
+    background:var(--nw-panel);
     border:1px solid var(--nw-line-soft);
     box-shadow:var(--nw-shadow-paper);
   }
@@ -7798,7 +7840,11 @@ window.__ModuleLoader__.load({
   border-radius:var(--nw-r-control);border:1px solid var(--nw-btn-border);
   background:var(--nw-panel);color:var(--nw-btn-fg);
   font-family:inherit;font-size:12px;line-height:1;cursor:pointer;
-  opacity:.55;transition:opacity var(--nw-dur) ease,background var(--nw-dur) ease,border-color var(--nw-dur) ease;
+  /* R21: 0.55 was meant as "quiet until hovered", but on the warm palettes it
+     reads as disabled — the glyph sits at ~45% contrast against the paper and
+     the writer has to hunt for it. 0.78 is still clearly secondary next to the
+     body text while staying legible; hover takes it to 1. */
+  opacity:.78;transition:opacity var(--nw-dur) ease,background var(--nw-dur) ease,border-color var(--nw-dur) ease;
 }
 .nw-homebtn:hover,
 .nw-actbtn:hover{opacity:1;background:var(--nw-btn-hover);border-color:var(--nw-find-ring);}
@@ -9966,13 +10012,20 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-suggest{
   position:relative;
   flex:0 0 auto;display:flex;flex-direction:column;min-height:0;
+  /* R21: this class name is shared with the proofread suggestion *card*
+     (45-dialogs-css.js), which sets align-items:flex-start + gap:8px. On the
+     panel that made every child shrink to its text width (the note box came out
+     181px inside a 336px panel). Both are pinned back here. */
+  align-items:stretch;gap:0;
   width:336px;
   /* R13: was 46vw. The panel lives inside a ~600px column most of the time, so
      a viewport-relative cap let the advice column eat the manuscript on a wide
      monitor. Percentages resolve against the bench, which is the real budget. */
   max-width:46%;
-  border-left:1px solid var(--dsw-alias-border-l1);
-  background:var(--dsw-alias-bg-layer-1);
+  /* R21: palette tokens, so the column follows the reading theme (it used to be
+     a white strip beside a dark page). */
+  border-left:1px solid var(--nw-line);
+  background:var(--nw-panel);
   animation:nw-slide-in var(--nw-dur) var(--nw-ease,ease);
 }
 /* R19 B2: adviceWidth and its localStorage key have existed since R12, but
@@ -10079,20 +10132,25 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 /* The writer's own instruction. It sits above the list, not in a dialog: the
    whole point of typing 「只看结尾」 is to re-run with it immediately. */
 .nw-advice-note{flex:0 0 auto;padding:0 12px 9px;}
+/* R21: min-height was 34px, i.e. one clipped line — the two-line placeholder was
+   cut in half and the field read as a broken input. It now starts at two rows
+   and grows with the text up to 96px. Colours also come from the reading palette
+   instead of the host aliases, or the box stays white on the night theme. */
 .nw-advice-note textarea{
-  width:100%;box-sizing:border-box;min-height:34px;max-height:96px;resize:vertical;
-  padding:7px 9px;border-radius:var(--nw-r-control);
-  border:1px solid var(--dsw-alias-border-l1);
-  background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);
-  font-family:inherit;font-size:12.5px;line-height:1.6;
+  display:block;width:100%;box-sizing:border-box;
+  min-height:52px;max-height:96px;resize:vertical;overflow:auto;
+  padding:8px 10px;border-radius:var(--nw-r-control);
+  border:1px solid var(--nw-line);
+  background:var(--nw-sunken);color:var(--nw-fg);
+  font-family:inherit;font-size:var(--nw-fs-tiny);line-height:1.65;
 }
 .nw-advice-note textarea:focus{
-  outline:none;border-color:var(--dsw-alias-brand-primary);
-  box-shadow:0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent);
+  outline:none;border-color:var(--nw-brand);
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-brand) 18%, transparent);
 }
-.nw-advice-note textarea::placeholder{color:var(--dsw-alias-label-secondary);opacity:.8;}
+.nw-advice-note textarea::placeholder{color:var(--nw-fg-soft);opacity:.85;}
 .nw-advice-notebar{display:flex;align-items:center;gap:var(--nw-sp-0);margin-top:var(--nw-sp-0);}
-.nw-advice-notehint{font-size:var(--nw-fs-tiny);color:var(--dsw-alias-label-secondary);opacity:.8;}
+.nw-advice-notehint{font-size:var(--nw-fs-tiny);color:var(--nw-fg-soft);opacity:.85;}
 .nw-suggest-empty{
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--nw-sp-2);
   flex:1 1 auto;padding:24px 18px;text-align:center;
@@ -10126,35 +10184,48 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   position:absolute;z-index:var(--nw-z-float);
   right:20px;bottom:56px;
   display:flex;flex-direction:column;align-items:flex-end;gap:var(--nw-sp-1);
-  opacity:.35;
+  /* R21: .35 was invisible on the warm paper — the FAB read as a smudge and
+     nobody would guess it was a button. At rest the dock only ever shows the
+     FAB (the menu is display-gated behind data-open), so dimming it was dimming
+     the one thing that had to stay legible. .88 keeps it out of the way without
+     washing the brand fill into the page. */
+  opacity:.88;
   transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock:hover,.nw-dock:focus-within,.nw-dock[data-open="1"]{opacity:1;}
 .nw-dock-fab{
   width:44px;height:44px;border-radius:var(--nw-r-pill);
   display:inline-flex;align-items:center;justify-content:center;
-  border:1px solid var(--dsw-alias-border-l1);
-  background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
-  color:var(--dsw-alias-label-primary);
-  box-shadow:0 2px 6px rgba(0,0,0,.08),0 12px 30px rgba(0,0,0,.10);
+  /* R21: this used the host aliases and a literal black shadow, so it was the
+     one control that did not follow the reading theme — on night it stayed a
+     pale chip, on paper it kept a grey halo. Worse, once it moved onto --nw-panel
+     it matched the sheet exactly and disappeared into it.
+     A floating action button has to be an action: it is now the one brand-filled
+     element in the writing view, which also balances the 新建小说 button on the
+     home screen. The dock's 0.55 opacity keeps it from shouting until hovered. */
+  border:1px solid color-mix(in srgb, var(--nw-brand) 82%, var(--nw-fg));
+  background:var(--nw-brand);
+  color:var(--nw-panel);
+  box-shadow:var(--nw-shadow-2);
   cursor:pointer;font-size:18px;line-height:1;
   transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
-.nw-dock-fab:hover{transform:translateY(-2px);box-shadow:0 4px 10px rgba(0,0,0,.1),0 16px 36px rgba(0,0,0,.14);}
+.nw-dock-fab:hover{transform:translateY(-2px);box-shadow:var(--nw-shadow-3);}
 .nw-dock-fab:active{transform:translateY(0) scale(.97);}
 .nw-dock-menu{display:flex;flex-direction:column;align-items:flex-end;gap:var(--nw-sp-1);}
 .nw-dock-menu[data-open="1"]{animation:nw-pop var(--nw-dur) var(--nw-ease,ease);}
 .nw-dock-btn{
   display:inline-flex;align-items:center;gap:var(--nw-sp-1);
   height:38px;padding:0 16px;border-radius:var(--nw-r-pill);
-  border:1px solid var(--dsw-alias-border-l1);
-  background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
-  color:var(--dsw-alias-label-primary);
+  /* R21: same host-alias leak as the FAB — the menu rows stayed white on night. */
+  border:1px solid var(--nw-line-strong);
+  background:var(--nw-panel);
+  color:var(--nw-fg);
   font-size:14px;cursor:pointer;white-space:nowrap;
   box-shadow:var(--nw-shadow-1);
   transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
-.nw-dock-btn:hover{transform:translateY(-1px);background:var(--dsw-alias-bg-layer-2);}
+.nw-dock-btn:hover{transform:translateY(-1px);background:var(--nw-surface-2);}
 .nw-dock-btn[disabled]{opacity:.45;cursor:default;transform:none;}
 /* The dock carries nine rows in R5 (three writing tools + a 「更多」 group), so
    the icon column is fixed-width to keep every label on the same baseline. */
@@ -10174,18 +10245,25 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-notes{
   position:absolute;z-index:var(--nw-z-float);top:52px;right:14px;
   display:flex;flex-direction:column;align-items:flex-end;gap:var(--nw-sp-1);
-  max-width:calc(100% - 28px);
+  /* R21: this box is absolutely positioned, so its width was shrink-to-fit —
+     and a percentage width inside a shrink-to-fit parent is circular, which is
+     why the card collapsed to its longest text run (200px, a narrow column).
+     The container now owns the width and the card fills it. */
+  width:min(420px,calc(100% - 28px));
   pointer-events:none;
 }
 .nw-notes > *{pointer-events:auto;}
 .nw-notes-tab{
   display:inline-flex;align-items:center;gap:var(--nw-sp-0);
   height:32px;padding:0 11px;border-radius:var(--nw-r-pill);
-  border:1px solid var(--dsw-alias-border-l1);
-  background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
-  color:var(--dsw-alias-label-secondary);
-  font-size:13px;cursor:pointer;opacity:.55;
-  box-shadow:0 1px 3px rgba(0,0,0,.06);
+  /* R21: same story as the dock — host aliases plus a black shadow meant the
+     tab ignored the reading theme entirely (a white pill floating on night).
+     It now uses the palette's own panel/line/ink. */
+  border:1px solid var(--nw-line-strong);
+  background:var(--nw-panel);
+  color:var(--nw-fg-soft);
+  font-size:13px;cursor:pointer;opacity:.62;
+  box-shadow:var(--nw-shadow-1);
   transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
              transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
              border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
@@ -10202,14 +10280,16 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
    instead, so the note gets the whole card. */
 .nw-notes-card{
   position:relative;
-  width:min(420px,100%);
+  /* R21: fills .nw-notes, which now carries the 420px ceiling. */
+  width:100%;
   /* R14 ③: the card grows with the note instead of showing a fixed window —
      the textarea drives its own height, the card only caps how far it may go. */
   max-height:min(560px,calc(100vh - 200px));
   display:flex;flex-direction:column;min-height:0;
   border-radius:var(--nw-r-card);
-  border:1px solid var(--dsw-alias-border-l2);
-  background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
+  /* R21: host alias → palette token, so the card belongs to the reading theme. */
+  border:1px solid var(--nw-line-strong);
+  background:var(--nw-panel);
   box-shadow:var(--nw-shadow-3);
   overflow:hidden;
   animation:nw-notes-in var(--nw-dur) var(--nw-ease,ease);
@@ -18311,19 +18391,23 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   right:24px;bottom:64px;gap:var(--nw-sp-2);
   transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
+/* R21: the FAB is the one control in the writing view that has to be findable
+   without hovering, so it is the brand fill — same role as 新建小说 on the home
+   screen. The earlier overlay fill sat within ~4% of the paper and vanished. */
 .nw-dock-fab{
   width:46px;height:46px;border-radius:var(--nw-r-pill);
-  border:1px solid var(--nw-line-soft);
-  background:var(--nw-surface-overlay);color:var(--nw-fg);
-  box-shadow:var(--nw-shadow-1),var(--nw-shadow-2);
+  border:1px solid color-mix(in srgb, var(--nw-brand) 82%, var(--nw-fg));
+  background:var(--nw-brand);color:var(--nw-panel);
+  box-shadow:var(--nw-shadow-2);
   font-size:19px;
   transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease-pop,ease),
     box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
     background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock-fab:hover{
-  transform:translateY(-2px);background:var(--nw-surface-overlay);
-  box-shadow:var(--nw-shadow-2);
+  transform:translateY(-2px);
+  background:color-mix(in srgb, var(--nw-brand) 88%, var(--nw-fg));
+  box-shadow:var(--nw-shadow-3);
 }
 .nw-dock-fab:active{transform:translateY(0) scale(.97);}
 .nw-dock-fab:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
@@ -18496,7 +18580,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
    otherwise the sheet would read as a hole rather than a page. */
 .nw-root[data-theme="night"] .nw-modal{background:#232220;}
 .nw-root[data-theme="night"] .nw-toast{background:#2b2a26;}
-.nw-root[data-theme="night"] .nw-dock-fab,
+/* R21: the FAB no longer needs a night override — it is brand-filled in every
+   theme (see 97-theme.js). Only the menu rows still need the lift, because they
+   sit on --nw-panel and at night that is one step off the page. */
 .nw-root[data-theme="night"] .nw-dock-btn{background:#2b2a26;}
 
 /* ============================================================== card ====== */
@@ -18730,7 +18816,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
      there at this width, just closer to the edge. */
   .nw-surface{--nw-pad-x:20px;--nw-pad-y:32px;--nw-gutter-x:68px;}
 
-  .nw-notes{left:8px;right:8px;top:48px;max-width:none;}
+  /* R21: the base rule now sets an explicit width, so the narrow tier has to
+     release it (left+right already pin the box edge to edge). */
+  .nw-notes{left:8px;right:8px;top:48px;width:auto;}
   .nw-notes-card{width:100%;max-height:min(420px,calc(100vh - 180px));}
 
   /* Below the shelf overlay (34) and the advice overlay (33): when the shelf is
