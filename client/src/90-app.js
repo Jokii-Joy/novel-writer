@@ -36,21 +36,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   container-type:inline-size;container-name:bench;
 }
 .nw-bench-paper{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;min-height:0;position:relative;}
-/* R24: the note card lives in a lane of its own on the left instead of sitting on
-   top of the first line of prose. The paper gives up exactly the width the card
-   occupies (14px margin + 320px card + 14px gap = 348px); when the bench gets too
-   narrow for that plus a readable page the card goes back to overlaying (see the
-   bench container query in 98b-responsive). Closed card = no lane, so nothing
-   moves unless the writer asks for it.
-   R27 ①: the lane is inset on the SURFACE, not on the bench-paper. Padding the
-   paper moved the whole surface right by 348px, and since the surface owns
-   overflow:hidden its own corner buttons (anchored at its left edge) got pushed
-   out and clipped away entirely. Insetting the surface keeps the surface — and
-   therefore the buttons — on the column's real left edge, while the scroll area
-   and the page inside it start where the lane ends. */
-.nw-bench-paper[data-notes-lane="1"] .nw-surface{
-  padding-left:348px;
-}
+/* R28 ①: the reserved lane is gone. R24/R27 carved 348px out of the manuscript by
+   padding the surface, which narrowed the page and pushed the prose right the
+   moment the card opened — the exact two things the writer asked us to stop
+   doing. The card now lives inside the margin the centred page already leaves on
+   its left, and its width is that margin (see .nw-notes below), so opening a
+   note changes nothing about the manuscript: same measure, same position. */
 /* R25: with the advice column open the manuscript stops growing — it pins itself
    to the page measure — and the advice column takes the rest, up to a ceiling.
    The pair is then centred as a unit, so the text and the suggestions always meet
@@ -59,9 +50,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    between the two columns. */
 .nw-bench[data-advice="1"]{justify-content:center;}
 .nw-bench[data-advice="1"] .nw-bench-paper{flex:0 1 auto;width:calc(min(var(--nw-page,760px),100%) + 32px);}
-.nw-bench[data-advice="1"] .nw-bench-paper[data-notes-lane="1"]{
-  width:calc(min(var(--nw-page,760px),100%) + 348px + 32px);
-}
+/* R28 ①: the note card no longer takes a lane, so this branch is gone. With the
+   advice column open the paper is pinned to the page measure and centred as a
+   pair — the card simply rides along inside that paper's left margin. */
+/* …except there is no margin left at that point: the paper is page + 32px, so
+   the gutter is 16px. Rather than let a 40px sliver pretend to be a panel, the
+   card steps aside while the advice column is open — the advice column is a
+   review mode, and closing it brings the notes straight back. */
+.nw-bench[data-advice="1"] .nw-notes{display:none;}
 .nw-suggest{
   position:relative;
   flex:0 0 auto;display:flex;flex-direction:column;min-height:0;
@@ -326,9 +322,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      and a percentage width inside a shrink-to-fit parent is circular, which is
      why the card collapsed to its longest text run (200px, a narrow column).
      The container now owns the width and the card fills it.
-     R24: 320px, not 420 — the card now owns a lane on the left and every pixel it
-     takes comes straight out of the manuscript. */
-  width:min(320px,calc(100% - 28px));
+     R28 ①: the card is exactly as wide as the room the centred page leaves on
+     its left, so it can never cover the text and never pushes it. The maths:
+       100% is the writing column, min(--nw-page, 100%) is the page measure,
+       so half the difference is the gutter on one side. The text itself starts
+       one --nw-pad-x inside the page, which is paper margin, not input — the
+       card may borrow that too. 24px = the 14px outer inset + a 10px gap, so
+       the right edge always stops short of the first character. */
+  width:clamp(0px, calc((100% - min(var(--nw-page, 760px), 100%)) / 2 + var(--nw-pad-x, 48px) - 24px), 340px);
   pointer-events:none;
 }
 .nw-notes > *{pointer-events:auto;}
@@ -2120,7 +2121,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           },
           onSubmit: () => {
             setDockOpen(false);
-            openDialog('submit');
+            // R28 ②: AI 投稿 is a one-click path. Standing in a book means the
+            // manuscript is already decided, so the wizard opens straight on the
+            // preview and picks the model's top journal for the writer; from the
+            // home screen there is no manuscript yet, so it opens on step 1.
+            openDialog(
+              'submit',
+              view === 'write' && activeNovelId
+                ? { step: 3, novelId: activeNovelId }
+                : { step: 1 },
+            );
           },
         });
 
@@ -2623,6 +2633,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // `undefined` rather than '' so a stale caller cannot wipe a note
             // the writer typed after pressing Enter.
             note: nextNote == null ? noteRef.current : nextNote,
+            // R29: this panel has its own model — the writer may want the
+            // editorial read on a stronger model than the proofreader.
+            provider: (p.settings && p.settings.adviceProvider) || undefined,
+            model: (p.settings && p.settings.adviceModel) || undefined,
           });
           if (runRef.current !== token) return;
           setItems(Array.isArray(data && data.suggestions) ? data.suggestions : []);
@@ -2635,7 +2649,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           if (runRef.current === token) setBusy(false);
         }
       },
-      [focus, p.editorApi],
+      [focus, p.editorApi, p.settings],
     );
 
     // A fresh chapter starts blank: advice about the previous one is worse than

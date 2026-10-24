@@ -30,17 +30,15 @@
   .nw-status{gap:var(--nw-sp-3);}
 }
 
-/* ------------------------------------------------------------- bench < 1000 -- */
-/* R24: the notes lane is budgeted against the writing column, not the panel: the
-   bench is what actually shrinks when the shelf or the advice column is open. The
-   lane needs 348px, so it may only exist while at least ~470px of page is left —
-   below that the card floats over the paper again (and keeps its 320px ceiling). */
-@container bench (max-width: 820px){
-  /* R27 ①: below this width the lane is released and the card floats over the
-     paper again. The lane is an inset on the surface now, so releasing it means
-     simply dropping that padding — the corner buttons never moved in the first
-     place. */
-  .nw-bench-paper[data-notes-lane="1"] .nw-surface{padding-left:0;}
+/* ------------------------------------------------------------- bench < 940 -- */
+/* R28 ①: the card sizes itself from the gutter the centred page leaves on its
+   left. That gutter is (bench - page) / 2, so it vanishes long before the panel
+   does — at a 760px page and an 820px bench it is 30px, which is not a column.
+   Below ~940px (gutter + paper margin under 200px) the card falls back to a
+   260px floating card: there is no honest "beside the text" position left, and
+   a 54px sliver would be worse than a card the writer can simply close. */
+@container bench (max-width: 940px){
+  .nw-notes{width:min(260px,calc(100% - 28px));}
 }
 
 /* ------------------------------------------------------------ <= 780px -- */

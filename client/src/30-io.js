@@ -387,12 +387,16 @@
 
   function proofread(input) {
     const data = input || {};
-    return api('proofread', {
+    const payload = {
       provider: data.provider,
       model: data.model,
       text: String(data.text == null ? '' : data.text),
       mode: data.mode || 'typo',
-    });
+    };
+    // R29: only send the writer's brief when there is one — the host already
+    // knows the shipped default and must not be handed an empty override.
+    if (data.rules) payload.rules = String(data.rules);
+    return api('proofread', payload);
   }
 
   function selftest() {
@@ -763,5 +767,15 @@
     proofread: proofread,
     revise: revise,
     selftest: selftest,
+  };
+
+  /**
+   * R29: the same starter brief the Host ships with, shown in the settings
+   * hint. Duplicated on purpose — reading it back from the Host would need a
+   * round trip to render a hint, and a stale copy in the hint is harmless while
+   * a missing one looks broken.
+   */
+  NW.aiProofreadDefaultRules = function aiProofreadDefaultRules() {
+    return '只找确凿的错别字、词语误用、标点错误与重复字；不改风格、不改剧情、不调整人称或时态；没有把握的地方一律不报。';
   };
 })();

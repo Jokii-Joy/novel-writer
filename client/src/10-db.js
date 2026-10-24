@@ -51,7 +51,20 @@
      * setting, so the two halves cannot disagree).
      */
     countPunctuation: true,
+    /**
+     * R29: one model per AI job. Each of the three is an independent
+     * `provider` + `model` pair so the writer can run proofreading on a cheap
+     * model and the editorial advice on a strong one; `null` means "follow the
+     * harness default", which is what a fresh library gets.
+     */
+    proofreadProvider: null,
     proofreadModel: null,
+    /** R29: the writer's own proofreading brief; '' = use the shipped default. */
+    proofreadRules: '',
+    submitProvider: null,
+    submitModel: null,
+    adviceProvider: null,
+    adviceModel: null,
     autoLockMinutes: 15,
     lockEnabled: false,
     encryption: false,

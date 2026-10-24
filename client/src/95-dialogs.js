@@ -869,7 +869,14 @@
       setSuggestions(null);
       setDecided({});
       try {
-        const data = await NW.ai.proofread({ provider: state.provider, model: state.model, text: text, mode: 'typo' });
+        const data = await NW.ai.proofread({
+          provider: state.provider,
+          model: state.model,
+          text: text,
+          mode: 'typo',
+          // R29: the brief edited in Settings → 写作, if the writer wrote one.
+          rules: String((p.settings && p.settings.proofreadRules) || ''),
+        });
         const rows = ((data && data.suggestions) || []).map((row, index) => ({
           id: row.id == null ? 's' + index : row.id,
           start: Number(row.start) || 0,
@@ -1629,7 +1636,33 @@
       );
     }, [models]);
 
+    /** R29: kept for the proofread dialog's own fallback, not for Settings. */
     const proofreadValue = draft.proofreadProvider && draft.proofreadModel ? draft.proofreadProvider + '\u0000' + draft.proofreadModel : '';
+
+    /**
+     * R29: one picker per AI job. A job's model is a provider+model pair, so the
+     * select has to write two settings at once — `set()` only owns one key.
+     * An empty value means "follow the harness default", which is the shipped
+     * state; that is why every pair starts as `null` rather than a guessed id.
+     */
+    const modelPicker = (label, provKey, modKey, hint) =>
+      NW.ui.field({
+        label: label,
+        hint: hint,
+        children: NW.ui.select({
+          value: draft[provKey] && draft[modKey] ? draft[provKey] + '\u0000' + draft[modKey] : '',
+          onChange: (value) => {
+            const parts = String(value || '').split('\u0000');
+            const patch = {};
+            patch[provKey] = parts[0] || null;
+            patch[modKey] = parts[1] || null;
+            setDraft((prev) => Object.assign({}, prev, patch));
+            if (typeof p.onSettings === 'function') p.onSettings(patch);
+          },
+          options: modelOptions,
+          ariaLabel: label,
+        }),
+      });
 
     /**
      * Set or change the password.
@@ -2154,20 +2187,25 @@
               h('span', null, '封面图片'),
               NW.ui.btn({ onClick: () => openSibling(p, 'export', {}), children: '在导出面板中选择…' }),
             ),
+            // R29: three AI jobs, three models. Each defaults to the harness
+            // model; the writer picks a cheap one for proofreading and a strong
+            // one for the editorial advice if they want. 「跟随默认模型」 is the
+            // shipped state, not a placeholder — an unset pair really does fall
+            // through to the harness selection on the Host side.
+            modelPicker('AI 校对模型', 'proofreadProvider', 'proofreadModel', '只做错别字与标点这类机械校对，可以选便宜快的模型。'),
             NW.ui.field({
-              label: '校对默认模型',
-              children: NW.ui.select({
-                value: proofreadValue,
-                onChange: (value) => {
-                  const parts = String(value).split('\u0000');
-                  setDraft((prev) => Object.assign({}, prev, { proofreadProvider: parts[0] || null, proofreadModel: parts[1] || null }));
-                  if (typeof p.onSettings === 'function') {
-                    p.onSettings({ proofreadProvider: parts[0] || null, proofreadModel: parts[1] || null });
-                  }
-                },
-                options: modelOptions,
+              label: 'AI 校对要求',
+              hint: '会拼在校对提示词后面。留空就用内置默认：' + NW.aiProofreadDefaultRules(),
+              children: NW.ui.textarea({
+                rows: 4,
+                value: String(draft.proofreadRules || ''),
+                placeholder: '例如：人名统一用「林深」，不要改成「林深先生」；保留作者刻意使用的短句。',
+                onChange: (v) => set('proofreadRules', v),
+                ariaLabel: 'AI 校对要求',
               }),
             }),
+            modelPicker('AI 投稿模型', 'submitProvider', 'submitModel', '生成投稿邮件正文与按期刊要求排版时使用。'),
+            modelPicker('AI 修改建议模型', 'adviceProvider', 'adviceModel', '通读全章给出修改建议，建议用能力更强的模型。'),
           ),
         ),
         // -------------------------------------------------- 3 导出与文件 ----
@@ -2951,7 +2989,7 @@
         .recommend(
           { wordCount: count, genre: suggestGenreOf(count), title: String((activeNovel && activeNovel.title) || '') },
           6,
-          { excerpt, provider: settings.proofreadProvider, model: settings.proofreadModel },
+          { excerpt, provider: settings.submitProvider || settings.proofreadProvider, model: settings.submitModel || settings.proofreadModel },
         )
         .then((data) => {
           if (!alive) return;
@@ -3070,6 +3108,10 @@
           countPunctuation: !(
             p.settings && p.settings.countPunctuation === false
           ),
+          // R29: the mail is written by the model, so it needs its own model
+          // choice — 「AI 投稿模型」 in Settings.
+          provider: (p.settings && p.settings.submitProvider) || undefined,
+          model: (p.settings && p.settings.submitModel) || undefined,
         });
         setPrepared(data || null);
         setSubject(String((data && data.subject) || ''));
@@ -3116,6 +3158,22 @@
       discardPrepared();
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedId, novelId, scope, pickedIds.join(','), discardPrepared]);
+
+    // R28 ②: 一键 AI 投稿 opens the wizard on step 3 with no journal chosen yet.
+    // The recommendation effect above is already reading this manuscript with the
+    // model, so the top row *is* the model's answer — take it, and let the author
+    // change it from the preview. Guarded on `step === 3` so browsing journals on
+    // step 2 never gets a choice made behind the writer's back.
+    useEffect(() => {
+      if (step !== 3) return undefined;
+      if (selectedId) return undefined;
+      if (!recos || recos.length === 0) return undefined;
+      const first = recos[0] && recos[0].journal;
+      if (!first || !first.id) return undefined;
+      setSelectedId(String(first.id));
+      return undefined;
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [step, recos, selectedId]);
 
     useEffect(() => {
       if (step !== 3 || sent) return undefined;

@@ -381,6 +381,15 @@ window.__ModuleLoader__.load({
     '接受': 'Accept',
     '拒绝': 'Reject',
     'AI 校对': 'AI proofreading',
+    'AI 校对模型': 'Proofreading model',
+    'AI 校对要求': 'Proofreading brief',
+    'AI 投稿模型': 'Submission model',
+    'AI 修改建议模型': 'Advice model',
+    '只做错别字与标点这类机械校对，可以选便宜快的模型。': 'Mechanical fixes only — a cheap, fast model is fine.',
+    '生成投稿邮件正文与按期刊要求排版时使用。': 'Drafts the submission mail and typesets it to the journal rules.',
+    '通读全章给出修改建议，建议用能力更强的模型。': 'Reads the whole chapter for editorial advice — a stronger model helps.',
+    '会拼在校对提示词后面。留空就用内置默认：': 'Appended to the proofreading prompt. Empty keeps the built-in default: ',
+    '例如：人名统一用「林深」，不要改成「林深先生」；保留作者刻意使用的短句。': 'e.g. keep the name as 林深, never 林深先生; keep the author deliberate short sentences.',
     '一键排版': 'Typeset',
     '导入': 'Import',
     '导出': 'Export',
@@ -725,7 +734,20 @@ window.__ModuleLoader__.load({
      * setting, so the two halves cannot disagree).
      */
     countPunctuation: true,
+    /**
+     * R29: one model per AI job. Each of the three is an independent
+     * `provider` + `model` pair so the writer can run proofreading on a cheap
+     * model and the editorial advice on a strong one; `null` means "follow the
+     * harness default", which is what a fresh library gets.
+     */
+    proofreadProvider: null,
     proofreadModel: null,
+    /** R29: the writer's own proofreading brief; '' = use the shipped default. */
+    proofreadRules: '',
+    submitProvider: null,
+    submitModel: null,
+    adviceProvider: null,
+    adviceModel: null,
     autoLockMinutes: 15,
     lockEnabled: false,
     encryption: false,
@@ -3299,12 +3321,16 @@ window.__ModuleLoader__.load({
 
   function proofread(input) {
     const data = input || {};
-    return api('proofread', {
+    const payload = {
       provider: data.provider,
       model: data.model,
       text: String(data.text == null ? '' : data.text),
       mode: data.mode || 'typo',
-    });
+    };
+    // R29: only send the writer's brief when there is one — the host already
+    // knows the shipped default and must not be handed an empty override.
+    if (data.rules) payload.rules = String(data.rules);
+    return api('proofread', payload);
   }
 
   function selftest() {
@@ -3675,6 +3701,16 @@ window.__ModuleLoader__.load({
     proofread: proofread,
     revise: revise,
     selftest: selftest,
+  };
+
+  /**
+   * R29: the same starter brief the Host ships with, shown in the settings
+   * hint. Duplicated on purpose — reading it back from the Host would need a
+   * round trip to render a hint, and a stale copy in the hint is harmless while
+   * a missing one looks broken.
+   */
+  NW.aiProofreadDefaultRules = function aiProofreadDefaultRules() {
+    return '只找确凿的错别字、词语误用、标点错误与重复字；不改风格、不改剧情、不调整人称或时态；没有把握的地方一律不报。';
   };
 })();
 
@@ -10234,21 +10270,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   container-type:inline-size;container-name:bench;
 }
 .nw-bench-paper{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;min-height:0;position:relative;}
-/* R24: the note card lives in a lane of its own on the left instead of sitting on
-   top of the first line of prose. The paper gives up exactly the width the card
-   occupies (14px margin + 320px card + 14px gap = 348px); when the bench gets too
-   narrow for that plus a readable page the card goes back to overlaying (see the
-   bench container query in 98b-responsive). Closed card = no lane, so nothing
-   moves unless the writer asks for it.
-   R27 ①: the lane is inset on the SURFACE, not on the bench-paper. Padding the
-   paper moved the whole surface right by 348px, and since the surface owns
-   overflow:hidden its own corner buttons (anchored at its left edge) got pushed
-   out and clipped away entirely. Insetting the surface keeps the surface — and
-   therefore the buttons — on the column's real left edge, while the scroll area
-   and the page inside it start where the lane ends. */
-.nw-bench-paper[data-notes-lane="1"] .nw-surface{
-  padding-left:348px;
-}
+/* R28 ①: the reserved lane is gone. R24/R27 carved 348px out of the manuscript by
+   padding the surface, which narrowed the page and pushed the prose right the
+   moment the card opened — the exact two things the writer asked us to stop
+   doing. The card now lives inside the margin the centred page already leaves on
+   its left, and its width is that margin (see .nw-notes below), so opening a
+   note changes nothing about the manuscript: same measure, same position. */
 /* R25: with the advice column open the manuscript stops growing — it pins itself
    to the page measure — and the advice column takes the rest, up to a ceiling.
    The pair is then centred as a unit, so the text and the suggestions always meet
@@ -10257,9 +10284,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    between the two columns. */
 .nw-bench[data-advice="1"]{justify-content:center;}
 .nw-bench[data-advice="1"] .nw-bench-paper{flex:0 1 auto;width:calc(min(var(--nw-page,760px),100%) + 32px);}
-.nw-bench[data-advice="1"] .nw-bench-paper[data-notes-lane="1"]{
-  width:calc(min(var(--nw-page,760px),100%) + 348px + 32px);
-}
+/* R28 ①: the note card no longer takes a lane, so this branch is gone. With the
+   advice column open the paper is pinned to the page measure and centred as a
+   pair — the card simply rides along inside that paper's left margin. */
+/* …except there is no margin left at that point: the paper is page + 32px, so
+   the gutter is 16px. Rather than let a 40px sliver pretend to be a panel, the
+   card steps aside while the advice column is open — the advice column is a
+   review mode, and closing it brings the notes straight back. */
+.nw-bench[data-advice="1"] .nw-notes{display:none;}
 .nw-suggest{
   position:relative;
   flex:0 0 auto;display:flex;flex-direction:column;min-height:0;
@@ -10524,9 +10556,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      and a percentage width inside a shrink-to-fit parent is circular, which is
      why the card collapsed to its longest text run (200px, a narrow column).
      The container now owns the width and the card fills it.
-     R24: 320px, not 420 — the card now owns a lane on the left and every pixel it
-     takes comes straight out of the manuscript. */
-  width:min(320px,calc(100% - 28px));
+     R28 ①: the card is exactly as wide as the room the centred page leaves on
+     its left, so it can never cover the text and never pushes it. The maths:
+       100% is the writing column, min(--nw-page, 100%) is the page measure,
+       so half the difference is the gutter on one side. The text itself starts
+       one --nw-pad-x inside the page, which is paper margin, not input — the
+       card may borrow that too. 24px = the 14px outer inset + a 10px gap, so
+       the right edge always stops short of the first character. */
+  width:clamp(0px, calc((100% - min(var(--nw-page, 760px), 100%)) / 2 + var(--nw-pad-x, 48px) - 24px), 340px);
   pointer-events:none;
 }
 .nw-notes > *{pointer-events:auto;}
@@ -12318,7 +12355,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           },
           onSubmit: () => {
             setDockOpen(false);
-            openDialog('submit');
+            // R28 ②: AI 投稿 is a one-click path. Standing in a book means the
+            // manuscript is already decided, so the wizard opens straight on the
+            // preview and picks the model's top journal for the writer; from the
+            // home screen there is no manuscript yet, so it opens on step 1.
+            openDialog(
+              'submit',
+              view === 'write' && activeNovelId
+                ? { step: 3, novelId: activeNovelId }
+                : { step: 1 },
+            );
           },
         });
 
@@ -12821,6 +12867,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // `undefined` rather than '' so a stale caller cannot wipe a note
             // the writer typed after pressing Enter.
             note: nextNote == null ? noteRef.current : nextNote,
+            // R29: this panel has its own model — the writer may want the
+            // editorial read on a stronger model than the proofreader.
+            provider: (p.settings && p.settings.adviceProvider) || undefined,
+            model: (p.settings && p.settings.adviceModel) || undefined,
           });
           if (runRef.current !== token) return;
           setItems(Array.isArray(data && data.suggestions) ? data.suggestions : []);
@@ -12833,7 +12883,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           if (runRef.current === token) setBusy(false);
         }
       },
-      [focus, p.editorApi],
+      [focus, p.editorApi, p.settings],
     );
 
     // A fresh chapter starts blank: advice about the previous one is worse than
@@ -14402,7 +14452,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       setSuggestions(null);
       setDecided({});
       try {
-        const data = await NW.ai.proofread({ provider: state.provider, model: state.model, text: text, mode: 'typo' });
+        const data = await NW.ai.proofread({
+          provider: state.provider,
+          model: state.model,
+          text: text,
+          mode: 'typo',
+          // R29: the brief edited in Settings → 写作, if the writer wrote one.
+          rules: String((p.settings && p.settings.proofreadRules) || ''),
+        });
         const rows = ((data && data.suggestions) || []).map((row, index) => ({
           id: row.id == null ? 's' + index : row.id,
           start: Number(row.start) || 0,
@@ -15162,7 +15219,33 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       );
     }, [models]);
 
+    /** R29: kept for the proofread dialog's own fallback, not for Settings. */
     const proofreadValue = draft.proofreadProvider && draft.proofreadModel ? draft.proofreadProvider + '\u0000' + draft.proofreadModel : '';
+
+    /**
+     * R29: one picker per AI job. A job's model is a provider+model pair, so the
+     * select has to write two settings at once — `set()` only owns one key.
+     * An empty value means "follow the harness default", which is the shipped
+     * state; that is why every pair starts as `null` rather than a guessed id.
+     */
+    const modelPicker = (label, provKey, modKey, hint) =>
+      NW.ui.field({
+        label: label,
+        hint: hint,
+        children: NW.ui.select({
+          value: draft[provKey] && draft[modKey] ? draft[provKey] + '\u0000' + draft[modKey] : '',
+          onChange: (value) => {
+            const parts = String(value || '').split('\u0000');
+            const patch = {};
+            patch[provKey] = parts[0] || null;
+            patch[modKey] = parts[1] || null;
+            setDraft((prev) => Object.assign({}, prev, patch));
+            if (typeof p.onSettings === 'function') p.onSettings(patch);
+          },
+          options: modelOptions,
+          ariaLabel: label,
+        }),
+      });
 
     /**
      * Set or change the password.
@@ -15687,20 +15770,25 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               h('span', null, '封面图片'),
               NW.ui.btn({ onClick: () => openSibling(p, 'export', {}), children: '在导出面板中选择…' }),
             ),
+            // R29: three AI jobs, three models. Each defaults to the harness
+            // model; the writer picks a cheap one for proofreading and a strong
+            // one for the editorial advice if they want. 「跟随默认模型」 is the
+            // shipped state, not a placeholder — an unset pair really does fall
+            // through to the harness selection on the Host side.
+            modelPicker('AI 校对模型', 'proofreadProvider', 'proofreadModel', '只做错别字与标点这类机械校对，可以选便宜快的模型。'),
             NW.ui.field({
-              label: '校对默认模型',
-              children: NW.ui.select({
-                value: proofreadValue,
-                onChange: (value) => {
-                  const parts = String(value).split('\u0000');
-                  setDraft((prev) => Object.assign({}, prev, { proofreadProvider: parts[0] || null, proofreadModel: parts[1] || null }));
-                  if (typeof p.onSettings === 'function') {
-                    p.onSettings({ proofreadProvider: parts[0] || null, proofreadModel: parts[1] || null });
-                  }
-                },
-                options: modelOptions,
+              label: 'AI 校对要求',
+              hint: '会拼在校对提示词后面。留空就用内置默认：' + NW.aiProofreadDefaultRules(),
+              children: NW.ui.textarea({
+                rows: 4,
+                value: String(draft.proofreadRules || ''),
+                placeholder: '例如：人名统一用「林深」，不要改成「林深先生」；保留作者刻意使用的短句。',
+                onChange: (v) => set('proofreadRules', v),
+                ariaLabel: 'AI 校对要求',
               }),
             }),
+            modelPicker('AI 投稿模型', 'submitProvider', 'submitModel', '生成投稿邮件正文与按期刊要求排版时使用。'),
+            modelPicker('AI 修改建议模型', 'adviceProvider', 'adviceModel', '通读全章给出修改建议，建议用能力更强的模型。'),
           ),
         ),
         // -------------------------------------------------- 3 导出与文件 ----
@@ -16484,7 +16572,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         .recommend(
           { wordCount: count, genre: suggestGenreOf(count), title: String((activeNovel && activeNovel.title) || '') },
           6,
-          { excerpt, provider: settings.proofreadProvider, model: settings.proofreadModel },
+          { excerpt, provider: settings.submitProvider || settings.proofreadProvider, model: settings.submitModel || settings.proofreadModel },
         )
         .then((data) => {
           if (!alive) return;
@@ -16603,6 +16691,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           countPunctuation: !(
             p.settings && p.settings.countPunctuation === false
           ),
+          // R29: the mail is written by the model, so it needs its own model
+          // choice — 「AI 投稿模型」 in Settings.
+          provider: (p.settings && p.settings.submitProvider) || undefined,
+          model: (p.settings && p.settings.submitModel) || undefined,
         });
         setPrepared(data || null);
         setSubject(String((data && data.subject) || ''));
@@ -16649,6 +16741,22 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       discardPrepared();
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedId, novelId, scope, pickedIds.join(','), discardPrepared]);
+
+    // R28 ②: 一键 AI 投稿 opens the wizard on step 3 with no journal chosen yet.
+    // The recommendation effect above is already reading this manuscript with the
+    // model, so the top row *is* the model's answer — take it, and let the author
+    // change it from the preview. Guarded on `step === 3` so browsing journals on
+    // step 2 never gets a choice made behind the writer's back.
+    useEffect(() => {
+      if (step !== 3) return undefined;
+      if (selectedId) return undefined;
+      if (!recos || recos.length === 0) return undefined;
+      const first = recos[0] && recos[0].journal;
+      if (!first || !first.id) return undefined;
+      setSelectedId(String(first.id));
+      return undefined;
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [step, recos, selectedId]);
 
     useEffect(() => {
       if (step !== 3 || sent) return undefined;
@@ -19335,17 +19443,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   .nw-status{gap:var(--nw-sp-3);}
 }
 
-/* ------------------------------------------------------------- bench < 1000 -- */
-/* R24: the notes lane is budgeted against the writing column, not the panel: the
-   bench is what actually shrinks when the shelf or the advice column is open. The
-   lane needs 348px, so it may only exist while at least ~470px of page is left —
-   below that the card floats over the paper again (and keeps its 320px ceiling). */
-@container bench (max-width: 820px){
-  /* R27 ①: below this width the lane is released and the card floats over the
-     paper again. The lane is an inset on the surface now, so releasing it means
-     simply dropping that padding — the corner buttons never moved in the first
-     place. */
-  .nw-bench-paper[data-notes-lane="1"] .nw-surface{padding-left:0;}
+/* ------------------------------------------------------------- bench < 940 -- */
+/* R28 ①: the card sizes itself from the gutter the centred page leaves on its
+   left. That gutter is (bench - page) / 2, so it vanishes long before the panel
+   does — at a 760px page and an 820px bench it is 30px, which is not a column.
+   Below ~940px (gutter + paper margin under 200px) the card falls back to a
+   260px floating card: there is no honest "beside the text" position left, and
+   a 54px sliver would be worse than a card the writer can simply close. */
+@container bench (max-width: 940px){
+  .nw-notes{width:min(260px,calc(100% - 28px));}
 }
 
 /* ------------------------------------------------------------ <= 780px -- */
