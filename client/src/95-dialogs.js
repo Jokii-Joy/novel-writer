@@ -3068,14 +3068,21 @@
     const suggestedTo = String(
       (emailInfo && emailInfo.email) || (selected && selected.email) || '',
     ).trim();
+    // R31 ②: the note has to explain the choice, not just name it. Three states:
+    //   variant — a row keyed to this 体裁 matched, and the row says which;
+    //   default — the journal publishes one address for everything;
+    //   divided — the journal *does* publish per-体裁 inboxes but none matched
+    //             this manuscript, so the generic one is a guess and says so.
     const emailNote = emailInfo
       ? [
-          emailInfo.bandLabel ? '按' + emailInfo.bandLabel + '（' + NW.fmtWords(workCount) + '字）' : '',
+          emailInfo.bandLabel ? NW.fmtWords(workCount) + ' 字 · ' + emailInfo.bandLabel : '',
           emailInfo.matched === 'variant'
-            ? '已匹配体裁·篇幅'
+            ? '已匹配体裁'
             : emailInfo.matched === 'default'
-              ? '该刊只收录了一个总邮箱'
-              : '',
+              ? '该刊只登记了一个通用邮箱'
+              : emailInfo.matched === 'none'
+                ? '该刊未登记收稿邮箱'
+                : '',
           emailInfo.note || '',
         ]
           .filter(Boolean)

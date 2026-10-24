@@ -1100,6 +1100,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           novels: payload,
           chapters: snapshot.chapters || [],
           settings: snapshot.settings || {},
+          // R31 ③: the same snapshot restores chapters and notes together.
+          notes: snapshot.notes || [],
           encrypt: cfg.encrypt === true || settings.libraryEncrypt === true,
         });
         if (!aliveRef.current) return data;

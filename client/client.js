@@ -600,6 +600,9 @@ window.__ModuleLoader__.load({
     '重试': 'Retry',
     '全部': 'All',
     '书架': 'Shelf',
+    '从书架里选一部小说开始写作。': 'Pick a novel from the shelf to start writing.',
+    '{0} 本': '{0} in all',
+    '书架里只有这一本。': 'This is the only book so far.',
     '导入小说': 'Import novels',
     '更多操作': 'More actions',
     '收起侧栏': 'Collapse sidebar',
@@ -5357,6 +5360,9 @@ window.__ModuleLoader__.load({
     const [collapsedIds, setCollapsedIds] = React.useState(() => new Set());
     // 行内「更多操作」菜单：{kind:'novel'|'chapter', id, entity, x, y} 或 null。
     const [menu, setMenu] = React.useState(null);
+    // R31 ④: the bookcase sheet. Closed by default — the sidebar is for the
+    // book you are writing, not for browsing the library.
+    const [libraryOpen, setLibraryOpen] = React.useState(false);
 
     const dragIdRef = React.useRef(null);
     const hintRef = React.useRef(null);
@@ -5971,17 +5977,16 @@ window.__ModuleLoader__.load({
         );
       }
     } else {
+      // R31 ④: the sidebar is about the open book. One card, its chapter tree,
+      // and a 「书架」 row for the rest of the library.
       const parts = [];
-      let sawActive = false;
-      for (let i = 0; i < novels.length; i += 1) {
-        const n = novels[i];
-        if (!n || n.id == null) continue;
-        parts.push(novelCard(n));
-        if (!sameId(activeNovelId, n.id)) continue;
-        sawActive = true;
-        const nid = String(n.id);
-        parts.push(treeHead(n, index.novelChapterCount.get(nid), index.novelWords.get(nid)));
-        const rows = buildTreeRows(n.id);
+      const active = novels.find((n) => n && n.id != null && sameId(activeNovelId, n.id)) || null;
+
+      if (active) {
+        const nid = String(active.id);
+        parts.push(novelCard(active));
+        parts.push(treeHead(active, index.novelChapterCount.get(nid), index.novelWords.get(nid)));
+        const rows = buildTreeRows(active.id);
         if (rows.length === 0) {
           parts.push(
             h('div', { key: 'emptytree-' + nid, className: 'nw-shelf-hint' }, tr('这部小说还没有章节，点页脚的 新建章节 开始。')),
@@ -5991,11 +5996,98 @@ window.__ModuleLoader__.load({
             h('div', { key: 'tree-' + nid, role: 'tree', 'aria-label': tr('章节'), className: 'nw-shelf-tree' }, rows),
           );
         }
-        parts.push(rootDropEnd(n));
+        parts.push(rootDropEnd(active));
+      } else {
+        parts.push(h('div', { key: 'noactive', className: 'nw-shelf-hint' }, tr('从书架里选一部小说开始写作。')));
       }
-      if (!sawActive) {
-        parts.push(h('div', { key: 'noactive', className: 'nw-shelf-hint' }, tr('从上方选择一部小说查看目录。')));
+
+      // R31 ④: 「书架」 — the counter where the other books wait. It renders
+      // above the footer rather than as a modal so picking a book never loses
+      // the sidebar, and it closes itself on pick.
+      parts.push(
+        h(
+          'button',
+          {
+            key: 'library',
+            type: 'button',
+            className: 'nw-shelf-library' + (libraryOpen ? ' is-open' : ''),
+            'aria-expanded': libraryOpen ? 'true' : 'false',
+            'aria-controls': 'nw-shelf-bookcase',
+            onClick: () => setLibraryOpen((v) => !v),
+          },
+          h('span', { className: 'nw-shelf-library-ico', 'aria-hidden': 'true' }, icon('book', 15)),
+          h('span', { className: 'nw-shelf-library-label' }, tr('书架')),
+          h('span', { className: 'nw-shelf-library-count' }, tr('{0} 本', novels.length)),
+          h('span', { className: 'nw-shelf-library-caret', 'aria-hidden': 'true' }, icon(libraryOpen ? 'chevup' : 'chevdown', 14)),
+        ),
+      );
+
+      if (libraryOpen) {
+        const rows = novels
+          .filter((n) => n && n.id != null)
+          .map((n) =>
+            h(
+              'div',
+              {
+                key: 'shelf-' + String(n.id),
+                className: 'nw-shelf-book-row' + (sameId(activeNovelId, n.id) ? ' is-active' : ''),
+                role: 'button',
+                tabIndex: 0,
+                'aria-pressed': sameId(activeNovelId, n.id) ? 'true' : 'false',
+                title: n.title || tr('无标题'),
+                onClick: () => {
+                  setLibraryOpen(false);
+                  if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
+                },
+                onKeyDown: (ev) => {
+                  if (ev.key !== 'Enter' && ev.key !== ' ') return;
+                  ev.preventDefault();
+                  setLibraryOpen(false);
+                  if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
+                },
+              },
+              h('span', { className: 'nw-shelf-cover', 'aria-hidden': 'true' }),
+              h(
+                'span',
+                { className: 'nw-shelf-book-body' },
+                h('span', { className: 'nw-shelf-book-title' }, n.title || tr('无标题')),
+                h(
+                  'span',
+                  { className: 'nw-shelf-book-meta' },
+                  [
+                    n.updatedAt ? fmtDate(n.updatedAt) : '',
+                    index.novelWords.has(String(n.id)) ? fmtWords(index.novelWords.get(String(n.id))) + ' ' + tr('字') : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · '),
+                ),
+              ),
+            ),
+          );
+        parts.push(
+          h(
+            'div',
+            { key: 'bookcase', id: 'nw-shelf-bookcase', className: 'nw-shelf-bookcase', role: 'group', 'aria-label': tr('书架') },
+            rows.length > 0
+              ? rows
+              : h('div', { className: 'nw-shelf-hint' }, tr('书架里只有这一本。')),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-shelf-book-new',
+                onClick: () => {
+                  setLibraryOpen(false);
+                  if (typeof P.onCreateNovel === 'function') P.onCreateNovel();
+                },
+              },
+              icon('plus', 14),
+              h('span', null, tr('新建小说')),
+            ),
+          ),
+        );
       }
+
       body = parts;
     }
 
@@ -6189,6 +6281,62 @@ window.__ModuleLoader__.load({
 .nw-shelf *{box-sizing:border-box;}
 /* 90-app 收起侧栏时整列不渲染；data-collapsed 只负责离场姿态的过渡。 */
 .nw-shelf[data-collapsed="1"]{opacity:0;transform:translateX(-12px);pointer-events:none;}
+
+/* --------------------------------------------------- R31 ④ 书架 sheet ----
+   The sidebar holds one book. Everything else lives behind this row, so the
+   tree you are writing in never gets pushed off-screen by the library. */
+.nw-shelf-library{
+  display:flex;align-items:center;gap:var(--nw-sp-2);width:100%;
+  height:36px;margin:var(--nw-sp-2) 0 0;padding:0 var(--nw-sp-2);
+  border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
+  background:var(--nw-panel);color:var(--nw-fg);
+  font-family:inherit;font-size:var(--nw-fs-second);line-height:1;
+  cursor:pointer;text-align:left;
+  transition:background var(--nw-dur) var(--nw-ease),border-color var(--nw-dur) var(--nw-ease);
+}
+.nw-shelf-library:hover{background:var(--nw-surface-2);border-color:var(--nw-line-strong);}
+.nw-shelf-library:focus-visible{outline:2px solid var(--nw-brand);outline-offset:1px;}
+.nw-shelf-library.is-open{border-color:var(--nw-line-strong);background:var(--nw-surface-2);}
+.nw-shelf-library-ico{display:inline-flex;flex:0 0 auto;color:var(--nw-fg-soft);}
+.nw-shelf-library-label{flex:1 1 auto;min-width:0;font-weight:600;}
+.nw-shelf-library-count{
+  flex:0 0 auto;font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);
+  font-variant-numeric:tabular-nums;
+}
+.nw-shelf-library-caret{display:inline-flex;flex:0 0 auto;color:var(--nw-fg-soft);}
+.nw-shelf-bookcase{
+  display:flex;flex-direction:column;gap:2px;
+  margin-top:var(--nw-sp-2);padding:var(--nw-sp-1);
+  border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-card);
+  background:var(--nw-panel);
+  animation:nw-shelf-case-in var(--nw-dur) var(--nw-ease);
+}
+@keyframes nw-shelf-case-in{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:none;}}
+@media (prefers-reduced-motion: reduce){.nw-shelf-bookcase{animation:none;}}
+.nw-shelf-book-row{
+  display:flex;align-items:center;gap:var(--nw-sp-2);
+  padding:6px var(--nw-sp-2);border-radius:var(--nw-r-control);
+  cursor:pointer;
+}
+.nw-shelf-book-row:hover{background:var(--nw-surface-2);}
+.nw-shelf-book-row:focus-visible{outline:2px solid var(--nw-brand);outline-offset:-2px;}
+.nw-shelf-book-row.is-active{background:color-mix(in srgb, var(--nw-brand) 9%, transparent);}
+.nw-shelf-book-row .nw-shelf-cover{width:22px;height:22px;flex:0 0 auto;}
+.nw-shelf-book-body{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1 1 auto;}
+.nw-shelf-book-title{
+  font-size:var(--nw-fs-second);font-weight:600;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.nw-shelf-book-meta{font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);}
+.nw-shelf-book-new{
+  display:flex;align-items:center;justify-content:center;gap:6px;
+  height:32px;margin-top:var(--nw-sp-1);
+  border:1px dashed var(--nw-line-strong);border-radius:var(--nw-r-control);
+  background:transparent;color:var(--nw-fg-soft);
+  font-family:inherit;font-size:var(--nw-fs-micro);cursor:pointer;
+}
+.nw-shelf-book-new:hover{color:var(--nw-fg);border-color:var(--nw-brand);}
+.nw-shelf-book-new:focus-visible{outline:2px solid var(--nw-brand);outline-offset:1px;}
 
 /* ------------------------------------------------------------ 顶部区 ---- */
 .nw-shelf-top{
@@ -11381,6 +11529,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           novels: payload,
           chapters: snapshot.chapters || [],
           settings: snapshot.settings || {},
+          // R31 ③: the same snapshot restores chapters and notes together.
+          notes: snapshot.notes || [],
           encrypt: cfg.encrypt === true || settings.libraryEncrypt === true,
         });
         if (!aliveRef.current) return data;
@@ -16700,14 +16850,21 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const suggestedTo = String(
       (emailInfo && emailInfo.email) || (selected && selected.email) || '',
     ).trim();
+    // R31 ②: the note has to explain the choice, not just name it. Three states:
+    //   variant — a row keyed to this 体裁 matched, and the row says which;
+    //   default — the journal publishes one address for everything;
+    //   divided — the journal *does* publish per-体裁 inboxes but none matched
+    //             this manuscript, so the generic one is a guess and says so.
     const emailNote = emailInfo
       ? [
-          emailInfo.bandLabel ? '按' + emailInfo.bandLabel + '（' + NW.fmtWords(workCount) + '字）' : '',
+          emailInfo.bandLabel ? NW.fmtWords(workCount) + ' 字 · ' + emailInfo.bandLabel : '',
           emailInfo.matched === 'variant'
-            ? '已匹配体裁·篇幅'
+            ? '已匹配体裁'
             : emailInfo.matched === 'default'
-              ? '该刊只收录了一个总邮箱'
-              : '',
+              ? '该刊只登记了一个通用邮箱'
+              : emailInfo.matched === 'none'
+                ? '该刊未登记收稿邮箱'
+                : '',
           emailInfo.note || '',
         ]
           .filter(Boolean)
