@@ -34,54 +34,27 @@
   }
 
   // ---------------------------------------------------------------- icons ---
-  const ICON_PATHS = {
-    plus: ['M8 3.2v9.6', 'M3.2 8h9.6'],
-    pencil: ['M11.1 2.4l2.5 2.5-8 8-3.2.7.7-3.2z', 'M9.5 4l2.5 2.5'],
-    trash: ['M2.8 4.2h10.4', 'M6.1 4.2V2.8h3.8v1.4', 'M4.2 4.2l.6 9h6.4l.6-9', 'M6.6 6.6v4.2', 'M9.4 6.6v4.2'],
-    child: ['M4 3.2v3.6a2 2 0 0 0 2 2h4.2', 'M8.4 6.6l2 2.2-2 2.2'],
-    book: ['M3.4 2.6h6.6a2 2 0 0 1 2 2v9H5.4a2 2 0 0 1-2-2z', 'M3.4 11.6h8.6'],
-    caret: ['M6.2 3.8l4.4 4.2-4.4 4.2'],
-    x: ['M4.2 4.2l7.6 7.6', 'M11.8 4.2l-7.6 7.6'],
-    gear: [
-      'M8 2.4a5.6 5.6 0 1 0 0 11.2 5.6 5.6 0 0 0 0-11.2',
-      'M8 6.3a1.7 1.7 0 1 0 0 3.4 1.7 1.7 0 0 0 0-3.4',
-      'M8 1.2v1.2',
-      'M8 13.6v1.2',
-      'M1.2 8h1.2',
-      'M13.6 8h1.2',
-    ],
-    more: ['M4 8h.01', 'M8 8h.01', 'M12 8h.01'],
-    upload: ['M8 10.8V3.4', 'M5.2 6.2L8 3.4l2.8 2.8', 'M3.4 12.8h9.2'],
-    download: ['M8 3.2v7.4', 'M5.2 7.8L8 10.6l2.8-2.8', 'M3.4 13.2h9.2'],
-    chevleft: ['M9.6 3.6L6 8l3.6 4.4'],
-  };
-
+  // R20: the private 16×16 copy of the icon table is gone. It was only ever a
+  // fallback for a build without 42-icons.js (which the build order guarantees
+  // never happens: 42- sorts before 50-), and keeping a second, older geometry
+  // around is how the shelf ended up rendering thinner glyphs than the dock.
+  // Everything goes through NW.icon now.
   function icon(name, size, weight) {
-    // R5: one shared icon set (42-icons.js) so the shelf, the dock and the
-    // dialogs can never drift apart. The local table below stays only as a
-    // fallback for a build where 42-icons.js is missing.
     if (typeof NW.icon === 'function') {
-      return NW.icon(name, { size: size || 13, weight: weight || 1.5 });
+      // Do NOT pass a fixed weight: the shared module picks an optical stroke
+      // per size, and pinning it made shelf glyphs look washed out next to the
+      // same glyph in the dock.
+      const opts = { size: size || 14 };
+      if (Number(weight) > 0) opts.weight = Number(weight);
+      return NW.icon(name, opts);
     }
-    const paths = ICON_PATHS[name] || EMPTY;
-    const px = size || 13;
-    return h(
-      'svg',
-      {
-        viewBox: '0 0 16 16',
-        width: px,
-        height: px,
-        fill: 'none',
-        stroke: 'currentColor',
-        strokeWidth: weight || 1.5,
-        strokeLinecap: 'round',
-        strokeLinejoin: 'round',
-        'aria-hidden': 'true',
-        focusable: 'false',
-        style: { display: 'block', flex: '0 0 auto', pointerEvents: 'none' },
-      },
-      paths.map((d, i) => h('path', { key: i, d })),
-    );
+    // Last-resort placeholder so a broken build still renders a box instead of
+    // throwing inside the shelf.
+    const px = size || 14;
+    return h('span', {
+      'aria-hidden': 'true',
+      style: { display: 'block', width: px + 'px', height: px + 'px', flex: '0 0 auto' },
+    });
   }
 
   // ------------------------------------------------------------ NW.ui glue --
