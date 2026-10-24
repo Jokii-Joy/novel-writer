@@ -28,8 +28,21 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 /* R12 ②: 修改建议 is a column beside the manuscript, not a modal. A dialog
    hides the text it is talking about; a column keeps the passage and the advice
    on screen at once, so 「这一段」 can actually be looked at while reading why. */
-.nw-bench{display:flex;flex:1 1 auto;min-height:0;min-width:0;position:relative;}
+.nw-bench{
+  display:flex;flex:1 1 auto;min-height:0;min-width:0;position:relative;
+  /* R24: the notes lane is measured against the bench, not the panel — with the
+     shelf open the bench is 272px narrower, and a lane that only checked the
+     panel width would starve the manuscript exactly when the tree is visible. */
+  container-type:inline-size;container-name:bench;
+}
 .nw-bench-paper{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;min-height:0;position:relative;}
+/* R24: the note card lives in a lane of its own on the left instead of sitting on
+   top of the first line of prose. The paper gives up exactly the width the card
+   occupies (14px margin + 320px card + 14px gap = 348px); when the bench gets too
+   narrow for that plus a readable page the card goes back to overlaying (see the
+   bench container query in 98b-responsive). Closed card = no lane, so nothing
+   moves unless the writer asks for it. */
+.nw-bench-paper[data-notes-lane="1"]{padding-left:348px;}
 .nw-suggest{
   position:relative;
   flex:0 0 auto;display:flex;flex-direction:column;min-height:0;
@@ -267,19 +280,23 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 @keyframes nw-pop{from{opacity:0;transform:translateY(8px) scale(.94)}to{opacity:1;transform:none}}
 /* 灵感便签 (R13). R11 把它做成一整页纸：一展开就把正文顶掉，用户说「不用分窗口
    了，悬浮在编辑器上」，又说「看着好瘦长」—— 那是 196px 宽 × 整屏高 的结果。
-   现在是一张 420×最多 320 的悬浮卡片，钉在写作列右上角：写作时一直看得见正文，
+   现在是一张 420×最多 320 的悬浮卡片，钉在写作列**左上角**：写作时一直看得见正文，
    关掉只留一枚小圆钮。整块不参与 .nw-main 的布局，所以永远不会把正文挤窄。 */
-/* Parked just under the find bar's corner (60-editor owns top:10px right:14px
-   there) and one layer *below* it, so opening 查找 covers the note card instead
-   of the card covering the search box. */
+/* R24: 挪到左边。用户说「左侧没东西」—— 右边挤着修改建议栏和浮动坞，左边那片
+   只有三个 28px 的角落按钮。放在 left:14px 还顺手解决了和查找栏的争位：查找栏
+   占的是 top:10px right:14px，两者现在各占一角，谁都不用压谁。
+   宽面板下这条 lane 会被 .nw-bench-paper 的 padding-left 让出来，卡片不会压住正文
+   第一行；窄面板（见 98b-responsive）没有这条 lane，卡片回到浮层并收窄。 */
 .nw-notes{
-  position:absolute;z-index:var(--nw-z-float);top:52px;right:14px;
-  display:flex;flex-direction:column;align-items:flex-end;gap:var(--nw-sp-1);
+  position:absolute;z-index:var(--nw-z-float);top:52px;left:14px;
+  display:flex;flex-direction:column;align-items:flex-start;gap:var(--nw-sp-1);
   /* R21: this box is absolutely positioned, so its width was shrink-to-fit —
      and a percentage width inside a shrink-to-fit parent is circular, which is
      why the card collapsed to its longest text run (200px, a narrow column).
-     The container now owns the width and the card fills it. */
-  width:min(420px,calc(100% - 28px));
+     The container now owns the width and the card fills it.
+     R24: 320px, not 420 — the card now owns a lane on the left and every pixel it
+     takes comes straight out of the manuscript. */
+  width:min(320px,calc(100% - 28px));
   pointer-events:none;
 }
 .nw-notes > *{pointer-events:auto;}
@@ -2179,7 +2196,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                   { className: 'nw-bench' },
                   h(
                     'div',
-                    { className: 'nw-bench-paper' },
+                    {
+                      className: 'nw-bench-paper',
+                      // R24: reserve the left lane only while the card is actually
+                      // open — an empty strip of margin would silently narrow the
+                      // manuscript for no reason.
+                      'data-notes-lane': notesOpen && !immersive ? '1' : '0',
+                    },
                     h(NW.Editor, {
                       key: String(chapter.id),
                       chapter: chapter,

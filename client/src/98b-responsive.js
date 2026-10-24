@@ -30,6 +30,15 @@
   .nw-status{gap:var(--nw-sp-3);}
 }
 
+/* ------------------------------------------------------------- bench < 1000 -- */
+/* R24: the notes lane is budgeted against the writing column, not the panel: the
+   bench is what actually shrinks when the shelf or the advice column is open. The
+   lane needs 348px, so it may only exist while at least ~470px of page is left —
+   below that the card floats over the paper again (and keeps its 320px ceiling). */
+@container bench (max-width: 820px){
+  .nw-bench-paper[data-notes-lane="1"]{padding-left:0;}
+}
+
 /* ------------------------------------------------------------ <= 780px -- */
 @container nw (max-width: 780px){
   /* The modal is the one surface that must never be narrower than its content:
@@ -92,7 +101,9 @@
   .nw-surface{--nw-pad-x:20px;--nw-pad-y:32px;--nw-gutter-x:68px;}
 
   /* R21: the base rule now sets an explicit width, so the narrow tier has to
-     release it (left+right already pin the box edge to edge). */
+     release it (left+right already pin the box edge to edge).
+     R24: and the lane is gone at this size, so the card must also stop assuming
+     the wide-layout width — 98b's 980px tier already capped it at 360px. */
   .nw-notes{left:8px;right:8px;top:48px;width:auto;}
   .nw-notes-card{width:100%;max-height:min(420px,calc(100vh - 180px));}
 
