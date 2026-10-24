@@ -66,11 +66,11 @@
      panel. The splitter still works — it just cannot exceed the cap. */
   .nw-side{max-width:min(62%,300px);}
 
-  /* Tools: the dock shrinks to its FAB, the advice column narrows. The width is
-     an inline style (the user may have dragged it), so !important is the only
-     way a container tier can cap it. */
+  /* Tools: the dock shrinks to its FAB, the advice column narrows. R25: the
+     column is auto-width now, so this tier only has to cap it — and it caps both
+     the auto width and a dragged inline width. */
   .nw-dock-btn{height:34px;padding:0 12px;font-size:13px;}
-  .nw-suggest{width:min(280px,40%) !important;}
+  .nw-suggest{width:min(320px,42%) !important;max-width:42% !important;}
   .nw-suggest-body{padding:0 var(--nw-sp-2) var(--nw-sp-2);}
 }
 

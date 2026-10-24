@@ -47,6 +47,7 @@
     '杂志': 'Magazine',
     '调整建议栏宽度': 'Resize the advice column',
     '拖拽调整建议栏宽度': 'Drag to resize the advice column',
+    '拖拽调整建议栏宽度（双击回到自动）': 'Drag to resize (double-click for auto)',
     '浅色': 'Light',
     '深色': 'Dark',
     '打字机模式': 'Typewriter mode',

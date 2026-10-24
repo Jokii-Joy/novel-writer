@@ -43,6 +43,17 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    bench container query in 98b-responsive). Closed card = no lane, so nothing
    moves unless the writer asks for it. */
 .nw-bench-paper[data-notes-lane="1"]{padding-left:348px;}
+/* R25: with the advice column open the manuscript stops growing — it pins itself
+   to the page measure — and the advice column takes the rest, up to a ceiling.
+   The pair is then centred as a unit, so the text and the suggestions always meet
+   with just the page gutter between them instead of a dead margin, and the extra
+   space on a wide monitor is split evenly outside the pair rather than dumped
+   between the two columns. */
+.nw-bench[data-advice="1"]{justify-content:center;}
+.nw-bench[data-advice="1"] .nw-bench-paper{flex:0 1 auto;width:calc(min(var(--nw-page,760px),100%) + 32px);}
+.nw-bench[data-advice="1"] .nw-bench-paper[data-notes-lane="1"]{
+  width:calc(min(var(--nw-page,760px),100%) + 348px + 32px);
+}
 .nw-suggest{
   position:relative;
   flex:0 0 auto;display:flex;flex-direction:column;min-height:0;
@@ -51,17 +62,30 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      panel that made every child shrink to its text width (the note box came out
      181px inside a 336px panel). Both are pinned back here. */
   align-items:stretch;gap:0;
-  width:336px;
-  /* R13: was 46vw. The panel lives inside a ~600px column most of the time, so
-     a viewport-relative cap let the advice column eat the manuscript on a wide
-     monitor. Percentages resolve against the bench, which is the real budget. */
-  max-width:46%;
+  /* R25: the column used to be a fixed 336px, which left a wide blank margin
+     between the page and the panel — the page is capped at --nw-width and centred
+     inside its column, so the leftover was split on both sides. Now the manuscript
+     column is pinned to the page measure while the advice column is open (see
+     .nw-bench[data-advice="1"] below) and this column simply grows into whatever
+     is left, so it always sits flush against the text. The 300px floor is what
+     the manuscript is never allowed to eat into. */
+  /* R25: basis 300px, not auto — with an auto basis the max-width becomes the
+     flex base, and the paper then had to shrink to make room for a column that
+     was mostly empty. The column grows into the leftover instead. */
+  flex:1 1 300px;min-width:300px;max-width:560px;
+  /* R25: the auto width stops at 560px so the column never eats the manuscript
+     on a wide screen, but a hand-dragged width is an explicit request — the
+     grip's own ceiling is 640px, so the cap has to move with it or dragging
+     past 560px would silently do nothing. */
   /* R21: palette tokens, so the column follows the reading theme (it used to be
      a white strip beside a dark page). */
   border-left:1px solid var(--nw-line);
   background:var(--nw-panel);
   animation:nw-slide-in var(--nw-dur) var(--nw-ease,ease);
 }
+/* R25: once the writer drags the grip the column is no longer "auto", so the
+   560px auto cap must not clamp it. The 640px grip ceiling still applies. */
+.nw-suggest[data-manual="1"]{max-width:640px;}
 /* R19 B2: adviceWidth and its localStorage key have existed since R12, but
    nothing ever called the setter — the column was 336px forever. This grip is
    the missing half: the same pointer-drag idiom as .nw-splitter, mirrored to
@@ -547,9 +571,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * sessions are spent writing, not reviewing.
      */
     const [adviceOpen, setAdviceOpen] = useState(() => lsGet(LS_ADVICE_OPEN) === '1');
+    /**
+     * R25: null = auto. The column measures itself from the bench (see
+     * .nw-suggest in the CSS above) so it always hugs the page instead of
+     * leaving a dead margin. A drag stores an explicit pixel width and from then
+     * on that wins, until the writer resets it.
+     */
     const [adviceWidth, setAdviceWidth] = useState(() => {
       const raw = Number(lsGet(LS_ADVICE_WIDTH));
-      return Number.isFinite(raw) && raw >= 260 && raw <= 600 ? raw : 336;
+      return Number.isFinite(raw) && raw >= 260 && raw <= 640 ? raw : null;
     });
     /** Bottom-right action dock: collapsed to a single round button by default. */
     const [dockOpen, setDockOpen] = useState(false);
@@ -794,7 +824,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       lsSet(LS_ADVICE_OPEN, adviceOpen ? '1' : '0');
     }, [adviceOpen]);
     useEffect(() => {
-      lsSet(LS_ADVICE_WIDTH, adviceWidth);
+      /* null means auto — clear the key so a fresh session keeps measuring. */
+      lsSet(LS_ADVICE_WIDTH, adviceWidth == null ? null : adviceWidth);
     }, [adviceWidth]);
     /**
      * R23: opening the advice column takes the 目录 down with it.
@@ -2193,7 +2224,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             : chapter
               ? h(
                   'div',
-                  { className: 'nw-bench' },
+                  {
+                    className: 'nw-bench',
+                    // R25: the bench owns the page measure so its CSS can decide
+                    // how much of the leftover width the advice column may take.
+                    // --nw-width is set on .nw-surface (inside the paper), so it
+                    // cannot be read from here.
+                    'data-advice': adviceOpen && !immersive ? '1' : '0',
+                    style: { '--nw-page': clampNum(Number(settings.pageWidth) || 760, 360, 1400) + 'px' },
+                  },
                   h(
                     'div',
                     {
@@ -2516,8 +2555,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     noteRef.current = note;
     /** R19 B2: pointer-drag on the left edge, mirrored from NW.Splitter. */
     const [dragging, setDragging] = useState(false);
-    const widthRef = useRef(clampNum(Number(p.width) || 336, 260, 600));
-    widthRef.current = clampNum(Number(p.width) || 336, 260, 600);
+    /* R25: p.width is null while the column is in auto mode; the drag starts from
+       whatever the column currently measures, not from a hard-coded 336. */
+    const widthRef = useRef(0);
+    widthRef.current = Number(p.width) || 0;
 
     React.useEffect(() => {
       if (!dragging) return undefined;
@@ -2527,7 +2568,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const bench = panel && panel.parentElement;
         if (!bench) return;
         const box = bench.getBoundingClientRect();
-        const next = Math.max(260, Math.min(600, box.right - ev.clientX));
+        const next = Math.max(300, Math.min(640, box.right - ev.clientX));
         if (typeof p.onResize === 'function') p.onResize(Math.round(next));
       };
       const up = () => setDragging(false);
@@ -2841,7 +2882,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       className: 'nw-suggest-grip',
       'data-drag': dragging ? '1' : '0',
       'aria-label': NW.t('调整建议栏宽度'),
-      title: NW.t('拖拽调整建议栏宽度'),
       tabIndex: 0,
       onPointerDown: (ev) => {
         ev.preventDefault();
@@ -2849,11 +2889,27 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       },
       onKeyDown: (ev) => {
         if (typeof p.onResize !== 'function') return;
+        /* R25: a double-click or Home puts the column back into auto mode. The
+           grip used to be write-only — once dragged there was no way back to
+           "hug the page". */
+        if (ev.key === 'Home') {
+          ev.preventDefault();
+          p.onResize(null);
+          return;
+        }
         const step = ev.key === 'ArrowLeft' ? 16 : ev.key === 'ArrowRight' ? -16 : 0;
         if (!step) return;
         ev.preventDefault();
-        p.onResize(clampNum(widthRef.current + step, 260, 600));
+        /* R25: keyboard resize needs a starting number even in auto mode, so
+           measure the column before nudging it. */
+        const panel = document.querySelector('.nw-suggest');
+        const base = widthRef.current || (panel ? Math.round(panel.getBoundingClientRect().width) : 336);
+        p.onResize(clampNum(base + step, 300, 640));
       },
+      onDoubleClick: () => {
+        if (typeof p.onResize === 'function') p.onResize(null);
+      },
+      title: NW.t('拖拽调整建议栏宽度（双击回到自动）'),
     });
 
     return h(
@@ -2861,7 +2917,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       {
         className: 'nw-suggest',
         'aria-label': NW.t('修改建议'),
-        style: { width: clampNum(Number(p.width) || 336, 260, 600) + 'px' },
+        /* R25: no inline width in auto mode — the CSS clamp measures the bench.
+           An inline width only exists once the writer has dragged the grip. */
+        style: Number(p.width) > 0 ? { width: clampNum(Number(p.width), 300, 640) + 'px' } : null,
+        'data-manual': Number(p.width) > 0 ? '1' : '0',
       },
       grip,
       head,
