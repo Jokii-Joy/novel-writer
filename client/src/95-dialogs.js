@@ -1631,9 +1631,21 @@
 
     const modelOptions = useMemo(() => {
       const list = (models && models.models) || [];
-      return [{ value: '', label: '跟随默认模型' }].concat(
-        list.map((row) => ({ value: row.provider + '\u0000' + row.id, label: (row.name || row.id) + ' · ' + row.provider })),
-      );
+      const current = (models && models.current) || {};
+      const options = list.map((row) => ({
+        value: row.provider + '\u0000' + row.id,
+        label: (row.name || row.id) + ' · ' + row.provider,
+      }));
+      // R29: the harness default is a valid target even when discovery returns
+      // nothing for that provider (some expose no model list at all). Without
+      // this row the picker would offer only "跟随默认模型" and look broken.
+      if (current.provider && current.model) {
+        const value = current.provider + '\u0000' + current.model;
+        if (!options.some((opt) => opt.value === value)) {
+          options.unshift({ value: value, label: current.model + ' · ' + current.provider + '（当前默认）' });
+        }
+      }
+      return [{ value: '', label: '跟随默认模型' }].concat(options);
     }, [models]);
 
     /** R29: kept for the proofread dialog's own fallback, not for Settings. */
@@ -2195,12 +2207,21 @@
             modelPicker('AI 校对模型', 'proofreadProvider', 'proofreadModel', '只做错别字与标点这类机械校对，可以选便宜快的模型。'),
             NW.ui.field({
               label: 'AI 校对要求',
-              hint: '会拼在校对提示词后面。留空就用内置默认：' + NW.aiProofreadDefaultRules(),
+              hint: '这段要求会拼在校对提示词后面，与内置规则冲突时以你的为准。清空即恢复默认。',
               children: NW.ui.textarea({
                 rows: 4,
-                value: String(draft.proofreadRules || ''),
-                placeholder: '例如：人名统一用「林深」，不要改成「林深先生」；保留作者刻意使用的短句。',
-                onChange: (v) => set('proofreadRules', v),
+                // R30: the default used to live only in the hint, so the box
+                // looked empty and the writer had to invent the wording before
+                // they could change a word of it. The default is now the actual
+                // value, editable in place; an untouched default is stored as
+                // '' so a future change to the text still reaches everyone.
+                value: String(draft.proofreadRules || NW.aiProofreadDefaultRules()),
+                placeholder: NW.aiProofreadDefaultRules(),
+                onChange: (v) =>
+                  set(
+                    'proofreadRules',
+                    String(v || '').trim() === NW.aiProofreadDefaultRules().trim() ? '' : v,
+                  ),
                 ariaLabel: 'AI 校对要求',
               }),
             }),
@@ -3035,9 +3056,17 @@
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedId, genre, workCount]);
 
-    /** The address this mail will go to: what the host resolved, unless edited. */
+    /**
+     * The address this mail will go to: what the host resolved, unless edited.
+     *
+     * R30: never fall back to `form.email`. That is the writer's own sending
+     * address, and falling back to it meant "the journal has no inbox on file"
+     * quietly became "post this letter to yourself" — the To field is prefilled
+     * with the exact address it will be sent from. An empty field that says
+     * 待核对 is honest; a self-addressed submission is a lost submission.
+     */
     const suggestedTo = String(
-      (emailInfo && emailInfo.email) || (selected && selected.email) || form.email || '',
+      (emailInfo && emailInfo.email) || (selected && selected.email) || '',
     ).trim();
     const emailNote = emailInfo
       ? [
@@ -3117,7 +3146,7 @@
         setSubject(String((data && data.subject) || ''));
         setBody(String((data && data.body) || ''));
         const resolvedTo = String(
-          (data && data.journalEmail) || (emailInfo && emailInfo.email) || (selected && selected.email) || form.email || '',
+          (data && data.journalEmail) || (emailInfo && emailInfo.email) || (selected && selected.email) || '',
         ).trim();
         setToDraft(resolvedTo);
         setAttachRows(

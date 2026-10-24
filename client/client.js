@@ -7994,30 +7994,44 @@ window.__ModuleLoader__.load({
    otherwise be unrecoverable from this view). */
 .nw-surface-acts{
   position:absolute;top:10px;left:14px;z-index:var(--nw-z-float);
-  display:inline-flex;align-items:center;gap:4px;
+  display:inline-flex;align-items:center;gap:0;
   /* R27 ①: the notes lane used to be a left padding on the writing column,
      which slid the whole surface (and this row, anchored to its left edge)
      348px to the right the moment the card opened — the buttons appeared to
      jump onto the paper. The lane is now an inset on the surface itself, so the
-     surface keeps the column's real left edge and this row simply never moves. */
+     surface keeps the column's real left edge and this row simply never moves.
+
+     R30: three loose squares in a row read as three unrelated buttons, and the
+     lock — a destructive action — sat one 4px gap away from the shelf toggle.
+     They are now one segmented capsule: navigation (home, shelf) | a hairline |
+     the lock, so the grouping itself says which two belong together. */
+  padding:3px;border-radius:var(--nw-r-pill);
+  border:1px solid var(--nw-btn-border);background:var(--nw-panel);
+  box-shadow:var(--nw-shadow-1);
+}
+.nw-acts-div{
+  width:1px;height:16px;margin:0 var(--nw-sp-0);
+  background:var(--nw-btn-border);flex:0 0 auto;
 }
 .nw-homebtn,
 .nw-actbtn{
   display:inline-flex;align-items:center;justify-content:center;
-  width:28px;height:28px;padding:0;
-  border-radius:var(--nw-r-control);border:1px solid var(--nw-btn-border);
-  background:var(--nw-panel);color:var(--nw-btn-fg);
+  width:26px;height:26px;padding:0;
+  border-radius:var(--nw-r-pill);border:1px solid transparent;
+  background:transparent;color:var(--nw-btn-fg);
   font-family:inherit;font-size:12px;line-height:1;cursor:pointer;
   /* R21: 0.55 was meant as "quiet until hovered", but on the warm palettes it
      reads as disabled — the glyph sits at ~45% contrast against the paper and
      the writer has to hunt for it. 0.78 is still clearly secondary next to the
-     body text while staying legible; hover takes it to 1. */
+     body text while staying legible; hover takes it to 1.
+     R30: the individual borders moved onto the enclosing capsule, so these are
+     now just the glyph wells; the hover fill carries the affordance. */
   opacity:.78;transition:opacity var(--nw-dur) ease,background var(--nw-dur) ease,border-color var(--nw-dur) ease;
 }
 .nw-homebtn:hover,
-.nw-actbtn:hover{opacity:1;background:var(--nw-btn-hover);border-color:var(--nw-find-ring);}
+.nw-actbtn:hover{opacity:1;background:var(--nw-btn-hover);border-color:transparent;}
 .nw-homebtn:focus-visible,
-.nw-actbtn:focus-visible{opacity:1;outline:2px solid var(--nw-find-ring);outline-offset:2px;}
+.nw-actbtn:focus-visible{opacity:1;outline:2px solid var(--nw-find-ring);outline-offset:1px;}
 /* The icon component owns its own size (42-icons snaps every request to one
    ladder), so the corner buttons must not re-scale the svg here — doing both
    was how neighbouring icons ended up 14/15/16px in the same row. */
@@ -9871,6 +9885,32 @@ window.__ModuleLoader__.load({
       const onResize = () => {
         syncScrollerAndMeasure();
       };
+      /**
+       * R30: Ctrl/Cmd+F used to be caught only by the textarea's own onKeyDown,
+       * so the shortcut died the moment focus left the manuscript — clicking the
+       * shelf, the note card, or simply loading a chapter and typing nowhere.
+       * The user reported it as "查找替换快捷键没反应", which was exactly that:
+       * the handler existed, but only on one element.
+       *
+       * It is now a window capture listener, so it works whenever the writing
+       * surface is mounted. Three guards keep it from stealing the key:
+       *   - a dialog on top owns the keyboard (its own inputs must keep working);
+       *   - the find bar's own inputs already handle it and must not re-enter;
+       *   - the textarea path still handles it first (capture fires earlier, so
+       *     opening twice is harmless — openFind() is idempotent).
+       */
+      const onFindShortcut = (ev) => {
+        if (!(ev.ctrlKey || ev.metaKey) || ev.shiftKey || ev.altKey) return;
+        if (String(ev.key || '').toLowerCase() !== 'f') return;
+        const target = ev.target;
+        if (target && typeof target.closest === 'function') {
+          if (target.closest('.nw-modal-mask')) return; // a dialog owns the key
+          if (target.closest('.nw-findbar')) return; // already in the find bar
+        }
+        ev.preventDefault();
+        ev.stopPropagation();
+        openFind(true);
+      };
 
       // Resolve against the live DOM (the refs are set by the time effects run)
       // and bind the scroll listeners to whatever actually scrolls.
@@ -9886,6 +9926,8 @@ window.__ModuleLoader__.load({
       window.addEventListener('focus', onWindowFocus, true);
       document.addEventListener('visibilitychange', onVisibility);
       document.addEventListener('mouseup', onMouseUp);
+      // R30: Ctrl/Cmd+F works from anywhere on the surface, not just the textarea.
+      window.addEventListener('keydown', onFindShortcut, true);
 
       let observer = null;
       const tryObserve = () => {
@@ -9942,6 +9984,7 @@ window.__ModuleLoader__.load({
         window.removeEventListener('focus', onWindowFocus, true);
         document.removeEventListener('visibilitychange', onVisibility);
         document.removeEventListener('mouseup', onMouseUp);
+        window.removeEventListener('keydown', onFindShortcut, true);
         if (observer) observer.disconnect();
         if (measureRafRef.current) {
           if (typeof window.cancelAnimationFrame === 'function') {
@@ -10209,6 +10252,10 @@ window.__ModuleLoader__.load({
                   NW.icon(shelfOpen ? 'chevleft' : 'chevright', { size: 16 }),
                 )
               : null,
+            // R30: the hairline splits navigation from the lock, so the only
+            // destructive button in this row can no longer be hit by accident
+            // while reaching for the shelf toggle.
+            onLock ? h('span', { className: 'nw-acts-div', 'aria-hidden': 'true' }) : null,
             onLock
               ? h(
                   'button',
@@ -10552,18 +10599,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-notes{
   position:absolute;z-index:var(--nw-z-float);top:52px;left:14px;
   display:flex;flex-direction:column;align-items:flex-start;gap:var(--nw-sp-1);
-  /* R21: this box is absolutely positioned, so its width was shrink-to-fit —
-     and a percentage width inside a shrink-to-fit parent is circular, which is
-     why the card collapsed to its longest text run (200px, a narrow column).
-     The container now owns the width and the card fills it.
-     R28 ①: the card is exactly as wide as the room the centred page leaves on
-     its left, so it can never cover the text and never pushes it. The maths:
-       100% is the writing column, min(--nw-page, 100%) is the page measure,
-       so half the difference is the gutter on one side. The text itself starts
-       one --nw-pad-x inside the page, which is paper margin, not input — the
-       card may borrow that too. 24px = the 14px outer inset + a 10px gap, so
-       the right edge always stops short of the first character. */
-  width:clamp(0px, calc((100% - min(var(--nw-page, 760px), 100%)) / 2 + var(--nw-pad-x, 48px) - 24px), 340px);
+  /* R30 ③: the width is the gutter beside the centred page, plus the paper's own
+     left padding — the card may sit in the margin, which holds no glyph, but its
+     right edge stops before the first character. 14 (offset) + 8 (gap) = 22 is
+     taken back out, so the card is always at least 30px clear of the text column
+     even when the page fills the whole panel. Nothing is ever pushed right: the
+     page measure and position do not depend on this element at all.
+     .nw-notes is absolutely positioned, so a percentage width alone is circular
+     (it collapsed to 200px once) — the calc resolves against the paper box,
+     which has a definite width. 98b-responsive tightens type/padding once the
+     resulting column is small. */
+  width:clamp(0px, calc((100% - min(var(--nw-page, 760px), 100%)) / 2 + 26px), 340px);
+  min-width:0;
   pointer-events:none;
 }
 .nw-notes > *{pointer-events:auto;}
@@ -15215,9 +15262,21 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     const modelOptions = useMemo(() => {
       const list = (models && models.models) || [];
-      return [{ value: '', label: '跟随默认模型' }].concat(
-        list.map((row) => ({ value: row.provider + '\u0000' + row.id, label: (row.name || row.id) + ' · ' + row.provider })),
-      );
+      const current = (models && models.current) || {};
+      const options = list.map((row) => ({
+        value: row.provider + '\u0000' + row.id,
+        label: (row.name || row.id) + ' · ' + row.provider,
+      }));
+      // R29: the harness default is a valid target even when discovery returns
+      // nothing for that provider (some expose no model list at all). Without
+      // this row the picker would offer only "跟随默认模型" and look broken.
+      if (current.provider && current.model) {
+        const value = current.provider + '\u0000' + current.model;
+        if (!options.some((opt) => opt.value === value)) {
+          options.unshift({ value: value, label: current.model + ' · ' + current.provider + '（当前默认）' });
+        }
+      }
+      return [{ value: '', label: '跟随默认模型' }].concat(options);
     }, [models]);
 
     /** R29: kept for the proofread dialog's own fallback, not for Settings. */
@@ -15779,12 +15838,21 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             modelPicker('AI 校对模型', 'proofreadProvider', 'proofreadModel', '只做错别字与标点这类机械校对，可以选便宜快的模型。'),
             NW.ui.field({
               label: 'AI 校对要求',
-              hint: '会拼在校对提示词后面。留空就用内置默认：' + NW.aiProofreadDefaultRules(),
+              hint: '这段要求会拼在校对提示词后面，与内置规则冲突时以你的为准。清空即恢复默认。',
               children: NW.ui.textarea({
                 rows: 4,
-                value: String(draft.proofreadRules || ''),
-                placeholder: '例如：人名统一用「林深」，不要改成「林深先生」；保留作者刻意使用的短句。',
-                onChange: (v) => set('proofreadRules', v),
+                // R30: the default used to live only in the hint, so the box
+                // looked empty and the writer had to invent the wording before
+                // they could change a word of it. The default is now the actual
+                // value, editable in place; an untouched default is stored as
+                // '' so a future change to the text still reaches everyone.
+                value: String(draft.proofreadRules || NW.aiProofreadDefaultRules()),
+                placeholder: NW.aiProofreadDefaultRules(),
+                onChange: (v) =>
+                  set(
+                    'proofreadRules',
+                    String(v || '').trim() === NW.aiProofreadDefaultRules().trim() ? '' : v,
+                  ),
                 ariaLabel: 'AI 校对要求',
               }),
             }),
@@ -16619,9 +16687,17 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedId, genre, workCount]);
 
-    /** The address this mail will go to: what the host resolved, unless edited. */
+    /**
+     * The address this mail will go to: what the host resolved, unless edited.
+     *
+     * R30: never fall back to `form.email`. That is the writer's own sending
+     * address, and falling back to it meant "the journal has no inbox on file"
+     * quietly became "post this letter to yourself" — the To field is prefilled
+     * with the exact address it will be sent from. An empty field that says
+     * 待核对 is honest; a self-addressed submission is a lost submission.
+     */
     const suggestedTo = String(
-      (emailInfo && emailInfo.email) || (selected && selected.email) || form.email || '',
+      (emailInfo && emailInfo.email) || (selected && selected.email) || '',
     ).trim();
     const emailNote = emailInfo
       ? [
@@ -16701,7 +16777,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         setSubject(String((data && data.subject) || ''));
         setBody(String((data && data.body) || ''));
         const resolvedTo = String(
-          (data && data.journalEmail) || (emailInfo && emailInfo.email) || (selected && selected.email) || form.email || '',
+          (data && data.journalEmail) || (emailInfo && emailInfo.email) || (selected && selected.email) || '',
         ).trim();
         setToDraft(resolvedTo);
         setAttachRows(
@@ -19445,14 +19521,20 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 }
 
 /* ------------------------------------------------------------- bench < 940 -- */
-/* R28 ①: the card sizes itself from the gutter the centred page leaves on its
-   left. That gutter is (bench - page) / 2, so it vanishes long before the panel
-   does — at a 760px page and an 820px bench it is 30px, which is not a column.
-   Below ~940px (gutter + paper margin under 200px) the card falls back to a
-   260px floating card: there is no honest "beside the text" position left, and
-   a 54px sliver would be worse than a card the writer can simply close. */
+/* R28 ① / R30: the card sizes itself from the gutter the centred page leaves on
+   its left — that gutter is (bench - page) / 2, so it shrinks as the column gets
+   narrower. R28 used to answer that by switching to a fixed 260px floating card
+   at this tier, which is precisely what covered the first characters of every
+   line. The rule is now only about density: a narrow card gets tighter padding
+   and slightly smaller type, and its width keeps tracking the gutter. */
 @container bench (max-width: 940px){
-  .nw-notes{width:min(260px,calc(100% - 28px));}
+  /* R30: this used to force a 260px floating card, which promptly covered the
+     first characters of every line — exactly the complaint that the card must
+     not sit on the text. The width formula in 90-app.js already shrinks with
+     the gutter, so nothing needs to override it here: a narrow column simply
+     gets a narrow card that still hugs the page. */
+  .nw-notes-card{padding:var(--nw-sp-1);}
+  .nw-notes-input{padding:10px 11px;font-size:14px;}
 }
 
 /* ------------------------------------------------------------ <= 780px -- */
@@ -19517,11 +19599,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   .nw-surface{--nw-pad-x:20px;--nw-pad-y:32px;--nw-gutter-x:68px;}
 
   /* R21: the base rule now sets an explicit width, so the narrow tier has to
-     release it (left+right already pin the box edge to edge).
-     R24: and the lane is gone at this size, so the card must also stop assuming
-     the wide-layout width — 98b's 980px tier already capped it at 360px. */
-  .nw-notes{left:8px;right:8px;top:48px;width:auto;}
-  .nw-notes-card{width:100%;max-height:min(420px,calc(100vh - 180px));}
+     release it.
+     R30 ③: but it must NOT release the right edge too — stretching from 8px to
+     8px would put the card straight across the manuscript. On a panel this
+     small there is no gutter left, so the card stops being a column beside the
+     text and becomes a compact corner card the writer toggles open: bounded
+     width, bounded height, and the page keeps its full measure underneath. */
+  .nw-notes{left:10px;right:auto;top:44px;width:min(248px,calc(100% - 20px));}
+  .nw-notes-card{width:100%;max-height:min(300px,calc(100vh - 200px));}
 
   /* Below the shelf overlay (34) and the advice overlay (33): when the shelf is
      lifted out of the flow it must be able to cover the dock, otherwise its

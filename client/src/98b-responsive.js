@@ -31,14 +31,20 @@
 }
 
 /* ------------------------------------------------------------- bench < 940 -- */
-/* R28 ①: the card sizes itself from the gutter the centred page leaves on its
-   left. That gutter is (bench - page) / 2, so it vanishes long before the panel
-   does — at a 760px page and an 820px bench it is 30px, which is not a column.
-   Below ~940px (gutter + paper margin under 200px) the card falls back to a
-   260px floating card: there is no honest "beside the text" position left, and
-   a 54px sliver would be worse than a card the writer can simply close. */
+/* R28 ① / R30: the card sizes itself from the gutter the centred page leaves on
+   its left — that gutter is (bench - page) / 2, so it shrinks as the column gets
+   narrower. R28 used to answer that by switching to a fixed 260px floating card
+   at this tier, which is precisely what covered the first characters of every
+   line. The rule is now only about density: a narrow card gets tighter padding
+   and slightly smaller type, and its width keeps tracking the gutter. */
 @container bench (max-width: 940px){
-  .nw-notes{width:min(260px,calc(100% - 28px));}
+  /* R30: this used to force a 260px floating card, which promptly covered the
+     first characters of every line — exactly the complaint that the card must
+     not sit on the text. The width formula in 90-app.js already shrinks with
+     the gutter, so nothing needs to override it here: a narrow column simply
+     gets a narrow card that still hugs the page. */
+  .nw-notes-card{padding:var(--nw-sp-1);}
+  .nw-notes-input{padding:10px 11px;font-size:14px;}
 }
 
 /* ------------------------------------------------------------ <= 780px -- */
@@ -103,11 +109,14 @@
   .nw-surface{--nw-pad-x:20px;--nw-pad-y:32px;--nw-gutter-x:68px;}
 
   /* R21: the base rule now sets an explicit width, so the narrow tier has to
-     release it (left+right already pin the box edge to edge).
-     R24: and the lane is gone at this size, so the card must also stop assuming
-     the wide-layout width — 98b's 980px tier already capped it at 360px. */
-  .nw-notes{left:8px;right:8px;top:48px;width:auto;}
-  .nw-notes-card{width:100%;max-height:min(420px,calc(100vh - 180px));}
+     release it.
+     R30 ③: but it must NOT release the right edge too — stretching from 8px to
+     8px would put the card straight across the manuscript. On a panel this
+     small there is no gutter left, so the card stops being a column beside the
+     text and becomes a compact corner card the writer toggles open: bounded
+     width, bounded height, and the page keeps its full measure underneath. */
+  .nw-notes{left:10px;right:auto;top:44px;width:min(248px,calc(100% - 20px));}
+  .nw-notes-card{width:100%;max-height:min(300px,calc(100vh - 200px));}
 
   /* Below the shelf overlay (34) and the advice overlay (33): when the shelf is
      lifted out of the flow it must be able to cover the dock, otherwise its
