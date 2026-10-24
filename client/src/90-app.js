@@ -318,17 +318,17 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-notes{
   position:absolute;z-index:var(--nw-z-float);top:52px;left:14px;
   display:flex;flex-direction:column;align-items:flex-start;gap:var(--nw-sp-1);
-  /* R30 ③: the width is the gutter beside the centred page, plus the paper's own
-     left padding — the card may sit in the margin, which holds no glyph, but its
-     right edge stops before the first character. 14 (offset) + 8 (gap) = 22 is
-     taken back out, so the card is always at least 30px clear of the text column
-     even when the page fills the whole panel. Nothing is ever pushed right: the
-     page measure and position do not depend on this element at all.
+  /* R30 ③: the width is exactly the empty margin beside the centred page, minus
+     the 14px card offset and an 8px gap. That margin holds no glyph and no part
+     of the paper, so the card sits *beside* the writing area instead of on it,
+     and the page keeps both its measure and its position — nothing is pushed
+     right, because this element is absolutely positioned and takes no space in
+     the flex row.
      .nw-notes is absolutely positioned, so a percentage width alone is circular
      (it collapsed to 200px once) — the calc resolves against the paper box,
-     which has a definite width. 98b-responsive tightens type/padding once the
-     resulting column is small. */
-  width:clamp(0px, calc((100% - min(var(--nw-page, 760px), 100%)) / 2 + 26px), 340px);
+     which has a definite width. On a narrow panel the gutter shrinks to nothing
+     and 98b-responsive drops the card to a compact corner overlay instead. */
+  width:clamp(0px, calc((100% - min(var(--nw-page, 760px), 100%)) / 2 - 22px), 340px);
   min-width:0;
   pointer-events:none;
 }
