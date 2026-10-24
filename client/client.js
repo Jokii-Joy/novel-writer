@@ -7871,6 +7871,15 @@ window.__ModuleLoader__.load({
 .nw-hl mark{color:transparent;background-color:transparent;}
 .nw-hl .nw-hl-mark{background-color:var(--nw-hl-bg);border-radius:var(--nw-r-hair);box-shadow:inset 0 -1.5px 0 var(--nw-hl-line);}
 .nw-hl .nw-hl-mark[data-active="1"]{background-color:var(--nw-hl-active);}
+/* R23: the sentence the advice panel is talking about gets a solid underline.
+   The fill drops to a hint of tint so the words stay legible (the writer is
+   comparing them with the suggestion, not looking at a highlight) and the rule
+   itself carries the emphasis — the same brand-coloured underline the quote
+   wears inside the advice card. */
+.nw-hl .nw-hl-mark[data-active="1"]{
+  background-color:color-mix(in srgb, var(--nw-hl-active) 30%, transparent);
+  box-shadow:inset 0 -2px 0 var(--nw-brand);
+}
 .nw-hl .nw-find-hit{background-color:var(--nw-find-bg);border-radius:var(--nw-r-hair);}
 .nw-hl .nw-find-hit[data-active="1"]{background-color:var(--nw-find-active);box-shadow:inset 0 0 0 1px var(--nw-find-ring);}
 
@@ -9541,6 +9550,28 @@ window.__ModuleLoader__.load({
         setHighlights(list) {
           setHighlights(list);
         },
+        /**
+         * Scrolls an arbitrary character range to the vertical middle of the
+         * viewport (R23). The advice panel used to approximate this with
+         * getScrollRatio + scrollTo(start / textLength), which lands wherever
+         * the ratio happens to point — often a screen away from the quoted
+         * sentence. Measuring the offset is exact and costs one mirror pass.
+         */
+        centerRange(start, end) {
+          // An explicit scroll is an intent: drop any queued caret centring so
+          // the pending measure pass cannot yank the viewport back.
+          pendingCenterRef.current = false;
+          const v = resolveScroller(false);
+          const sc = v && v.el;
+          const ta = taRef.current;
+          if (!sc || !ta) return false;
+          const from = clampNum(numOf(start, 0), 0, ta.value.length);
+          const m = measureCaret(from, v);
+          if (!m) return false;
+          const viewH = sc.clientHeight || window.innerHeight || 0;
+          setScrollTop(m.top + m.height / 2 - viewH / 2, v);
+          return true;
+        },
         openFind() {
           openFind(true);
         },
@@ -10157,9 +10188,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-advice-quote{
   font-family:var(--nw-reading-font,inherit);font-size:13px;line-height:1.7;
   color:var(--dsw-alias-label-secondary);
-  border-left:3px solid var(--dsw-alias-border-l2);padding-left:var(--nw-sp-1);
+  /* R23: the quote is underlined instead of boxed on the left. The matching
+     sentence on the paper wears the same underline in the same colour, so the
+     pair reads as one annotation seen from two sides. Both use --nw-brand
+     rather than the host alias so the two rules can never drift apart. */
+  text-decoration:underline;
+  text-decoration-color:var(--nw-brand);
+  text-decoration-thickness:2px;
+  text-underline-offset:3px;
+  padding-bottom:2px;
   max-height:4.8em;overflow:hidden;
 }
+.nw-advice[data-active="1"] .nw-advice-quote{color:var(--dsw-alias-label-primary);}
 .nw-advice-issue{font-size:var(--nw-fs-micro);font-weight:600;line-height:1.55;color:var(--dsw-alias-label-primary);}
 /* R19 B3: eight cards × five lines was a wall of grey. The quote and the advice
    are what the writer reads; the reasoning collapses to a single clamped line
@@ -10845,6 +10885,31 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     useEffect(() => {
       lsSet(LS_ADVICE_WIDTH, adviceWidth);
     }, [adviceWidth]);
+    /**
+     * R23: opening the advice column takes the 目录 down with it.
+     *
+     * The bench is a three-way split (shelf | paper | advice) and the paper is
+     * what the comparison is about — a 272px tree plus a 336px column on a
+     * ~1200px panel leaves the manuscript about 550px, at which point the
+     * suggestion and the sentence it quotes are no longer side by side but one
+     * above the other. The shelf is collapsed for as long as the column is
+     * open, and put back afterwards only if the writer had it open to begin
+     * with (closing the column must not resurrect a shelf they had hidden).
+     */
+    const shelfBeforeAdvice = useRef(null);
+    useEffect(() => {
+      if (adviceOpen) {
+        if (shelfBeforeAdvice.current == null) shelfBeforeAdvice.current = shelfOpen;
+        if (shelfOpen) setShelfOpen(false);
+        return;
+      }
+      if (shelfBeforeAdvice.current === true) setShelfOpen(true);
+      shelfBeforeAdvice.current = null;
+      // `shelfOpen` is read once on the open edge on purpose: depending on it
+      // would re-collapse the shelf the moment the writer reopens it by hand
+      // while the column is up.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [adviceOpen]);
     /**
      * R22: remember which screen you were on. Booting straight into 首页 every
      * time meant a writer who had been in the editor all afternoon reopened the
@@ -12610,18 +12675,45 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       (item) => {
         setActiveId(item.id);
         const api = p.editorApi && p.editorApi.current;
-        if (!api || typeof api.setHighlights !== 'function') return;
-        if (Number(item.start) >= 0) {
+        if (!api) return;
+        if (Number(item.start) >= 0 && typeof api.setHighlights === 'function') {
           api.setHighlights([{ start: Number(item.start), end: Number(item.end), id: item.id, active: true }]);
-          if (typeof api.scrollTo === 'function' && typeof api.getScrollRatio === 'function') {
-            // No offset→scroll API, so approximate by the passage's position in
-            // the chapter; the highlight makes the exact line findable.
+          // R23: the quoted sentence is put on the same horizontal band as the
+          // suggestion that talks about it — both sit at the vertical middle of
+          // the screen, so the eye can jump left/right without moving up or
+          // down. An exact offset measurement replaces the old
+          // getScrollRatio/scrollTo guess, which landed wherever the ratio
+          // happened to point.
+          if (typeof api.centerRange === 'function') {
+            api.centerRange(Number(item.start), Number(item.end));
+          } else if (typeof api.scrollTo === 'function' && typeof api.getScrollRatio === 'function') {
             const ratio = p.chapter && p.chapter.content
               ? clampRatio(Number(item.start) / Math.max(1, String(p.chapter.content).length))
               : 0;
             api.scrollTo(ratio);
           }
         }
+        // Mirror of the above on the panel side: the card that is being read
+        // slides to the middle of the *viewport* — the same band the highlighted
+        // sentence landed on. `scrollIntoView({block:'center'})` centres it in
+        // the scrolling body instead, which sits below the panel header and the
+        // focus chips, so the pair ended up ~60px apart.
+        window.setTimeout(() => {
+          const node = document.querySelector('.nw-advice[data-active="1"]');
+          const body = document.querySelector('.nw-suggest-body');
+          if (!node || !body) return;
+          // Both sides are measured against the same line: the vertical middle
+          // of the manuscript pane. Using the window middle instead left the
+          // pair half a line apart, because the status bar eats the bottom
+          // 34px of the viewport.
+          const pane = document.querySelector('.nw-scroll');
+          const paneRect = pane ? pane.getBoundingClientRect() : null;
+          const band = paneRect
+            ? paneRect.top + paneRect.height / 2
+            : (window.innerHeight || document.documentElement.clientHeight || 0) / 2;
+          const cardRect = node.getBoundingClientRect();
+          body.scrollTop += cardRect.top + cardRect.height / 2 - band;
+        }, 0);
       },
       [p.editorApi, p.chapter],
     );

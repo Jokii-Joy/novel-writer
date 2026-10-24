@@ -462,6 +462,15 @@
 .nw-hl mark{color:transparent;background-color:transparent;}
 .nw-hl .nw-hl-mark{background-color:var(--nw-hl-bg);border-radius:var(--nw-r-hair);box-shadow:inset 0 -1.5px 0 var(--nw-hl-line);}
 .nw-hl .nw-hl-mark[data-active="1"]{background-color:var(--nw-hl-active);}
+/* R23: the sentence the advice panel is talking about gets a solid underline.
+   The fill drops to a hint of tint so the words stay legible (the writer is
+   comparing them with the suggestion, not looking at a highlight) and the rule
+   itself carries the emphasis — the same brand-coloured underline the quote
+   wears inside the advice card. */
+.nw-hl .nw-hl-mark[data-active="1"]{
+  background-color:color-mix(in srgb, var(--nw-hl-active) 30%, transparent);
+  box-shadow:inset 0 -2px 0 var(--nw-brand);
+}
 .nw-hl .nw-find-hit{background-color:var(--nw-find-bg);border-radius:var(--nw-r-hair);}
 .nw-hl .nw-find-hit[data-active="1"]{background-color:var(--nw-find-active);box-shadow:inset 0 0 0 1px var(--nw-find-ring);}
 
@@ -2131,6 +2140,28 @@
         },
         setHighlights(list) {
           setHighlights(list);
+        },
+        /**
+         * Scrolls an arbitrary character range to the vertical middle of the
+         * viewport (R23). The advice panel used to approximate this with
+         * getScrollRatio + scrollTo(start / textLength), which lands wherever
+         * the ratio happens to point — often a screen away from the quoted
+         * sentence. Measuring the offset is exact and costs one mirror pass.
+         */
+        centerRange(start, end) {
+          // An explicit scroll is an intent: drop any queued caret centring so
+          // the pending measure pass cannot yank the viewport back.
+          pendingCenterRef.current = false;
+          const v = resolveScroller(false);
+          const sc = v && v.el;
+          const ta = taRef.current;
+          if (!sc || !ta) return false;
+          const from = clampNum(numOf(start, 0), 0, ta.value.length);
+          const m = measureCaret(from, v);
+          if (!m) return false;
+          const viewH = sc.clientHeight || window.innerHeight || 0;
+          setScrollTop(m.top + m.height / 2 - viewH / 2, v);
+          return true;
         },
         openFind() {
           openFind(true);
