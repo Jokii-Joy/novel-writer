@@ -2263,6 +2263,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       onNewChapter: () => createChapter(null),
                       onToggleAdvice: () => setAdviceOpen((v) => !v),
                       onSave: (content) => saveChapter(content, chapter.id),
+                      onDirty: (dirty) =>
+                        setSaveState((prev) => {
+                          if (prev === 'saving') return prev;
+                          return dirty ? 'dirty' : 'saved';
+                        }),
                       onSelectionChange: onSelectionChange,
                       registerApi: registerEditor,
                     }),

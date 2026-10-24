@@ -364,8 +364,18 @@
 
   /** Line-level LCS diff. Adjacent rows of the same type are merged. */
   function diffPreview(a, b) {
-    const left = String(a == null ? '' : a).split('\n');
-    const right = String(b == null ? '' : b).split('\n');
+    // R26: a lone trailing newline is not a visible edit. typeset() always ends
+    // its output with exactly one newline, so a manuscript typed without a final
+    // line break produced a phantom add row (rendered as a bare plus sign) and
+    // made the apply button look enabled when nothing needed changing. Strip one
+    // trailing newline from each side before splitting; internal blank-line
+    // changes are unaffected.
+    const trimEnd = (value) => {
+      const text = String(value == null ? '' : value);
+      return text.slice(-1) === '\n' ? text.slice(0, -1) : text;
+    };
+    const left = trimEnd(a).split('\n');
+    const right = trimEnd(b).split('\n');
 
     let start = 0;
     while (start < left.length && start < right.length && left[start] === right[start]) start += 1;

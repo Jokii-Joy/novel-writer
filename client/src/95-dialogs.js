@@ -3363,6 +3363,12 @@
         const recoButtons = recos.map((row) => {
           const entry = (row && row.journal) || {};
           const reasons = Array.isArray(row && row.reasons) ? row.reasons : [];
+          // R26: only the first two reasons used to be shown, which hid every
+          // discriminating signal behind the generic "有公开投稿邮箱（待核对）"
+          // tail. Drop that note (it is true for almost every journal) and show
+          // up to three reasons, so the ordering explains itself.
+          const shown = reasons.filter((text) => String(text).indexOf('邮箱') < 0).slice(0, 3);
+          const why = (shown.length ? shown : reasons).join('·');
           return h(
             'button',
             {
@@ -3376,7 +3382,7 @@
               },
             },
             h('span', { className: 'nw-reco-name' }, String(entry.name || '')),
-            h('span', { className: 'nw-reco-why' }, reasons.slice(0, 2).join('·')),
+            h('span', { className: 'nw-reco-why' }, why),
           );
         });
         stepBody.push(

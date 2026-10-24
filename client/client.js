@@ -2674,8 +2674,18 @@ window.__ModuleLoader__.load({
 
   /** Line-level LCS diff. Adjacent rows of the same type are merged. */
   function diffPreview(a, b) {
-    const left = String(a == null ? '' : a).split('\n');
-    const right = String(b == null ? '' : b).split('\n');
+    // R26: a lone trailing newline is not a visible edit. typeset() always ends
+    // its output with exactly one newline, so a manuscript typed without a final
+    // line break produced a phantom add row (rendered as a bare plus sign) and
+    // made the apply button look enabled when nothing needed changing. Strip one
+    // trailing newline from each side before splitting; internal blank-line
+    // changes are unaffected.
+    const trimEnd = (value) => {
+      const text = String(value == null ? '' : value);
+      return text.slice(-1) === '\n' ? text.slice(0, -1) : text;
+    };
+    const left = trimEnd(a).split('\n');
+    const right = trimEnd(b).split('\n');
 
     let start = 0;
     while (start < left.length && start < right.length && left[start] === right[start]) start += 1;
@@ -9012,7 +9022,22 @@ window.__ModuleLoader__.load({
       // *different* chapter cannot happen: a new chapter means a new instance
       // (App keys the editor by chapter.id), and the app flushes before it
       // swaps chapterRef, so this closure can only ever see its own buffer.
-      if (!immediate && lastSavedRef.current !== null && text === lastSavedRef.current) return;
+      if (!immediate && lastSavedRef.current !== null && text === lastSavedRef.current) {
+        // R26: the buffer is back to what is already on disk (the author typed
+        // and then undid it). No write happens, so the app has to be told the
+        // text is clean again — otherwise the status bar stays on 未保存 and
+        // beforeunload keeps warning about work that no longer exists.
+        dirtyRef.current = false;
+        const settled = propsRef.current.onDirty;
+        if (typeof settled === 'function') {
+          try {
+            settled(false);
+          } catch (err) {
+            /* ignore */
+          }
+        }
+        return;
+      }
       lastSavedRef.current = text;
       dirtyRef.current = false;
       valueRef.current = text;
@@ -9055,6 +9080,17 @@ window.__ModuleLoader__.load({
       if (!ta) return;
       valueRef.current = ta.value;
       dirtyRef.current = true;
+      // R26: tell the app the buffer is dirty *now*. The debounce is 1200ms and
+      // without this the status bar keeps claiming 已保存 for the whole second
+      // after a keystroke — the "dirty" branch in the app was unreachable.
+      const notify = propsRef.current.onDirty;
+      if (typeof notify === 'function') {
+        try {
+          notify(true);
+        } catch (err) {
+          /* a broken listener must not break typing */
+        }
+      }
       scheduleSave();
       if (findRef.current.open) refreshMatches();
       scheduleMeasure(true);
@@ -9115,6 +9151,14 @@ window.__ModuleLoader__.load({
         /* ignore */
       }
       dirtyRef.current = true;
+      const notify = propsRef.current.onDirty;
+      if (typeof notify === 'function') {
+        try {
+          notify(true);
+        } catch (err) {
+          /* ignore */
+        }
+      }
       scheduleSave();
       if (findRef.current.open) refreshMatches();
       scheduleMeasure(true);
@@ -9354,6 +9398,16 @@ window.__ModuleLoader__.load({
       if (!ta) return;
       valueRef.current = ta.value;
       dirtyRef.current = true;
+      // R26: same as afterEdit — the status bar must say 未保存 from the first
+      // keystroke, not 1.2s later when the debounce finally fires.
+      const notify = propsRef.current.onDirty;
+      if (typeof notify === 'function') {
+        try {
+          notify(true);
+        } catch (err) {
+          /* ignore */
+        }
+      }
       scheduleSave();
       if (composingRef.current) {
         // IME composition: never re-centre mid-composition.
@@ -12370,6 +12424,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       onNewChapter: () => createChapter(null),
                       onToggleAdvice: () => setAdviceOpen((v) => !v),
                       onSave: (content) => saveChapter(content, chapter.id),
+                      onDirty: (dirty) =>
+                        setSaveState((prev) => {
+                          if (prev === 'saving') return prev;
+                          return dirty ? 'dirty' : 'saved';
+                        }),
                       onSelectionChange: onSelectionChange,
                       registerApi: registerEditor,
                     }),
@@ -16784,6 +16843,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const recoButtons = recos.map((row) => {
           const entry = (row && row.journal) || {};
           const reasons = Array.isArray(row && row.reasons) ? row.reasons : [];
+          // R26: only the first two reasons used to be shown, which hid every
+          // discriminating signal behind the generic "有公开投稿邮箱（待核对）"
+          // tail. Drop that note (it is true for almost every journal) and show
+          // up to three reasons, so the ordering explains itself.
+          const shown = reasons.filter((text) => String(text).indexOf('邮箱') < 0).slice(0, 3);
+          const why = (shown.length ? shown : reasons).join('·');
           return h(
             'button',
             {
@@ -16797,7 +16862,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               },
             },
             h('span', { className: 'nw-reco-name' }, String(entry.name || '')),
-            h('span', { className: 'nw-reco-why' }, reasons.slice(0, 2).join('·')),
+            h('span', { className: 'nw-reco-why' }, why),
           );
         });
         stepBody.push(

@@ -1602,7 +1602,22 @@
       // *different* chapter cannot happen: a new chapter means a new instance
       // (App keys the editor by chapter.id), and the app flushes before it
       // swaps chapterRef, so this closure can only ever see its own buffer.
-      if (!immediate && lastSavedRef.current !== null && text === lastSavedRef.current) return;
+      if (!immediate && lastSavedRef.current !== null && text === lastSavedRef.current) {
+        // R26: the buffer is back to what is already on disk (the author typed
+        // and then undid it). No write happens, so the app has to be told the
+        // text is clean again — otherwise the status bar stays on 未保存 and
+        // beforeunload keeps warning about work that no longer exists.
+        dirtyRef.current = false;
+        const settled = propsRef.current.onDirty;
+        if (typeof settled === 'function') {
+          try {
+            settled(false);
+          } catch (err) {
+            /* ignore */
+          }
+        }
+        return;
+      }
       lastSavedRef.current = text;
       dirtyRef.current = false;
       valueRef.current = text;
@@ -1645,6 +1660,17 @@
       if (!ta) return;
       valueRef.current = ta.value;
       dirtyRef.current = true;
+      // R26: tell the app the buffer is dirty *now*. The debounce is 1200ms and
+      // without this the status bar keeps claiming 已保存 for the whole second
+      // after a keystroke — the "dirty" branch in the app was unreachable.
+      const notify = propsRef.current.onDirty;
+      if (typeof notify === 'function') {
+        try {
+          notify(true);
+        } catch (err) {
+          /* a broken listener must not break typing */
+        }
+      }
       scheduleSave();
       if (findRef.current.open) refreshMatches();
       scheduleMeasure(true);
@@ -1705,6 +1731,14 @@
         /* ignore */
       }
       dirtyRef.current = true;
+      const notify = propsRef.current.onDirty;
+      if (typeof notify === 'function') {
+        try {
+          notify(true);
+        } catch (err) {
+          /* ignore */
+        }
+      }
       scheduleSave();
       if (findRef.current.open) refreshMatches();
       scheduleMeasure(true);
@@ -1944,6 +1978,16 @@
       if (!ta) return;
       valueRef.current = ta.value;
       dirtyRef.current = true;
+      // R26: same as afterEdit — the status bar must say 未保存 from the first
+      // keystroke, not 1.2s later when the debounce finally fires.
+      const notify = propsRef.current.onDirty;
+      if (typeof notify === 'function') {
+        try {
+          notify(true);
+        } catch (err) {
+          /* ignore */
+        }
+      }
       scheduleSave();
       if (composingRef.current) {
         // IME composition: never re-centre mid-composition.
