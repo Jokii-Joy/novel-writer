@@ -556,6 +556,8 @@
     }
     await writeBatch(ops);
     notify();
+    // R22: same contract as deleteChapter — the id lets the caller offer 撤销.
+    return trashItem.id;
   }
 
   // -------------------------------- chapters --------------------------------
@@ -815,6 +817,10 @@
     await writeBatch(ops);
     if (root.novelId) await touchNovel(root.novelId);
     notify();
+    // R22: hand the trash id back so the UI can offer 撤销 on the toast. The
+    // row already sits in 回收站, but nobody wants to open a dialog to undo a
+    // mis-click.
+    return trashItem.id;
   }
 
   async function saveChapterContent(id, content) {

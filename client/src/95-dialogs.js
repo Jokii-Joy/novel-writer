@@ -2625,6 +2625,9 @@
               ['Ctrl / ⌘ + I', '斜体'],
               ['Ctrl / ⌘ + F', NW.t('查找替换')],
               ['Ctrl / ⌘ + Shift + L', NW.t('锁定')],
+              // R22: the two new in-editor shortcuts.
+              ['Alt + N', NW.t('新章节')],
+              ['Alt + A', NW.t('修改建议')],
               ['Tab', '插入两个全角空格'],
             ].map((row) => h('div', { key: row[0], className: 'nw-kbd-row' }, h('kbd', null, row[0]), h('span', null, row[1]))),
           ),

@@ -207,6 +207,7 @@
         style: { paddingLeft: 6 + Math.min(p.depth, MAX_INDENT_DEPTH) * INDENT_STEP },
         role: 'treeitem',
         'aria-level': p.depth + 1,
+        'data-id': String(ch.id),
         'aria-selected': p.active ? 'true' : undefined,
         'aria-expanded': p.hasKids ? (p.collapsed ? 'false' : 'true') : undefined,
         draggable: true,
@@ -564,10 +565,62 @@
       hideIndicator();
       applyMove(srcId, ch, before);
     };
+    // R22: the tree was reachable by Tab only — you could not walk it with the
+    // arrow keys, and Delete/F2 did nothing. Keyboard users had to mouse-click
+    // every chapter. This walks the *visible* rows (collapsed branches excluded)
+    // by DOM order, which matches what the eye sees.
+    api.focusRow = (ch, mode) => {
+      const host = shelfRef.current;
+      if (!host || !ch) return false;
+      const rows = Array.prototype.slice.call(host.querySelectorAll('[role="treeitem"]'));
+      if (rows.length === 0) return false;
+      let at = -1;
+      for (let i = 0; i < rows.length; i += 1) {
+        if (rows[i].getAttribute('data-id') === String(ch.id)) {
+          at = i;
+          break;
+        }
+      }
+      if (at < 0) return false;
+      let target = -1;
+      if (mode === 'next') target = Math.min(at + 1, rows.length - 1);
+      else if (mode === 'prev') target = Math.max(at - 1, 0);
+      else if (mode === 'first') target = 0;
+      else if (mode === 'last') target = rows.length - 1;
+      if (target < 0 || target === at) return false;
+      rows[target].focus();
+      return true;
+    };
     api.keyDown = (ev, ch, hasKids, collapsed) => {
       if (ev.key === 'Enter' || ev.key === ' ') {
         ev.preventDefault();
         api.select(ch.id);
+        return;
+      }
+      if (ev.key === 'F2') {
+        ev.preventDefault();
+        api.rename(ch);
+        return;
+      }
+      if (ev.key === 'Delete' || ev.key === 'Backspace') {
+        ev.preventDefault();
+        api.remove(ch);
+        return;
+      }
+      if (ev.key === 'ArrowDown' && api.focusRow(ch, 'next')) {
+        ev.preventDefault();
+        return;
+      }
+      if (ev.key === 'ArrowUp' && api.focusRow(ch, 'prev')) {
+        ev.preventDefault();
+        return;
+      }
+      if (ev.key === 'Home' && api.focusRow(ch, 'first')) {
+        ev.preventDefault();
+        return;
+      }
+      if (ev.key === 'End' && api.focusRow(ch, 'last')) {
+        ev.preventDefault();
         return;
       }
       if (!hasKids) return;
@@ -656,6 +709,22 @@
       onChange: (ev) => setRawQuery(readValue(ev)),
       placeholder: tr('搜索章节…'),
       'aria-label': tr('搜索章节…'),
+      onKeyDown: (ev) => {
+        // R22: the results list is keyboard-navigable once you are in it, but
+        // there was no way to get there from the box. Enter jumps to the first
+        // hit, and Escape clears the filter without leaving the tree.
+        if (ev.key === 'Escape' && String(rawQuery || '').length > 0) {
+          ev.preventDefault();
+          setRawQuery('');
+          setTerm('');
+          return;
+        }
+        if (ev.key !== 'Enter') return;
+        const hits = (search && search.items) || [];
+        if (hits.length === 0) return;
+        ev.preventDefault();
+        openChapter(hits[0]);
+      },
     });
 
     const openChapter = (ch) => {

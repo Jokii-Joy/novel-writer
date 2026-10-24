@@ -581,6 +581,10 @@
     // Which glyph the shelf handle shows: a collapsed shelf needs 展开, an open
     // one 收起. The app passes `shelfOpen` so the button never lies.
     const shelfOpen = p.shelfOpen !== false;
+    // R22: keyboard shortcuts for the two most common structural actions. The
+    // editor owns the keystrokes because it has focus; the app owns the actions.
+    const onNewChapter = typeof p.onNewChapter === 'function' ? p.onNewChapter : null;
+    const onToggleAdvice = typeof p.onToggleAdvice === 'function' ? p.onToggleAdvice : null;
     /** 灵感便签 lane (R10): the app mounts the notes column beside the text. */
     const notesLane = p.notesLane === true && !immersive;
     /** Page width actually applied; immersive mode guarantees a wide canvas. */
@@ -1970,6 +1974,21 @@
       if (meta && (ev.key === 'f' || ev.key === 'F')) {
         ev.preventDefault();
         openFind(true);
+        return;
+      }
+      // R22: Alt+N starts the next chapter without leaving the keyboard, and
+      // Alt+A toggles the revision panel. Ctrl+N / Ctrl+Shift+A would collide
+      // with the browser (new window) and with nothing at all respectively, so
+      // Alt is the safe modifier here.
+      if (ev.altKey && !meta && !ev.ctrlKey && (ev.key === 'n' || ev.key === 'N') && onNewChapter) {
+        ev.preventDefault();
+        flushNow();
+        onNewChapter();
+        return;
+      }
+      if (ev.altKey && !meta && !ev.ctrlKey && (ev.key === 'a' || ev.key === 'A') && onToggleAdvice) {
+        ev.preventDefault();
+        onToggleAdvice();
         return;
       }
       if (ev.key === 'Escape') {

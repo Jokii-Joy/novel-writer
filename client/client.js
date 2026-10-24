@@ -1222,6 +1222,8 @@ window.__ModuleLoader__.load({
     }
     await writeBatch(ops);
     notify();
+    // R22: same contract as deleteChapter — the id lets the caller offer 撤销.
+    return trashItem.id;
   }
 
   // -------------------------------- chapters --------------------------------
@@ -1481,6 +1483,10 @@ window.__ModuleLoader__.load({
     await writeBatch(ops);
     if (root.novelId) await touchNovel(root.novelId);
     notify();
+    // R22: hand the trash id back so the UI can offer 撤销 on the toast. The
+    // row already sits in 回收站, but nobody wants to open a dialog to undo a
+    // mis-click.
+    return trashItem.id;
   }
 
   async function saveChapterContent(id, content) {
@@ -5208,6 +5214,7 @@ window.__ModuleLoader__.load({
         style: { paddingLeft: 6 + Math.min(p.depth, MAX_INDENT_DEPTH) * INDENT_STEP },
         role: 'treeitem',
         'aria-level': p.depth + 1,
+        'data-id': String(ch.id),
         'aria-selected': p.active ? 'true' : undefined,
         'aria-expanded': p.hasKids ? (p.collapsed ? 'false' : 'true') : undefined,
         draggable: true,
@@ -5565,10 +5572,62 @@ window.__ModuleLoader__.load({
       hideIndicator();
       applyMove(srcId, ch, before);
     };
+    // R22: the tree was reachable by Tab only — you could not walk it with the
+    // arrow keys, and Delete/F2 did nothing. Keyboard users had to mouse-click
+    // every chapter. This walks the *visible* rows (collapsed branches excluded)
+    // by DOM order, which matches what the eye sees.
+    api.focusRow = (ch, mode) => {
+      const host = shelfRef.current;
+      if (!host || !ch) return false;
+      const rows = Array.prototype.slice.call(host.querySelectorAll('[role="treeitem"]'));
+      if (rows.length === 0) return false;
+      let at = -1;
+      for (let i = 0; i < rows.length; i += 1) {
+        if (rows[i].getAttribute('data-id') === String(ch.id)) {
+          at = i;
+          break;
+        }
+      }
+      if (at < 0) return false;
+      let target = -1;
+      if (mode === 'next') target = Math.min(at + 1, rows.length - 1);
+      else if (mode === 'prev') target = Math.max(at - 1, 0);
+      else if (mode === 'first') target = 0;
+      else if (mode === 'last') target = rows.length - 1;
+      if (target < 0 || target === at) return false;
+      rows[target].focus();
+      return true;
+    };
     api.keyDown = (ev, ch, hasKids, collapsed) => {
       if (ev.key === 'Enter' || ev.key === ' ') {
         ev.preventDefault();
         api.select(ch.id);
+        return;
+      }
+      if (ev.key === 'F2') {
+        ev.preventDefault();
+        api.rename(ch);
+        return;
+      }
+      if (ev.key === 'Delete' || ev.key === 'Backspace') {
+        ev.preventDefault();
+        api.remove(ch);
+        return;
+      }
+      if (ev.key === 'ArrowDown' && api.focusRow(ch, 'next')) {
+        ev.preventDefault();
+        return;
+      }
+      if (ev.key === 'ArrowUp' && api.focusRow(ch, 'prev')) {
+        ev.preventDefault();
+        return;
+      }
+      if (ev.key === 'Home' && api.focusRow(ch, 'first')) {
+        ev.preventDefault();
+        return;
+      }
+      if (ev.key === 'End' && api.focusRow(ch, 'last')) {
+        ev.preventDefault();
         return;
       }
       if (!hasKids) return;
@@ -5657,6 +5716,22 @@ window.__ModuleLoader__.load({
       onChange: (ev) => setRawQuery(readValue(ev)),
       placeholder: tr('搜索章节…'),
       'aria-label': tr('搜索章节…'),
+      onKeyDown: (ev) => {
+        // R22: the results list is keyboard-navigable once you are in it, but
+        // there was no way to get there from the box. Enter jumps to the first
+        // hit, and Escape clears the filter without leaving the tree.
+        if (ev.key === 'Escape' && String(rawQuery || '').length > 0) {
+          ev.preventDefault();
+          setRawQuery('');
+          setTerm('');
+          return;
+        }
+        if (ev.key !== 'Enter') return;
+        const hits = (search && search.items) || [];
+        if (hits.length === 0) return;
+        ev.preventDefault();
+        openChapter(hits[0]);
+      },
     });
 
     const openChapter = (ch) => {
@@ -7915,6 +7990,10 @@ window.__ModuleLoader__.load({
     // Which glyph the shelf handle shows: a collapsed shelf needs 展开, an open
     // one 收起. The app passes `shelfOpen` so the button never lies.
     const shelfOpen = p.shelfOpen !== false;
+    // R22: keyboard shortcuts for the two most common structural actions. The
+    // editor owns the keystrokes because it has focus; the app owns the actions.
+    const onNewChapter = typeof p.onNewChapter === 'function' ? p.onNewChapter : null;
+    const onToggleAdvice = typeof p.onToggleAdvice === 'function' ? p.onToggleAdvice : null;
     /** 灵感便签 lane (R10): the app mounts the notes column beside the text. */
     const notesLane = p.notesLane === true && !immersive;
     /** Page width actually applied; immersive mode guarantees a wide canvas. */
@@ -9306,6 +9385,21 @@ window.__ModuleLoader__.load({
         openFind(true);
         return;
       }
+      // R22: Alt+N starts the next chapter without leaving the keyboard, and
+      // Alt+A toggles the revision panel. Ctrl+N / Ctrl+Shift+A would collide
+      // with the browser (new window) and with nothing at all respectively, so
+      // Alt is the safe modifier here.
+      if (ev.altKey && !meta && !ev.ctrlKey && (ev.key === 'n' || ev.key === 'N') && onNewChapter) {
+        ev.preventDefault();
+        flushNow();
+        onNewChapter();
+        return;
+      }
+      if (ev.altKey && !meta && !ev.ctrlKey && (ev.key === 'a' || ev.key === 'A') && onToggleAdvice) {
+        ev.preventDefault();
+        onToggleAdvice();
+        return;
+      }
       if (ev.key === 'Escape') {
         if (findRef.current.open) {
           ev.preventDefault();
@@ -9993,6 +10087,8 @@ window.__ModuleLoader__.load({
 // wants it back next session, so both the toggle and the drag width persist.
 const LS_ADVICE_OPEN = 'nw.adviceOpen';
 const LS_ADVICE_WIDTH = 'nw.adviceWidth';
+const LS_VIEW = 'nw.view';
+const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   const LS_NOTES_OPEN = 'nw.notesOpen';
   const DEFAULT_WIDTH = 272;
   // Host layout: the shell renders `data-sidebar-collapsed` on its frame and
@@ -10556,13 +10652,25 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     immersiveRef.current = immersive;
 
     // ------------------------------------------------------------- toasts ----
-    const pushToast = useCallback((message, kind) => {
+    /**
+     * R22: toasts can carry one action (撤销). Returns the toast id so callers
+     * can dismiss it early, and action toasts live longer — 2.8s is not enough
+     * time to notice and hit undo.
+     */
+    const pushToast = useCallback((message, kind, action) => {
       const id = 't' + Date.now() + Math.random().toString(36).slice(2, 6);
-      setToasts((list) => list.concat([{ id: id, message: String(message), kind: kind || 'info' }]));
+      const row = { id: id, message: String(message), kind: kind || 'info' };
+      if (action && typeof action.onClick === 'function') {
+        row.actionLabel = String(action.label || '撤销');
+        row.onClick = action.onClick;
+      }
+      setToasts((list) => list.concat([row]));
+      const ttl = row.actionLabel ? 6000 : 2800;
       setTimeout(() => {
         if (!aliveRef.current) return;
-        setToasts((list) => list.filter((row) => row.id !== id));
-      }, 2800);
+        setToasts((list) => list.filter((item) => item.id !== id));
+      }, ttl);
+      return id;
     }, []);
 
     useEffect(() => {
@@ -10571,6 +10679,10 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         if (NW.uiToastBus.push === pushToast) NW.uiToastBus.push = null;
       };
     }, [pushToast]);
+
+    const dismissToast = useCallback((id) => {
+      setToasts((list) => list.filter((row) => row.id !== id));
+    }, []);
 
     useEffect(() => {
       NW.uiModalHost.request = (req) => setModalReq(req);
@@ -10661,6 +10773,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         setActiveNovelId(initial.novelId == null ? null : initial.novelId);
         setActiveChapterId(initial.chapter ? initial.chapter.id : null);
         setChapter(initial.chapter || null);
+        // R22: land back on the screen the writer left (only if it still makes
+        // sense — 写作 needs a chapter, so an empty library stays on 首页).
+        if (lsGet(LS_VIEW) === 'write' && initial.chapter) setView('write');
         setSaveState('saved');
         setReady(true);
       } catch (err) {
@@ -10697,6 +10812,24 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
       if (!ready || locked) return;
       lsSet(LS_CHAPTER, activeChapterId == null ? null : activeChapterId);
     }, [activeChapterId, ready, locked]);
+    /**
+     * R22: per-book "last chapter" memory. `nw.activeChapter` only covers the
+     * book that happens to be open, so switching to another book and back used
+     * to lose your place. One small JSON map is enough.
+     */
+    useEffect(() => {
+      if (!ready || locked) return;
+      if (activeNovelId == null || activeChapterId == null) return;
+      let map = {};
+      try {
+        map = JSON.parse(lsGet(LS_LAST_CHAPTER) || '{}') || {};
+      } catch (err) {
+        map = {};
+      }
+      if (map[String(activeNovelId)] === String(activeChapterId)) return;
+      map[String(activeNovelId)] = String(activeChapterId);
+      lsSet(LS_LAST_CHAPTER, JSON.stringify(map));
+    }, [activeNovelId, activeChapterId, ready, locked]);
     useEffect(() => {
       lsSet(LS_WIDTH, shelfWidth);
     }, [shelfWidth]);
@@ -10712,6 +10845,17 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     useEffect(() => {
       lsSet(LS_ADVICE_WIDTH, adviceWidth);
     }, [adviceWidth]);
+    /**
+     * R22: remember which screen you were on. Booting straight into 首页 every
+     * time meant a writer who had been in the editor all afternoon reopened the
+     * studio and had to click their chapter again. Only restored once the boot
+     * has picked a chapter, so 写作 is never shown with an empty canvas.
+     */
+    useEffect(() => {
+      if (!ready || locked) return;
+      if (view === 'write' && !chapter) return;
+      lsSet(LS_VIEW, view);
+    }, [view, ready, locked, chapter]);
 
     /**
      * Home-screen data: the submission log and the journal count. Both are
@@ -11131,7 +11275,18 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
             setView('write');
             return;
           }
-          await selectChapter(rows[0].id);
+          // R22: reopening a book lands on the chapter you were last in, not on
+          // its first chapter. Keeping the place is the difference between "my
+          // book" and "a list of files".
+          let resume = null;
+          try {
+            const map = JSON.parse(lsGet(LS_LAST_CHAPTER) || '{}') || {};
+            const want = map[String(id)];
+            if (want) resume = rows.find((row) => String(row.id) === String(want)) || null;
+          } catch (err) {
+            resume = null;
+          }
+          await selectChapter((resume || rows[0]).id);
           return;
         }
         // No chapters yet → create the first one so the editor is usable.
@@ -11206,17 +11361,25 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         }
         try {
           flushEditor();
-          const created = await NW.db.createChapter(novelId, { parentId: parentId == null ? null : parentId, title: NW.t('新章节') });
+          // R22: number the default title. Every chapter used to be called
+          // 新章节, so a book of ten chapters showed ten identical rows.
+          const siblings = (Array.isArray(chapters) ? chapters : []).filter(
+            (row) => row && String(row.novelId) === String(novelId) && row.parentId == null,
+          );
+          const title = NW.t('新章节') + (siblings.length > 0 ? ' ' + (siblings.length + 1) : '');
+          const created = await NW.db.createChapter(novelId, { parentId: parentId == null ? null : parentId, title: title });
           await refreshChapters();
           if (!aliveRef.current) return;
           setActiveChapterId(created.id);
           setChapter(created);
           setSaveState('saved');
+          // R22: a new chapter is meant to be written in, so open the editor.
+          setView('write');
         } catch (err) {
           pushToast(errText(err, '新建章节失败'), 'error');
         }
       },
-      [activeNovelId, chapter, flushEditor, refreshChapters, pushToast],
+      [activeNovelId, chapter, chapters, flushEditor, refreshChapters, pushToast],
     );
 
     const renameNode = useCallback(
@@ -11249,10 +11412,16 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           { danger: true, title: NW.t('确认删除') },
         );
         if (!ok) return;
+        let trashId = null;
         try {
           flushEditor();
-          if (kind === 'novel') await NW.db.deleteNovel(id);
-          else await NW.db.deleteChapter(id);
+          // R22: remember where the doomed chapter sat before the delete, so the
+          // cursor can fall through to its neighbour instead of the library head.
+          const before = Array.isArray(chapters) ? chapters : [];
+          const goneIndex = before.findIndex((row) => row && String(row.id) === String(id));
+          const novelOf = (before[goneIndex] && before[goneIndex].novelId) || activeNovelId;
+          if (kind === 'novel') trashId = await NW.db.deleteNovel(id);
+          else trashId = await NW.db.deleteChapter(id);
           const novelRows = await refreshNovels();
           const chapterRows = await refreshChapters();
           if (!aliveRef.current) return;
@@ -11262,17 +11431,52 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
             setActiveChapterId(null);
             setChapter(null);
           } else if (kind === 'chapter' && String(activeChapterId) === String(id)) {
-            const next = (chapterRows || [])[0];
+            // Fall through to the chapter that took its place (the next sibling,
+            // else the previous one) — never jump to another book.
+            const siblings = (chapterRows || []).filter((row) => row && row.novelId === novelOf);
+            let next = null;
+            if (goneIndex >= 0 && siblings.length > 0) {
+              next = siblings[Math.min(goneIndex, siblings.length - 1)] || null;
+            }
+            if (!next) next = siblings[0] || (chapterRows || [])[0] || null;
             setActiveChapterId(next ? next.id : null);
             setChapter(next || null);
             if (next) setActiveNovelId(next.novelId);
           }
-          pushToast('已移入回收站', 'ok');
+          if (trashId) {
+            pushToast('已移入回收站', 'ok', {
+              label: '撤销',
+              onClick: () => {
+                NW.db
+                  .restoreTrash(trashId)
+                  .then(() => Promise.all([refreshNovels(), refreshChapters()]))
+                  .then(([novelRows, chapterRows]) => {
+                    if (!aliveRef.current) return;
+                    if (kind === 'chapter') {
+                      const back = (chapterRows || []).find((row) => String(row.id) === String(id));
+                      if (back) {
+                        setActiveChapterId(back.id);
+                        setActiveNovelId(back.novelId);
+                        setChapter(back);
+                        setView('write');
+                      }
+                    } else if (novelRows && novelRows.length) {
+                      const back = novelRows.find((row) => String(row.id) === String(id));
+                      if (back) setActiveNovelId(back.id);
+                    }
+                    pushToast('已恢复', 'ok');
+                  })
+                  .catch((err) => pushToast(errText(err, '恢复失败'), 'error'));
+              },
+            });
+          } else {
+            pushToast('已移入回收站', 'ok');
+          }
         } catch (err) {
           pushToast(errText(err, '删除失败'), 'error');
         }
       },
-      [activeNovelId, activeChapterId, flushEditor, refreshNovels, refreshChapters, pushToast],
+      [activeNovelId, activeChapterId, chapters, flushEditor, refreshNovels, refreshChapters, pushToast],
     );
 
     const moveNode = useCallback(
@@ -11841,7 +12045,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           onUnlock: unlock,
           onClose: null,
         }),
-        h(Toasts, { toasts: toasts }),
+        h(Toasts, { toasts: toasts, onDismiss: dismissToast }),
       );
     }
 
@@ -12034,6 +12238,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                       onToggleShelf: () => setShelfOpen((v) => !v),
                       shelfOpen: shelfOpen,
                       onLock: doLock,
+                      // R22: Alt+N / Alt+A from inside the textarea.
+                      onNewChapter: () => createChapter(null),
+                      onToggleAdvice: () => setAdviceOpen((v) => !v),
                       onSave: (content) => saveChapter(content, chapter.id),
                       onSelectionChange: onSelectionChange,
                       registerApi: registerEditor,
@@ -12220,7 +12427,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           })
         : null,
       modalReq ? h(ModalRequest, { req: modalReq, onDone: () => setModalReq(null) }) : null,
-      h(Toasts, { toasts: toasts }),
+      h(Toasts, { toasts: toasts, onDismiss: dismissToast }),
     );
   };
 
@@ -12837,11 +13044,36 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   // ------------------------------------------------------------------ misc ---
   function Toasts(props) {
     const list = (props && props.toasts) || [];
+    const dismiss = typeof props.onDismiss === 'function' ? props.onDismiss : null;
     if (list.length === 0) return null;
     return h(
       'div',
       { className: 'nw-toast-wrap', role: 'status', 'aria-live': 'polite' },
-      list.map((row) => h('div', { key: row.id, className: 'nw-toast', 'data-kind': row.kind }, row.message)),
+      list.map((row) =>
+        h(
+          'div',
+          { key: row.id, className: 'nw-toast', 'data-kind': row.kind },
+          h('span', { className: 'nw-toast-text' }, row.message),
+          row.actionLabel
+            ? h(
+                'button',
+                {
+                  className: 'nw-toast-act',
+                  type: 'button',
+                  onClick: () => {
+                    if (dismiss) dismiss(row.id);
+                    try {
+                      row.onClick();
+                    } catch (err) {
+                      /* the action owns its own error reporting */
+                    }
+                  },
+                },
+                row.actionLabel,
+              )
+            : null,
+        ),
+      ),
     );
   }
 
@@ -15639,6 +15871,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
               ['Ctrl / ⌘ + I', '斜体'],
               ['Ctrl / ⌘ + F', NW.t('查找替换')],
               ['Ctrl / ⌘ + Shift + L', NW.t('锁定')],
+              // R22: the two new in-editor shortcuts.
+              ['Alt + N', NW.t('新章节')],
+              ['Alt + A', NW.t('修改建议')],
               ['Tab', '插入两个全角空格'],
             ].map((row) => h('div', { key: row[0], className: 'nw-kbd-row' }, h('kbd', null, row[0]), h('span', null, row[1]))),
           ),
@@ -18284,6 +18519,18 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-toast[data-kind="error"]{border-color:color-mix(in srgb, var(--nw-danger) 36%, var(--nw-line));}
 .nw-toast[data-kind="error"]::before{background:var(--nw-danger);}
 .nw-toast[data-kind="info"]::before{background:var(--nw-brand);}
+/* R22: action toasts (撤销 on a delete) — the label is a real button, not
+   decoration, so it gets its own hit area and the brand colour. */
+.nw-toast-text{min-width:0;overflow-wrap:anywhere;}
+.nw-toast-act{
+  flex:0 0 auto;height:24px;padding:0 10px;margin-left:var(--nw-sp-0);
+  border-radius:var(--nw-r-pill);border:1px solid var(--nw-line-strong);
+  background:transparent;color:var(--nw-brand);
+  font-family:inherit;font-size:var(--nw-fs-tiny);font-weight:600;cursor:pointer;
+  transition:background var(--nw-dur) var(--nw-ease),color var(--nw-dur) var(--nw-ease);
+}
+.nw-toast-act:hover{background:var(--nw-brand);color:var(--nw-panel);}
+.nw-toast-act:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
 
 /* ============================================================ empty state ===
    The generic NW.ui.empty() renders a folder glyph. Scale it into a medallion

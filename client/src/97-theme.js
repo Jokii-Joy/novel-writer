@@ -282,6 +282,18 @@
 .nw-toast[data-kind="error"]{border-color:color-mix(in srgb, var(--nw-danger) 36%, var(--nw-line));}
 .nw-toast[data-kind="error"]::before{background:var(--nw-danger);}
 .nw-toast[data-kind="info"]::before{background:var(--nw-brand);}
+/* R22: action toasts (撤销 on a delete) — the label is a real button, not
+   decoration, so it gets its own hit area and the brand colour. */
+.nw-toast-text{min-width:0;overflow-wrap:anywhere;}
+.nw-toast-act{
+  flex:0 0 auto;height:24px;padding:0 10px;margin-left:var(--nw-sp-0);
+  border-radius:var(--nw-r-pill);border:1px solid var(--nw-line-strong);
+  background:transparent;color:var(--nw-brand);
+  font-family:inherit;font-size:var(--nw-fs-tiny);font-weight:600;cursor:pointer;
+  transition:background var(--nw-dur) var(--nw-ease),color var(--nw-dur) var(--nw-ease);
+}
+.nw-toast-act:hover{background:var(--nw-brand);color:var(--nw-panel);}
+.nw-toast-act:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
 
 /* ============================================================ empty state ===
    The generic NW.ui.empty() renders a folder glyph. Scale it into a medallion
