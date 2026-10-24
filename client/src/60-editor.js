@@ -515,8 +515,9 @@
 
      R30: three loose squares in a row read as three unrelated buttons, and the
      lock — a destructive action — sat one 4px gap away from the shelf toggle.
-     They are now one segmented capsule: navigation (home, shelf) | a hairline |
-     the lock, so the grouping itself says which two belong together. */
+     They were merged into one segmented capsule.
+     R33: the shelf toggle is gone (首页 restores the shelf), so the capsule now
+     holds two things — navigation | a hairline | the lock. */
   padding:3px;border-radius:var(--nw-r-pill);
   border:1px solid var(--nw-btn-border);background:var(--nw-panel);
   box-shadow:var(--nw-shadow-1);
