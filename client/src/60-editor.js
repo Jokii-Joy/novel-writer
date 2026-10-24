@@ -600,15 +600,12 @@
     const immersive = p.immersive === true || (p.immersive !== false && settings.immersive === true);
     // R12 ①: the writing surface needs its own way home — the toolbar has no
     // back button, and in immersive mode there is no toolbar at all.
+    // R33: 首页 also reopens the shelf, because the home screen is where you pick
+    // a book — landing there with the目录 still hidden made the button feel broken.
     const onHome = typeof p.onHome === 'function' ? p.onHome : null;
-    // R16 ③: the shelf handle and the lock button live next to the home button
-    // so the writing surface keeps its own controls even when DSH chrome is
-    // hidden (immersive) or the shelf is collapsed.
-    const onToggleShelf = typeof p.onToggleShelf === 'function' ? p.onToggleShelf : null;
+    // R16 ③: the lock button lives next to the home button so the writing surface
+    // keeps its own controls even when DSH chrome is hidden (immersive).
     const onLock = typeof p.onLock === 'function' ? p.onLock : null;
-    // Which glyph the shelf handle shows: a collapsed shelf needs 展开, an open
-    // one 收起. The app passes `shelfOpen` so the button never lies.
-    const shelfOpen = p.shelfOpen !== false;
     // R22: keyboard shortcuts for the two most common structural actions. The
     // editor owns the keystrokes because it has focus; the app owns the actions.
     const onNewChapter = typeof p.onNewChapter === 'function' ? p.onNewChapter : null;
@@ -2719,7 +2716,7 @@
       },
       h('div', { className: 'nw-scroll', ref: scrollRef, tabIndex: -1 }, body),
       findBar,
-      onHome || onToggleShelf || onLock
+      onHome || onLock
         ? h(
             'div',
             { className: 'nw-surface-acts' },
@@ -2747,26 +2744,9 @@
                   NW.icon('home', { size: 16 }),
                 )
               : null,
-            onToggleShelf
-              ? h(
-                  'button',
-                  {
-                    type: 'button',
-                    className: 'nw-actbtn',
-                    title: shelfOpen ? NW.t('隐藏目录') : NW.t('显示目录'),
-                    'aria-label': shelfOpen ? NW.t('隐藏目录') : NW.t('显示目录'),
-                    'aria-expanded': shelfOpen ? 'true' : 'false',
-                    onClick: (ev) => {
-                      if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-                      onToggleShelf();
-                    },
-                  },
-                  NW.icon(shelfOpen ? 'chevleft' : 'chevright', { size: 16 }),
-                )
-              : null,
-            // R30: the hairline splits navigation from the lock, so the only
-            // destructive button in this row can no longer be hit by accident
-            // while reaching for the shelf toggle.
+            // R33: 首页 itself now brings the shelf back, so the dedicated
+            // 目录 toggle is gone — one button, one meaning, and the corner
+            // stops needing a hairline to separate three things.
             onLock ? h('span', { className: 'nw-acts-div', 'aria-hidden': 'true' }) : null,
             onLock
               ? h(

@@ -2197,9 +2197,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // shelf used to remove every in-panel route back (dock needs two clicks
           // and reads as a writing tool, not a layout control). This handle stays
           // pinned to the left edge for as long as the shelf is hidden.
-          // R16 ③: the editor grew its own 目录 button, so this edge handle is
-          // only needed on screens that have no writing surface (home, empty).
-          !showShelf && !immersive && !(view === 'write' && chapter)
+          // R16 ③ briefly let the editor's own 目录 button replace this handle on
+          // the writing screen; R33 removed that button (首页 restores the shelf),
+          // so the edge handle is back everywhere except immersive.
+          !showShelf && !immersive
             ? h(
                 'button',
                 {
@@ -2280,11 +2281,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       notesLane: false,
                       // R12 ①: the paper owns its own 首页 button; the shelf
                       // header is gone in immersive mode.
-                      onHome: () => setView('home'),
-                      // R16 ③: 展开目录 + 锁定 now sit beside it, so the writing
-                      // surface never depends on DSH chrome or an open shelf.
-                      onToggleShelf: () => setShelfOpen((v) => !v),
-                      shelfOpen: shelfOpen,
+                      // R33: going home also reopens the shelf — that is where
+                      // you pick the next book, and a hidden shelf turned this
+                      // into a button that looked like it did nothing.
+                      onHome: () => {
+                        setView('home');
+                        setShelfOpen(true);
+                      },
+                      // R33: the 目录 toggle is gone (首页 now restores the
+                      // shelf). Lock stays so the writing surface keeps its own
+                      // controls even when DSH chrome is hidden.
                       onLock: doLock,
                       // R22: Alt+N / Alt+A from inside the textarea.
                       onNewChapter: () => createChapter(null),

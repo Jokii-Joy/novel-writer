@@ -8341,15 +8341,12 @@ window.__ModuleLoader__.load({
     const immersive = p.immersive === true || (p.immersive !== false && settings.immersive === true);
     // R12 ①: the writing surface needs its own way home — the toolbar has no
     // back button, and in immersive mode there is no toolbar at all.
+    // R33: 首页 also reopens the shelf, because the home screen is where you pick
+    // a book — landing there with the目录 still hidden made the button feel broken.
     const onHome = typeof p.onHome === 'function' ? p.onHome : null;
-    // R16 ③: the shelf handle and the lock button live next to the home button
-    // so the writing surface keeps its own controls even when DSH chrome is
-    // hidden (immersive) or the shelf is collapsed.
-    const onToggleShelf = typeof p.onToggleShelf === 'function' ? p.onToggleShelf : null;
+    // R16 ③: the lock button lives next to the home button so the writing surface
+    // keeps its own controls even when DSH chrome is hidden (immersive).
     const onLock = typeof p.onLock === 'function' ? p.onLock : null;
-    // Which glyph the shelf handle shows: a collapsed shelf needs 展开, an open
-    // one 收起. The app passes `shelfOpen` so the button never lies.
-    const shelfOpen = p.shelfOpen !== false;
     // R22: keyboard shortcuts for the two most common structural actions. The
     // editor owns the keystrokes because it has focus; the app owns the actions.
     const onNewChapter = typeof p.onNewChapter === 'function' ? p.onNewChapter : null;
@@ -10460,7 +10457,7 @@ window.__ModuleLoader__.load({
       },
       h('div', { className: 'nw-scroll', ref: scrollRef, tabIndex: -1 }, body),
       findBar,
-      onHome || onToggleShelf || onLock
+      onHome || onLock
         ? h(
             'div',
             { className: 'nw-surface-acts' },
@@ -10488,26 +10485,9 @@ window.__ModuleLoader__.load({
                   NW.icon('home', { size: 16 }),
                 )
               : null,
-            onToggleShelf
-              ? h(
-                  'button',
-                  {
-                    type: 'button',
-                    className: 'nw-actbtn',
-                    title: shelfOpen ? NW.t('隐藏目录') : NW.t('显示目录'),
-                    'aria-label': shelfOpen ? NW.t('隐藏目录') : NW.t('显示目录'),
-                    'aria-expanded': shelfOpen ? 'true' : 'false',
-                    onClick: (ev) => {
-                      if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-                      onToggleShelf();
-                    },
-                  },
-                  NW.icon(shelfOpen ? 'chevleft' : 'chevright', { size: 16 }),
-                )
-              : null,
-            // R30: the hairline splits navigation from the lock, so the only
-            // destructive button in this row can no longer be hit by accident
-            // while reaching for the shelf toggle.
+            // R33: 首页 itself now brings the shelf back, so the dedicated
+            // 目录 toggle is gone — one button, one meaning, and the corner
+            // stops needing a hairline to separate three things.
             onLock ? h('span', { className: 'nw-acts-div', 'aria-hidden': 'true' }) : null,
             onLock
               ? h(
@@ -12731,9 +12711,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // shelf used to remove every in-panel route back (dock needs two clicks
           // and reads as a writing tool, not a layout control). This handle stays
           // pinned to the left edge for as long as the shelf is hidden.
-          // R16 ③: the editor grew its own 目录 button, so this edge handle is
-          // only needed on screens that have no writing surface (home, empty).
-          !showShelf && !immersive && !(view === 'write' && chapter)
+          // R16 ③ briefly let the editor's own 目录 button replace this handle on
+          // the writing screen; R33 removed that button (首页 restores the shelf),
+          // so the edge handle is back everywhere except immersive.
+          !showShelf && !immersive
             ? h(
                 'button',
                 {
@@ -12814,11 +12795,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       notesLane: false,
                       // R12 ①: the paper owns its own 首页 button; the shelf
                       // header is gone in immersive mode.
-                      onHome: () => setView('home'),
-                      // R16 ③: 展开目录 + 锁定 now sit beside it, so the writing
-                      // surface never depends on DSH chrome or an open shelf.
-                      onToggleShelf: () => setShelfOpen((v) => !v),
-                      shelfOpen: shelfOpen,
+                      // R33: going home also reopens the shelf — that is where
+                      // you pick the next book, and a hidden shelf turned this
+                      // into a button that looked like it did nothing.
+                      onHome: () => {
+                        setView('home');
+                        setShelfOpen(true);
+                      },
+                      // R33: the 目录 toggle is gone (首页 now restores the
+                      // shelf). Lock stays so the writing surface keeps its own
+                      // controls even when DSH chrome is hidden.
                       onLock: doLock,
                       // R22: Alt+N / Alt+A from inside the textarea.
                       onNewChapter: () => createChapter(null),
