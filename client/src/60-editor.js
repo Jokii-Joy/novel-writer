@@ -10,11 +10,11 @@
   //     .nw-scroll                            the ONLY vertical scroller
   //       .nw-page (max width = --nw-width)   padding top/bottom = 留白
   //         .nw-stack (position:relative)
-  //           .nw-hl        z-index:1  typography mirror, color:transparent,
+  //           .nw-hl        z-index:var(--nw-z-base)  typography mirror, color:transparent,
   //                                     draws <mark> highlights (pointer-events:none)
-  //           .nw-caret     z-index:0  visibility:hidden measuring mirror used to
+  //           .nw-caret     z-index:var(--nw-z-base)  visibility:hidden measuring mirror used to
   //                                     locate the caret's *visual* line
-  //           textarea      z-index:2  transparent, uncontrolled, grown to the
+  //           textarea      z-index:var(--nw-z-base)  transparent, uncontrolled, grown to the
   //                                     full content height (so it never scrolls
   //                                     internally and both mirrors stay aligned)
   //     .nw-findbar (absolute)                find & replace overlay
@@ -45,13 +45,25 @@
   const TAB_TEXT = '\u3000\u3000'; // two full-width spaces
   const MAX_MATCHES = 5000;
   // Reading palettes owned by the editor. The five ids are shared with the
-  // shell (client/src/98-shell-theme.js) and with settings.theme; see
-  // docs/CONTRACT-R3.md section 2.
-  const THEMES = { harness: 1, claude: 1, eye: 1, night: 1, ink: 1, card: 1, newspaper: 1, guofeng: 1, magazine: 1 };
+  // shell (client/src/98-shell-theme.js) and with settings.theme. R19 dropped
+  // harness / ink / card / guofeng — see the palette comment further down.
+  const THEMES = { claude: 1, eye: 1, night: 1, newspaper: 1, magazine: 1 };
   // Values written by older settings rows keep working: the shell migrates
   // them in 90-app, but the editor has to tolerate a stale settings object too
   // (a document opened from an older backup, a settings write that raced).
-  const THEME_ALIAS = { light: 'claude', dark: 'night', parchment: 'ink', eye: 'eye' };
+  // Every retired id lands on its closest surviving neighbour so an old row
+  // never falls through to an unstyled surface.
+  const THEME_ALIAS = {
+    light: 'claude',
+    paper: 'claude',
+    harness: 'claude',
+    card: 'claude',
+    dark: 'night',
+    parchment: 'night',
+    ink: 'night',
+    guofeng: 'newspaper',
+    eye: 'eye',
+  };
 
   // ---------------------------------------------------------------- helpers --
   function nowMs() {
@@ -191,13 +203,14 @@
   position:relative;display:flex;flex-direction:column;flex:1 1 auto;
   height:100%;min-height:0;min-width:0;overflow:hidden;
   background:var(--nw-bg);color:var(--nw-fg);
-  /* R6: paper grain. A palette may set --nw-texture; harness and the other
-     chrome-following themes leave it unset, which resolves to none. */
+  /* R6: paper grain. A palette may set --nw-texture; every shipped palette
+     leaves it unset (backgrounds are plain colour since R10 ⑧), so this
+     resolves to none. The hook stays for user themes. */
   background-image:var(--nw-texture,none);
   font-family:var(--nw-ui-font,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",system-ui,sans-serif);
   font-size:16px;line-height:1.6;
-  transition:background-color .18s var(--nw-ease, cubic-bezier(.2,.7,.2,1)),
-             color .18s var(--nw-ease, cubic-bezier(.2,.7,.2,1));
+  transition:background-color var(--nw-dur) var(--nw-ease, cubic-bezier(.2,.7,.2,1)),
+             color var(--nw-dur) var(--nw-ease, cubic-bezier(.2,.7,.2,1));
   /* Reading measure. --nw-pad-x is the fixed gutter of the writing column;
      --nw-gutter-x is the extra lane kept free for the floating dock pinned to
      the bottom-right of the pane (CONTRACT-R3 section 7: the text's right edge
@@ -219,22 +232,6 @@
    gutter. */
 @container nw (max-width: 720px){.nw-surface{--nw-pad-x:22px;--nw-pad-y:36px;--nw-gutter-x:66px;}}
 
-/* ---- five reading palettes (owned by the editor, not the host chrome) ----
-   ids shared with 98-shell-theme.js: harness | claude | eye | night | ink.
-   "harness" deliberately re-maps nothing outside this element: it is the
-   neutral white paper that follows the host tokens around it. */
-.nw-surface[data-theme="harness"]{
-  --nw-bg:#ffffff;--nw-fg:#1f1f1f;--nw-soft:#6f7278;--nw-rule:#e6e4e0;
-  --nw-caret-color:#1f1f1f;--nw-caret:#1f1f1f;--nw-sel:rgba(31,31,31,.14);
-  --nw-accent:#1f1f1f;
-  --nw-scroll-thumb:rgba(31,31,31,.18);--nw-scroll-thumb-hover:rgba(31,31,31,.32);
-  --nw-panel:#ffffff;--nw-panel-border:#e6e4e0;--nw-panel-shadow:0 8px 24px rgba(0,0,0,.06);
-  --nw-btn-bg:#f6f5f2;--nw-btn-fg:#1f1f1f;--nw-btn-border:#e6e4e0;--nw-btn-hover:#eeede9;
-  --nw-hl-bg:rgba(255,196,0,.28);--nw-hl-line:rgba(203,145,0,.68);--nw-hl-active:rgba(255,152,0,.46);
-  --nw-find-bg:rgba(31,31,31,.10);--nw-find-active:rgba(31,31,31,.24);--nw-find-ring:rgba(31,31,31,.72);
-  --nw-empty-glyph:rgba(31,31,31,.16);
-  --nw-texture:none;
-}
 .nw-surface[data-theme="claude"]{
   --nw-bg:#faf4e9;--nw-fg:#1b1813;--nw-soft:#6d6558;--nw-rule:#e6dccb;
   --nw-caret-color:#1b1813;--nw-caret:#1b1813;--nw-sel:rgba(27,24,19,.14);
@@ -275,39 +272,6 @@
   --nw-empty-glyph:rgba(232,230,220,.16);
   --nw-texture:none;
 }
-.nw-surface[data-theme="ink"]{
-  --nw-bg:#e9eef5;--nw-fg:#121820;--nw-soft:#5b6675;--nw-rule:#d3dce6;
-  --nw-caret-color:#0d141b;--nw-caret:#0d141b;--nw-sel:rgba(18,24,32,.16);
-  --nw-accent:#1f4f6b;
-  --nw-scroll-thumb:rgba(18,24,32,.20);--nw-scroll-thumb-hover:rgba(18,24,32,.36);
-  --nw-panel:#f7fafd;--nw-panel-border:#d3dce6;--nw-panel-shadow:0 8px 24px rgba(18,32,48,.12);
-  --nw-btn-bg:#e3eaf2;--nw-btn-fg:#1f4f6b;--nw-btn-border:#d3dce6;--nw-btn-hover:#d7e1ec;
-  --nw-hl-bg:rgba(31,79,107,.16);--nw-hl-line:rgba(31,79,107,.56);--nw-hl-active:rgba(31,79,107,.30);
-  --nw-find-bg:rgba(31,79,107,.12);--nw-find-active:rgba(31,79,107,.26);--nw-find-ring:rgba(31,79,107,.78);
-  --nw-empty-glyph:rgba(18,24,32,.18);
-  /* Ink is a hard-edged material: no soft rounding anywhere. */
-  --nw-r-card:4px;--nw-r-control:3px;
-  /* A blue-grey wash that darkens toward the foot of the page. */
-  --nw-texture:none;
-}
-
-/* card — 极简卡片：纯白纸、无衬线、大圆角，靠留白与卡片分层而不是描边。
-   The accent is a muted slate blue, chosen because it survives the paper being
-   pure white without the theme reading as "harness with rounded corners". */
-.nw-surface[data-theme="card"]{
-  --nw-bg:#f9fbfd;--nw-fg:#16181c;--nw-soft:#6b7280;--nw-rule:#e3e8ef;
-  --nw-caret-color:#16181c;--nw-caret:#16181c;--nw-sel:rgba(22,24,28,.14);
-  --nw-accent:#3b6ea5;
-  --nw-scroll-thumb:rgba(22,24,28,.16);--nw-scroll-thumb-hover:rgba(22,24,28,.30);
-  --nw-panel:#ffffff;--nw-panel-border:#e9edf3;--nw-panel-shadow:0 10px 30px rgba(22,32,48,.10);
-  --nw-btn-bg:#ffffff;--nw-btn-fg:#16181c;--nw-btn-border:#e6ebf2;--nw-btn-hover:#eef3f9;
-  --nw-hl-bg:rgba(59,110,165,.16);--nw-hl-line:rgba(59,110,165,.60);--nw-hl-active:rgba(59,110,165,.32);
-  --nw-find-bg:rgba(59,110,165,.12);--nw-find-active:rgba(59,110,165,.26);--nw-find-ring:rgba(59,110,165,.80);
-  --nw-empty-glyph:rgba(22,24,28,.14);
-  --nw-r-card:18px;--nw-r-control:14px;
-  --nw-texture:none;
-}
-
 /* newspaper — 报纸：新闻纸米黄底、全衬线、细墨线，标题用报头红。 */
 .nw-surface[data-theme="newspaper"]{
   --nw-bg:#ecdfbe;--nw-fg:#1a1913;--nw-soft:#5a5546;--nw-rule:#d3c8a9;
@@ -325,25 +289,6 @@
   --nw-reading-font:Georgia,"Times New Roman","Songti SC","Noto Serif CJK SC",serif;
   /* R10: solid paper. The old ruled newsprint used a repeating-linear-gradient
      per 3px, which users read as "background grid" — replaced by a flat tone. */
-  --nw-texture:none;
-}
-
-/* guofeng — 国风水墨：宣纸底、楷体正文、朱砂印泥做强调色。 */
-.nw-surface[data-theme="guofeng"]{
-  --nw-bg:#f2e9d2;--nw-fg:#221f18;--nw-soft:#6a6250;--nw-rule:#ded2b6;
-  --nw-caret-color:#221f18;--nw-caret:#221f18;--nw-sel:rgba(34,31,24,.16);
-  --nw-accent:#a8442f;
-  --nw-scroll-thumb:rgba(34,31,24,.20);--nw-scroll-thumb-hover:rgba(34,31,24,.36);
-  --nw-panel:#f6eed9;--nw-panel-border:#e0d4b8;--nw-panel-shadow:0 8px 26px rgba(60,48,28,.14);
-  --nw-btn-bg:#e9dfc4;--nw-btn-fg:#221f18;--nw-btn-border:#dcd4bd;--nw-btn-hover:#dfd3b4;
-  --nw-hl-bg:rgba(168,68,47,.16);--nw-hl-line:rgba(168,68,47,.58);--nw-hl-active:rgba(168,68,47,.30);
-  --nw-find-bg:rgba(34,31,24,.10);--nw-find-active:rgba(34,31,24,.22);--nw-find-ring:rgba(34,31,24,.70);
-  --nw-empty-glyph:rgba(34,31,24,.16);
-  --nw-r-card:8px;--nw-r-control:6px;
-  --nw-ui-font-override:"Songti SC","STSong","Noto Serif CJK SC","SimSun",serif;
-  --nw-reading-font:"Kaiti SC","STKaiti","KaiTi","Noto Serif CJK SC","Songti SC",serif;
-  /* R10: solid 宣纸 tone. The two-way fibre gradient rendered as a visible grid
-     on large screens, so the paper is now a flat wash. */
   --nw-texture:none;
 }
 
@@ -368,40 +313,6 @@
   --nw-texture:none;
 }
 
-/* Legacy theme names. themeOf() normalises light/dark/parchment to the
-   canonical ids above, so these blocks exist only as a safety net for a caller
-   that writes the old id straight onto the element (older shells did). */
-.nw-surface[data-theme="light"]{
-  --nw-bg:#faf9f5;--nw-fg:#141413;--nw-soft:#6f6d66;--nw-rule:#e8e6dc;
-  --nw-caret-color:#141413;--nw-caret:#141413;--nw-sel:rgba(20,20,19,.13);--nw-accent:#d97757;
-  --nw-scroll-thumb:rgba(20,20,19,.18);--nw-scroll-thumb-hover:rgba(20,20,19,.32);
-  --nw-panel:#fdfcf9;--nw-panel-border:#e8e6dc;--nw-panel-shadow:0 8px 24px rgba(0,0,0,.06);
-  --nw-btn-bg:#f3f1ea;--nw-btn-fg:#141413;--nw-btn-border:#e8e6dc;--nw-btn-hover:#eae7de;
-  --nw-hl-bg:rgba(217,119,87,.22);--nw-hl-line:rgba(190,94,62,.62);--nw-hl-active:rgba(217,119,87,.38);
-  --nw-find-bg:rgba(217,119,87,.14);--nw-find-active:rgba(217,119,87,.30);--nw-find-ring:rgba(190,94,62,.82);
-  --nw-empty-glyph:rgba(20,20,19,.16);--nw-gutter-x:40px;
-}
-.nw-surface[data-theme="dark"]{
-  --nw-bg:#1a1a18;--nw-fg:#e8e6dc;--nw-soft:#9c9a90;--nw-rule:#33322d;
-  --nw-caret-color:#e8e6dc;--nw-caret:#e8e6dc;--nw-sel:rgba(232,230,220,.18);--nw-accent:#e08d6f;
-  --nw-scroll-thumb:rgba(232,230,220,.18);--nw-scroll-thumb-hover:rgba(232,230,220,.34);
-  --nw-panel:#221f1d;--nw-panel-border:#33322d;--nw-panel-shadow:0 8px 24px rgba(0,0,0,.46);
-  --nw-btn-bg:#2a2825;--nw-btn-fg:#e8e6dc;--nw-btn-border:#3a3832;--nw-btn-hover:#35322e;
-  --nw-hl-bg:rgba(224,141,111,.24);--nw-hl-line:rgba(224,141,111,.62);--nw-hl-active:rgba(224,141,111,.40);
-  --nw-find-bg:rgba(224,141,111,.16);--nw-find-active:rgba(224,141,111,.32);--nw-find-ring:rgba(224,141,111,.86);
-  --nw-empty-glyph:rgba(232,230,220,.16);
-}
-.nw-surface[data-theme="parchment"]{
-  --nw-bg:#f4f2ec;--nw-fg:#1a1a18;--nw-soft:#6b6a63;--nw-rule:#dedbd2;
-  --nw-caret-color:#141413;--nw-caret:#141413;--nw-sel:rgba(26,26,24,.14);--nw-accent:#2b2b28;
-  --nw-scroll-thumb:rgba(26,26,24,.20);--nw-scroll-thumb-hover:rgba(26,26,24,.34);
-  --nw-panel:#f9f7f1;--nw-panel-border:#dedbd2;--nw-panel-shadow:0 8px 24px rgba(26,26,24,.10);
-  --nw-btn-bg:#ebe8e0;--nw-btn-fg:#2b2b28;--nw-btn-border:#dedbd2;--nw-btn-hover:#e2ded4;
-  --nw-hl-bg:rgba(43,43,40,.14);--nw-hl-line:rgba(43,43,40,.55);--nw-hl-active:rgba(43,43,40,.26);
-  --nw-find-bg:rgba(43,43,40,.10);--nw-find-active:rgba(43,43,40,.22);--nw-find-ring:rgba(43,43,40,.70);
-  --nw-empty-glyph:rgba(26,26,24,.18);
-}
-
 /* Immersive writing surface (prop "immersive"). The component raises --nw-width
    to at least 880px; its 96px gutters are generous enough on their own, and the
    dock is dimmed and deprioritised in immersive mode, so the extra lane is
@@ -420,10 +331,28 @@
 .nw-scroll::-webkit-scrollbar{width:8px;height:8px;}
 .nw-scroll::-webkit-scrollbar-track{background:transparent;}
 .nw-scroll::-webkit-scrollbar-thumb{
-  background:var(--nw-scroll-thumb);border-radius:8px;border:2px solid transparent;background-clip:padding-box;
+  background:var(--nw-scroll-thumb);border-radius:var(--nw-r-control);border:2px solid transparent;background-clip:padding-box;
 }
 .nw-scroll::-webkit-scrollbar-thumb:hover{background:var(--nw-scroll-thumb-hover);background-clip:padding-box;}
-.nw-page{width:min(var(--nw-width,760px),100%);margin:0 auto;padding:var(--nw-pad-y) 0;}/* Typewriter room. Centring the caret needs half a viewport of content above
+/* ---- the sheet ------------------------------------------------------------
+   R19 B6: the manuscript used to be a bare rectangle of paper colour, which on
+   a wide panel read as "a textarea", not "a page". A hairline plus one soft
+   drop is enough to lift it off the desk; anything stronger turns the writing
+   surface into a card and competes with the text. The shadow is only drawn
+   when the sheet is actually narrower than the pane — at 100% width it would
+   be clipped by .nw-scroll and leave a smudge on one edge only. */
+.nw-page{
+  width:min(var(--nw-width,760px),100%);margin:0 auto;padding:var(--nw-pad-y) 0;
+  border-radius:var(--nw-r-card);
+  transition:box-shadow var(--nw-dur) var(--nw-ease,ease);
+}
+@container nw (min-width: 780px){
+  .nw-page{
+    border:1px solid var(--nw-line-soft);
+    box-shadow:var(--nw-shadow-paper);
+  }
+}
+/* Typewriter room. Centring the caret needs half a viewport of content above
    the first line and below the last one; without it the scrollTop gets clamped
    at 0/max near the document edges and the line never reaches the middle —
    which is exactly where people type most of the time. --nw-tw-room is set by
@@ -434,26 +363,40 @@
 }
 .nw-stack{position:relative;width:100%;contain:layout style;}
 
-/* ---- chapter heading (R17 ①) -------------------------------------------
+/* ---- chapter heading (R17 ①, reworked R19) -------------------------------
    The chapter name is printed as the first line of the manuscript, centred and
    larger than the body. It lives inside .nw-page above .nw-stack so it scrolls
    with the text, and it is deliberately NOT part of the textarea: the writer
    renames it in the shelf, the editor only displays it. Its height is measured
-   by chapterTitleH() and subtracted from the typewriter room. */
+   by chapterTitleH() and subtracted from the typewriter room.
+
+   R19: this used to be 700-weight, which read like a government notice. A book
+   heading is quieter than the body, not louder: semibold, a hair of tracking,
+   and a short centred rule that spans the title only. The rule is a pseudo
+   element, not a border on the block, so it never stretches the full measure. */
 .nw-chaptertitle{
   display:block;
   padding:0 calc(var(--nw-pad-x) + var(--nw-gutter-x,0px));
-  margin:0 0 calc(var(--nw-line) * 0.75em);
+  margin:0 0 calc(var(--nw-line) * 0.9em);
   font-family:var(--nw-font);
-  font-size:calc(var(--nw-size) * 1.28);
-  font-weight:700;
-  line-height:1.45;
-  letter-spacing:.01em;
+  font-size:calc(var(--nw-size) * 1.22);
+  font-weight:600;
+  line-height:1.5;
+  letter-spacing:.02em;
   text-align:center;
   color:var(--nw-fg);
   overflow-wrap:break-word;word-break:break-word;
   user-select:none;
 }
+.nw-chaptertitle::after{
+  content:'';
+  display:block;
+  width:36px;height:1px;
+  margin:calc(var(--nw-line) * 0.55em) auto 0;
+  background:var(--nw-rule);
+  opacity:.8;
+}
+.nw-surface[data-immersive="1"] .nw-chaptertitle::after{opacity:.55;}
 
 /* ---- shared typography for the textarea and BOTH mirrors -----------------
    Every wrapping-affecting property must be identical or the caret/highlight
@@ -474,7 +417,7 @@
    is hidden and replaced by .nw-cursor below, positioned from the very same
    mirror measurement the typewriter uses (no second geometry pipeline). */
 .nw-ta{
-  position:relative;z-index:2;
+  position:relative;z-index:var(--nw-z-base);
   background:transparent;color:var(--nw-fg);caret-color:transparent;
   overflow:hidden;resize:none;outline:none;-webkit-appearance:none;appearance:none;
   border-radius:0;
@@ -491,7 +434,7 @@
 .nw-cursor{
   position:absolute;left:0;top:0;width:var(--nw-caret-width,2px);height:1.2em;
   background:var(--nw-caret-color,#141413);border-radius:1px;
-  pointer-events:none;user-select:none;z-index:3;display:none;
+  pointer-events:none;user-select:none;z-index:var(--nw-z-float);display:none;
   animation:nw-caret-blink 1.06s step-end infinite;
 }
 /* R11: "光标闪烁" is a setting. paintCaret swaps animation-name to restart the
@@ -508,18 +451,18 @@
 /* highlight mirror: sits behind the transparent textarea, draws marks only */
 .nw-hl{
   position:absolute;left:0;top:0;right:0;height:100%;overflow:hidden;
-  color:transparent;pointer-events:none;user-select:none;z-index:1;
+  color:transparent;pointer-events:none;user-select:none;z-index:var(--nw-z-base);
 }
 .nw-hl mark{color:transparent;background-color:transparent;}
-.nw-hl .nw-hl-mark{background-color:var(--nw-hl-bg);border-radius:2px;box-shadow:inset 0 -1.5px 0 var(--nw-hl-line);}
+.nw-hl .nw-hl-mark{background-color:var(--nw-hl-bg);border-radius:var(--nw-r-hair);box-shadow:inset 0 -1.5px 0 var(--nw-hl-line);}
 .nw-hl .nw-hl-mark[data-active="1"]{background-color:var(--nw-hl-active);}
-.nw-hl .nw-find-hit{background-color:var(--nw-find-bg);border-radius:2px;}
+.nw-hl .nw-find-hit{background-color:var(--nw-find-bg);border-radius:var(--nw-r-hair);}
 .nw-hl .nw-find-hit[data-active="1"]{background-color:var(--nw-find-active);box-shadow:inset 0 0 0 1px var(--nw-find-ring);}
 
 /* caret measuring mirror: same box, never painted */
 .nw-caret{
   position:absolute;left:0;top:0;width:100%;height:auto;overflow:visible;
-  visibility:hidden;pointer-events:none;user-select:none;z-index:0;
+  visibility:hidden;pointer-events:none;user-select:none;z-index:var(--nw-z-base);
 }
 /* zero-size inline-block anchored to the line box top, not to the baseline */
 .nw-caret-mark{display:inline-block;width:0;height:0;vertical-align:top;overflow:hidden;}
@@ -527,17 +470,17 @@
 /* ---- empty state ---- */
 .nw-empty{
   min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
-  gap:10px;padding:32px;text-align:center;color:var(--nw-soft);
+  gap:var(--nw-sp-2);padding:var(--nw-sp-6);text-align:center;color:var(--nw-soft);
 }
 .nw-empty .nw-empty-glyph{font-size:40px;line-height:1;color:var(--nw-empty-glyph);}
 .nw-empty .nw-empty-main{font-size:14px;}
-.nw-empty .nw-empty-sub{font-size:11px;opacity:.8;}
+.nw-empty .nw-empty-sub{font-size:var(--nw-fs-tiny);opacity:.8;}
 
 /* ---- find & replace overlay ---- */
 .nw-findbar{
-  position:absolute;top:10px;right:14px;z-index:8;
-  width:min(342px,calc(100% - 28px));display:flex;flex-direction:column;gap:6px;
-  padding:9px;border-radius:10px;
+  position:absolute;top:10px;right:14px;z-index:var(--nw-z-float);
+  width:min(342px,calc(100% - 28px));display:flex;flex-direction:column;gap:var(--nw-sp-0);
+  padding:var(--nw-sp-1);border-radius:var(--nw-r-card);
   background:var(--nw-panel);border:1px solid var(--nw-panel-border);box-shadow:var(--nw-panel-shadow);
   color:var(--nw-btn-fg);font-size:12px;
 }
@@ -547,17 +490,17 @@
    immersive mode there is no toolbar at all, and a collapsed shelf would
    otherwise be unrecoverable from this view). */
 .nw-surface-acts{
-  position:absolute;top:10px;left:14px;z-index:8;
+  position:absolute;top:10px;left:14px;z-index:var(--nw-z-float);
   display:inline-flex;align-items:center;gap:4px;
 }
 .nw-homebtn,
 .nw-actbtn{
   display:inline-flex;align-items:center;justify-content:center;
   width:28px;height:28px;padding:0;
-  border-radius:8px;border:1px solid var(--nw-btn-border);
+  border-radius:var(--nw-r-control);border:1px solid var(--nw-btn-border);
   background:var(--nw-panel);color:var(--nw-btn-fg);
   font-family:inherit;font-size:12px;line-height:1;cursor:pointer;
-  opacity:.55;transition:opacity .16s ease,background .16s ease,border-color .16s ease;
+  opacity:.55;transition:opacity var(--nw-dur) ease,background var(--nw-dur) ease,border-color var(--nw-dur) ease;
 }
 .nw-homebtn:hover,
 .nw-actbtn:hover{opacity:1;background:var(--nw-btn-hover);border-color:var(--nw-find-ring);}
@@ -572,27 +515,27 @@
 .nw-surface[data-immersive="1"] .nw-actbtn{opacity:.28;}
 .nw-surface[data-immersive="1"] .nw-homebtn:hover,
 .nw-surface[data-immersive="1"] .nw-actbtn:hover{opacity:1;}
-.nw-findbar .nw-find-row{display:flex;align-items:center;gap:6px;}
+.nw-findbar .nw-find-row{display:flex;align-items:center;gap:var(--nw-sp-0);}
 .nw-findbar .nw-find-input{
-  flex:1 1 auto;min-width:0;height:27px;padding:0 8px;border-radius:6px;
+  flex:1 1 auto;min-width:0;height:27px;padding:0 8px;border-radius:var(--nw-r-control);
   border:1px solid var(--nw-btn-border);background:var(--nw-bg);color:var(--nw-fg);
   font-family:inherit;font-size:12px;line-height:25px;outline:none;
 }
 .nw-findbar .nw-find-input::placeholder{color:var(--nw-soft);}
 .nw-findbar .nw-find-input:focus{border-color:var(--nw-find-ring);box-shadow:0 0 0 2px var(--nw-find-bg);}
 .nw-findbar .nw-find-count{
-  min-width:52px;text-align:right;color:var(--nw-soft);font-size:11px;
+  min-width:52px;text-align:right;color:var(--nw-soft);font-size:var(--nw-fs-tiny);
   font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
-.nw-findbar .nw-find-actions{display:flex;align-items:center;gap:5px;flex-wrap:wrap;}
+.nw-findbar .nw-find-actions{display:flex;align-items:center;gap:var(--nw-sp-0);flex-wrap:wrap;}
 .nw-findbar .nw-find-spacer{flex:1 1 auto;min-width:4px;}
 
 .nw-ebtn{
   -webkit-appearance:none;appearance:none;display:inline-flex;align-items:center;justify-content:center;
-  height:27px;padding:0 9px;border-radius:6px;border:1px solid var(--nw-btn-border);
+  height:27px;padding:0 9px;border-radius:var(--nw-r-control);border:1px solid var(--nw-btn-border);
   background:var(--nw-btn-bg);color:var(--nw-btn-fg);
   font-family:inherit;font-size:12px;line-height:1;white-space:nowrap;cursor:pointer;
-  transition:background-color .12s ease,border-color .12s ease,opacity .12s ease;
+  transition:background-color var(--nw-dur) ease,border-color var(--nw-dur) ease,opacity var(--nw-dur) ease;
 }
 .nw-ebtn:hover:not([disabled]){background:var(--nw-btn-hover);}
 .nw-ebtn:active:not([disabled]){transform:translateY(.5px);}

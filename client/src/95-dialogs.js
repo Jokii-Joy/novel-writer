@@ -233,16 +233,14 @@
 
   // ---------------------------------------------------------- shared data ----
 
+  // Five themes (R19). Order is deliberate: the two neutral papers first, then
+  // the one dark palette, then the two that carry a strong editorial voice.
   const THEME_OPTIONS = [
-    { value: 'harness', label: 'Harness 默认' },
-    { value: 'claude', label: 'Claude' },
-    { value: 'card', label: '极简卡片' },
+    { value: 'claude', label: '浅色' },
     { value: 'eye', label: '护眼' },
-    { value: 'night', label: '黑夜' },
-    { value: 'ink', label: '水墨' },
+    { value: 'night', label: '深色' },
     { value: 'newspaper', label: '报纸' },
     { value: 'magazine', label: '杂志' },
-    { value: 'guofeng', label: '国风' },
   ];
 
   /**

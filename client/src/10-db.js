@@ -28,7 +28,9 @@
     fontSize: 20,
     lineHeight: 2,
     pageWidth: 760,
-    /* 'harness' | 'eye' | 'night' | 'ink' | 'claude' — see docs/CONTRACT-R3.md §2 */
+    /* 'claude' | 'eye' | 'night' | 'newspaper' | 'magazine' — five themes since
+       R19; retired ids (light/harness/card/ink/dark/parchment/guofeng) are
+       migrated on load by 90-app.js migrateTheme() and aliased by 60-editor.js. */
     theme: 'claude',
     typewriter: false,
     immersive: false,

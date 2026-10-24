@@ -25,12 +25,12 @@
 /* ================================================================ buttons == */
 .nw-btn{
   height:var(--nw-h-btn);padding:0 16px;border-radius:var(--nw-r-control);
-  font-size:var(--nw-fs-base);font-weight:500;line-height:1;gap:7px;letter-spacing:.01em;
-  transition:background var(--nw-dur,.18s) var(--nw-ease,ease),
-    border-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease),
-    transform var(--nw-dur,.18s) var(--nw-ease,ease);
+  font-size:var(--nw-fs-base);font-weight:500;line-height:1;gap:var(--nw-sp-1);letter-spacing:.01em;
+  transition:background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-btn:hover:not(:disabled){
   background:var(--nw-surface-2);border-color:var(--nw-line);
@@ -62,6 +62,20 @@
 .nw-btn[data-kind="danger"]{
   color:var(--nw-danger);
   border-color:color-mix(in srgb, var(--nw-danger) 28%, var(--nw-line));
+}
+/* R19 C1: only buttons had a pressed state. Every clickable row in the plugin
+   (shelf rows, journal items, welcome cards, advice cards) now answers the
+   finger too — one shared rule, because they all already carry a data-active or
+   aria-selected attribute for the selected state. */
+.nw-root :where(.nw-shelf-row,.nw-shelf-novel,.nw-journal-item,.nw-welcome-novel,
+  .nw-welcome-quickbtn,.nw-welcome-subbtn,.nw-advice,.nw-rowitem,.nw-choice,
+  .nw-settings-navbtn,.nw-advice-chip):active{
+  transform:translateY(1px);
+}
+.nw-root :where(.nw-advice-chip,.nw-welcome-quickbtn,.nw-journal-item,.nw-settings-navbtn){
+  transition:background var(--nw-dur) var(--nw-ease,ease),
+    border-color var(--nw-dur) var(--nw-ease,ease),
+    transform 90ms var(--nw-ease,ease);
 }
 .nw-btn[data-kind="danger"]:hover:not(:disabled){
   background:color-mix(in srgb, var(--nw-danger) 10%, transparent);
@@ -113,11 +127,11 @@
   border-color:var(--nw-line);background:var(--nw-surface-overlay);
   color:var(--nw-fg);font-size:var(--nw-fs-base);line-height:var(--nw-lh-base);
   box-shadow:none;
-  transition:border-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease),
-    background var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
-.nw-select{height:var(--nw-h-input);padding-right:10px;}
+.nw-select{height:var(--nw-h-input);padding-right:var(--nw-sp-2);}
 .nw-textarea{height:auto;min-height:104px;padding:11px 13px;line-height:1.7;resize:vertical;}
 .nw-input:hover:not(:disabled),.nw-select:hover:not(:disabled),.nw-textarea:hover:not(:disabled){
   border-color:var(--nw-line-strong);
@@ -143,7 +157,7 @@
 }
 .nw-input[type="range"]::-webkit-slider-runnable-track,
 .nw-range::-webkit-slider-runnable-track{
-  height:4px;border-radius:2px;background:var(--nw-surface-2);
+  height:4px;border-radius:var(--nw-r-hair);background:var(--nw-surface-2);
   box-shadow:inset 0 0 0 1px var(--nw-line);
 }
 .nw-input[type="range"]::-webkit-slider-thumb,
@@ -151,7 +165,7 @@
   -webkit-appearance:none;appearance:none;width:16px;height:16px;margin-top:-6px;
   border-radius:50%;background:var(--nw-brand);
   box-shadow:0 0 0 2px var(--nw-bg),0 0 0 3px var(--nw-line),var(--nw-shadow-1);
-  transition:box-shadow var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-input[type="range"]:hover::-webkit-slider-thumb,
 .nw-range:hover::-webkit-slider-thumb{
@@ -161,7 +175,7 @@
 }
 .nw-input[type="range"]::-moz-range-track,
 .nw-range::-moz-range-track{
-  height:4px;border-radius:2px;background:var(--nw-surface-2);
+  height:4px;border-radius:var(--nw-r-hair);background:var(--nw-surface-2);
 }
 .nw-input[type="range"]::-moz-range-thumb,
 .nw-range::-moz-range-thumb{
@@ -170,9 +184,9 @@
 }
 .nw-input[type="range"]:focus,.nw-range:focus{box-shadow:none;}
 .nw-input[type="range"]:focus-visible,.nw-range:focus-visible{
-  outline:2px solid var(--nw-brand);outline-offset:4px;border-radius:4px;
+  outline:2px solid var(--nw-brand);outline-offset:4px;border-radius:var(--nw-r-hair);
 }
-.nw-field{gap:7px;margin-bottom:16px;}
+.nw-field{gap:var(--nw-sp-1);margin-bottom:var(--nw-sp-4);}
 .nw-field > label{
   font-size:var(--nw-fs-micro);font-weight:500;color:var(--nw-fg-soft);letter-spacing:.01em;
 }
@@ -183,9 +197,9 @@
 .nw-row > span:first-child{min-width:0;}
 .nw-rowitem{
   font-size:var(--nw-fs-base);padding:9px 11px;border-radius:var(--nw-r-control);
-  transition:background var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-rowitem:hover{background:var(--nw-surface-2);}
 .nw-rowitem[data-active="1"]{
@@ -200,15 +214,15 @@
 .nw-switch i::after{
   top:2px;left:2px;width:20px;height:20px;background:var(--nw-bg);
   box-shadow:inset 0 0 0 1px var(--nw-line-strong),var(--nw-shadow-1);
-  transition:transform var(--nw-dur,.18s) var(--nw-ease-pop,ease),background var(--nw-dur,.18s) ease;
+  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease-pop,ease),background var(--nw-dur,var(--nw-dur)) ease;
 }
 .nw-switch input:checked + i{background:var(--nw-brand);box-shadow:none;}
 .nw-switch input:checked + i::after{transform:translateX(20px);}
 
 /* ================================================================= modal === */
 .nw-modal-mask{
-  padding:26px;background:rgba(0,0,0,.42);backdrop-filter:blur(3px);
-  animation:nw-fade-in var(--nw-dur,.18s) var(--nw-ease,ease) both;
+  padding:var(--nw-sp-6);background:rgba(0,0,0,.42);backdrop-filter:blur(3px);
+  animation:nw-fade-in var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease) both;
 }
 .nw-modal{
   max-width:680px;position:relative;
@@ -218,11 +232,11 @@
   background:var(--nw-surface-overlay);
   border-radius:var(--nw-r-modal);border:1px solid var(--nw-line-soft);
   box-shadow:var(--nw-shadow-3);
-  animation:nw-fade-up var(--nw-dur,.18s) var(--nw-ease,ease) both;
+  animation:nw-fade-up var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease) both;
 }
 /* headband: the same brand hairline the lock card wears */
 .nw-modal::before{
-  content:'';position:absolute;top:0;left:0;right:0;height:2px;z-index:1;pointer-events:none;
+  content:'';position:absolute;top:0;left:0;right:0;height:2px;z-index:var(--nw-z-base);pointer-events:none;
   background:linear-gradient(90deg,transparent,
     color-mix(in srgb, var(--nw-brand) 62%, transparent),transparent);
 }
@@ -240,25 +254,25 @@
   font-size:var(--nw-fs-title);font-weight:600;letter-spacing:.02em;color:var(--nw-fg);
 }
 .nw-modal-foot{
-  padding:13px 22px;gap:10px;
+  padding:13px 22px;gap:var(--nw-sp-2);
   border-top-color:var(--nw-line-soft);background:var(--nw-surface-1);
 }
 .nw-modal-foot .nw-btn{min-width:88px;}
 .nw-modal-foot .nw-spacer{flex:1 1 auto;}
 
 /* ================================================================= toast === */
-.nw-toast-wrap{bottom:60px;gap:8px;}
+.nw-toast-wrap{bottom:60px;gap:var(--nw-sp-1);}
 .nw-toast,
 .nw-toast[data-kind="ok"],
 .nw-toast[data-kind="error"],
 .nw-toast[data-kind="info"],
 .nw-toast[data-kind="default"]{
-  display:inline-flex;align-items:center;gap:10px;
+  display:inline-flex;align-items:center;gap:var(--nw-sp-2);
   padding:11px 18px;max-width:min(600px,74cqw);
   border-radius:var(--nw-r-pill);font-size:var(--nw-fs-second);font-weight:500;line-height:1.4;
   color:var(--nw-fg);background:var(--nw-surface-overlay);
   border:1px solid var(--nw-line);box-shadow:var(--nw-shadow-2);
-  animation:nw-toast-in var(--nw-dur,.18s) var(--nw-ease,ease) both;
+  animation:nw-toast-in var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease) both;
 }
 .nw-toast::before{
   content:'';flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:var(--nw-idle);
@@ -276,7 +290,7 @@
    treatment (with .nw-empty-glyph) from 60-editor.js; these selectors never
    reach it because the centre/modal hosts are required. */
 .nw-center .nw-empty,.nw-modal-body .nw-empty{
-  padding:8px 0 4px;gap:14px;
+  padding:8px 0 4px;gap:var(--nw-sp-4);
   /* 40-ui gives .nw-empty height:100% and 60-editor min-height:100%; inside a
      centred stage that would stretch the group to the full panel and strand the
      icon at the top. Both are reset so the block hugs its content. */
@@ -289,7 +303,7 @@
   height:40px;padding:0 22px;font-size:var(--nw-fs-base);
 }
 .nw-center .nw-empty > svg,.nw-modal-body .nw-empty > svg{
-  width:64px;height:64px;padding:14px;border-radius:20px;opacity:1;
+  width:64px;height:64px;padding:var(--nw-sp-4);border-radius:var(--nw-r-modal);opacity:1;
   color:var(--nw-brand);
   background:
     linear-gradient(160deg,
@@ -308,11 +322,11 @@
   font-family:var(--nw-reading-font);font-size:19px;letter-spacing:.02em;color:var(--nw-fg);
 }
 .nw-center .nw-empty::after{
-  content:'';position:relative;width:36px;height:2px;border-radius:2px;
+  content:'';position:relative;width:36px;height:2px;border-radius:var(--nw-r-hair);
   background:linear-gradient(90deg,transparent,
     color-mix(in srgb, var(--nw-brand) 48%, transparent),transparent);
 }
-.nw-center .nw-inline{font-size:var(--nw-fs-base);gap:10px;color:var(--nw-fg-soft);}
+.nw-center .nw-inline{font-size:var(--nw-fs-base);gap:var(--nw-sp-2);color:var(--nw-fg-soft);}
 .nw-center .nw-spin{width:20px;height:20px;border-width:2px;}
 
 /* ================================================================ typography = */
@@ -323,24 +337,24 @@
 .nw-title small{font-family:var(--nw-ui-font);letter-spacing:0;}
 
 /* ================================================================ lock ===== */
-.nw-lock-card{padding:38px 30px 28px;gap:10px;}
+.nw-lock-card{padding:38px 30px 28px;gap:var(--nw-sp-2);}
 .nw-lock-title{font-family:var(--nw-reading-font);font-size:20px;letter-spacing:.02em;}
 .nw-lock-hint{font-size:var(--nw-fs-second);line-height:1.75;}
 .nw-lock-input{height:44px;font-size:var(--nw-fs-base);}
-.nw-lock-actions{gap:10px;}
+.nw-lock-actions{gap:var(--nw-sp-2);}
 .nw-lock-actions > .nw-btn{flex:1 1 auto;height:38px;}
-.nw-lock-card .nw-inline{justify-content:center;margin-top:10px;}
+.nw-lock-card .nw-inline{justify-content:center;margin-top:var(--nw-sp-2);}
 
 /* ============================================================== settings === */
 .nw-settings-section{padding:16px 18px 8px;border-radius:var(--nw-r-card);}
 .nw-settings-section > h3{font-size:var(--nw-fs-base);font-weight:600;letter-spacing:.02em;}
 .nw-settings-section > h3::before{
-  content:'';display:inline-block;width:3px;height:13px;border-radius:2px;
-  background:var(--nw-brand);margin-right:9px;vertical-align:-2px;
+  content:'';display:inline-block;width:3px;height:13px;border-radius:var(--nw-r-hair);
+  background:var(--nw-brand);margin-right:var(--nw-sp-1);vertical-align:-2px;
 }
 .nw-settings-section .nw-row{padding:12px 0;}
 .nw-seg{padding:3px;border-radius:var(--nw-r-control);}
-.nw-grid2{gap:12px;}
+.nw-grid2{gap:var(--nw-sp-3);}
 
 /* =========================================================== suggestions === */
 .nw-suggest > input[type="checkbox"]{
@@ -372,8 +386,8 @@
    re-lifts. The dock must never compete with the text, hence the low resting
    opacity that 90-app already sets — nothing here raises it. */
 .nw-dock{
-  right:24px;bottom:64px;gap:10px;
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease);
+  right:24px;bottom:64px;gap:var(--nw-sp-2);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock-fab{
   width:46px;height:46px;border-radius:var(--nw-r-pill);
@@ -381,9 +395,9 @@
   background:var(--nw-surface-overlay);color:var(--nw-fg);
   box-shadow:var(--nw-shadow-1),var(--nw-shadow-2);
   font-size:19px;
-  transition:transform var(--nw-dur,.18s) var(--nw-ease-pop,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease),
-    background var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease-pop,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock-fab:hover{
   transform:translateY(-2px);background:var(--nw-surface-overlay);
@@ -391,17 +405,17 @@
 }
 .nw-dock-fab:active{transform:translateY(0) scale(.97);}
 .nw-dock-fab:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
-.nw-dock-menu{gap:10px;}
-.nw-dock-menu[data-open="1"]{animation:nw-pop var(--nw-dur,.18s) var(--nw-ease-pop,ease) both;}
+.nw-dock-menu{gap:var(--nw-sp-2);}
+.nw-dock-menu[data-open="1"]{animation:nw-pop var(--nw-dur,var(--nw-dur)) var(--nw-ease-pop,ease) both;}
 .nw-dock-btn{
   height:40px;padding:0 18px;border-radius:var(--nw-r-pill);
   border:1px solid var(--nw-line-soft);
   background:var(--nw-surface-overlay);color:var(--nw-fg);
-  font-size:var(--nw-fs-second);font-weight:500;gap:9px;
+  font-size:var(--nw-fs-second);font-weight:500;gap:var(--nw-sp-1);
   box-shadow:var(--nw-shadow-1);
-  transition:transform var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease),
-    background var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock-btn:hover:not(:disabled){
   transform:translateY(-1px);background:var(--nw-surface-overlay);
@@ -429,17 +443,17 @@
    screen (host sidebar + rightbar), so the tier is measured against the
    container declared in 05-css. 98b-responsive.js refines the same tiers. */
 @container nw (max-width: 980px){
-  .nw-toolbar{padding:0 var(--nw-sp-3);gap:6px;}
+  .nw-toolbar{padding:0 var(--nw-sp-3);gap:var(--nw-sp-0);}
   .nw-title{max-width:40%;padding-right:var(--nw-sp-1);}
   .nw-title small{display:none;}
   .nw-toolbar .nw-btn{padding:0 11px;}
   .nw-toolbar > span[style*="width: 1px"],
   .nw-toolbar > span[style*="width:1px"]{margin:0 2px;}
   .nw-status{gap:var(--nw-sp-3);padding:0 var(--nw-sp-3);}
-  .nw-modal-mask{padding:14px;}
+  .nw-modal-mask{padding:var(--nw-sp-4);}
   .nw-modal{max-width:100%;border-radius:var(--nw-r-card);}
   .nw-modal-head{padding:15px 16px 13px;}
-  .nw-modal-body{padding:16px;}
+  .nw-modal-body{padding:var(--nw-sp-4);}
   .nw-modal-foot{padding:12px 16px;}
   .nw-dock{right:12px;bottom:52px;}
   .nw-dock-btn{height:38px;padding:0 15px;}
@@ -448,7 +462,7 @@
    window instead of clipping. */
 @supports not (container-type: inline-size){
   @media (max-width:900px){
-    .nw-toolbar{padding:0 var(--nw-sp-3);gap:6px;}
+    .nw-toolbar{padding:0 var(--nw-sp-3);gap:var(--nw-sp-0);}
     .nw-title{max-width:40%;padding-right:var(--nw-sp-1);}
     .nw-title small{display:none;}
     .nw-toolbar .nw-btn{padding:0 11px;}

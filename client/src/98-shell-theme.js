@@ -3,27 +3,23 @@
 
   // ============================================================ Shell theme ==
   //
-  // The plugin ships eight themes. The writing surface owns the paper and the ink
-  // per theme inside 60-editor.js; this file carries the *shell* — toolbar,
-  // sidebar, status bar, dialogs, dock — into the same palette.
+  // The plugin ships five themes (R19: harness / ink / card / guofeng removed).
+  // The writing surface owns the paper and the ink per theme inside
+  // 60-editor.js; this file carries the *shell* - toolbar, sidebar, status bar,
+  // dialogs, dock - into the same palette.
   //
-  // Mechanism: re-map the host's --dsw-alias-* vocabulary inside .nw-root only.
+  // Mechanism: re-map the host --dsw-alias-* vocabulary inside .nw-root only.
   // Every rule in the plugin colours itself from those aliases (directly, or
   // through the --nw-* derivation in 05-css.js), so one scoped remap moves the
   // whole chrome without touching a single component rule. Nothing outside
-  // .nw-root is affected — the host's own UI keeps its own theme.
+  // .nw-root is affected - the host UI keeps its own theme.
   //
-  // `harness` deliberately has no branch: it is "follow the host", and any
-  // selector here would pin the shell to a palette the host does not use.
-  //
-  // Values (docs/CONTRACT-R5.md §2):
-  //   claude     paper #faf9f5 · ink #141413 · terracotta #d97757 · rule #e8e6dc
-  //   eye        paper #cce8cf · ink #1f2a20 · accent #2f6b3c
-  //   night      paper #1a1a18 · ink #e8e6dc · accent #e08d6f (terracotta lifted)
-  //   ink        paper #f4f2ec · ink #1a1a18 · accent #2b2b28 (achromatic)
-  //   card       paper #ffffff · ink #17181a · accent #3b6ea5 · r16
-  //   newspaper  paper #f2eee2 · ink #1c1b17 · accent #8c2b22 · serif, r2
-  //   guofeng    paper #f5f1e6 · ink #23211b · accent #a8442f · 楷体, r6
+  // Values (docs/CONTRACT-R5.md section 2):
+  //   claude     paper #faf4e9 ink #1b1813 terracotta #c4532f rule #e6dccb
+  //   eye        paper #cce8cf ink #1f2a20 accent #2f6b3c
+  //   night      paper #1a1a18 ink #e8e6dc accent #e08d6f (terracotta lifted)
+  //   newspaper  paper #ecdfbe ink #1a1913 accent #8c2b22 serif, r2
+  //   magazine   paper #ffffff ink #14171a accent #d0021b sans, r14
   // ===========================================================================
   NW.CSS_PARTS.push(`
 /* ============================================================ claude ====== */
@@ -93,53 +89,7 @@
 .nw-root[data-theme="night"] .nw-dock-fab,
 .nw-root[data-theme="night"] .nw-dock-btn{background:#2b2a26;}
 
-/* =============================================================== ink ====== */
-.nw-root[data-theme="ink"]{
-  --dsw-alias-bg-base:#e9eef5;
-  --dsw-alias-bg-layer-1:#e2e8f1;
-  --dsw-alias-bg-layer-2:#d9e2ed;
-  --dsw-alias-bg-overlay:#f6f9fc;
-  --dsw-alias-border-l1:#dde5ee;
-  --dsw-alias-border-l2:#d3dce6;
-  --dsw-alias-brand-primary:#1f4f6b;
-  --dsw-alias-label-primary:#121820;
-  --dsw-alias-label-secondary:#5b6675;
-  --dsw-alias-state-error-primary:#8f3b32;
-  --dsw-alias-state-idle-primary:#8a95a3;
-  --dsw-alias-state-success-primary:#3f6b57;
-  --dsw-alias-state-warn-primary:#8a6a2a;
-  --dsw-specific-sidebar-fill:#e4ebf3;
-  color-scheme:light;
-}
-
 /* ============================================================== card ====== */
-/* 极简卡片：白纸 + 无衬线 + 大圆角。Buttons and inputs drop their outline in
-   favour of a soft fill, which is what makes the style read as "cards". */
-.nw-root[data-theme="card"]{
-  --dsw-alias-bg-base:#f9fbfd;
-  --dsw-alias-bg-layer-1:#f0f4f9;
-  --dsw-alias-bg-layer-2:#e8eef6;
-  --dsw-alias-bg-overlay:#ffffff;
-  --dsw-alias-border-l1:#e9eef5;
-  --dsw-alias-border-l2:#dde4ee;
-  --dsw-alias-brand-primary:#3b6ea5;
-  --dsw-alias-label-primary:#17181a;
-  --dsw-alias-label-secondary:#6b6f76;
-  --dsw-alias-state-error-primary:#c0392b;
-  --dsw-alias-state-idle-primary:#a3a8b0;
-  --dsw-alias-state-success-primary:#2f8a63;
-  --dsw-alias-state-warn-primary:#b07514;
-  --dsw-specific-sidebar-fill:#f2f6fb;
-  --nw-r-card:16px;
-  --nw-r-control:12px;
-  --nw-r-modal:18px;
-  --nw-shadow-1:0 1px 3px rgba(23,24,26,.06);
-  --nw-shadow-2:0 10px 30px rgba(23,24,26,.08);
-  --nw-shadow-3:0 4px 12px rgba(23,24,26,.07), 0 30px 70px rgba(23,24,26,.14);
-  --nw-ui-font-override:"Inter","Helvetica Neue","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
-  color-scheme:light;
-}
-
 /* ========================================================= newspaper ====== */
 /* 报纸：新闻纸底、全衬线、直角。Serif UI + square corners are the whole point,
    so both are set here rather than left to the component defaults. */
@@ -223,32 +173,6 @@
   letter-spacing:.01em;
 }
 
-/* =========================================================== guofeng ====== */
-/* 国风水墨：宣纸底、宋体界面、朱砂强调。 */
-.nw-root[data-theme="guofeng"]{
-  --dsw-alias-bg-base:#f2e9d2;
-  --dsw-alias-bg-layer-1:#ece1c2;
-  --dsw-alias-bg-layer-2:#e3d6b2;
-  --dsw-alias-bg-overlay:#f9f1dc;
-  --dsw-alias-border-l1:#e2d6bb;
-  --dsw-alias-border-l2:#d8caa8;
-  --dsw-alias-brand-primary:#a8442f;
-  --dsw-alias-label-primary:#23211b;
-  --dsw-alias-label-secondary:#6a6455;
-  --dsw-alias-state-error-primary:#9c3326;
-  --dsw-alias-state-idle-primary:#a49d8b;
-  --dsw-alias-state-success-primary:#4b6b4a;
-  --dsw-alias-state-warn-primary:#8a6410;
-  --dsw-specific-sidebar-fill:#eee3c6;
-  --nw-r-card:8px;
-  --nw-r-control:6px;
-  --nw-shadow-1:0 1px 2px rgba(35,33,27,.08);
-  --nw-shadow-2:0 8px 26px rgba(35,33,27,.12);
-  --nw-shadow-3:0 2px 8px rgba(35,33,27,.10), 0 24px 60px rgba(35,33,27,.18);
-  --nw-ui-font-override:"Songti SC","STSong","Noto Serif CJK SC","SimSun",serif;
-  color-scheme:light;
-}
-
 /* ---------------------------------------------------------------------------
    Shared theme polish. These are shell-level adjustments that are true for every
    theme that is not "follow the host": the toolbar carries no separate fill (the
@@ -256,10 +180,8 @@
    ------------------------------------------------------------------------- */
 .nw-root[data-theme="claude"] .nw-toolbar,
 .nw-root[data-theme="eye"] .nw-toolbar,
-.nw-root[data-theme="ink"] .nw-toolbar,
-.nw-root[data-theme="card"] .nw-toolbar,
 .nw-root[data-theme="newspaper"] .nw-toolbar,
-.nw-root[data-theme="guofeng"] .nw-toolbar{
+.nw-root[data-theme="magazine"] .nw-toolbar{
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--nw-surface-overlay) 55%, transparent), transparent 84%),
     var(--nw-bg);
@@ -284,7 +206,7 @@
 .nw-root[data-theme="newspaper"] .nw-card,
 .nw-root[data-theme="newspaper"] .nw-journal-item,
 .nw-root[data-theme="newspaper"] .nw-choice{
-  border-radius:2px;
+  border-radius:var(--nw-r-hair);
 }
 .nw-root[data-theme="newspaper"] .nw-toolbar,
 .nw-root[data-theme="newspaper"] .nw-statusbar{
@@ -301,51 +223,5 @@
   letter-spacing:.06em;
 }
 
-.nw-root[data-theme="card"] .nw-btn,
-.nw-root[data-theme="card"] .nw-iconbtn,
-.nw-root[data-theme="card"] .nw-input,
-.nw-root[data-theme="card"] .nw-select{
-  border-radius:12px;
-}
-.nw-root[data-theme="card"] .nw-modal{
-  border-radius:18px;
-  border:1px solid var(--dsw-alias-border-l1);
-}
-.nw-root[data-theme="card"] .nw-card,
-.nw-root[data-theme="card"] .nw-journal-item,
-.nw-root[data-theme="card"] .nw-choice,
-.nw-root[data-theme="card"] .nw-setting-group{
-  border-radius:16px;
-  border-color:transparent;
-  box-shadow:var(--nw-shadow-1);
-  background:var(--nw-surface-overlay);
-}
-.nw-root[data-theme="card"] .nw-btn{
-  border-color:transparent;
-  background:var(--nw-sunken);
-}
-.nw-root[data-theme="card"] .nw-btn:hover{
-  background:color-mix(in srgb, var(--dsw-alias-label-primary) 9%, var(--nw-bg));
-}
-
-.nw-root[data-theme="guofeng"] .nw-btn,
-.nw-root[data-theme="guofeng"] .nw-iconbtn,
-.nw-root[data-theme="guofeng"] .nw-input,
-.nw-root[data-theme="guofeng"] .nw-select,
-.nw-root[data-theme="guofeng"] .nw-modal,
-.nw-root[data-theme="guofeng"] .nw-card{
-  border-radius:6px;
-}
-.nw-root[data-theme="guofeng"] .nw-toolbar-label,
-.nw-root[data-theme="guofeng"] .nw-title,
-.nw-root[data-theme="guofeng"] .nw-dialog-title{
-  font-family:"Songti SC","STSong","Noto Serif CJK SC","SimSun",serif;
-  letter-spacing:.08em;
-}
-/* 印章感：强调色只出现在实心主按钮上，像一方朱砂印。 */
-.nw-root[data-theme="guofeng"] .nw-btn-primary{
-  background:var(--dsw-alias-brand-primary);
-  color:#faf6ea;
-}
 `);
 })();

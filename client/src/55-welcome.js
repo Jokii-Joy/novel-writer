@@ -366,7 +366,16 @@
 
     let inboxBody;
     if (inboxStatus === 'loading' && inboxMessages.length === 0) {
-      inboxBody = NW.h('div', { className: 'nw-welcome-inboxbusy' }, NW.ui.spinner('正在读取收件箱…'));
+      // R19 C2: a spinner alone left the card at one line of height and the
+      // page jumped when the mail arrived. Three skeleton rows hold the space
+      // the real rows will take, so nothing moves.
+      inboxBody = NW.h(
+        'div',
+        { className: 'nw-skel', 'aria-hidden': 'true' },
+        NW.h('span', { className: 'nw-skel-row' }),
+        NW.h('span', { className: 'nw-skel-row' }),
+        NW.h('span', { className: 'nw-skel-row' }),
+      );
     } else if (inboxProp.error) {
       inboxBody = NW.h(
         'div',
@@ -568,7 +577,7 @@
 /* ============================================================== welcome ==
    A reading column, not a dashboard: one max-width container, card surfaces
    derived from the same --nw-* tokens the editor uses, so every theme
-   (including 报纸 / 国风 / 极简卡片) restyles the home screen for free. */
+   (including 报纸 / 杂志) restyles the home screen for free. */
 .nw-welcome{
   height:100%;min-height:0;overflow:auto;
   /* R13: cqw, not vw — the home screen is a column inside the host shell, so a
@@ -582,11 +591,23 @@
 .nw-welcome-inner{max-width:940px;margin:0 auto;display:flex;flex-direction:column;gap:var(--nw-sp-5);}
 .nw-btn-icon{display:inline-flex;align-items:center;flex:0 0 auto;}
 
-.nw-welcome-head{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--nw-sp-4);flex-wrap:wrap;}
+.nw-welcome-head{
+  position:relative;
+  display:flex;align-items:flex-end;justify-content:space-between;gap:var(--nw-sp-4);flex-wrap:wrap;
+  padding-bottom:var(--nw-sp-5);
+}
+/* R19 B4: the home screen had no focal point — a title, a sentence, three
+   buttons, then four identical cards. The hero rule gives the eye a place to
+   land and separates "what this is" from "what you do next". It fades out to
+   the right so it reads as a gesture, not as a table border. */
+.nw-welcome-head::after{
+  content:'';position:absolute;left:0;right:0;bottom:0;height:1px;
+  background:linear-gradient(90deg, var(--nw-line-strong), var(--nw-line-soft) 42%, transparent 88%);
+}
 .nw-welcome-headtext{min-width:0;flex:1 1 320px;}
 .nw-welcome-title{
-  margin:0 0 6px;font-family:var(--nw-reading-font);font-weight:600;
-  font-size:clamp(22px,2.6cqw,28px);line-height:1.25;letter-spacing:.01em;color:var(--nw-fg);
+  margin:0 0 var(--nw-sp-0);font-family:var(--nw-reading-font);font-weight:600;
+  font-size:clamp(24px,2.9cqw,31px);line-height:1.2;letter-spacing:.005em;color:var(--nw-fg);
 }
 .nw-welcome-sub{margin:0;font-size:var(--nw-fs-second);line-height:1.6;color:var(--nw-fg-soft);}
 .nw-welcome-actions{display:flex;align-items:center;gap:var(--nw-sp-2);flex-wrap:wrap;}
@@ -607,6 +628,19 @@
   font-size:var(--nw-fs-micro);font-weight:600;letter-spacing:.06em;text-transform:none;
   color:var(--nw-fg-soft);
 }
+/* R19 C2: skeleton placeholders. The sweep is one gradient travelling across a
+   muted bar; it stops entirely under prefers-reduced-motion. */
+.nw-skel{display:flex;flex-direction:column;gap:var(--nw-sp-1);padding:var(--nw-sp-0) 0;}
+.nw-skel-row{
+  display:block;height:34px;border-radius:var(--nw-r-control);
+  background:linear-gradient(90deg,
+    color-mix(in srgb, var(--nw-fg) 6%, transparent) 0%,
+    color-mix(in srgb, var(--nw-fg) 12%, transparent) 42%,
+    color-mix(in srgb, var(--nw-fg) 6%, transparent) 84%);
+  background-size:220% 100%;
+  animation:nw-skel 1.25s ease-in-out infinite;
+}
+@keyframes nw-skel{from{background-position:120% 0;}to{background-position:-20% 0;}}
 .nw-welcome-empty{margin:0;font-size:var(--nw-fs-second);line-height:1.7;color:var(--nw-fg-soft);}
 
 /* -------------------------------------------------------- 正在创作 ----- */
@@ -616,7 +650,7 @@
   padding:9px 8px;border:0;border-radius:var(--nw-r-control);
   background:transparent;color:inherit;text-align:left;cursor:pointer;
   font-family:inherit;font-size:var(--nw-fs-second);
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-welcome-novel:hover{background:var(--nw-sunken);}
 .nw-welcome-novel:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
@@ -639,7 +673,7 @@
 }
 
 /* -------------------------------------------------------- 投稿记录 ----- */
-.nw-welcome-subs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;}
+.nw-welcome-subs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--nw-sp-0);}
 .nw-welcome-sub{
   display:flex;align-items:center;justify-content:space-between;gap:var(--nw-sp-3);
   padding:8px 10px;border-radius:var(--nw-r-control);background:var(--nw-sunken);
@@ -661,7 +695,7 @@
 .nw-welcome-subbtn{
   width:100%;border:1px solid transparent;font-family:inherit;text-align:left;
   color:var(--nw-fg);cursor:pointer;
-  transition:background .16s ease,border-color .16s ease,transform .16s ease;
+  transition:background var(--nw-dur) ease,border-color var(--nw-dur) ease,transform var(--nw-dur) ease;
 }
 .nw-welcome-subbtn:hover{
   border-color:var(--nw-line-strong);
@@ -672,7 +706,7 @@
 .nw-welcome-subarrow{
   display:inline-flex;flex:0 0 auto;color:var(--nw-fg-soft);
   opacity:0;transform:translateX(-3px);
-  transition:opacity .16s ease,transform .16s ease;
+  transition:opacity var(--nw-dur) ease,transform var(--nw-dur) ease;
 }
 .nw-welcome-sub-unread .nw-welcome-subtitle{font-weight:600;}
 
@@ -686,7 +720,7 @@
   width:30px;padding:0;border-radius:var(--nw-r-control);
   border:1px solid transparent;background:transparent;
   color:var(--nw-fg-soft);font-family:inherit;cursor:pointer;
-  opacity:0;transition:opacity .16s ease,color .16s ease,background .16s ease,border-color .16s ease;
+  opacity:0;transition:opacity var(--nw-dur) ease,color var(--nw-dur) ease,background var(--nw-dur) ease,border-color var(--nw-dur) ease;
 }
 .nw-welcome-subrow:hover .nw-welcome-subdel,
 .nw-welcome-subdel:focus-visible{opacity:1;}
@@ -699,12 +733,12 @@
 
 /* R16 ⑤: the fold footer shared by all three cards. */
 .nw-welcome-more{
-  display:flex;align-items:center;justify-content:center;gap:5px;
-  width:100%;margin-top:8px;padding:6px 10px;
+  display:flex;align-items:center;justify-content:center;gap:var(--nw-sp-0);
+  width:100%;margin-top:var(--nw-sp-1);padding:6px 10px;
   border-radius:var(--nw-r-control);border:1px solid var(--nw-line);
   background:transparent;color:var(--nw-fg-soft);
   font-family:inherit;font-size:var(--nw-fs-micro);cursor:pointer;
-  transition:color .16s ease,border-color .16s ease,background .16s ease;
+  transition:color var(--nw-dur) ease,border-color var(--nw-dur) ease,background var(--nw-dur) ease;
 }
 .nw-welcome-more:hover{
   color:var(--nw-fg);
@@ -733,7 +767,7 @@
 .nw-badge{
   flex:0 0 auto;display:inline-flex;align-items:center;
   height:20px;padding:0 8px;border-radius:var(--nw-r-pill);
-  font-size:11.5px;line-height:1;white-space:nowrap;
+  font-size:var(--nw-fs-tiny);line-height:1;white-space:nowrap;
   background:color-mix(in srgb, var(--nw-fg-soft) 12%, transparent);
   color:var(--nw-fg-soft);
 }
@@ -746,14 +780,14 @@
 /* -------------------------------------------------------- 快捷入口 ----- */
 .nw-welcome-quick{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px,100%),1fr));gap:var(--nw-sp-2);}
 .nw-welcome-quickbtn{
-  display:flex;align-items:center;gap:10px;
+  display:flex;align-items:center;gap:var(--nw-sp-2);
   padding:12px 14px;border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
   background:var(--nw-surface-1);color:var(--nw-fg);cursor:pointer;
   font-family:inherit;font-size:var(--nw-fs-second);text-align:left;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    border-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease),
-    transform var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-welcome-quickbtn:hover:not(:disabled){
   background:var(--nw-surface-2);border-color:var(--nw-line-strong);
@@ -765,9 +799,9 @@
 .nw-welcome-quickicon{
   color:var(--nw-fg-soft);display:flex;flex:0 0 auto;
   width:26px;height:26px;align-items:center;justify-content:center;
-  border-radius:8px;background:color-mix(in srgb, var(--nw-fg) 6%, transparent);
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease);
+  border-radius:var(--nw-r-control);background:color-mix(in srgb, var(--nw-fg) 6%, transparent);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-welcome-quickbtn:hover:not(:disabled) .nw-welcome-quickicon{background:var(--nw-brand);color:var(--nw-bg);}
 
@@ -778,9 +812,9 @@
 .nw-welcome-refresh{
   display:inline-flex;align-items:center;justify-content:center;
   width:26px;height:26px;padding:0;
-  border:1px solid transparent;border-radius:8px;
+  border:1px solid transparent;border-radius:var(--nw-r-control);
   background:transparent;color:var(--nw-fg-soft);cursor:pointer;
-  transition:background-color .16s ease,color .16s ease,border-color .16s ease;
+  transition:background-color var(--nw-dur) ease,color var(--nw-dur) ease,border-color var(--nw-dur) ease;
 }
 .nw-welcome-refresh:hover:not(:disabled){background:var(--nw-sunken);border-color:var(--nw-line);color:var(--nw-fg);}
 .nw-welcome-refresh:disabled{opacity:.5;cursor:default;}
@@ -791,6 +825,7 @@
   .nw-welcome-quickbtn{transition:none;}
   .nw-welcome-quickbtn:hover:not(:disabled){transform:none;}
   .nw-welcome-refresh:disabled .nw-welcome-refreshicon{animation:none;}
+  .nw-skel-row{animation:none;background:color-mix(in srgb, var(--nw-fg) 8%, transparent);}
 }
 
 /* R13: container tiers, not window tiers — the home screen is a column. */

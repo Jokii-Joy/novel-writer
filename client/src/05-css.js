@@ -25,14 +25,19 @@
   --nw-reading-font:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Songti SC","Noto Serif CJK SC",
     "Source Han Serif SC","Noto Serif SC",STSong,SimSun,serif;
 
-  /* type */
+  /* type
+     Four sizes, and the smallest one is 12px. Anything below 12 stops being
+     "secondary" and starts being unreadable on a 1x display, so 10.5/11/11.5
+     were folded up into --nw-fs-tiny in the R19 pass. */
   --nw-fs-base:16px;
   --nw-fs-second:14px;
   --nw-fs-micro:13px;
+  --nw-fs-tiny:12px;
   --nw-fs-title:17px;
   --nw-lh-base:1.55;
 
   /* radii */
+  --nw-r-hair:2px;
   --nw-r-card:12px;
   --nw-r-control:10px;
   --nw-r-modal:16px;
@@ -45,8 +50,21 @@
   --nw-h-toolbar:52px;
   --nw-h-status:34px;
 
-  /* rhythm */
-  --nw-sp-1:8px;--nw-sp-2:10px;--nw-sp-3:12px;--nw-sp-4:16px;--nw-sp-5:20px;--nw-sp-6:24px;
+  /* rhythm — every gap/padding in the plugin resolves to one of these.
+     Before R19 about 75% of them were hand-written (6/8/10/4/5/7px all lived
+     side by side), which is why rows never quite lined up. */
+  --nw-sp-0:4px;--nw-sp-1:8px;--nw-sp-2:10px;--nw-sp-3:12px;
+  --nw-sp-4:16px;--nw-sp-5:20px;--nw-sp-6:24px;
+
+  /* Layering. Fifteen ad-hoc z-index values used to be scattered across the
+     parts (0/1/2/3/4/5/7/8/20/30/33/34/39/40/60), which meant the notes card
+     could end up above a modal by accident. These five rungs are the only
+     values the plugin is allowed to use now; each one has exactly one job. */
+  --nw-z-base:0;      /* in-flow content */
+  --nw-z-float:10;    /* things that float over the manuscript: home/lock, notes, dock */
+  --nw-z-panel:20;    /* side panels and popovers that must beat the floats */
+  --nw-z-modal:40;    /* modal mask + dialog */
+  --nw-z-toast:60;    /* toasts are always last */
 
   /* Surfaces. The host's layer tokens are not reliably distinct from the page
      background (in the light theme layer-1/2/overlay are all plain white), so
@@ -70,10 +88,18 @@
   --nw-warn:var(--dsw-alias-state-warn-primary);
   --nw-idle:var(--dsw-alias-state-idle-primary);
 
-  /* neutrals used only for elevation (no token exists for shadows) */
-  --nw-shadow-1:0 1px 2px rgba(0,0,0,.04);
-  --nw-shadow-2:0 8px 24px rgba(0,0,0,.06);
-  --nw-shadow-3:0 2px 6px rgba(0,0,0,.05), 0 24px 64px rgba(0,0,0,.12);
+  /* Neutrals used only for elevation — there is no shadow token in the host.
+     R19: these are derived from the ink rather than from black, so a dark
+     palette gets a shadow that reads as depth instead of a grey smudge. The
+     paper lift is the one exception: a sheet on a desk is darker underneath. */
+  --nw-shadow-1:0 1px 2px color-mix(in srgb, var(--nw-fg) 6%, transparent);
+  --nw-shadow-2:0 8px 24px color-mix(in srgb, var(--nw-fg) 10%, transparent);
+  --nw-shadow-3:0 2px 6px color-mix(in srgb, var(--nw-fg) 8%, transparent),
+                0 24px 64px color-mix(in srgb, var(--nw-fg) 18%, transparent);
+  /* The manuscript sheet itself: a hairline plus one soft drop, enough to read
+     as paper on a desk without turning the writing surface into a card. */
+  --nw-shadow-paper:0 1px 1px color-mix(in srgb, var(--nw-fg) 5%, transparent),
+                    0 12px 32px color-mix(in srgb, var(--nw-fg) 8%, transparent);
   --nw-ring:0 0 0 2px var(--nw-bg), 0 0 0 4px color-mix(in srgb, var(--nw-brand) 55%, transparent);
   --nw-ring-soft:0 0 0 3px color-mix(in srgb, var(--nw-brand) 16%, transparent);
 
@@ -89,8 +115,8 @@
      97-theme.js only remain as a belt-and-braces fallback for old engines. */
   container-type:inline-size;
   container-name:nw;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-root *{box-sizing:border-box;}
 .nw-root ::selection{background:color-mix(in srgb, var(--nw-brand) 22%, transparent);}
@@ -109,7 +135,7 @@
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--nw-surface-overlay) 60%, transparent), transparent 82%),
     var(--nw-bg);
-  position:relative;z-index:5;
+  position:relative;z-index:var(--nw-z-float);
 }
 /* a hairline of brand under the strip: the only colour in the chrome at rest */
 .nw-toolbar::after{
@@ -122,7 +148,7 @@
 .nw-title{
   font-family:var(--nw-reading-font);
   font-weight:600;font-size:var(--nw-fs-base);letter-spacing:.02em;
-  display:flex;align-items:baseline;gap:8px;color:var(--nw-fg);max-width:38%;min-width:0;
+  display:flex;align-items:baseline;gap:var(--nw-sp-1);color:var(--nw-fg);max-width:38%;min-width:0;
   padding-right:var(--nw-sp-2);
 }
 .nw-title small{
@@ -140,17 +166,17 @@
 /* ------------------------------------------------------------------ body -- */
 .nw-body{display:flex;flex:1 1 auto;min-height:0;position:relative;}
 .nw-splitter{
-  flex:0 0 8px;cursor:col-resize;background:transparent;position:relative;z-index:3;
+  flex:0 0 8px;cursor:col-resize;background:transparent;position:relative;z-index:var(--nw-z-float);
   border-left:1px solid var(--nw-line);
-  transition:background var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-splitter::after{
   content:'';position:absolute;top:50%;left:3px;transform:translateY(-50%);
-  width:2px;height:28px;border-radius:2px;background:var(--nw-line-strong);
+  width:2px;height:28px;border-radius:var(--nw-r-hair);background:var(--nw-line-strong);
   opacity:.5;
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease),
-    background var(--nw-dur,.18s) var(--nw-ease,ease),
-    height var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    height var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-splitter:hover::after,.nw-splitter[data-drag="1"]::after{
   background:var(--nw-brand);opacity:1;height:48px;
@@ -173,13 +199,13 @@
   color:var(--nw-fg-soft);font-size:var(--nw-fs-micro);letter-spacing:.01em;
   font-variant-numeric:tabular-nums;
 }
-.nw-status > span{display:inline-flex;align-items:center;gap:6px;min-width:0;white-space:nowrap;}
+.nw-status > span{display:inline-flex;align-items:center;gap:var(--nw-sp-0);min-width:0;white-space:nowrap;}
 .nw-status .nw-dot{
   width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:2px;flex:0 0 auto;
   background:var(--nw-idle);
   box-shadow:0 0 0 3px color-mix(in srgb, var(--nw-idle) 16%, transparent);
-  transition:background var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-status .nw-dot[data-state="ok"]{
   background:var(--nw-ok);box-shadow:0 0 0 3px color-mix(in srgb, var(--nw-ok) 16%, transparent);

@@ -43,14 +43,19 @@ window.__ModuleLoader__.load({
   --nw-reading-font:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Songti SC","Noto Serif CJK SC",
     "Source Han Serif SC","Noto Serif SC",STSong,SimSun,serif;
 
-  /* type */
+  /* type
+     Four sizes, and the smallest one is 12px. Anything below 12 stops being
+     "secondary" and starts being unreadable on a 1x display, so 10.5/11/11.5
+     were folded up into --nw-fs-tiny in the R19 pass. */
   --nw-fs-base:16px;
   --nw-fs-second:14px;
   --nw-fs-micro:13px;
+  --nw-fs-tiny:12px;
   --nw-fs-title:17px;
   --nw-lh-base:1.55;
 
   /* radii */
+  --nw-r-hair:2px;
   --nw-r-card:12px;
   --nw-r-control:10px;
   --nw-r-modal:16px;
@@ -63,8 +68,21 @@ window.__ModuleLoader__.load({
   --nw-h-toolbar:52px;
   --nw-h-status:34px;
 
-  /* rhythm */
-  --nw-sp-1:8px;--nw-sp-2:10px;--nw-sp-3:12px;--nw-sp-4:16px;--nw-sp-5:20px;--nw-sp-6:24px;
+  /* rhythm — every gap/padding in the plugin resolves to one of these.
+     Before R19 about 75% of them were hand-written (6/8/10/4/5/7px all lived
+     side by side), which is why rows never quite lined up. */
+  --nw-sp-0:4px;--nw-sp-1:8px;--nw-sp-2:10px;--nw-sp-3:12px;
+  --nw-sp-4:16px;--nw-sp-5:20px;--nw-sp-6:24px;
+
+  /* Layering. Fifteen ad-hoc z-index values used to be scattered across the
+     parts (0/1/2/3/4/5/7/8/20/30/33/34/39/40/60), which meant the notes card
+     could end up above a modal by accident. These five rungs are the only
+     values the plugin is allowed to use now; each one has exactly one job. */
+  --nw-z-base:0;      /* in-flow content */
+  --nw-z-float:10;    /* things that float over the manuscript: home/lock, notes, dock */
+  --nw-z-panel:20;    /* side panels and popovers that must beat the floats */
+  --nw-z-modal:40;    /* modal mask + dialog */
+  --nw-z-toast:60;    /* toasts are always last */
 
   /* Surfaces. The host's layer tokens are not reliably distinct from the page
      background (in the light theme layer-1/2/overlay are all plain white), so
@@ -88,10 +106,18 @@ window.__ModuleLoader__.load({
   --nw-warn:var(--dsw-alias-state-warn-primary);
   --nw-idle:var(--dsw-alias-state-idle-primary);
 
-  /* neutrals used only for elevation (no token exists for shadows) */
-  --nw-shadow-1:0 1px 2px rgba(0,0,0,.04);
-  --nw-shadow-2:0 8px 24px rgba(0,0,0,.06);
-  --nw-shadow-3:0 2px 6px rgba(0,0,0,.05), 0 24px 64px rgba(0,0,0,.12);
+  /* Neutrals used only for elevation — there is no shadow token in the host.
+     R19: these are derived from the ink rather than from black, so a dark
+     palette gets a shadow that reads as depth instead of a grey smudge. The
+     paper lift is the one exception: a sheet on a desk is darker underneath. */
+  --nw-shadow-1:0 1px 2px color-mix(in srgb, var(--nw-fg) 6%, transparent);
+  --nw-shadow-2:0 8px 24px color-mix(in srgb, var(--nw-fg) 10%, transparent);
+  --nw-shadow-3:0 2px 6px color-mix(in srgb, var(--nw-fg) 8%, transparent),
+                0 24px 64px color-mix(in srgb, var(--nw-fg) 18%, transparent);
+  /* The manuscript sheet itself: a hairline plus one soft drop, enough to read
+     as paper on a desk without turning the writing surface into a card. */
+  --nw-shadow-paper:0 1px 1px color-mix(in srgb, var(--nw-fg) 5%, transparent),
+                    0 12px 32px color-mix(in srgb, var(--nw-fg) 8%, transparent);
   --nw-ring:0 0 0 2px var(--nw-bg), 0 0 0 4px color-mix(in srgb, var(--nw-brand) 55%, transparent);
   --nw-ring-soft:0 0 0 3px color-mix(in srgb, var(--nw-brand) 16%, transparent);
 
@@ -107,8 +133,8 @@ window.__ModuleLoader__.load({
      97-theme.js only remain as a belt-and-braces fallback for old engines. */
   container-type:inline-size;
   container-name:nw;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-root *{box-sizing:border-box;}
 .nw-root ::selection{background:color-mix(in srgb, var(--nw-brand) 22%, transparent);}
@@ -127,7 +153,7 @@ window.__ModuleLoader__.load({
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--nw-surface-overlay) 60%, transparent), transparent 82%),
     var(--nw-bg);
-  position:relative;z-index:5;
+  position:relative;z-index:var(--nw-z-float);
 }
 /* a hairline of brand under the strip: the only colour in the chrome at rest */
 .nw-toolbar::after{
@@ -140,7 +166,7 @@ window.__ModuleLoader__.load({
 .nw-title{
   font-family:var(--nw-reading-font);
   font-weight:600;font-size:var(--nw-fs-base);letter-spacing:.02em;
-  display:flex;align-items:baseline;gap:8px;color:var(--nw-fg);max-width:38%;min-width:0;
+  display:flex;align-items:baseline;gap:var(--nw-sp-1);color:var(--nw-fg);max-width:38%;min-width:0;
   padding-right:var(--nw-sp-2);
 }
 .nw-title small{
@@ -158,17 +184,17 @@ window.__ModuleLoader__.load({
 /* ------------------------------------------------------------------ body -- */
 .nw-body{display:flex;flex:1 1 auto;min-height:0;position:relative;}
 .nw-splitter{
-  flex:0 0 8px;cursor:col-resize;background:transparent;position:relative;z-index:3;
+  flex:0 0 8px;cursor:col-resize;background:transparent;position:relative;z-index:var(--nw-z-float);
   border-left:1px solid var(--nw-line);
-  transition:background var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-splitter::after{
   content:'';position:absolute;top:50%;left:3px;transform:translateY(-50%);
-  width:2px;height:28px;border-radius:2px;background:var(--nw-line-strong);
+  width:2px;height:28px;border-radius:var(--nw-r-hair);background:var(--nw-line-strong);
   opacity:.5;
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease),
-    background var(--nw-dur,.18s) var(--nw-ease,ease),
-    height var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    height var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-splitter:hover::after,.nw-splitter[data-drag="1"]::after{
   background:var(--nw-brand);opacity:1;height:48px;
@@ -191,13 +217,13 @@ window.__ModuleLoader__.load({
   color:var(--nw-fg-soft);font-size:var(--nw-fs-micro);letter-spacing:.01em;
   font-variant-numeric:tabular-nums;
 }
-.nw-status > span{display:inline-flex;align-items:center;gap:6px;min-width:0;white-space:nowrap;}
+.nw-status > span{display:inline-flex;align-items:center;gap:var(--nw-sp-0);min-width:0;white-space:nowrap;}
 .nw-status .nw-dot{
   width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:2px;flex:0 0 auto;
   background:var(--nw-idle);
   box-shadow:0 0 0 3px color-mix(in srgb, var(--nw-idle) 16%, transparent);
-  transition:background var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-status .nw-dot[data-state="ok"]{
   background:var(--nw-ok);box-shadow:0 0 0 3px color-mix(in srgb, var(--nw-ok) 16%, transparent);
@@ -360,18 +386,14 @@ window.__ModuleLoader__.load({
     '导出': 'Export',
     '备份': 'Backup',
     '主题': 'Theme',
-    'Harness 默认': 'Harness default',
-    'Claude 暖纸': 'Claude paper',
     '护眼': 'Eye care',
     '黑夜': 'Night',
-    '水墨': 'Ink wash',
-    '极简卡片': 'Minimal card',
     '报纸': 'Newspaper',
     '杂志': 'Magazine',
-    '国风': 'Guofeng',
+    '调整建议栏宽度': 'Resize the advice column',
+    '拖拽调整建议栏宽度': 'Drag to resize the advice column',
     '浅色': 'Light',
     '深色': 'Dark',
-    '羊皮纸': 'Parchment',
     '打字机模式': 'Typewriter mode',
     '字体': 'Font',
     '字号': 'Size',
@@ -672,7 +694,9 @@ window.__ModuleLoader__.load({
     fontSize: 20,
     lineHeight: 2,
     pageWidth: 760,
-    /* 'harness' | 'eye' | 'night' | 'ink' | 'claude' — see docs/CONTRACT-R3.md §2 */
+    /* 'claude' | 'eye' | 'night' | 'newspaper' | 'magazine' — five themes since
+       R19; retired ids (light/harness/card/ink/dark/parchment/guofeng) are
+       migrated on load by 90-app.js migrateTheme() and aliased by 60-editor.js. */
     theme: 'claude',
     typewriter: false,
     immersive: false,
@@ -3626,10 +3650,10 @@ window.__ModuleLoader__.load({
 
   NW.CSS_PARTS.push(`
 .nw-btn{
-  display:inline-flex;align-items:center;justify-content:center;gap:5px;
-  padding:4px 10px;border-radius:6px;border:1px solid var(--dsw-alias-border-l1);
+  display:inline-flex;align-items:center;justify-content:center;gap:var(--nw-sp-0);
+  padding:4px 10px;border-radius:var(--nw-r-control);border:1px solid var(--dsw-alias-border-l1);
   background:transparent;color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;
-  cursor:pointer;white-space:nowrap;font-family:inherit;transition:background .12s ease,border-color .12s ease;
+  cursor:pointer;white-space:nowrap;font-family:inherit;transition:background var(--nw-dur) ease,border-color var(--nw-dur) ease;
 }
 .nw-btn:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);}
 .nw-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px;}
@@ -3645,58 +3669,59 @@ window.__ModuleLoader__.load({
 .nw-btn[data-active="1"]{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);}
 
 .nw-input,.nw-select,.nw-textarea{
-  width:100%;padding:5px 8px;border-radius:6px;border:1px solid var(--dsw-alias-border-l1);
+  width:100%;padding:5px 8px;border-radius:var(--nw-r-control);border:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);
   font-family:inherit;font-size:12px;line-height:18px;outline:none;
 }
 .nw-input:focus,.nw-select:focus,.nw-textarea:focus{border-color:var(--dsw-alias-brand-primary);}
 .nw-textarea{resize:vertical;min-height:64px;}
 .nw-select{cursor:pointer;}
-.nw-field{display:flex;flex-direction:column;gap:4px;margin-bottom:10px;}
-.nw-field > label{font-size:11px;color:var(--dsw-alias-label-secondary);}
-.nw-field .nw-hint{font-size:10.5px;color:var(--dsw-alias-label-secondary);opacity:.85;}
-.nw-inline{display:flex;align-items:center;gap:8px;}
-.nw-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 0;
+.nw-field{display:flex;flex-direction:column;gap:4px;margin-bottom:var(--nw-sp-2);}
+.nw-field > label{font-size:var(--nw-fs-tiny);color:var(--dsw-alias-label-secondary);}
+.nw-field .nw-hint{font-size:var(--nw-fs-tiny);color:var(--dsw-alias-label-secondary);opacity:.85;}
+.nw-inline{display:flex;align-items:center;gap:var(--nw-sp-1);}
+.nw-row{display:flex;align-items:center;justify-content:space-between;gap:var(--nw-sp-2);padding:7px 0;
   border-bottom:1px solid var(--dsw-alias-border-l1);}
 .nw-row:last-child{border-bottom:none;}
 .nw-switch{position:relative;display:inline-block;width:34px;height:19px;flex:0 0 auto;cursor:pointer;}
 .nw-switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;}
-.nw-switch i{position:absolute;inset:0;border-radius:999px;background:var(--dsw-alias-border-l2);transition:background .15s;}
+.nw-switch i{position:absolute;inset:0;border-radius:var(--nw-r-pill);background:var(--dsw-alias-border-l2);transition:background var(--nw-dur);}
 .nw-switch i::after{content:'';position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;
-  background:#fff;transition:transform .15s;box-shadow:0 1px 2px rgba(0,0,0,.25);}
+  background:#fff;transition:transform var(--nw-dur);box-shadow:0 1px 2px rgba(0,0,0,.25);}
 .nw-switch input:checked + i{background:var(--dsw-alias-brand-primary);}
 .nw-switch input:checked + i::after{transform:translateX(15px);}
 .nw-switch input:focus-visible + i{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px;}
 
-.nw-modal-mask{position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;
-  background:rgba(8,10,14,.42);backdrop-filter:blur(1.5px);padding:20px;}
+.nw-modal-mask{position:absolute;inset:0;z-index:var(--nw-z-modal);display:flex;align-items:center;justify-content:center;
+  background:rgba(8,10,14,.42);backdrop-filter:blur(1.5px);padding:var(--nw-sp-5);}
 .nw-modal{display:flex;flex-direction:column;max-height:100%;width:100%;max-width:560px;
-  background:var(--dsw-alias-bg-overlay);border:1px solid var(--dsw-alias-border-l2);border-radius:10px;
-  box-shadow:0 18px 48px rgba(0,0,0,.32);overflow:hidden;animation:nw-pop .14s ease-out;}
+  background:var(--dsw-alias-bg-overlay);border:1px solid var(--dsw-alias-border-l2);border-radius:var(--nw-r-card);
+  box-shadow:var(--nw-shadow-3);overflow:hidden;animation:nw-pop var(--nw-dur) ease-out;}
 @keyframes nw-pop{from{opacity:0;transform:translateY(6px) scale(.99)}to{opacity:1;transform:none}}
-.nw-modal-head{display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--dsw-alias-border-l1);}
+.nw-modal-head{display:flex;align-items:center;gap:var(--nw-sp-1);padding:11px 14px;border-bottom:1px solid var(--dsw-alias-border-l1);}
 .nw-modal-head h2{margin:0;font-size:13px;font-weight:600;flex:1;}
-.nw-modal-body{padding:14px;overflow:auto;flex:1 1 auto;min-height:0;}
-.nw-modal-foot{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 14px;
+.nw-modal-body{padding:var(--nw-sp-4);overflow:auto;flex:1 1 auto;min-height:0;}
+.nw-modal-foot{display:flex;align-items:center;justify-content:flex-end;gap:var(--nw-sp-1);padding:10px 14px;
   border-top:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);}
-.nw-toast-wrap{position:absolute;left:50%;bottom:44px;transform:translateX(-50%);z-index:60;
-  display:flex;flex-direction:column;gap:6px;align-items:center;pointer-events:none;}
-.nw-toast{padding:6px 14px;border-radius:999px;font-size:12px;color:#fff;background:#333a44;
-  box-shadow:0 6px 18px rgba(0,0,0,.28);animation:nw-toast-in .16s ease-out;max-width:70%;}
-.nw-toast[data-kind="ok"]{background:var(--dsw-alias-state-success-primary);}
-.nw-toast[data-kind="error"]{background:var(--dsw-alias-state-error-primary);}
+.nw-toast-wrap{position:absolute;left:50%;bottom:44px;transform:translateX(-50%);z-index:var(--nw-z-toast);
+  display:flex;flex-direction:column;gap:var(--nw-sp-0);align-items:center;pointer-events:none;}
+.nw-toast{padding:6px 14px;border-radius:var(--nw-r-pill);font-size:var(--nw-fs-tiny);color:var(--dsw-alias-label-primary);
+  background:var(--dsw-alias-bg-overlay);border:1px solid var(--dsw-alias-border-l2);
+  box-shadow:var(--nw-shadow-2);animation:nw-toast-in var(--nw-dur) var(--nw-ease,ease-out);max-width:70%;}
+.nw-toast[data-kind="ok"]{border-color:var(--dsw-alias-state-success-primary);}
+.nw-toast[data-kind="error"]{border-color:var(--dsw-alias-state-error-primary);}
 @keyframes nw-toast-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .nw-spin{width:14px;height:14px;border-radius:50%;border:2px solid var(--dsw-alias-border-l2);
   border-top-color:var(--dsw-alias-brand-primary);animation:nw-spin .7s linear infinite;display:inline-block;}
 @keyframes nw-spin{to{transform:rotate(360deg)}}
-.nw-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+.nw-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--nw-sp-1);
   padding:28px 18px;color:var(--dsw-alias-label-secondary);font-size:12px;text-align:center;height:100%;}
 .nw-empty svg{opacity:.5;}
-.nw-rowitem{display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:5px;cursor:pointer;
+.nw-rowitem{display:flex;align-items:center;gap:var(--nw-sp-1);padding:5px 8px;border-radius:var(--nw-r-control);cursor:pointer;
   color:var(--dsw-alias-label-primary);font-size:12px;min-width:0;}
 .nw-rowitem:hover{background:var(--dsw-alias-bg-layer-2);}
 .nw-rowitem[data-active="1"]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-brand-primary);font-weight:600;}
-.nw-rowitem .nw-rowmeta{margin-left:auto;font-size:10.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap;
+.nw-rowitem .nw-rowmeta{margin-left:auto;font-size:var(--nw-fs-tiny);color:var(--dsw-alias-label-secondary);white-space:nowrap;
   font-variant-numeric:tabular-nums;}
 `);
 
@@ -4268,7 +4293,7 @@ window.__ModuleLoader__.load({
 .nw-link{
   color:var(--nw-brand);word-break:break-all;font-size:inherit;text-decoration:none;
   border-bottom:1px solid color-mix(in srgb, var(--nw-brand) 30%, transparent);
-  transition:border-color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-link:hover{border-bottom-color:var(--nw-brand);}
 
@@ -4318,11 +4343,11 @@ window.__ModuleLoader__.load({
   content:'';flex:0 0 auto;width:6px;height:6px;margin-left:2px;
   border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;
   transform:rotate(-45deg);opacity:.6;
-  transition:transform var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-fold[open] > summary::before{transform:rotate(45deg);}
 .nw-fold > summary:hover{color:var(--nw-brand);}
-.nw-fold > summary:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;border-radius:4px;}
+.nw-fold > summary:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;border-radius:var(--nw-r-hair);}
 .nw-fold > *:not(summary):not(.nw-fold-head){margin-top:2px;}
 /* dialog3's foldBox() is a div pair rather than <details>: .nw-fold-open marks
    the expanded state and .nw-fold-body holds the revealed content. The head is
@@ -4333,7 +4358,7 @@ window.__ModuleLoader__.load({
 .nw-fold-body{
   display:flex;flex-direction:column;gap:var(--nw-sp-2);
   padding:0 0 var(--nw-sp-2);
-  animation:nw-fade-up var(--nw-dur,.18s) var(--nw-ease,ease) both;
+  animation:nw-fade-up var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease) both;
 }
 
 /* ----------------------------------------------------------- lock screen -- */
@@ -4361,7 +4386,7 @@ window.__ModuleLoader__.load({
   width:100%;max-width:392px;padding:38px 32px 30px;
   border-radius:var(--nw-r-modal);border:1px solid var(--nw-line-soft);
   background:var(--nw-surface-overlay);box-shadow:var(--nw-shadow-3);color:var(--nw-fg);
-  animation:nw-fade-up var(--nw-dur-long,.28s) var(--nw-ease,ease) both;
+  animation:nw-fade-up var(--nw-dur-long,var(--nw-dur-long)) var(--nw-ease,ease) both;
 }
 /* a thin brand rule across the top of the card, like a book's headband */
 .nw-lock-card::before{
@@ -4405,12 +4430,12 @@ window.__ModuleLoader__.load({
   position:sticky;top:0;
 }
 .nw-settings-navbtn{
-  display:flex;align-items:center;gap:9px;width:100%;
+  display:flex;align-items:center;gap:var(--nw-sp-1);width:100%;
   height:34px;padding:0 10px;border:1px solid transparent;border-radius:var(--nw-r-control);
   background:transparent;color:var(--nw-fg-soft);cursor:pointer;
   font-family:inherit;font-size:var(--nw-fs-second);line-height:1;text-align:left;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-settings-navbtn:hover{background:var(--nw-sunken);color:var(--nw-fg);}
 .nw-settings-navbtn[data-active="1"]{
@@ -4442,25 +4467,25 @@ window.__ModuleLoader__.load({
 }
 .nw-settings-section:last-child{margin-bottom:4px;}
 .nw-settings-section > h3{
-  margin:0 0 var(--nw-sp-2);padding-bottom:9px;font-size:var(--nw-fs-base);font-weight:600;
+  margin:0 0 var(--nw-sp-2);padding-bottom:var(--nw-sp-1);font-size:var(--nw-fs-base);font-weight:600;
   letter-spacing:.02em;color:var(--nw-fg);
   border-bottom:1px solid var(--nw-line-soft);
 }
 /* rows now live inside the card, so they shed the doubled outer rule */
 .nw-settings-section .nw-row{padding:12px 0;border-bottom-color:var(--nw-line-soft);}
-.nw-settings-section .nw-row:last-child{border-bottom:none;padding-bottom:6px;}
+.nw-settings-section .nw-row:last-child{border-bottom:none;padding-bottom:var(--nw-sp-0);}
 /* R16 ⑥: a row may carry an explanation under its label. */
 .nw-rowlabel{display:flex;flex-direction:column;gap:2px;min-width:0;}
 .nw-rowhint{font-size:var(--nw-fs-micro);line-height:1.45;max-width:52ch;}
 
 /* SMTP provider presets — small pill buttons, one per mail service. */
-.nw-preset-wrap{display:flex;flex-wrap:wrap;gap:6px;}
+.nw-preset-wrap{display:flex;flex-wrap:wrap;gap:var(--nw-sp-0);}
 .nw-preset{
   height:30px;padding:0 12px;border-radius:var(--nw-r-pill);
   border:1px solid var(--nw-line-soft);background:var(--nw-surface-overlay);
   color:var(--nw-fg);cursor:pointer;font-family:inherit;font-size:var(--nw-fs-micro);line-height:1;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    border-color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-preset:hover{background:var(--nw-surface-2);border-color:var(--nw-line);}
 .nw-preset:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
@@ -4471,7 +4496,7 @@ window.__ModuleLoader__.load({
 }
 .nw-kbd-row kbd{
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:var(--nw-fs-micro);
-  padding:2px 8px;border-radius:7px;border:1px solid var(--nw-line);border-bottom-width:2px;
+  padding:2px 8px;border-radius:var(--nw-r-control);border:1px solid var(--nw-line);border-bottom-width:2px;
   background:var(--nw-surface-2);color:var(--nw-fg);white-space:nowrap;
 }
 
@@ -4481,14 +4506,14 @@ window.__ModuleLoader__.load({
    is only the colour block inside it. Written the other way round — a card
    inside a button — the appearance panel showed a card nested in a card. */
 .nw-choice{
-  display:flex;flex-direction:column;align-items:stretch;gap:6px;
-  padding:6px;border-radius:var(--nw-r-card);min-width:0;
+  display:flex;flex-direction:column;align-items:stretch;gap:var(--nw-sp-0);
+  padding:var(--nw-sp-0);border-radius:var(--nw-r-card);min-width:0;
   border:1px solid var(--nw-line);background:var(--nw-surface-1);
   font:inherit;font-size:var(--nw-fs-micro);font-weight:500;
   color:var(--nw-fg-soft);cursor:pointer;text-align:center;
-  transition:border-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease),
-    transform var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-choice:hover{transform:translateY(-1px);border-color:var(--nw-line-strong);box-shadow:var(--nw-shadow-1);}
 .nw-choice:active{transform:translateY(0);}
@@ -4511,7 +4536,7 @@ window.__ModuleLoader__.load({
    padding, no surface; the frame belongs to the button around it */
 .nw-theme-swatch{
   display:block;width:100%;height:34px;padding:0;overflow:hidden;
-  border-radius:8px;border:1px solid rgba(0,0,0,.10);
+  border-radius:var(--nw-r-control);border:1px solid rgba(0,0,0,.10);
   background:transparent;pointer-events:none;
 }
 .nw-theme-swatch::before{
@@ -4520,16 +4545,10 @@ window.__ModuleLoader__.load({
     radial-gradient(120% 140% at 18% 0%, rgba(255,255,255,.55), transparent 62%),
     linear-gradient(160deg, #faf9f5, #f3f0e7);
 }
-/* palette samples — keep in sync with 98-shell-theme.js */
-.nw-theme-swatch[data-theme="harness"]::before,
-.nw-theme-swatch[data-theme-id="harness"]::before,
-.nw-theme-swatch[data-value="harness"]::before{
-  background:linear-gradient(160deg,#ffffff,#f2f3f5);
-}
+/* palette samples - keep in sync with 98-shell-theme.js (five themes since R19) */
 .nw-theme-swatch[data-theme="claude"]::before,
 .nw-theme-swatch[data-theme-id="claude"]::before,
-.nw-theme-swatch[data-value="claude"]::before,
-.nw-theme-swatch[data-theme="light"]::before{
+.nw-theme-swatch[data-value="claude"]::before{
   background:
     radial-gradient(120% 140% at 18% 0%, rgba(255,255,255,.5), transparent 62%),
     linear-gradient(160deg,#fdf7ec,#ecdcc0);
@@ -4544,8 +4563,7 @@ window.__ModuleLoader__.load({
 }
 .nw-theme-swatch[data-theme="night"]::before,
 .nw-theme-swatch[data-theme-id="night"]::before,
-.nw-theme-swatch[data-value="night"]::before,
-.nw-theme-swatch[data-theme="dark"]::before{
+.nw-theme-swatch[data-value="night"]::before{
   background:
     radial-gradient(120% 140% at 18% 0%, rgba(255,255,255,.14), transparent 62%),
     linear-gradient(160deg,#24241f,#161614);
@@ -4554,24 +4572,7 @@ window.__ModuleLoader__.load({
    swatch itself lightens for that palette */
 .nw-theme-swatch[data-theme="night"],
 .nw-theme-swatch[data-theme-id="night"],
-.nw-theme-swatch[data-value="night"],
-.nw-theme-swatch[data-theme="dark"]{border-color:rgba(255,255,255,.16);}
-.nw-theme-swatch[data-theme="ink"]::before,
-.nw-theme-swatch[data-theme-id="ink"]::before,
-.nw-theme-swatch[data-value="ink"]::before,
-.nw-theme-swatch[data-theme="parchment"]::before{
-  background:
-    radial-gradient(120% 140% at 18% 0%, rgba(255,255,255,.45), transparent 62%),
-    linear-gradient(160deg,#f2f6fb,#d6e1ee);
-}
-.nw-theme-swatch[data-theme="card"]::before,
-.nw-theme-swatch[data-theme-id="card"]::before,
-.nw-theme-swatch[data-value="card"]::before{
-  background:
-    radial-gradient(120% 140% at 18% 0%, rgba(255,255,255,.9), transparent 62%),
-    linear-gradient(160deg,#ffffff,#e2eaf4);
-  box-shadow:inset 0 -12px 20px -14px rgba(59,110,165,.70);
-}
+.nw-theme-swatch[data-value="night"]{border-color:rgba(255,255,255,.16);}
 .nw-theme-swatch[data-theme="newspaper"]::before,
 .nw-theme-swatch[data-theme-id="newspaper"]::before,
 .nw-theme-swatch[data-value="newspaper"]::before{
@@ -4588,15 +4589,6 @@ window.__ModuleLoader__.load({
     linear-gradient(160deg,#ffffff,#eef0f2);
   box-shadow:inset 0 -12px 20px -14px rgba(208,2,27,.78);
 }
-.nw-theme-swatch[data-theme="guofeng"]::before,
-.nw-theme-swatch[data-theme-id="guofeng"]::before,
-.nw-theme-swatch[data-value="guofeng"]::before{
-  background:
-    radial-gradient(120% 140% at 18% 0%, rgba(255,255,255,.42), transparent 62%),
-    linear-gradient(160deg,#f9f1de,#e0d0aa);
-  box-shadow:inset 0 -12px 20px -14px rgba(168,68,47,.62);
-}
-
 /* ------------------------------------------------------- AI suggestions --- */
 .nw-suggest-list{
   display:flex;flex-direction:column;gap:var(--nw-sp-2);max-height:52vh;overflow:auto;padding-right:2px;
@@ -4605,8 +4597,8 @@ window.__ModuleLoader__.load({
   display:flex;align-items:flex-start;gap:var(--nw-sp-3);
   padding:var(--nw-sp-3);border-radius:var(--nw-r-card);
   border:1px solid var(--nw-line-soft);background:var(--nw-surface-1);
-  transition:border-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-suggest:hover{border-color:var(--nw-line);box-shadow:var(--nw-shadow-1);}
 .nw-suggest[data-on="1"]{
@@ -4624,12 +4616,12 @@ window.__ModuleLoader__.load({
 .nw-suggest-arrow{color:var(--nw-fg-soft);opacity:.65;margin:0 2px;}
 .nw-suggest-reason{margin-top:4px;font-size:var(--nw-fs-micro);line-height:1.6;color:var(--nw-fg-soft);}
 .nw-suggest-type{
-  display:inline-block;margin-top:6px;padding:2px 9px;border-radius:var(--nw-r-pill);
+  display:inline-block;margin-top:var(--nw-sp-0);padding:2px 9px;border-radius:var(--nw-r-pill);
   font-size:var(--nw-fs-micro);letter-spacing:.02em;color:var(--nw-warn);
   background:color-mix(in srgb, var(--nw-warn) 11%, transparent);
   border:1px solid color-mix(in srgb, var(--nw-warn) 26%, transparent);
 }
-.nw-suggest-actions{display:flex;flex-direction:column;gap:6px;flex:0 0 auto;}
+.nw-suggest-actions{display:flex;flex-direction:column;gap:var(--nw-sp-0);flex:0 0 auto;}
 
 /* ---------------------------------------------------------- typeset diff -- */
 .nw-diff{
@@ -4639,7 +4631,7 @@ window.__ModuleLoader__.load({
   font-size:var(--nw-fs-micro);line-height:1.75;
 }
 .nw-diff-row{
-  display:flex;gap:var(--nw-sp-1);padding:3px 8px;border-radius:6px;
+  display:flex;gap:var(--nw-sp-1);padding:3px 8px;border-radius:var(--nw-r-control);
   white-space:pre-wrap;word-break:break-word;
 }
 .nw-diff-row[data-type="add"]{background:color-mix(in srgb, var(--nw-ok) 13%, transparent);}
@@ -4652,7 +4644,7 @@ window.__ModuleLoader__.load({
   margin-top:var(--nw-sp-2);padding:var(--nw-sp-3);border-radius:var(--nw-r-card);
   border:1px dashed var(--nw-line-strong);background:var(--nw-surface-1);
   font-size:var(--nw-fs-second);line-height:1.75;
-  display:flex;flex-direction:column;gap:8px;
+  display:flex;flex-direction:column;gap:var(--nw-sp-1);
 }
 
 /* -------------------------------------------------------------- versions -- */
@@ -4673,7 +4665,7 @@ window.__ModuleLoader__.load({
   white-space:pre-wrap;word-break:break-word;color:var(--nw-fg);
 }
 .nw-mail-loading{
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--nw-sp-2);
   min-height:180px;text-align:center;font-size:var(--nw-fs-second);color:var(--nw-fg-soft);
 }
 .nw-version-list{
@@ -4711,8 +4703,8 @@ window.__ModuleLoader__.load({
   padding:9px 10px;border-radius:var(--nw-r-control);
   border:1px solid transparent;background:transparent;
   font-size:var(--nw-fs-second);color:var(--nw-fg);cursor:pointer;text-align:left;min-width:0;
-  transition:background var(--nw-dur,.18s) var(--nw-ease,ease),
-    border-color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-journal-item:hover{background:var(--nw-surface-2);}
 .nw-journal-item[data-active="1"]{
@@ -4765,7 +4757,7 @@ window.__ModuleLoader__.load({
 .nw-submit-changes > li,
 .nw-submit-changes > div{
   display:flex;align-items:baseline;gap:var(--nw-sp-1);
-  padding:4px 8px;border-radius:6px;background:var(--nw-surface-2);
+  padding:4px 8px;border-radius:var(--nw-r-control);background:var(--nw-surface-2);
   line-height:1.6;word-break:break-word;
 }
 .nw-submit-changes del{color:var(--nw-danger);text-decoration:line-through;}
@@ -4790,30 +4782,30 @@ window.__ModuleLoader__.load({
   background:color-mix(in srgb, var(--nw-brand) 5%, var(--nw-surface-1));
 }
 .nw-reco-head{
-  display:flex;align-items:center;gap:6px;margin-bottom:8px;
+  display:flex;align-items:center;gap:var(--nw-sp-0);margin-bottom:var(--nw-sp-1);
   font-size:var(--nw-fs-micro);font-weight:600;color:var(--nw-brand);
 }
-.nw-reco-list{display:flex;flex-wrap:wrap;gap:6px;}
+.nw-reco-list{display:flex;flex-wrap:wrap;gap:var(--nw-sp-0);}
 .nw-reco-item{
   display:flex;flex-direction:column;align-items:flex-start;gap:1px;
   padding:6px 10px;border-radius:var(--nw-r-control);
   border:1px solid var(--nw-line-soft);background:var(--nw-surface-overlay);
   color:var(--nw-fg);cursor:pointer;font-family:inherit;text-align:left;
-  transition:border-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    background-color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-reco-item:hover{background:var(--nw-surface-2);border-color:var(--nw-line);}
 .nw-reco-item:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
 .nw-reco-name{font-size:var(--nw-fs-second);font-weight:500;}
-.nw-reco-why{font-size:11px;line-height:1.3;color:var(--nw-fg-soft);}
+.nw-reco-why{font-size:var(--nw-fs-tiny);line-height:1.3;color:var(--nw-fg-soft);}
 
 /* ------------------------------------------------------- submission log --- */
-.nw-submit-filters{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}
+.nw-submit-filters{display:flex;flex-wrap:wrap;gap:var(--nw-sp-0);margin-bottom:var(--nw-sp-2);}
 .nw-chip{
   height:28px;padding:0 12px;border-radius:var(--nw-r-pill);
   border:1px solid var(--nw-line-soft);background:transparent;color:var(--nw-fg-soft);
   cursor:pointer;font-family:inherit;font-size:var(--nw-fs-micro);line-height:1;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-chip:hover{background:var(--nw-sunken);color:var(--nw-fg);}
 .nw-chip[data-active="1"]{
@@ -4822,7 +4814,7 @@ window.__ModuleLoader__.load({
 }
 .nw-chip:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
 
-.nw-submit-table{display:flex;flex-direction:column;gap:6px;}
+.nw-submit-table{display:flex;flex-direction:column;gap:var(--nw-sp-0);}
 .nw-submit-line{
   display:flex;align-items:center;gap:var(--nw-sp-3);
   padding:8px 10px;border-radius:var(--nw-r-control);
@@ -4831,10 +4823,10 @@ window.__ModuleLoader__.load({
 .nw-submit-line-main{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 auto;}
 .nw-submit-line-title{font-size:var(--nw-fs-second);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .nw-submit-line-meta{font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.nw-submit-line-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto;}
+.nw-submit-line-actions{display:flex;align-items:center;gap:var(--nw-sp-0);flex:0 0 auto;}
 
 /* -------------------------------------------------------- journal table --- */
-.nw-journal-toolbar{display:flex;gap:6px;margin-bottom:8px;}
+.nw-journal-toolbar{display:flex;gap:var(--nw-sp-0);margin-bottom:var(--nw-sp-1);}
 .nw-journal-toolbar > :first-child{flex:1 1 auto;min-width:0;}
 .nw-journal-table{
   display:flex;flex-direction:column;gap:2px;
@@ -4848,7 +4840,7 @@ window.__ModuleLoader__.load({
 .nw-journal-row:hover{background:var(--nw-sunken);}
 .nw-journal-row-main{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1 1 auto;}
 .nw-journal-row-name{font-size:var(--nw-fs-second);font-weight:500;}
-.nw-journal-row-meta{font-size:11.5px;color:var(--nw-fg-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.nw-journal-row-meta{font-size:var(--nw-fs-tiny);color:var(--nw-fg-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .nw-journal-edit{
   margin-top:var(--nw-sp-3);padding:var(--nw-sp-3);
   border-radius:var(--nw-r-card);border:1px solid var(--nw-line-soft);
@@ -4857,20 +4849,20 @@ window.__ModuleLoader__.load({
 .nw-journal-edit h4{margin:0 0 10px;}
 
 /* ③ 邮件预览 —— 附件不再只列文件名，每个附件都能打开看正文 */
-.nw-attach-list{display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+.nw-attach-list{display:flex;flex-wrap:wrap;gap:var(--nw-sp-0);align-items:center;}
 .nw-attach-chip{
-  display:inline-flex;align-items:center;gap:6px;
+  display:inline-flex;align-items:center;gap:var(--nw-sp-0);
   max-width:100%;padding:2px 4px 2px 8px;
   border-radius:var(--nw-r-pill);border:1px solid var(--nw-line-soft);
   background:var(--nw-surface-1);
 }
 .nw-attach-name{
-  font-size:11.5px;color:var(--nw-fg-soft);
+  font-size:var(--nw-fs-tiny);color:var(--nw-fg-soft);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:15em;
 }
 .nw-attach-open{
   flex:0 0 auto;padding:2px 8px;
-  font:inherit;font-size:11px;line-height:1.6;
+  font:inherit;font-size:var(--nw-fs-tiny);line-height:1.6;
   color:var(--nw-brand);background:color-mix(in srgb, var(--nw-brand) 12%, transparent);
   border:none;border-radius:var(--nw-r-pill);cursor:pointer;
 }
@@ -4897,7 +4889,7 @@ window.__ModuleLoader__.load({
   display:flex;flex-direction:column;gap:4px;
 }
 .nw-variant-row{
-  display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;
+  display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--nw-sp-0);
   padding:4px 8px;border-radius:var(--nw-r-control);
   border:1px solid transparent;
   font-size:var(--nw-fs-second);line-height:1.6;
@@ -5976,8 +5968,8 @@ window.__ModuleLoader__.load({
   font-family:var(--nw-ui-font);
   font-size:var(--nw-fs-base);line-height:var(--nw-lh-base);
   -webkit-font-smoothing:antialiased;
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease),
-    transform var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf *{box-sizing:border-box;}
 /* 90-app 收起侧栏时整列不渲染；data-collapsed 只负责离场姿态的过渡。 */
@@ -6003,15 +5995,15 @@ window.__ModuleLoader__.load({
   flex:0 0 auto;width:32px;height:32px;padding:0;
   border:1px solid transparent;border-radius:var(--nw-r-control);
   background:transparent;color:var(--nw-fg-soft);
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 /* Six 32px buttons do not fit next to the label at the 220px minimum width, so
    the action cluster tightens to 24px targets and the label yields first. */
 .nw-shelf-topacts{display:flex;align-items:center;gap:1px;flex:0 0 auto;min-width:0;}
 .nw-shelf-topacts .nw-btn[data-kind="icon"],
 .nw-shelf-topacts .nw-shelf-iconbtn{
-  width:24px;height:24px;border-radius:8px;
+  width:24px;height:24px;border-radius:var(--nw-r-control);
 }
 .nw-shelf-topacts .nw-shelf-iconbtn > svg,
 .nw-shelf-topacts .nw-btn[data-kind="icon"] > span > svg{display:block;}
@@ -6033,8 +6025,8 @@ window.__ModuleLoader__.load({
   border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
   background:var(--nw-bg);color:var(--nw-fg);
   font-family:inherit;font-size:var(--nw-fs-base);line-height:1.4;outline:none;
-  transition:border-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf .nw-input::placeholder,
 .nw-shelf-input::placeholder{color:var(--nw-fg-soft);opacity:.72;}
@@ -6047,8 +6039,8 @@ window.__ModuleLoader__.load({
   flex:0 0 auto;width:32px;height:32px;padding:0;
   border:1px solid transparent;border-radius:var(--nw-r-control);
   background:transparent;color:var(--nw-fg-soft);
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-searchbar > .nw-btn[data-kind="icon"]:hover:not(:disabled),
 .nw-shelf-searchbar > .nw-shelf-iconbtn:hover{
@@ -6069,11 +6061,11 @@ window.__ModuleLoader__.load({
 .nw-shelf-scroll::-webkit-scrollbar-track{background:transparent;}
 /* 拖拽插入指示线：2px 品牌色 + 一点光晕，位置由 JS 写 inline top/opacity。 */
 .nw-shelf-indicator{
-  position:absolute;z-index:4;left:var(--nw-sp-2);right:var(--nw-sp-2);top:0;height:2px;
-  border-radius:2px;opacity:0;pointer-events:none;
+  position:absolute;z-index:var(--nw-z-float);left:var(--nw-sp-2);right:var(--nw-sp-2);top:0;height:2px;
+  border-radius:var(--nw-r-hair);opacity:0;pointer-events:none;
   background:var(--nw-brand);
   box-shadow:0 0 8px color-mix(in srgb, var(--nw-brand) 55%, transparent);
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 
 /* ------------------------------------------------------ 小说卡片 ---- */
@@ -6085,8 +6077,8 @@ window.__ModuleLoader__.load({
   margin:0 var(--nw-sp-2) 6px;padding:var(--nw-sp-3);
   border:1px solid transparent;border-radius:var(--nw-r-card);
   cursor:pointer;outline:none;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    border-color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-novel:hover{background:var(--nw-surface-2);}
 .nw-shelf-novel:focus-visible{outline:2px solid var(--nw-brand);outline-offset:-2px;}
@@ -6098,14 +6090,14 @@ window.__ModuleLoader__.load({
 }
 .nw-shelf-novel::after{
   content:'';position:absolute;left:0;top:var(--nw-sp-3);bottom:var(--nw-sp-3);width:3px;
-  border-radius:2px;background:var(--nw-brand);opacity:0;pointer-events:none;
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease);
+  border-radius:var(--nw-r-hair);background:var(--nw-brand);opacity:0;pointer-events:none;
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-novel.is-active::after{opacity:1;}
 /* 纯 CSS 封面：品牌色线性渐变 + 一道中性书脊，不用图片。 */
 .nw-shelf-cover{
   position:relative;grid-column:1;grid-row:1 / span 2;
-  width:34px;height:34px;border-radius:8px;
+  width:34px;height:34px;border-radius:var(--nw-r-control);
   background-image:linear-gradient(135deg,
     var(--nw-brand) 0%,
     color-mix(in srgb, var(--nw-brand) 62%, var(--nw-bg)) 100%);
@@ -6113,13 +6105,13 @@ window.__ModuleLoader__.load({
 }
 .nw-shelf-cover::after{
   content:'';position:absolute;left:8px;top:9px;bottom:9px;width:2px;
-  border-radius:2px;background:color-mix(in srgb, var(--nw-bg) 55%, transparent);
+  border-radius:var(--nw-r-hair);background:color-mix(in srgb, var(--nw-bg) 55%, transparent);
 }
 .nw-shelf-novel-title{
   grid-column:2;grid-row:1;min-width:0;
   font-size:var(--nw-fs-base);font-weight:600;line-height:1.35;letter-spacing:.01em;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  transition:padding-right var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:padding-right var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-novel-meta{
   grid-column:2;grid-row:2;min-width:0;
@@ -6143,16 +6135,16 @@ window.__ModuleLoader__.load({
   border-radius:var(--nw-r-control);
   font-size:var(--nw-fs-base);line-height:1.4;color:var(--nw-fg);
   cursor:pointer;outline:none;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-row:hover{background:var(--nw-surface-2);}
 .nw-shelf-row:focus-visible{outline:2px solid var(--nw-brand);outline-offset:-2px;}
 .nw-shelf-row.is-active{background:var(--nw-surface-2);color:var(--nw-fg);font-weight:500;}
 .nw-shelf-row.is-active::after{
   content:'';position:absolute;left:2px;top:7px;bottom:7px;width:3px;
-  border-radius:2px;background:var(--nw-brand);
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease);
+  border-radius:var(--nw-r-hair);background:var(--nw-brand);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 /* 层级连接线：行上 aria-level = 深度 + 1，每级缩进 14px，
    所以线要落在祖先 caret 的中线（行内 left 16px 起，每级 +14px）。 */
@@ -6170,14 +6162,14 @@ window.__ModuleLoader__.load({
 .nw-shelf-row[aria-level="9"]::before{width:99px;background:repeating-linear-gradient(90deg,var(--nw-line-soft) 0,var(--nw-line-soft) 1px,transparent 1px,transparent 14px);}
 .nw-shelf-caret{
   flex:0 0 auto;display:flex;align-items:center;justify-content:center;
-  width:20px;height:20px;border-radius:6px;color:var(--nw-fg-soft);cursor:pointer;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease);
+  width:20px;height:20px;border-radius:var(--nw-r-control);color:var(--nw-fg-soft);cursor:pointer;
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-caret svg{
   /* size comes from the icon ladder in 42-icons; only the rotation is ours */
   transform:rotate(90deg);
-  transition:transform var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-caret[data-open="0"] svg{transform:rotate(0deg);}
 .nw-shelf-caret:hover{background:var(--nw-surface-2);color:var(--nw-fg);}
@@ -6189,14 +6181,14 @@ window.__ModuleLoader__.load({
 .nw-shelf-row-meta{
   flex:0 0 auto;font-size:var(--nw-fs-micro);line-height:1.4;color:var(--nw-fg-soft);
   font-variant-numeric:tabular-nums;
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 /* 悬停时动作条浮在行右侧，字数先淡出让位，避免被按钮压住。 */
 .nw-shelf-row:hover .nw-shelf-row-meta{opacity:0;}
 
 /* --------------------------------------------- 行内动作按钮（悬停显示） ---- */
 .nw-row-actions{
-  position:absolute;z-index:2;top:50%;right:var(--nw-sp-1);transform:translateY(-50%);
+  position:absolute;z-index:var(--nw-z-base);top:50%;right:var(--nw-sp-1);transform:translateY(-50%);
   display:flex;align-items:center;gap:1px;padding:2px;
   border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
   background:var(--nw-surface-overlay);
@@ -6204,7 +6196,7 @@ window.__ModuleLoader__.load({
 }
 /* 97-theme 给 .nw-row-actions .nw-btn 定的 32px 高在这里压回紧凑尺寸（0,4,0）。 */
 .nw-shelf .nw-row-actions .nw-btn[data-kind="icon"]{
-  width:26px;height:26px;padding:0;border:0;border-radius:8px;
+  width:26px;height:26px;padding:0;border:0;border-radius:var(--nw-r-control);
   background:transparent;color:var(--nw-fg-soft);
 }
 .nw-shelf .nw-row-actions .nw-btn[data-kind="icon"]:hover:not(:disabled){
@@ -6213,7 +6205,7 @@ window.__ModuleLoader__.load({
 }
 /* NW.ui 缺失时的回退按钮（.nw-shelf-iconbtn）同样压到 26×26。 */
 .nw-shelf .nw-row-actions .nw-shelf-iconbtn{
-  width:26px;height:26px;padding:0;border:0;border-radius:8px;
+  width:26px;height:26px;padding:0;border:0;border-radius:var(--nw-r-control);
   background:transparent;color:var(--nw-fg-soft);
 }
 .nw-shelf .nw-row-actions .nw-shelf-iconbtn:hover{
@@ -6222,7 +6214,7 @@ window.__ModuleLoader__.load({
 .nw-shelf-novel .nw-row-actions{
   top:var(--nw-sp-1);right:var(--nw-sp-1);transform:none;
   opacity:0;pointer-events:none;
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 /* 菜单打开时即使指针移开也要保住动作条，否则「⋯」锚点会被卸载。 */
 .nw-shelf-novel:hover .nw-row-actions,
@@ -6230,7 +6222,7 @@ window.__ModuleLoader__.load({
 .nw-shelf-novel[data-menu-open="1"] .nw-row-actions{opacity:1;pointer-events:auto;}
 .nw-shelf-novel:hover .nw-shelf-novel-title,
 .nw-shelf-novel:focus-within .nw-shelf-novel-title,
-.nw-shelf-novel[data-menu-open="1"] .nw-shelf-novel-title{padding-right:96px;}
+.nw-shelf-novel[data-menu-open="1"] .nw-shelf-novel-title{padding-right:var(--nw-sp-6);}
 
 /* --------------------------------------------------- 「⋯」动作菜单 ---- */
 /* 绝对定位在 .nw-shelf 内（侧栏 overflow:hidden 会裁切，所以 JS 已把
@@ -6238,7 +6230,7 @@ window.__ModuleLoader__.load({
 /* 宽度固定 184px（border-box），与 api.openMenu 里的夹取常量一致，
    保证贴着侧栏右缘时不会被 .nw-shelf 的 overflow:hidden 裁掉。 */
 .nw-shelf-menu{
-  position:absolute;z-index:20;width:184px;padding:6px;
+  position:absolute;z-index:var(--nw-z-panel);width:184px;padding:var(--nw-sp-0);
   display:flex;flex-direction:column;gap:2px;
   border:1px solid var(--nw-line);border-radius:var(--nw-r-card);
   background:var(--nw-surface-overlay);
@@ -6251,8 +6243,8 @@ window.__ModuleLoader__.load({
   border:0;border-radius:var(--nw-r-control);background:transparent;color:var(--nw-fg);
   font-family:var(--nw-ui-font);font-size:var(--nw-fs-second);font-weight:500;
   line-height:1;text-align:left;cursor:pointer;appearance:none;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-menu-item:hover{background:var(--nw-surface-2);}
 .nw-shelf-menu-item:focus-visible{outline:2px solid var(--nw-brand);outline-offset:-2px;}
@@ -6271,7 +6263,7 @@ window.__ModuleLoader__.load({
 .nw-shelf-result{
   position:relative;margin:1px var(--nw-sp-2);padding:var(--nw-sp-2) var(--nw-sp-3);
   border-radius:var(--nw-r-control);cursor:pointer;outline:none;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-result:hover{background:var(--nw-surface-2);}
 .nw-shelf-result:focus-visible{outline:2px solid var(--nw-brand);outline-offset:-2px;}
@@ -6284,16 +6276,16 @@ window.__ModuleLoader__.load({
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
 .nw-shelf-result-snippet{
-  margin-top:5px;font-size:var(--nw-fs-second);line-height:1.6;color:var(--nw-fg-soft);
+  margin-top:var(--nw-sp-0);font-size:var(--nw-fs-second);line-height:1.6;color:var(--nw-fg-soft);
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
   word-break:break-word;
 }
 .nw-shelf-hit{
-  border-radius:3px;padding:0 2px;font-weight:700;text-decoration:none;
+  border-radius:var(--nw-r-hair);padding:0 2px;font-weight:700;text-decoration:none;
   background:color-mix(in srgb, var(--nw-brand) 16%, transparent);
   color:var(--nw-brand);
 }
-.nw-shelf-dropend{position:relative;height:16px;margin:2px var(--nw-sp-2) var(--nw-sp-1);border-radius:6px;}
+.nw-shelf-dropend{position:relative;height:16px;margin:2px var(--nw-sp-2) var(--nw-sp-1);border-radius:var(--nw-r-control);}
 
 /* -------------------------------------------------------- 页脚工具栏 ---- */
 .nw-shelf-foot{
@@ -6308,10 +6300,10 @@ window.__ModuleLoader__.load({
   flex:1 1 0;min-width:40px;width:auto;height:40px;padding:0;
   border:1px solid transparent;border-radius:var(--nw-r-control);
   background:transparent;color:var(--nw-fg-soft);
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease),
-    transform var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-foot .nw-btn[data-kind="icon"]:hover:not(:disabled),
 .nw-shelf-foot .nw-shelf-iconbtn:hover{
@@ -6368,8 +6360,8 @@ window.__ModuleLoader__.load({
   border:1px solid var(--nw-line-soft);background:transparent;
   color:var(--nw-fg);font-family:var(--nw-ui-font);font-size:var(--nw-fs-second);
   cursor:pointer;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    border-color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-btn-fallback:hover{background:var(--nw-surface-2);border-color:var(--nw-line);}
 .nw-shelf-btn-fallback.is-primary{
@@ -6380,8 +6372,8 @@ window.__ModuleLoader__.load({
   width:var(--nw-h-iconbtn);height:var(--nw-h-iconbtn);padding:0;
   border:1px solid transparent;border-radius:var(--nw-r-control);
   background:transparent;color:var(--nw-fg-soft);cursor:pointer;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-iconbtn:hover{background:var(--nw-surface-2);color:var(--nw-fg);}
 
@@ -6772,7 +6764,16 @@ window.__ModuleLoader__.load({
 
     let inboxBody;
     if (inboxStatus === 'loading' && inboxMessages.length === 0) {
-      inboxBody = NW.h('div', { className: 'nw-welcome-inboxbusy' }, NW.ui.spinner('正在读取收件箱…'));
+      // R19 C2: a spinner alone left the card at one line of height and the
+      // page jumped when the mail arrived. Three skeleton rows hold the space
+      // the real rows will take, so nothing moves.
+      inboxBody = NW.h(
+        'div',
+        { className: 'nw-skel', 'aria-hidden': 'true' },
+        NW.h('span', { className: 'nw-skel-row' }),
+        NW.h('span', { className: 'nw-skel-row' }),
+        NW.h('span', { className: 'nw-skel-row' }),
+      );
     } else if (inboxProp.error) {
       inboxBody = NW.h(
         'div',
@@ -6974,7 +6975,7 @@ window.__ModuleLoader__.load({
 /* ============================================================== welcome ==
    A reading column, not a dashboard: one max-width container, card surfaces
    derived from the same --nw-* tokens the editor uses, so every theme
-   (including 报纸 / 国风 / 极简卡片) restyles the home screen for free. */
+   (including 报纸 / 杂志) restyles the home screen for free. */
 .nw-welcome{
   height:100%;min-height:0;overflow:auto;
   /* R13: cqw, not vw — the home screen is a column inside the host shell, so a
@@ -6988,11 +6989,23 @@ window.__ModuleLoader__.load({
 .nw-welcome-inner{max-width:940px;margin:0 auto;display:flex;flex-direction:column;gap:var(--nw-sp-5);}
 .nw-btn-icon{display:inline-flex;align-items:center;flex:0 0 auto;}
 
-.nw-welcome-head{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--nw-sp-4);flex-wrap:wrap;}
+.nw-welcome-head{
+  position:relative;
+  display:flex;align-items:flex-end;justify-content:space-between;gap:var(--nw-sp-4);flex-wrap:wrap;
+  padding-bottom:var(--nw-sp-5);
+}
+/* R19 B4: the home screen had no focal point — a title, a sentence, three
+   buttons, then four identical cards. The hero rule gives the eye a place to
+   land and separates "what this is" from "what you do next". It fades out to
+   the right so it reads as a gesture, not as a table border. */
+.nw-welcome-head::after{
+  content:'';position:absolute;left:0;right:0;bottom:0;height:1px;
+  background:linear-gradient(90deg, var(--nw-line-strong), var(--nw-line-soft) 42%, transparent 88%);
+}
 .nw-welcome-headtext{min-width:0;flex:1 1 320px;}
 .nw-welcome-title{
-  margin:0 0 6px;font-family:var(--nw-reading-font);font-weight:600;
-  font-size:clamp(22px,2.6cqw,28px);line-height:1.25;letter-spacing:.01em;color:var(--nw-fg);
+  margin:0 0 var(--nw-sp-0);font-family:var(--nw-reading-font);font-weight:600;
+  font-size:clamp(24px,2.9cqw,31px);line-height:1.2;letter-spacing:.005em;color:var(--nw-fg);
 }
 .nw-welcome-sub{margin:0;font-size:var(--nw-fs-second);line-height:1.6;color:var(--nw-fg-soft);}
 .nw-welcome-actions{display:flex;align-items:center;gap:var(--nw-sp-2);flex-wrap:wrap;}
@@ -7013,6 +7026,19 @@ window.__ModuleLoader__.load({
   font-size:var(--nw-fs-micro);font-weight:600;letter-spacing:.06em;text-transform:none;
   color:var(--nw-fg-soft);
 }
+/* R19 C2: skeleton placeholders. The sweep is one gradient travelling across a
+   muted bar; it stops entirely under prefers-reduced-motion. */
+.nw-skel{display:flex;flex-direction:column;gap:var(--nw-sp-1);padding:var(--nw-sp-0) 0;}
+.nw-skel-row{
+  display:block;height:34px;border-radius:var(--nw-r-control);
+  background:linear-gradient(90deg,
+    color-mix(in srgb, var(--nw-fg) 6%, transparent) 0%,
+    color-mix(in srgb, var(--nw-fg) 12%, transparent) 42%,
+    color-mix(in srgb, var(--nw-fg) 6%, transparent) 84%);
+  background-size:220% 100%;
+  animation:nw-skel 1.25s ease-in-out infinite;
+}
+@keyframes nw-skel{from{background-position:120% 0;}to{background-position:-20% 0;}}
 .nw-welcome-empty{margin:0;font-size:var(--nw-fs-second);line-height:1.7;color:var(--nw-fg-soft);}
 
 /* -------------------------------------------------------- 正在创作 ----- */
@@ -7022,7 +7048,7 @@ window.__ModuleLoader__.load({
   padding:9px 8px;border:0;border-radius:var(--nw-r-control);
   background:transparent;color:inherit;text-align:left;cursor:pointer;
   font-family:inherit;font-size:var(--nw-fs-second);
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-welcome-novel:hover{background:var(--nw-sunken);}
 .nw-welcome-novel:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
@@ -7045,7 +7071,7 @@ window.__ModuleLoader__.load({
 }
 
 /* -------------------------------------------------------- 投稿记录 ----- */
-.nw-welcome-subs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;}
+.nw-welcome-subs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--nw-sp-0);}
 .nw-welcome-sub{
   display:flex;align-items:center;justify-content:space-between;gap:var(--nw-sp-3);
   padding:8px 10px;border-radius:var(--nw-r-control);background:var(--nw-sunken);
@@ -7067,7 +7093,7 @@ window.__ModuleLoader__.load({
 .nw-welcome-subbtn{
   width:100%;border:1px solid transparent;font-family:inherit;text-align:left;
   color:var(--nw-fg);cursor:pointer;
-  transition:background .16s ease,border-color .16s ease,transform .16s ease;
+  transition:background var(--nw-dur) ease,border-color var(--nw-dur) ease,transform var(--nw-dur) ease;
 }
 .nw-welcome-subbtn:hover{
   border-color:var(--nw-line-strong);
@@ -7078,7 +7104,7 @@ window.__ModuleLoader__.load({
 .nw-welcome-subarrow{
   display:inline-flex;flex:0 0 auto;color:var(--nw-fg-soft);
   opacity:0;transform:translateX(-3px);
-  transition:opacity .16s ease,transform .16s ease;
+  transition:opacity var(--nw-dur) ease,transform var(--nw-dur) ease;
 }
 .nw-welcome-sub-unread .nw-welcome-subtitle{font-weight:600;}
 
@@ -7092,7 +7118,7 @@ window.__ModuleLoader__.load({
   width:30px;padding:0;border-radius:var(--nw-r-control);
   border:1px solid transparent;background:transparent;
   color:var(--nw-fg-soft);font-family:inherit;cursor:pointer;
-  opacity:0;transition:opacity .16s ease,color .16s ease,background .16s ease,border-color .16s ease;
+  opacity:0;transition:opacity var(--nw-dur) ease,color var(--nw-dur) ease,background var(--nw-dur) ease,border-color var(--nw-dur) ease;
 }
 .nw-welcome-subrow:hover .nw-welcome-subdel,
 .nw-welcome-subdel:focus-visible{opacity:1;}
@@ -7105,12 +7131,12 @@ window.__ModuleLoader__.load({
 
 /* R16 ⑤: the fold footer shared by all three cards. */
 .nw-welcome-more{
-  display:flex;align-items:center;justify-content:center;gap:5px;
-  width:100%;margin-top:8px;padding:6px 10px;
+  display:flex;align-items:center;justify-content:center;gap:var(--nw-sp-0);
+  width:100%;margin-top:var(--nw-sp-1);padding:6px 10px;
   border-radius:var(--nw-r-control);border:1px solid var(--nw-line);
   background:transparent;color:var(--nw-fg-soft);
   font-family:inherit;font-size:var(--nw-fs-micro);cursor:pointer;
-  transition:color .16s ease,border-color .16s ease,background .16s ease;
+  transition:color var(--nw-dur) ease,border-color var(--nw-dur) ease,background var(--nw-dur) ease;
 }
 .nw-welcome-more:hover{
   color:var(--nw-fg);
@@ -7139,7 +7165,7 @@ window.__ModuleLoader__.load({
 .nw-badge{
   flex:0 0 auto;display:inline-flex;align-items:center;
   height:20px;padding:0 8px;border-radius:var(--nw-r-pill);
-  font-size:11.5px;line-height:1;white-space:nowrap;
+  font-size:var(--nw-fs-tiny);line-height:1;white-space:nowrap;
   background:color-mix(in srgb, var(--nw-fg-soft) 12%, transparent);
   color:var(--nw-fg-soft);
 }
@@ -7152,14 +7178,14 @@ window.__ModuleLoader__.load({
 /* -------------------------------------------------------- 快捷入口 ----- */
 .nw-welcome-quick{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px,100%),1fr));gap:var(--nw-sp-2);}
 .nw-welcome-quickbtn{
-  display:flex;align-items:center;gap:10px;
+  display:flex;align-items:center;gap:var(--nw-sp-2);
   padding:12px 14px;border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
   background:var(--nw-surface-1);color:var(--nw-fg);cursor:pointer;
   font-family:inherit;font-size:var(--nw-fs-second);text-align:left;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    border-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease),
-    transform var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-welcome-quickbtn:hover:not(:disabled){
   background:var(--nw-surface-2);border-color:var(--nw-line-strong);
@@ -7171,9 +7197,9 @@ window.__ModuleLoader__.load({
 .nw-welcome-quickicon{
   color:var(--nw-fg-soft);display:flex;flex:0 0 auto;
   width:26px;height:26px;align-items:center;justify-content:center;
-  border-radius:8px;background:color-mix(in srgb, var(--nw-fg) 6%, transparent);
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease);
+  border-radius:var(--nw-r-control);background:color-mix(in srgb, var(--nw-fg) 6%, transparent);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-welcome-quickbtn:hover:not(:disabled) .nw-welcome-quickicon{background:var(--nw-brand);color:var(--nw-bg);}
 
@@ -7184,9 +7210,9 @@ window.__ModuleLoader__.load({
 .nw-welcome-refresh{
   display:inline-flex;align-items:center;justify-content:center;
   width:26px;height:26px;padding:0;
-  border:1px solid transparent;border-radius:8px;
+  border:1px solid transparent;border-radius:var(--nw-r-control);
   background:transparent;color:var(--nw-fg-soft);cursor:pointer;
-  transition:background-color .16s ease,color .16s ease,border-color .16s ease;
+  transition:background-color var(--nw-dur) ease,color var(--nw-dur) ease,border-color var(--nw-dur) ease;
 }
 .nw-welcome-refresh:hover:not(:disabled){background:var(--nw-sunken);border-color:var(--nw-line);color:var(--nw-fg);}
 .nw-welcome-refresh:disabled{opacity:.5;cursor:default;}
@@ -7197,6 +7223,7 @@ window.__ModuleLoader__.load({
   .nw-welcome-quickbtn{transition:none;}
   .nw-welcome-quickbtn:hover:not(:disabled){transform:none;}
   .nw-welcome-refresh:disabled .nw-welcome-refreshicon{animation:none;}
+  .nw-skel-row{animation:none;background:color-mix(in srgb, var(--nw-fg) 8%, transparent);}
 }
 
 /* R13: container tiers, not window tiers — the home screen is a column. */
@@ -7220,11 +7247,11 @@ window.__ModuleLoader__.load({
   //     .nw-scroll                            the ONLY vertical scroller
   //       .nw-page (max width = --nw-width)   padding top/bottom = 留白
   //         .nw-stack (position:relative)
-  //           .nw-hl        z-index:1  typography mirror, color:transparent,
+  //           .nw-hl        z-index:var(--nw-z-base)  typography mirror, color:transparent,
   //                                     draws <mark> highlights (pointer-events:none)
-  //           .nw-caret     z-index:0  visibility:hidden measuring mirror used to
+  //           .nw-caret     z-index:var(--nw-z-base)  visibility:hidden measuring mirror used to
   //                                     locate the caret's *visual* line
-  //           textarea      z-index:2  transparent, uncontrolled, grown to the
+  //           textarea      z-index:var(--nw-z-base)  transparent, uncontrolled, grown to the
   //                                     full content height (so it never scrolls
   //                                     internally and both mirrors stay aligned)
   //     .nw-findbar (absolute)                find & replace overlay
@@ -7255,13 +7282,25 @@ window.__ModuleLoader__.load({
   const TAB_TEXT = '\u3000\u3000'; // two full-width spaces
   const MAX_MATCHES = 5000;
   // Reading palettes owned by the editor. The five ids are shared with the
-  // shell (client/src/98-shell-theme.js) and with settings.theme; see
-  // docs/CONTRACT-R3.md section 2.
-  const THEMES = { harness: 1, claude: 1, eye: 1, night: 1, ink: 1, card: 1, newspaper: 1, guofeng: 1, magazine: 1 };
+  // shell (client/src/98-shell-theme.js) and with settings.theme. R19 dropped
+  // harness / ink / card / guofeng — see the palette comment further down.
+  const THEMES = { claude: 1, eye: 1, night: 1, newspaper: 1, magazine: 1 };
   // Values written by older settings rows keep working: the shell migrates
   // them in 90-app, but the editor has to tolerate a stale settings object too
   // (a document opened from an older backup, a settings write that raced).
-  const THEME_ALIAS = { light: 'claude', dark: 'night', parchment: 'ink', eye: 'eye' };
+  // Every retired id lands on its closest surviving neighbour so an old row
+  // never falls through to an unstyled surface.
+  const THEME_ALIAS = {
+    light: 'claude',
+    paper: 'claude',
+    harness: 'claude',
+    card: 'claude',
+    dark: 'night',
+    parchment: 'night',
+    ink: 'night',
+    guofeng: 'newspaper',
+    eye: 'eye',
+  };
 
   // ---------------------------------------------------------------- helpers --
   function nowMs() {
@@ -7401,13 +7440,14 @@ window.__ModuleLoader__.load({
   position:relative;display:flex;flex-direction:column;flex:1 1 auto;
   height:100%;min-height:0;min-width:0;overflow:hidden;
   background:var(--nw-bg);color:var(--nw-fg);
-  /* R6: paper grain. A palette may set --nw-texture; harness and the other
-     chrome-following themes leave it unset, which resolves to none. */
+  /* R6: paper grain. A palette may set --nw-texture; every shipped palette
+     leaves it unset (backgrounds are plain colour since R10 ⑧), so this
+     resolves to none. The hook stays for user themes. */
   background-image:var(--nw-texture,none);
   font-family:var(--nw-ui-font,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",system-ui,sans-serif);
   font-size:16px;line-height:1.6;
-  transition:background-color .18s var(--nw-ease, cubic-bezier(.2,.7,.2,1)),
-             color .18s var(--nw-ease, cubic-bezier(.2,.7,.2,1));
+  transition:background-color var(--nw-dur) var(--nw-ease, cubic-bezier(.2,.7,.2,1)),
+             color var(--nw-dur) var(--nw-ease, cubic-bezier(.2,.7,.2,1));
   /* Reading measure. --nw-pad-x is the fixed gutter of the writing column;
      --nw-gutter-x is the extra lane kept free for the floating dock pinned to
      the bottom-right of the pane (CONTRACT-R3 section 7: the text's right edge
@@ -7429,22 +7469,6 @@ window.__ModuleLoader__.load({
    gutter. */
 @container nw (max-width: 720px){.nw-surface{--nw-pad-x:22px;--nw-pad-y:36px;--nw-gutter-x:66px;}}
 
-/* ---- five reading palettes (owned by the editor, not the host chrome) ----
-   ids shared with 98-shell-theme.js: harness | claude | eye | night | ink.
-   "harness" deliberately re-maps nothing outside this element: it is the
-   neutral white paper that follows the host tokens around it. */
-.nw-surface[data-theme="harness"]{
-  --nw-bg:#ffffff;--nw-fg:#1f1f1f;--nw-soft:#6f7278;--nw-rule:#e6e4e0;
-  --nw-caret-color:#1f1f1f;--nw-caret:#1f1f1f;--nw-sel:rgba(31,31,31,.14);
-  --nw-accent:#1f1f1f;
-  --nw-scroll-thumb:rgba(31,31,31,.18);--nw-scroll-thumb-hover:rgba(31,31,31,.32);
-  --nw-panel:#ffffff;--nw-panel-border:#e6e4e0;--nw-panel-shadow:0 8px 24px rgba(0,0,0,.06);
-  --nw-btn-bg:#f6f5f2;--nw-btn-fg:#1f1f1f;--nw-btn-border:#e6e4e0;--nw-btn-hover:#eeede9;
-  --nw-hl-bg:rgba(255,196,0,.28);--nw-hl-line:rgba(203,145,0,.68);--nw-hl-active:rgba(255,152,0,.46);
-  --nw-find-bg:rgba(31,31,31,.10);--nw-find-active:rgba(31,31,31,.24);--nw-find-ring:rgba(31,31,31,.72);
-  --nw-empty-glyph:rgba(31,31,31,.16);
-  --nw-texture:none;
-}
 .nw-surface[data-theme="claude"]{
   --nw-bg:#faf4e9;--nw-fg:#1b1813;--nw-soft:#6d6558;--nw-rule:#e6dccb;
   --nw-caret-color:#1b1813;--nw-caret:#1b1813;--nw-sel:rgba(27,24,19,.14);
@@ -7485,39 +7509,6 @@ window.__ModuleLoader__.load({
   --nw-empty-glyph:rgba(232,230,220,.16);
   --nw-texture:none;
 }
-.nw-surface[data-theme="ink"]{
-  --nw-bg:#e9eef5;--nw-fg:#121820;--nw-soft:#5b6675;--nw-rule:#d3dce6;
-  --nw-caret-color:#0d141b;--nw-caret:#0d141b;--nw-sel:rgba(18,24,32,.16);
-  --nw-accent:#1f4f6b;
-  --nw-scroll-thumb:rgba(18,24,32,.20);--nw-scroll-thumb-hover:rgba(18,24,32,.36);
-  --nw-panel:#f7fafd;--nw-panel-border:#d3dce6;--nw-panel-shadow:0 8px 24px rgba(18,32,48,.12);
-  --nw-btn-bg:#e3eaf2;--nw-btn-fg:#1f4f6b;--nw-btn-border:#d3dce6;--nw-btn-hover:#d7e1ec;
-  --nw-hl-bg:rgba(31,79,107,.16);--nw-hl-line:rgba(31,79,107,.56);--nw-hl-active:rgba(31,79,107,.30);
-  --nw-find-bg:rgba(31,79,107,.12);--nw-find-active:rgba(31,79,107,.26);--nw-find-ring:rgba(31,79,107,.78);
-  --nw-empty-glyph:rgba(18,24,32,.18);
-  /* Ink is a hard-edged material: no soft rounding anywhere. */
-  --nw-r-card:4px;--nw-r-control:3px;
-  /* A blue-grey wash that darkens toward the foot of the page. */
-  --nw-texture:none;
-}
-
-/* card — 极简卡片：纯白纸、无衬线、大圆角，靠留白与卡片分层而不是描边。
-   The accent is a muted slate blue, chosen because it survives the paper being
-   pure white without the theme reading as "harness with rounded corners". */
-.nw-surface[data-theme="card"]{
-  --nw-bg:#f9fbfd;--nw-fg:#16181c;--nw-soft:#6b7280;--nw-rule:#e3e8ef;
-  --nw-caret-color:#16181c;--nw-caret:#16181c;--nw-sel:rgba(22,24,28,.14);
-  --nw-accent:#3b6ea5;
-  --nw-scroll-thumb:rgba(22,24,28,.16);--nw-scroll-thumb-hover:rgba(22,24,28,.30);
-  --nw-panel:#ffffff;--nw-panel-border:#e9edf3;--nw-panel-shadow:0 10px 30px rgba(22,32,48,.10);
-  --nw-btn-bg:#ffffff;--nw-btn-fg:#16181c;--nw-btn-border:#e6ebf2;--nw-btn-hover:#eef3f9;
-  --nw-hl-bg:rgba(59,110,165,.16);--nw-hl-line:rgba(59,110,165,.60);--nw-hl-active:rgba(59,110,165,.32);
-  --nw-find-bg:rgba(59,110,165,.12);--nw-find-active:rgba(59,110,165,.26);--nw-find-ring:rgba(59,110,165,.80);
-  --nw-empty-glyph:rgba(22,24,28,.14);
-  --nw-r-card:18px;--nw-r-control:14px;
-  --nw-texture:none;
-}
-
 /* newspaper — 报纸：新闻纸米黄底、全衬线、细墨线，标题用报头红。 */
 .nw-surface[data-theme="newspaper"]{
   --nw-bg:#ecdfbe;--nw-fg:#1a1913;--nw-soft:#5a5546;--nw-rule:#d3c8a9;
@@ -7535,25 +7526,6 @@ window.__ModuleLoader__.load({
   --nw-reading-font:Georgia,"Times New Roman","Songti SC","Noto Serif CJK SC",serif;
   /* R10: solid paper. The old ruled newsprint used a repeating-linear-gradient
      per 3px, which users read as "background grid" — replaced by a flat tone. */
-  --nw-texture:none;
-}
-
-/* guofeng — 国风水墨：宣纸底、楷体正文、朱砂印泥做强调色。 */
-.nw-surface[data-theme="guofeng"]{
-  --nw-bg:#f2e9d2;--nw-fg:#221f18;--nw-soft:#6a6250;--nw-rule:#ded2b6;
-  --nw-caret-color:#221f18;--nw-caret:#221f18;--nw-sel:rgba(34,31,24,.16);
-  --nw-accent:#a8442f;
-  --nw-scroll-thumb:rgba(34,31,24,.20);--nw-scroll-thumb-hover:rgba(34,31,24,.36);
-  --nw-panel:#f6eed9;--nw-panel-border:#e0d4b8;--nw-panel-shadow:0 8px 26px rgba(60,48,28,.14);
-  --nw-btn-bg:#e9dfc4;--nw-btn-fg:#221f18;--nw-btn-border:#dcd4bd;--nw-btn-hover:#dfd3b4;
-  --nw-hl-bg:rgba(168,68,47,.16);--nw-hl-line:rgba(168,68,47,.58);--nw-hl-active:rgba(168,68,47,.30);
-  --nw-find-bg:rgba(34,31,24,.10);--nw-find-active:rgba(34,31,24,.22);--nw-find-ring:rgba(34,31,24,.70);
-  --nw-empty-glyph:rgba(34,31,24,.16);
-  --nw-r-card:8px;--nw-r-control:6px;
-  --nw-ui-font-override:"Songti SC","STSong","Noto Serif CJK SC","SimSun",serif;
-  --nw-reading-font:"Kaiti SC","STKaiti","KaiTi","Noto Serif CJK SC","Songti SC",serif;
-  /* R10: solid 宣纸 tone. The two-way fibre gradient rendered as a visible grid
-     on large screens, so the paper is now a flat wash. */
   --nw-texture:none;
 }
 
@@ -7578,40 +7550,6 @@ window.__ModuleLoader__.load({
   --nw-texture:none;
 }
 
-/* Legacy theme names. themeOf() normalises light/dark/parchment to the
-   canonical ids above, so these blocks exist only as a safety net for a caller
-   that writes the old id straight onto the element (older shells did). */
-.nw-surface[data-theme="light"]{
-  --nw-bg:#faf9f5;--nw-fg:#141413;--nw-soft:#6f6d66;--nw-rule:#e8e6dc;
-  --nw-caret-color:#141413;--nw-caret:#141413;--nw-sel:rgba(20,20,19,.13);--nw-accent:#d97757;
-  --nw-scroll-thumb:rgba(20,20,19,.18);--nw-scroll-thumb-hover:rgba(20,20,19,.32);
-  --nw-panel:#fdfcf9;--nw-panel-border:#e8e6dc;--nw-panel-shadow:0 8px 24px rgba(0,0,0,.06);
-  --nw-btn-bg:#f3f1ea;--nw-btn-fg:#141413;--nw-btn-border:#e8e6dc;--nw-btn-hover:#eae7de;
-  --nw-hl-bg:rgba(217,119,87,.22);--nw-hl-line:rgba(190,94,62,.62);--nw-hl-active:rgba(217,119,87,.38);
-  --nw-find-bg:rgba(217,119,87,.14);--nw-find-active:rgba(217,119,87,.30);--nw-find-ring:rgba(190,94,62,.82);
-  --nw-empty-glyph:rgba(20,20,19,.16);--nw-gutter-x:40px;
-}
-.nw-surface[data-theme="dark"]{
-  --nw-bg:#1a1a18;--nw-fg:#e8e6dc;--nw-soft:#9c9a90;--nw-rule:#33322d;
-  --nw-caret-color:#e8e6dc;--nw-caret:#e8e6dc;--nw-sel:rgba(232,230,220,.18);--nw-accent:#e08d6f;
-  --nw-scroll-thumb:rgba(232,230,220,.18);--nw-scroll-thumb-hover:rgba(232,230,220,.34);
-  --nw-panel:#221f1d;--nw-panel-border:#33322d;--nw-panel-shadow:0 8px 24px rgba(0,0,0,.46);
-  --nw-btn-bg:#2a2825;--nw-btn-fg:#e8e6dc;--nw-btn-border:#3a3832;--nw-btn-hover:#35322e;
-  --nw-hl-bg:rgba(224,141,111,.24);--nw-hl-line:rgba(224,141,111,.62);--nw-hl-active:rgba(224,141,111,.40);
-  --nw-find-bg:rgba(224,141,111,.16);--nw-find-active:rgba(224,141,111,.32);--nw-find-ring:rgba(224,141,111,.86);
-  --nw-empty-glyph:rgba(232,230,220,.16);
-}
-.nw-surface[data-theme="parchment"]{
-  --nw-bg:#f4f2ec;--nw-fg:#1a1a18;--nw-soft:#6b6a63;--nw-rule:#dedbd2;
-  --nw-caret-color:#141413;--nw-caret:#141413;--nw-sel:rgba(26,26,24,.14);--nw-accent:#2b2b28;
-  --nw-scroll-thumb:rgba(26,26,24,.20);--nw-scroll-thumb-hover:rgba(26,26,24,.34);
-  --nw-panel:#f9f7f1;--nw-panel-border:#dedbd2;--nw-panel-shadow:0 8px 24px rgba(26,26,24,.10);
-  --nw-btn-bg:#ebe8e0;--nw-btn-fg:#2b2b28;--nw-btn-border:#dedbd2;--nw-btn-hover:#e2ded4;
-  --nw-hl-bg:rgba(43,43,40,.14);--nw-hl-line:rgba(43,43,40,.55);--nw-hl-active:rgba(43,43,40,.26);
-  --nw-find-bg:rgba(43,43,40,.10);--nw-find-active:rgba(43,43,40,.22);--nw-find-ring:rgba(43,43,40,.70);
-  --nw-empty-glyph:rgba(26,26,24,.18);
-}
-
 /* Immersive writing surface (prop "immersive"). The component raises --nw-width
    to at least 880px; its 96px gutters are generous enough on their own, and the
    dock is dimmed and deprioritised in immersive mode, so the extra lane is
@@ -7630,10 +7568,28 @@ window.__ModuleLoader__.load({
 .nw-scroll::-webkit-scrollbar{width:8px;height:8px;}
 .nw-scroll::-webkit-scrollbar-track{background:transparent;}
 .nw-scroll::-webkit-scrollbar-thumb{
-  background:var(--nw-scroll-thumb);border-radius:8px;border:2px solid transparent;background-clip:padding-box;
+  background:var(--nw-scroll-thumb);border-radius:var(--nw-r-control);border:2px solid transparent;background-clip:padding-box;
 }
 .nw-scroll::-webkit-scrollbar-thumb:hover{background:var(--nw-scroll-thumb-hover);background-clip:padding-box;}
-.nw-page{width:min(var(--nw-width,760px),100%);margin:0 auto;padding:var(--nw-pad-y) 0;}/* Typewriter room. Centring the caret needs half a viewport of content above
+/* ---- the sheet ------------------------------------------------------------
+   R19 B6: the manuscript used to be a bare rectangle of paper colour, which on
+   a wide panel read as "a textarea", not "a page". A hairline plus one soft
+   drop is enough to lift it off the desk; anything stronger turns the writing
+   surface into a card and competes with the text. The shadow is only drawn
+   when the sheet is actually narrower than the pane — at 100% width it would
+   be clipped by .nw-scroll and leave a smudge on one edge only. */
+.nw-page{
+  width:min(var(--nw-width,760px),100%);margin:0 auto;padding:var(--nw-pad-y) 0;
+  border-radius:var(--nw-r-card);
+  transition:box-shadow var(--nw-dur) var(--nw-ease,ease);
+}
+@container nw (min-width: 780px){
+  .nw-page{
+    border:1px solid var(--nw-line-soft);
+    box-shadow:var(--nw-shadow-paper);
+  }
+}
+/* Typewriter room. Centring the caret needs half a viewport of content above
    the first line and below the last one; without it the scrollTop gets clamped
    at 0/max near the document edges and the line never reaches the middle —
    which is exactly where people type most of the time. --nw-tw-room is set by
@@ -7644,26 +7600,40 @@ window.__ModuleLoader__.load({
 }
 .nw-stack{position:relative;width:100%;contain:layout style;}
 
-/* ---- chapter heading (R17 ①) -------------------------------------------
+/* ---- chapter heading (R17 ①, reworked R19) -------------------------------
    The chapter name is printed as the first line of the manuscript, centred and
    larger than the body. It lives inside .nw-page above .nw-stack so it scrolls
    with the text, and it is deliberately NOT part of the textarea: the writer
    renames it in the shelf, the editor only displays it. Its height is measured
-   by chapterTitleH() and subtracted from the typewriter room. */
+   by chapterTitleH() and subtracted from the typewriter room.
+
+   R19: this used to be 700-weight, which read like a government notice. A book
+   heading is quieter than the body, not louder: semibold, a hair of tracking,
+   and a short centred rule that spans the title only. The rule is a pseudo
+   element, not a border on the block, so it never stretches the full measure. */
 .nw-chaptertitle{
   display:block;
   padding:0 calc(var(--nw-pad-x) + var(--nw-gutter-x,0px));
-  margin:0 0 calc(var(--nw-line) * 0.75em);
+  margin:0 0 calc(var(--nw-line) * 0.9em);
   font-family:var(--nw-font);
-  font-size:calc(var(--nw-size) * 1.28);
-  font-weight:700;
-  line-height:1.45;
-  letter-spacing:.01em;
+  font-size:calc(var(--nw-size) * 1.22);
+  font-weight:600;
+  line-height:1.5;
+  letter-spacing:.02em;
   text-align:center;
   color:var(--nw-fg);
   overflow-wrap:break-word;word-break:break-word;
   user-select:none;
 }
+.nw-chaptertitle::after{
+  content:'';
+  display:block;
+  width:36px;height:1px;
+  margin:calc(var(--nw-line) * 0.55em) auto 0;
+  background:var(--nw-rule);
+  opacity:.8;
+}
+.nw-surface[data-immersive="1"] .nw-chaptertitle::after{opacity:.55;}
 
 /* ---- shared typography for the textarea and BOTH mirrors -----------------
    Every wrapping-affecting property must be identical or the caret/highlight
@@ -7684,7 +7654,7 @@ window.__ModuleLoader__.load({
    is hidden and replaced by .nw-cursor below, positioned from the very same
    mirror measurement the typewriter uses (no second geometry pipeline). */
 .nw-ta{
-  position:relative;z-index:2;
+  position:relative;z-index:var(--nw-z-base);
   background:transparent;color:var(--nw-fg);caret-color:transparent;
   overflow:hidden;resize:none;outline:none;-webkit-appearance:none;appearance:none;
   border-radius:0;
@@ -7701,7 +7671,7 @@ window.__ModuleLoader__.load({
 .nw-cursor{
   position:absolute;left:0;top:0;width:var(--nw-caret-width,2px);height:1.2em;
   background:var(--nw-caret-color,#141413);border-radius:1px;
-  pointer-events:none;user-select:none;z-index:3;display:none;
+  pointer-events:none;user-select:none;z-index:var(--nw-z-float);display:none;
   animation:nw-caret-blink 1.06s step-end infinite;
 }
 /* R11: "光标闪烁" is a setting. paintCaret swaps animation-name to restart the
@@ -7718,18 +7688,18 @@ window.__ModuleLoader__.load({
 /* highlight mirror: sits behind the transparent textarea, draws marks only */
 .nw-hl{
   position:absolute;left:0;top:0;right:0;height:100%;overflow:hidden;
-  color:transparent;pointer-events:none;user-select:none;z-index:1;
+  color:transparent;pointer-events:none;user-select:none;z-index:var(--nw-z-base);
 }
 .nw-hl mark{color:transparent;background-color:transparent;}
-.nw-hl .nw-hl-mark{background-color:var(--nw-hl-bg);border-radius:2px;box-shadow:inset 0 -1.5px 0 var(--nw-hl-line);}
+.nw-hl .nw-hl-mark{background-color:var(--nw-hl-bg);border-radius:var(--nw-r-hair);box-shadow:inset 0 -1.5px 0 var(--nw-hl-line);}
 .nw-hl .nw-hl-mark[data-active="1"]{background-color:var(--nw-hl-active);}
-.nw-hl .nw-find-hit{background-color:var(--nw-find-bg);border-radius:2px;}
+.nw-hl .nw-find-hit{background-color:var(--nw-find-bg);border-radius:var(--nw-r-hair);}
 .nw-hl .nw-find-hit[data-active="1"]{background-color:var(--nw-find-active);box-shadow:inset 0 0 0 1px var(--nw-find-ring);}
 
 /* caret measuring mirror: same box, never painted */
 .nw-caret{
   position:absolute;left:0;top:0;width:100%;height:auto;overflow:visible;
-  visibility:hidden;pointer-events:none;user-select:none;z-index:0;
+  visibility:hidden;pointer-events:none;user-select:none;z-index:var(--nw-z-base);
 }
 /* zero-size inline-block anchored to the line box top, not to the baseline */
 .nw-caret-mark{display:inline-block;width:0;height:0;vertical-align:top;overflow:hidden;}
@@ -7737,17 +7707,17 @@ window.__ModuleLoader__.load({
 /* ---- empty state ---- */
 .nw-empty{
   min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
-  gap:10px;padding:32px;text-align:center;color:var(--nw-soft);
+  gap:var(--nw-sp-2);padding:var(--nw-sp-6);text-align:center;color:var(--nw-soft);
 }
 .nw-empty .nw-empty-glyph{font-size:40px;line-height:1;color:var(--nw-empty-glyph);}
 .nw-empty .nw-empty-main{font-size:14px;}
-.nw-empty .nw-empty-sub{font-size:11px;opacity:.8;}
+.nw-empty .nw-empty-sub{font-size:var(--nw-fs-tiny);opacity:.8;}
 
 /* ---- find & replace overlay ---- */
 .nw-findbar{
-  position:absolute;top:10px;right:14px;z-index:8;
-  width:min(342px,calc(100% - 28px));display:flex;flex-direction:column;gap:6px;
-  padding:9px;border-radius:10px;
+  position:absolute;top:10px;right:14px;z-index:var(--nw-z-float);
+  width:min(342px,calc(100% - 28px));display:flex;flex-direction:column;gap:var(--nw-sp-0);
+  padding:var(--nw-sp-1);border-radius:var(--nw-r-card);
   background:var(--nw-panel);border:1px solid var(--nw-panel-border);box-shadow:var(--nw-panel-shadow);
   color:var(--nw-btn-fg);font-size:12px;
 }
@@ -7757,17 +7727,17 @@ window.__ModuleLoader__.load({
    immersive mode there is no toolbar at all, and a collapsed shelf would
    otherwise be unrecoverable from this view). */
 .nw-surface-acts{
-  position:absolute;top:10px;left:14px;z-index:8;
+  position:absolute;top:10px;left:14px;z-index:var(--nw-z-float);
   display:inline-flex;align-items:center;gap:4px;
 }
 .nw-homebtn,
 .nw-actbtn{
   display:inline-flex;align-items:center;justify-content:center;
   width:28px;height:28px;padding:0;
-  border-radius:8px;border:1px solid var(--nw-btn-border);
+  border-radius:var(--nw-r-control);border:1px solid var(--nw-btn-border);
   background:var(--nw-panel);color:var(--nw-btn-fg);
   font-family:inherit;font-size:12px;line-height:1;cursor:pointer;
-  opacity:.55;transition:opacity .16s ease,background .16s ease,border-color .16s ease;
+  opacity:.55;transition:opacity var(--nw-dur) ease,background var(--nw-dur) ease,border-color var(--nw-dur) ease;
 }
 .nw-homebtn:hover,
 .nw-actbtn:hover{opacity:1;background:var(--nw-btn-hover);border-color:var(--nw-find-ring);}
@@ -7782,27 +7752,27 @@ window.__ModuleLoader__.load({
 .nw-surface[data-immersive="1"] .nw-actbtn{opacity:.28;}
 .nw-surface[data-immersive="1"] .nw-homebtn:hover,
 .nw-surface[data-immersive="1"] .nw-actbtn:hover{opacity:1;}
-.nw-findbar .nw-find-row{display:flex;align-items:center;gap:6px;}
+.nw-findbar .nw-find-row{display:flex;align-items:center;gap:var(--nw-sp-0);}
 .nw-findbar .nw-find-input{
-  flex:1 1 auto;min-width:0;height:27px;padding:0 8px;border-radius:6px;
+  flex:1 1 auto;min-width:0;height:27px;padding:0 8px;border-radius:var(--nw-r-control);
   border:1px solid var(--nw-btn-border);background:var(--nw-bg);color:var(--nw-fg);
   font-family:inherit;font-size:12px;line-height:25px;outline:none;
 }
 .nw-findbar .nw-find-input::placeholder{color:var(--nw-soft);}
 .nw-findbar .nw-find-input:focus{border-color:var(--nw-find-ring);box-shadow:0 0 0 2px var(--nw-find-bg);}
 .nw-findbar .nw-find-count{
-  min-width:52px;text-align:right;color:var(--nw-soft);font-size:11px;
+  min-width:52px;text-align:right;color:var(--nw-soft);font-size:var(--nw-fs-tiny);
   font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
-.nw-findbar .nw-find-actions{display:flex;align-items:center;gap:5px;flex-wrap:wrap;}
+.nw-findbar .nw-find-actions{display:flex;align-items:center;gap:var(--nw-sp-0);flex-wrap:wrap;}
 .nw-findbar .nw-find-spacer{flex:1 1 auto;min-width:4px;}
 
 .nw-ebtn{
   -webkit-appearance:none;appearance:none;display:inline-flex;align-items:center;justify-content:center;
-  height:27px;padding:0 9px;border-radius:6px;border:1px solid var(--nw-btn-border);
+  height:27px;padding:0 9px;border-radius:var(--nw-r-control);border:1px solid var(--nw-btn-border);
   background:var(--nw-btn-bg);color:var(--nw-btn-fg);
   font-family:inherit;font-size:12px;line-height:1;white-space:nowrap;cursor:pointer;
-  transition:background-color .12s ease,border-color .12s ease,opacity .12s ease;
+  transition:background-color var(--nw-dur) ease,border-color var(--nw-dur) ease,opacity var(--nw-dur) ease;
 }
 .nw-ebtn:hover:not([disabled]){background:var(--nw-btn-hover);}
 .nw-ebtn:active:not([disabled]){transform:translateY(.5px);}
@@ -9933,6 +9903,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-bench{display:flex;flex:1 1 auto;min-height:0;min-width:0;position:relative;}
 .nw-bench-paper{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;min-height:0;position:relative;}
 .nw-suggest{
+  position:relative;
   flex:0 0 auto;display:flex;flex-direction:column;min-height:0;
   width:336px;
   /* R13: was 46vw. The panel lives inside a ~600px column most of the time, so
@@ -9941,47 +9912,80 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   max-width:46%;
   border-left:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-layer-1);
-  animation:nw-slide-in .18s var(--nw-ease,ease);
+  animation:nw-slide-in var(--nw-dur) var(--nw-ease,ease);
+}
+/* R19 B2: adviceWidth and its localStorage key have existed since R12, but
+   nothing ever called the setter — the column was 336px forever. This grip is
+   the missing half: the same pointer-drag idiom as .nw-splitter, mirrored to
+   the panel's left edge (dragging left makes the panel wider). */
+.nw-suggest-grip{
+  position:absolute;left:-3px;top:0;bottom:0;width:6px;z-index:var(--nw-z-float);
+  cursor:col-resize;background:transparent;border:0;padding:0;
+  transition:background var(--nw-dur) var(--nw-ease,ease);
+}
+.nw-suggest-grip:hover,.nw-suggest-grip:focus-visible,.nw-suggest-grip[data-drag="1"]{
+  background:color-mix(in srgb, var(--nw-brand) 45%, transparent);
+  outline:none;
 }
 @keyframes nw-slide-in{from{opacity:0;transform:translateX(14px);}to{opacity:1;transform:none;}}
 .nw-suggest-head{
-  display:flex;align-items:center;gap:8px;flex:0 0 auto;
+  display:flex;align-items:center;gap:var(--nw-sp-1);flex:0 0 auto;
   padding:10px 10px 8px 14px;border-bottom:1px solid var(--dsw-alias-border-l1);
 }
 .nw-suggest-title{font-size:14px;font-weight:600;color:var(--dsw-alias-label-primary);}
 .nw-suggest-count{font-size:12px;color:var(--dsw-alias-label-secondary);}
-.nw-suggest-body{flex:1 1 auto;min-height:0;overflow:auto;padding:10px;display:flex;flex-direction:column;gap:8px;}
+.nw-suggest-body{flex:1 1 auto;min-height:0;overflow:auto;padding:var(--nw-sp-2);display:flex;flex-direction:column;gap:var(--nw-sp-1);}
 .nw-advice{
-  display:flex;flex-direction:column;gap:6px;padding:11px 12px;
-  border-radius:10px;border:1px solid var(--dsw-alias-border-l1);
+  display:flex;flex-direction:column;gap:var(--nw-sp-0);padding:11px 12px;
+  border-radius:var(--nw-r-card);border:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-base);cursor:pointer;text-align:left;
   font-family:inherit;
-  transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease;
+  transition:border-color var(--nw-dur) ease,box-shadow var(--nw-dur) ease,transform var(--nw-dur) ease;
 }
 .nw-advice:hover{border-color:var(--dsw-alias-border-l2);transform:translateY(-1px);}
 .nw-advice[data-active="1"]{border-color:var(--dsw-alias-brand-primary);box-shadow:inset 0 0 0 1px var(--dsw-alias-brand-primary);}
 .nw-advice-quote{
   font-family:var(--nw-reading-font,inherit);font-size:13px;line-height:1.7;
   color:var(--dsw-alias-label-secondary);
-  border-left:3px solid var(--dsw-alias-border-l2);padding-left:9px;
+  border-left:3px solid var(--dsw-alias-border-l2);padding-left:var(--nw-sp-1);
   max-height:4.8em;overflow:hidden;
 }
-.nw-advice-issue{font-size:13px;font-weight:600;line-height:1.55;color:var(--dsw-alias-label-primary);}
-.nw-advice-why{font-size:12.5px;line-height:1.65;color:var(--dsw-alias-label-secondary);}
-.nw-advice-do{font-size:13px;line-height:1.65;color:var(--dsw-alias-label-primary);}
+.nw-advice-issue{font-size:var(--nw-fs-micro);font-weight:600;line-height:1.55;color:var(--dsw-alias-label-primary);}
+/* R19 B3: eight cards × five lines was a wall of grey. The quote and the advice
+   are what the writer reads; the reasoning collapses to a single clamped line
+   and the rewrite example to two. Nothing is lost — hovering a card or opening
+   it (data-active) unfolds the whole thing. */
+.nw-advice-why{
+  font-size:var(--nw-fs-tiny);line-height:1.65;color:var(--dsw-alias-label-secondary);
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;overflow:hidden;
+}
+.nw-advice:hover .nw-advice-why,.nw-advice[data-active="1"] .nw-advice-why{
+  display:block;-webkit-line-clamp:unset;overflow:visible;
+}
+.nw-advice-do{
+  font-size:var(--nw-fs-micro);line-height:1.65;color:var(--dsw-alias-label-primary);
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;
+}
+.nw-advice:hover .nw-advice-do,.nw-advice[data-active="1"] .nw-advice-do{
+  display:block;-webkit-line-clamp:unset;overflow:visible;
+}
 /* The suggested rewrite is quoted prose, so it gets the reading face and a
    tinted block instead of another paragraph of grey — it is the one part of the
    card the writer may copy straight into the manuscript. */
 .nw-advice-example{
-  font-family:var(--nw-reading-font,inherit);font-size:13px;line-height:1.75;
-  padding:7px 10px;border-radius:8px;
+  font-family:var(--nw-reading-font,inherit);font-size:var(--nw-fs-micro);line-height:1.75;
+  padding:7px 10px;border-radius:var(--nw-r-control);
   background:color-mix(in srgb, var(--dsw-alias-brand-primary) 7%, var(--dsw-alias-bg-layer-1));
   border:1px dashed color-mix(in srgb, var(--dsw-alias-brand-primary) 26%, var(--dsw-alias-border-l1));
   color:var(--dsw-alias-label-primary);
   white-space:pre-wrap;word-break:break-word;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;
+}
+.nw-advice:hover .nw-advice-example,.nw-advice[data-active="1"] .nw-advice-example{
+  display:block;-webkit-line-clamp:unset;overflow:visible;
 }
 .nw-advice-kind{
-  align-self:flex-start;font-size:11px;line-height:1;padding:3px 7px;border-radius:999px;
+  align-self:flex-start;font-size:var(--nw-fs-tiny);line-height:1;padding:3px 7px;border-radius:var(--nw-r-pill);
   background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);
 }
 .nw-advice-kind[data-sev="high"]{
@@ -9989,19 +9993,19 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   color:var(--dsw-alias-state-error-primary);
 }
 .nw-advice-kind[data-sev="low"]{opacity:.72;}
-.nw-advice-foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.nw-advice-foot{display:flex;align-items:center;gap:var(--nw-sp-0);flex-wrap:wrap;}
 /* Ten dimensions do not fit one segmented control, and a <select> would hide
    nine tenths of them behind a click. Chips wrap onto as many rows as needed. */
 .nw-advice-focus{
-  flex:0 0 auto;display:flex;flex-wrap:wrap;gap:5px;
+  flex:0 0 auto;display:flex;flex-wrap:wrap;gap:var(--nw-sp-0);
   padding:8px 12px 9px;border-bottom:1px solid var(--dsw-alias-border-l1);
 }
 .nw-advice-chip{
-  height:24px;padding:0 10px;border-radius:999px;
+  height:24px;padding:0 10px;border-radius:var(--nw-r-pill);
   border:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary);
   font-family:inherit;font-size:12px;line-height:22px;cursor:pointer;
-  transition:background .14s ease,border-color .14s ease,color .14s ease;
+  transition:background var(--nw-dur) ease,border-color var(--nw-dur) ease,color var(--nw-dur) ease;
 }
 .nw-advice-chip:hover:not(:disabled){border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);}
 .nw-advice-chip[data-on="1"]{
@@ -10016,7 +10020,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-advice-note{flex:0 0 auto;padding:0 12px 9px;}
 .nw-advice-note textarea{
   width:100%;box-sizing:border-box;min-height:34px;max-height:96px;resize:vertical;
-  padding:7px 9px;border-radius:8px;
+  padding:7px 9px;border-radius:var(--nw-r-control);
   border:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);
   font-family:inherit;font-size:12.5px;line-height:1.6;
@@ -10026,68 +10030,68 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   box-shadow:0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent);
 }
 .nw-advice-note textarea::placeholder{color:var(--dsw-alias-label-secondary);opacity:.8;}
-.nw-advice-notebar{display:flex;align-items:center;gap:6px;margin-top:5px;}
-.nw-advice-notehint{font-size:11px;color:var(--dsw-alias-label-secondary);opacity:.8;}
+.nw-advice-notebar{display:flex;align-items:center;gap:var(--nw-sp-0);margin-top:var(--nw-sp-0);}
+.nw-advice-notehint{font-size:var(--nw-fs-tiny);color:var(--dsw-alias-label-secondary);opacity:.8;}
 .nw-suggest-empty{
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--nw-sp-2);
   flex:1 1 auto;padding:24px 18px;text-align:center;
   color:var(--dsw-alias-label-secondary);font-size:13px;line-height:1.7;
 }
 .nw-suggest-foot{
-  flex:0 0 auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  flex:0 0 auto;display:flex;align-items:center;gap:var(--nw-sp-1);flex-wrap:wrap;
   padding:9px 12px;border-top:1px solid var(--dsw-alias-border-l1);
 }
 /* R6: 收起侧栏 曾是一扇单向门 —— 仓库头部的收起按钮随侧栏一起消失，回来只能靠
    浮动坞（先点圆钮再点「显示目录」）。这个把手常驻在写作列左缘，任何时刻一次点击
    就能把目录要回来。沉浸模式不渲染它（沉浸是纯画布，Esc 退出）。 */
 .nw-shelfrestore{
-  position:absolute;z-index:39;left:0;top:50%;transform:translateY(-50%);
-  display:inline-flex;flex-direction:column;align-items:center;gap:8px;
+  position:absolute;z-index:var(--nw-z-float);left:0;top:50%;transform:translateY(-50%);
+  display:inline-flex;flex-direction:column;align-items:center;gap:var(--nw-sp-1);
   padding:10px 6px;border-radius:0 10px 10px 0;
   border:1px solid var(--dsw-alias-border-l1);border-left:none;
   background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
   color:var(--dsw-alias-label-secondary);
   cursor:pointer;opacity:.5;font-size:12px;line-height:1;
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease),
-             color var(--nw-dur,.18s) var(--nw-ease,ease),
-             padding var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+             color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+             padding var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelfrestore:hover,.nw-shelfrestore:focus-visible{
-  opacity:1;color:var(--dsw-alias-label-primary);padding-left:10px;
+  opacity:1;color:var(--dsw-alias-label-primary);padding-left:var(--nw-sp-2);
 }
 .nw-shelfrestore-txt{writing-mode:vertical-rl;letter-spacing:.2em;max-height:72px;overflow:hidden;}
 .nw-shelfrestore-ico{display:inline-flex;flex:0 0 auto;}
 .nw-dock{
-  position:absolute;z-index:40;
+  position:absolute;z-index:var(--nw-z-float);
   right:20px;bottom:56px;
-  display:flex;flex-direction:column;align-items:flex-end;gap:8px;
+  display:flex;flex-direction:column;align-items:flex-end;gap:var(--nw-sp-1);
   opacity:.35;
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock:hover,.nw-dock:focus-within,.nw-dock[data-open="1"]{opacity:1;}
 .nw-dock-fab{
-  width:44px;height:44px;border-radius:999px;
+  width:44px;height:44px;border-radius:var(--nw-r-pill);
   display:inline-flex;align-items:center;justify-content:center;
   border:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
   color:var(--dsw-alias-label-primary);
   box-shadow:0 2px 6px rgba(0,0,0,.08),0 12px 30px rgba(0,0,0,.10);
   cursor:pointer;font-size:18px;line-height:1;
-  transition:transform var(--nw-dur,.18s) var(--nw-ease,ease),box-shadow var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock-fab:hover{transform:translateY(-2px);box-shadow:0 4px 10px rgba(0,0,0,.1),0 16px 36px rgba(0,0,0,.14);}
 .nw-dock-fab:active{transform:translateY(0) scale(.97);}
-.nw-dock-menu{display:flex;flex-direction:column;align-items:flex-end;gap:8px;}
-.nw-dock-menu[data-open="1"]{animation:nw-pop .18s var(--nw-ease,ease);}
+.nw-dock-menu{display:flex;flex-direction:column;align-items:flex-end;gap:var(--nw-sp-1);}
+.nw-dock-menu[data-open="1"]{animation:nw-pop var(--nw-dur) var(--nw-ease,ease);}
 .nw-dock-btn{
-  display:inline-flex;align-items:center;gap:8px;
-  height:38px;padding:0 16px;border-radius:999px;
+  display:inline-flex;align-items:center;gap:var(--nw-sp-1);
+  height:38px;padding:0 16px;border-radius:var(--nw-r-pill);
   border:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
   color:var(--dsw-alias-label-primary);
   font-size:14px;cursor:pointer;white-space:nowrap;
-  box-shadow:0 2px 8px rgba(0,0,0,.08);
-  transition:transform var(--nw-dur,.18s) var(--nw-ease,ease),background var(--nw-dur,.18s) var(--nw-ease,ease);
+  box-shadow:var(--nw-shadow-1);
+  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock-btn:hover{transform:translateY(-1px);background:var(--dsw-alias-bg-layer-2);}
 .nw-dock-btn[disabled]{opacity:.45;cursor:default;transform:none;}
@@ -10107,23 +10111,23 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
    there) and one layer *below* it, so opening 查找 covers the note card instead
    of the card covering the search box. */
 .nw-notes{
-  position:absolute;z-index:7;top:52px;right:14px;
-  display:flex;flex-direction:column;align-items:flex-end;gap:8px;
+  position:absolute;z-index:var(--nw-z-float);top:52px;right:14px;
+  display:flex;flex-direction:column;align-items:flex-end;gap:var(--nw-sp-1);
   max-width:calc(100% - 28px);
   pointer-events:none;
 }
 .nw-notes > *{pointer-events:auto;}
 .nw-notes-tab{
-  display:inline-flex;align-items:center;gap:6px;
-  height:32px;padding:0 11px;border-radius:999px;
+  display:inline-flex;align-items:center;gap:var(--nw-sp-0);
+  height:32px;padding:0 11px;border-radius:var(--nw-r-pill);
   border:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
   color:var(--dsw-alias-label-secondary);
   font-size:13px;cursor:pointer;opacity:.55;
   box-shadow:0 1px 3px rgba(0,0,0,.06);
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease),
-             transform var(--nw-dur,.18s) var(--nw-ease,ease),
-             border-color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+             transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+             border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-notes-tab:hover,.nw-notes-tab:focus-visible{opacity:1;transform:translateY(-1px);border-color:var(--dsw-alias-border-l2);}
 .nw-notes-tab[aria-expanded="true"]{opacity:0;}
@@ -10142,12 +10146,12 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
      the textarea drives its own height, the card only caps how far it may go. */
   max-height:min(560px,calc(100vh - 200px));
   display:flex;flex-direction:column;min-height:0;
-  border-radius:12px;
+  border-radius:var(--nw-r-card);
   border:1px solid var(--dsw-alias-border-l2);
   background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
-  box-shadow:0 2px 8px rgba(0,0,0,.08), 0 18px 44px rgba(0,0,0,.14);
+  box-shadow:var(--nw-shadow-3);
   overflow:hidden;
-  animation:nw-notes-in .18s var(--nw-ease,ease);
+  animation:nw-notes-in var(--nw-dur) var(--nw-ease,ease);
 }
 @keyframes nw-notes-in{
   from{opacity:0;transform:translateY(-6px) scale(.985);}
@@ -10156,15 +10160,15 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 /* Floating corner: state word + close. Fades in on hover/focus so it never
    competes with the text, but stays reachable for keyboard users. */
 .nw-notes-tools{
-  position:absolute;top:6px;right:6px;z-index:2;
+  position:absolute;top:6px;right:6px;z-index:var(--nw-z-base);
   display:inline-flex;align-items:center;gap:4px;
-  padding:2px 4px 2px 8px;border-radius:999px;
+  padding:2px 4px 2px 8px;border-radius:var(--nw-r-pill);
   background:color-mix(in srgb, var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base)) 88%, transparent);
-  opacity:0;transition:opacity .16s ease;
+  opacity:0;transition:opacity var(--nw-dur) ease;
 }
 .nw-notes-card:hover .nw-notes-tools,
 .nw-notes-card:focus-within .nw-notes-tools{opacity:1;}
-.nw-notes-state{font-size:11.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap;opacity:.85;}
+.nw-notes-state{font-size:var(--nw-fs-tiny);color:var(--dsw-alias-label-secondary);white-space:nowrap;opacity:.85;}
 .nw-notes-input{
   flex:1 1 auto;width:100%;min-height:96px;box-sizing:border-box;
   border:none;outline:none;resize:none;background:transparent;
@@ -10177,7 +10181,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   /* R14 ③: height is set from scrollHeight on every change (auto-grow), so the
      textarea itself must never scroll — the card's own max-height governs. */
   overflow:hidden;
-  transition:height .12s ease;
+  transition:height var(--nw-dur) ease;
 }
 .nw-notes-input::placeholder{color:var(--dsw-alias-label-secondary);opacity:.65;}
 @media (prefers-reduced-motion: reduce){
@@ -10304,7 +10308,19 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
    * @returns {object|null} patch to persist, or null when nothing changed
    */
   function migrateTheme(next) {
-    const map = { light: 'claude', dark: 'night', parchment: 'ink' };
+    // R19 dropped four palettes. Anything stored under an id that no longer
+    // exists has to land on a survivor, otherwise 60-editor.js falls back to
+    // claude on its own while the swatch row shows nothing selected.
+    const map = {
+      light: 'claude',
+      harness: 'claude',
+      card: 'claude',
+      dark: 'night',
+      ink: 'night',
+      parchment: 'night',
+      guofeng: 'newspaper',
+      paper: 'newspaper',
+    };
     const current = String((next && next.theme) || '');
     const mapped = map[current];
     if (!mapped) return null;
@@ -11898,6 +11914,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                         chapter: chapter,
                         editorApi: editorRef,
                         width: adviceWidth,
+                        onResize: setAdviceWidth,
                         onClose: () => setAdviceOpen(false),
                       })
                     : null,
@@ -12167,6 +12184,32 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     const runRef = useRef(0);
     const noteRef = useRef('');
     noteRef.current = note;
+    /** R19 B2: pointer-drag on the left edge, mirrored from NW.Splitter. */
+    const [dragging, setDragging] = useState(false);
+    const widthRef = useRef(clampNum(Number(p.width) || 336, 260, 600));
+    widthRef.current = clampNum(Number(p.width) || 336, 260, 600);
+
+    React.useEffect(() => {
+      if (!dragging) return undefined;
+      const move = (ev) => {
+        // The panel grows to the LEFT: its right edge is pinned to the bench.
+        const panel = document.querySelector('.nw-suggest');
+        const bench = panel && panel.parentElement;
+        if (!bench) return;
+        const box = bench.getBoundingClientRect();
+        const next = Math.max(260, Math.min(600, box.right - ev.clientX));
+        if (typeof p.onResize === 'function') p.onResize(Math.round(next));
+      };
+      const up = () => setDragging(false);
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+      window.addEventListener('pointercancel', up);
+      return () => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        window.removeEventListener('pointercancel', up);
+      };
+    }, [dragging, p.onResize]);
 
     const chapterId = p.chapter ? String(p.chapter.id) : '';
 
@@ -12434,6 +12477,28 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           )
         : null;
 
+    // R19 B2: the grip is a real button so the column can also be resized with
+    // the keyboard (left/right = ±16px), matching the shelf splitter.
+    const grip = h('button', {
+      type: 'button',
+      className: 'nw-suggest-grip',
+      'data-drag': dragging ? '1' : '0',
+      'aria-label': NW.t('调整建议栏宽度'),
+      title: NW.t('拖拽调整建议栏宽度'),
+      tabIndex: 0,
+      onPointerDown: (ev) => {
+        ev.preventDefault();
+        setDragging(true);
+      },
+      onKeyDown: (ev) => {
+        if (typeof p.onResize !== 'function') return;
+        const step = ev.key === 'ArrowLeft' ? 16 : ev.key === 'ArrowRight' ? -16 : 0;
+        if (!step) return;
+        ev.preventDefault();
+        p.onResize(clampNum(widthRef.current + step, 260, 600));
+      },
+    });
+
     return h(
       'aside',
       {
@@ -12441,6 +12506,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         'aria-label': NW.t('修改建议'),
         style: { width: clampNum(Number(p.width) || 336, 260, 600) + 'px' },
       },
+      grip,
       head,
       focusRow,
       noteBox,
@@ -13040,16 +13106,14 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 
   // ---------------------------------------------------------- shared data ----
 
+  // Five themes (R19). Order is deliberate: the two neutral papers first, then
+  // the one dark palette, then the two that carry a strong editorial voice.
   const THEME_OPTIONS = [
-    { value: 'harness', label: 'Harness 默认' },
-    { value: 'claude', label: 'Claude' },
-    { value: 'card', label: '极简卡片' },
+    { value: 'claude', label: '浅色' },
     { value: 'eye', label: '护眼' },
-    { value: 'night', label: '黑夜' },
-    { value: 'ink', label: '水墨' },
+    { value: 'night', label: '深色' },
     { value: 'newspaper', label: '报纸' },
     { value: 'magazine', label: '杂志' },
-    { value: 'guofeng', label: '国风' },
   ];
 
   /**
@@ -17822,12 +17886,12 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 /* ================================================================ buttons == */
 .nw-btn{
   height:var(--nw-h-btn);padding:0 16px;border-radius:var(--nw-r-control);
-  font-size:var(--nw-fs-base);font-weight:500;line-height:1;gap:7px;letter-spacing:.01em;
-  transition:background var(--nw-dur,.18s) var(--nw-ease,ease),
-    border-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease),
-    transform var(--nw-dur,.18s) var(--nw-ease,ease);
+  font-size:var(--nw-fs-base);font-weight:500;line-height:1;gap:var(--nw-sp-1);letter-spacing:.01em;
+  transition:background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-btn:hover:not(:disabled){
   background:var(--nw-surface-2);border-color:var(--nw-line);
@@ -17859,6 +17923,20 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-btn[data-kind="danger"]{
   color:var(--nw-danger);
   border-color:color-mix(in srgb, var(--nw-danger) 28%, var(--nw-line));
+}
+/* R19 C1: only buttons had a pressed state. Every clickable row in the plugin
+   (shelf rows, journal items, welcome cards, advice cards) now answers the
+   finger too — one shared rule, because they all already carry a data-active or
+   aria-selected attribute for the selected state. */
+.nw-root :where(.nw-shelf-row,.nw-shelf-novel,.nw-journal-item,.nw-welcome-novel,
+  .nw-welcome-quickbtn,.nw-welcome-subbtn,.nw-advice,.nw-rowitem,.nw-choice,
+  .nw-settings-navbtn,.nw-advice-chip):active{
+  transform:translateY(1px);
+}
+.nw-root :where(.nw-advice-chip,.nw-welcome-quickbtn,.nw-journal-item,.nw-settings-navbtn){
+  transition:background var(--nw-dur) var(--nw-ease,ease),
+    border-color var(--nw-dur) var(--nw-ease,ease),
+    transform 90ms var(--nw-ease,ease);
 }
 .nw-btn[data-kind="danger"]:hover:not(:disabled){
   background:color-mix(in srgb, var(--nw-danger) 10%, transparent);
@@ -17910,11 +17988,11 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   border-color:var(--nw-line);background:var(--nw-surface-overlay);
   color:var(--nw-fg);font-size:var(--nw-fs-base);line-height:var(--nw-lh-base);
   box-shadow:none;
-  transition:border-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease),
-    background var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
-.nw-select{height:var(--nw-h-input);padding-right:10px;}
+.nw-select{height:var(--nw-h-input);padding-right:var(--nw-sp-2);}
 .nw-textarea{height:auto;min-height:104px;padding:11px 13px;line-height:1.7;resize:vertical;}
 .nw-input:hover:not(:disabled),.nw-select:hover:not(:disabled),.nw-textarea:hover:not(:disabled){
   border-color:var(--nw-line-strong);
@@ -17940,7 +18018,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 }
 .nw-input[type="range"]::-webkit-slider-runnable-track,
 .nw-range::-webkit-slider-runnable-track{
-  height:4px;border-radius:2px;background:var(--nw-surface-2);
+  height:4px;border-radius:var(--nw-r-hair);background:var(--nw-surface-2);
   box-shadow:inset 0 0 0 1px var(--nw-line);
 }
 .nw-input[type="range"]::-webkit-slider-thumb,
@@ -17948,7 +18026,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   -webkit-appearance:none;appearance:none;width:16px;height:16px;margin-top:-6px;
   border-radius:50%;background:var(--nw-brand);
   box-shadow:0 0 0 2px var(--nw-bg),0 0 0 3px var(--nw-line),var(--nw-shadow-1);
-  transition:box-shadow var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-input[type="range"]:hover::-webkit-slider-thumb,
 .nw-range:hover::-webkit-slider-thumb{
@@ -17958,7 +18036,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 }
 .nw-input[type="range"]::-moz-range-track,
 .nw-range::-moz-range-track{
-  height:4px;border-radius:2px;background:var(--nw-surface-2);
+  height:4px;border-radius:var(--nw-r-hair);background:var(--nw-surface-2);
 }
 .nw-input[type="range"]::-moz-range-thumb,
 .nw-range::-moz-range-thumb{
@@ -17967,9 +18045,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 }
 .nw-input[type="range"]:focus,.nw-range:focus{box-shadow:none;}
 .nw-input[type="range"]:focus-visible,.nw-range:focus-visible{
-  outline:2px solid var(--nw-brand);outline-offset:4px;border-radius:4px;
+  outline:2px solid var(--nw-brand);outline-offset:4px;border-radius:var(--nw-r-hair);
 }
-.nw-field{gap:7px;margin-bottom:16px;}
+.nw-field{gap:var(--nw-sp-1);margin-bottom:var(--nw-sp-4);}
 .nw-field > label{
   font-size:var(--nw-fs-micro);font-weight:500;color:var(--nw-fg-soft);letter-spacing:.01em;
 }
@@ -17980,9 +18058,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-row > span:first-child{min-width:0;}
 .nw-rowitem{
   font-size:var(--nw-fs-base);padding:9px 11px;border-radius:var(--nw-r-control);
-  transition:background var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-rowitem:hover{background:var(--nw-surface-2);}
 .nw-rowitem[data-active="1"]{
@@ -17997,15 +18075,15 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-switch i::after{
   top:2px;left:2px;width:20px;height:20px;background:var(--nw-bg);
   box-shadow:inset 0 0 0 1px var(--nw-line-strong),var(--nw-shadow-1);
-  transition:transform var(--nw-dur,.18s) var(--nw-ease-pop,ease),background var(--nw-dur,.18s) ease;
+  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease-pop,ease),background var(--nw-dur,var(--nw-dur)) ease;
 }
 .nw-switch input:checked + i{background:var(--nw-brand);box-shadow:none;}
 .nw-switch input:checked + i::after{transform:translateX(20px);}
 
 /* ================================================================= modal === */
 .nw-modal-mask{
-  padding:26px;background:rgba(0,0,0,.42);backdrop-filter:blur(3px);
-  animation:nw-fade-in var(--nw-dur,.18s) var(--nw-ease,ease) both;
+  padding:var(--nw-sp-6);background:rgba(0,0,0,.42);backdrop-filter:blur(3px);
+  animation:nw-fade-in var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease) both;
 }
 .nw-modal{
   max-width:680px;position:relative;
@@ -18015,11 +18093,11 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   background:var(--nw-surface-overlay);
   border-radius:var(--nw-r-modal);border:1px solid var(--nw-line-soft);
   box-shadow:var(--nw-shadow-3);
-  animation:nw-fade-up var(--nw-dur,.18s) var(--nw-ease,ease) both;
+  animation:nw-fade-up var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease) both;
 }
 /* headband: the same brand hairline the lock card wears */
 .nw-modal::before{
-  content:'';position:absolute;top:0;left:0;right:0;height:2px;z-index:1;pointer-events:none;
+  content:'';position:absolute;top:0;left:0;right:0;height:2px;z-index:var(--nw-z-base);pointer-events:none;
   background:linear-gradient(90deg,transparent,
     color-mix(in srgb, var(--nw-brand) 62%, transparent),transparent);
 }
@@ -18037,25 +18115,25 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   font-size:var(--nw-fs-title);font-weight:600;letter-spacing:.02em;color:var(--nw-fg);
 }
 .nw-modal-foot{
-  padding:13px 22px;gap:10px;
+  padding:13px 22px;gap:var(--nw-sp-2);
   border-top-color:var(--nw-line-soft);background:var(--nw-surface-1);
 }
 .nw-modal-foot .nw-btn{min-width:88px;}
 .nw-modal-foot .nw-spacer{flex:1 1 auto;}
 
 /* ================================================================= toast === */
-.nw-toast-wrap{bottom:60px;gap:8px;}
+.nw-toast-wrap{bottom:60px;gap:var(--nw-sp-1);}
 .nw-toast,
 .nw-toast[data-kind="ok"],
 .nw-toast[data-kind="error"],
 .nw-toast[data-kind="info"],
 .nw-toast[data-kind="default"]{
-  display:inline-flex;align-items:center;gap:10px;
+  display:inline-flex;align-items:center;gap:var(--nw-sp-2);
   padding:11px 18px;max-width:min(600px,74cqw);
   border-radius:var(--nw-r-pill);font-size:var(--nw-fs-second);font-weight:500;line-height:1.4;
   color:var(--nw-fg);background:var(--nw-surface-overlay);
   border:1px solid var(--nw-line);box-shadow:var(--nw-shadow-2);
-  animation:nw-toast-in var(--nw-dur,.18s) var(--nw-ease,ease) both;
+  animation:nw-toast-in var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease) both;
 }
 .nw-toast::before{
   content:'';flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:var(--nw-idle);
@@ -18073,7 +18151,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
    treatment (with .nw-empty-glyph) from 60-editor.js; these selectors never
    reach it because the centre/modal hosts are required. */
 .nw-center .nw-empty,.nw-modal-body .nw-empty{
-  padding:8px 0 4px;gap:14px;
+  padding:8px 0 4px;gap:var(--nw-sp-4);
   /* 40-ui gives .nw-empty height:100% and 60-editor min-height:100%; inside a
      centred stage that would stretch the group to the full panel and strand the
      icon at the top. Both are reset so the block hugs its content. */
@@ -18086,7 +18164,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   height:40px;padding:0 22px;font-size:var(--nw-fs-base);
 }
 .nw-center .nw-empty > svg,.nw-modal-body .nw-empty > svg{
-  width:64px;height:64px;padding:14px;border-radius:20px;opacity:1;
+  width:64px;height:64px;padding:var(--nw-sp-4);border-radius:var(--nw-r-modal);opacity:1;
   color:var(--nw-brand);
   background:
     linear-gradient(160deg,
@@ -18105,11 +18183,11 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   font-family:var(--nw-reading-font);font-size:19px;letter-spacing:.02em;color:var(--nw-fg);
 }
 .nw-center .nw-empty::after{
-  content:'';position:relative;width:36px;height:2px;border-radius:2px;
+  content:'';position:relative;width:36px;height:2px;border-radius:var(--nw-r-hair);
   background:linear-gradient(90deg,transparent,
     color-mix(in srgb, var(--nw-brand) 48%, transparent),transparent);
 }
-.nw-center .nw-inline{font-size:var(--nw-fs-base);gap:10px;color:var(--nw-fg-soft);}
+.nw-center .nw-inline{font-size:var(--nw-fs-base);gap:var(--nw-sp-2);color:var(--nw-fg-soft);}
 .nw-center .nw-spin{width:20px;height:20px;border-width:2px;}
 
 /* ================================================================ typography = */
@@ -18120,24 +18198,24 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-title small{font-family:var(--nw-ui-font);letter-spacing:0;}
 
 /* ================================================================ lock ===== */
-.nw-lock-card{padding:38px 30px 28px;gap:10px;}
+.nw-lock-card{padding:38px 30px 28px;gap:var(--nw-sp-2);}
 .nw-lock-title{font-family:var(--nw-reading-font);font-size:20px;letter-spacing:.02em;}
 .nw-lock-hint{font-size:var(--nw-fs-second);line-height:1.75;}
 .nw-lock-input{height:44px;font-size:var(--nw-fs-base);}
-.nw-lock-actions{gap:10px;}
+.nw-lock-actions{gap:var(--nw-sp-2);}
 .nw-lock-actions > .nw-btn{flex:1 1 auto;height:38px;}
-.nw-lock-card .nw-inline{justify-content:center;margin-top:10px;}
+.nw-lock-card .nw-inline{justify-content:center;margin-top:var(--nw-sp-2);}
 
 /* ============================================================== settings === */
 .nw-settings-section{padding:16px 18px 8px;border-radius:var(--nw-r-card);}
 .nw-settings-section > h3{font-size:var(--nw-fs-base);font-weight:600;letter-spacing:.02em;}
 .nw-settings-section > h3::before{
-  content:'';display:inline-block;width:3px;height:13px;border-radius:2px;
-  background:var(--nw-brand);margin-right:9px;vertical-align:-2px;
+  content:'';display:inline-block;width:3px;height:13px;border-radius:var(--nw-r-hair);
+  background:var(--nw-brand);margin-right:var(--nw-sp-1);vertical-align:-2px;
 }
 .nw-settings-section .nw-row{padding:12px 0;}
 .nw-seg{padding:3px;border-radius:var(--nw-r-control);}
-.nw-grid2{gap:12px;}
+.nw-grid2{gap:var(--nw-sp-3);}
 
 /* =========================================================== suggestions === */
 .nw-suggest > input[type="checkbox"]{
@@ -18169,8 +18247,8 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
    re-lifts. The dock must never compete with the text, hence the low resting
    opacity that 90-app already sets — nothing here raises it. */
 .nw-dock{
-  right:24px;bottom:64px;gap:10px;
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease);
+  right:24px;bottom:64px;gap:var(--nw-sp-2);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock-fab{
   width:46px;height:46px;border-radius:var(--nw-r-pill);
@@ -18178,9 +18256,9 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   background:var(--nw-surface-overlay);color:var(--nw-fg);
   box-shadow:var(--nw-shadow-1),var(--nw-shadow-2);
   font-size:19px;
-  transition:transform var(--nw-dur,.18s) var(--nw-ease-pop,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease),
-    background var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease-pop,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock-fab:hover{
   transform:translateY(-2px);background:var(--nw-surface-overlay);
@@ -18188,17 +18266,17 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 }
 .nw-dock-fab:active{transform:translateY(0) scale(.97);}
 .nw-dock-fab:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
-.nw-dock-menu{gap:10px;}
-.nw-dock-menu[data-open="1"]{animation:nw-pop var(--nw-dur,.18s) var(--nw-ease-pop,ease) both;}
+.nw-dock-menu{gap:var(--nw-sp-2);}
+.nw-dock-menu[data-open="1"]{animation:nw-pop var(--nw-dur,var(--nw-dur)) var(--nw-ease-pop,ease) both;}
 .nw-dock-btn{
   height:40px;padding:0 18px;border-radius:var(--nw-r-pill);
   border:1px solid var(--nw-line-soft);
   background:var(--nw-surface-overlay);color:var(--nw-fg);
-  font-size:var(--nw-fs-second);font-weight:500;gap:9px;
+  font-size:var(--nw-fs-second);font-weight:500;gap:var(--nw-sp-1);
   box-shadow:var(--nw-shadow-1);
-  transition:transform var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease),
-    background var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock-btn:hover:not(:disabled){
   transform:translateY(-1px);background:var(--nw-surface-overlay);
@@ -18226,17 +18304,17 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
    screen (host sidebar + rightbar), so the tier is measured against the
    container declared in 05-css. 98b-responsive.js refines the same tiers. */
 @container nw (max-width: 980px){
-  .nw-toolbar{padding:0 var(--nw-sp-3);gap:6px;}
+  .nw-toolbar{padding:0 var(--nw-sp-3);gap:var(--nw-sp-0);}
   .nw-title{max-width:40%;padding-right:var(--nw-sp-1);}
   .nw-title small{display:none;}
   .nw-toolbar .nw-btn{padding:0 11px;}
   .nw-toolbar > span[style*="width: 1px"],
   .nw-toolbar > span[style*="width:1px"]{margin:0 2px;}
   .nw-status{gap:var(--nw-sp-3);padding:0 var(--nw-sp-3);}
-  .nw-modal-mask{padding:14px;}
+  .nw-modal-mask{padding:var(--nw-sp-4);}
   .nw-modal{max-width:100%;border-radius:var(--nw-r-card);}
   .nw-modal-head{padding:15px 16px 13px;}
-  .nw-modal-body{padding:16px;}
+  .nw-modal-body{padding:var(--nw-sp-4);}
   .nw-modal-foot{padding:12px 16px;}
   .nw-dock{right:12px;bottom:52px;}
   .nw-dock-btn{height:38px;padding:0 15px;}
@@ -18245,7 +18323,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
    window instead of clipping. */
 @supports not (container-type: inline-size){
   @media (max-width:900px){
-    .nw-toolbar{padding:0 var(--nw-sp-3);gap:6px;}
+    .nw-toolbar{padding:0 var(--nw-sp-3);gap:var(--nw-sp-0);}
     .nw-title{max-width:40%;padding-right:var(--nw-sp-1);}
     .nw-title small{display:none;}
     .nw-toolbar .nw-btn{padding:0 11px;}
@@ -18274,27 +18352,23 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 
   // ============================================================ Shell theme ==
   //
-  // The plugin ships eight themes. The writing surface owns the paper and the ink
-  // per theme inside 60-editor.js; this file carries the *shell* — toolbar,
-  // sidebar, status bar, dialogs, dock — into the same palette.
+  // The plugin ships five themes (R19: harness / ink / card / guofeng removed).
+  // The writing surface owns the paper and the ink per theme inside
+  // 60-editor.js; this file carries the *shell* - toolbar, sidebar, status bar,
+  // dialogs, dock - into the same palette.
   //
-  // Mechanism: re-map the host's --dsw-alias-* vocabulary inside .nw-root only.
+  // Mechanism: re-map the host --dsw-alias-* vocabulary inside .nw-root only.
   // Every rule in the plugin colours itself from those aliases (directly, or
   // through the --nw-* derivation in 05-css.js), so one scoped remap moves the
   // whole chrome without touching a single component rule. Nothing outside
-  // .nw-root is affected — the host's own UI keeps its own theme.
+  // .nw-root is affected - the host UI keeps its own theme.
   //
-  // `harness` deliberately has no branch: it is "follow the host", and any
-  // selector here would pin the shell to a palette the host does not use.
-  //
-  // Values (docs/CONTRACT-R5.md §2):
-  //   claude     paper #faf9f5 · ink #141413 · terracotta #d97757 · rule #e8e6dc
-  //   eye        paper #cce8cf · ink #1f2a20 · accent #2f6b3c
-  //   night      paper #1a1a18 · ink #e8e6dc · accent #e08d6f (terracotta lifted)
-  //   ink        paper #f4f2ec · ink #1a1a18 · accent #2b2b28 (achromatic)
-  //   card       paper #ffffff · ink #17181a · accent #3b6ea5 · r16
-  //   newspaper  paper #f2eee2 · ink #1c1b17 · accent #8c2b22 · serif, r2
-  //   guofeng    paper #f5f1e6 · ink #23211b · accent #a8442f · 楷体, r6
+  // Values (docs/CONTRACT-R5.md section 2):
+  //   claude     paper #faf4e9 ink #1b1813 terracotta #c4532f rule #e6dccb
+  //   eye        paper #cce8cf ink #1f2a20 accent #2f6b3c
+  //   night      paper #1a1a18 ink #e8e6dc accent #e08d6f (terracotta lifted)
+  //   newspaper  paper #ecdfbe ink #1a1913 accent #8c2b22 serif, r2
+  //   magazine   paper #ffffff ink #14171a accent #d0021b sans, r14
   // ===========================================================================
   NW.CSS_PARTS.push(`
 /* ============================================================ claude ====== */
@@ -18364,53 +18438,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-root[data-theme="night"] .nw-dock-fab,
 .nw-root[data-theme="night"] .nw-dock-btn{background:#2b2a26;}
 
-/* =============================================================== ink ====== */
-.nw-root[data-theme="ink"]{
-  --dsw-alias-bg-base:#e9eef5;
-  --dsw-alias-bg-layer-1:#e2e8f1;
-  --dsw-alias-bg-layer-2:#d9e2ed;
-  --dsw-alias-bg-overlay:#f6f9fc;
-  --dsw-alias-border-l1:#dde5ee;
-  --dsw-alias-border-l2:#d3dce6;
-  --dsw-alias-brand-primary:#1f4f6b;
-  --dsw-alias-label-primary:#121820;
-  --dsw-alias-label-secondary:#5b6675;
-  --dsw-alias-state-error-primary:#8f3b32;
-  --dsw-alias-state-idle-primary:#8a95a3;
-  --dsw-alias-state-success-primary:#3f6b57;
-  --dsw-alias-state-warn-primary:#8a6a2a;
-  --dsw-specific-sidebar-fill:#e4ebf3;
-  color-scheme:light;
-}
-
 /* ============================================================== card ====== */
-/* 极简卡片：白纸 + 无衬线 + 大圆角。Buttons and inputs drop their outline in
-   favour of a soft fill, which is what makes the style read as "cards". */
-.nw-root[data-theme="card"]{
-  --dsw-alias-bg-base:#f9fbfd;
-  --dsw-alias-bg-layer-1:#f0f4f9;
-  --dsw-alias-bg-layer-2:#e8eef6;
-  --dsw-alias-bg-overlay:#ffffff;
-  --dsw-alias-border-l1:#e9eef5;
-  --dsw-alias-border-l2:#dde4ee;
-  --dsw-alias-brand-primary:#3b6ea5;
-  --dsw-alias-label-primary:#17181a;
-  --dsw-alias-label-secondary:#6b6f76;
-  --dsw-alias-state-error-primary:#c0392b;
-  --dsw-alias-state-idle-primary:#a3a8b0;
-  --dsw-alias-state-success-primary:#2f8a63;
-  --dsw-alias-state-warn-primary:#b07514;
-  --dsw-specific-sidebar-fill:#f2f6fb;
-  --nw-r-card:16px;
-  --nw-r-control:12px;
-  --nw-r-modal:18px;
-  --nw-shadow-1:0 1px 3px rgba(23,24,26,.06);
-  --nw-shadow-2:0 10px 30px rgba(23,24,26,.08);
-  --nw-shadow-3:0 4px 12px rgba(23,24,26,.07), 0 30px 70px rgba(23,24,26,.14);
-  --nw-ui-font-override:"Inter","Helvetica Neue","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
-  color-scheme:light;
-}
-
 /* ========================================================= newspaper ====== */
 /* 报纸：新闻纸底、全衬线、直角。Serif UI + square corners are the whole point,
    so both are set here rather than left to the component defaults. */
@@ -18494,32 +18522,6 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   letter-spacing:.01em;
 }
 
-/* =========================================================== guofeng ====== */
-/* 国风水墨：宣纸底、宋体界面、朱砂强调。 */
-.nw-root[data-theme="guofeng"]{
-  --dsw-alias-bg-base:#f2e9d2;
-  --dsw-alias-bg-layer-1:#ece1c2;
-  --dsw-alias-bg-layer-2:#e3d6b2;
-  --dsw-alias-bg-overlay:#f9f1dc;
-  --dsw-alias-border-l1:#e2d6bb;
-  --dsw-alias-border-l2:#d8caa8;
-  --dsw-alias-brand-primary:#a8442f;
-  --dsw-alias-label-primary:#23211b;
-  --dsw-alias-label-secondary:#6a6455;
-  --dsw-alias-state-error-primary:#9c3326;
-  --dsw-alias-state-idle-primary:#a49d8b;
-  --dsw-alias-state-success-primary:#4b6b4a;
-  --dsw-alias-state-warn-primary:#8a6410;
-  --dsw-specific-sidebar-fill:#eee3c6;
-  --nw-r-card:8px;
-  --nw-r-control:6px;
-  --nw-shadow-1:0 1px 2px rgba(35,33,27,.08);
-  --nw-shadow-2:0 8px 26px rgba(35,33,27,.12);
-  --nw-shadow-3:0 2px 8px rgba(35,33,27,.10), 0 24px 60px rgba(35,33,27,.18);
-  --nw-ui-font-override:"Songti SC","STSong","Noto Serif CJK SC","SimSun",serif;
-  color-scheme:light;
-}
-
 /* ---------------------------------------------------------------------------
    Shared theme polish. These are shell-level adjustments that are true for every
    theme that is not "follow the host": the toolbar carries no separate fill (the
@@ -18527,10 +18529,8 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
    ------------------------------------------------------------------------- */
 .nw-root[data-theme="claude"] .nw-toolbar,
 .nw-root[data-theme="eye"] .nw-toolbar,
-.nw-root[data-theme="ink"] .nw-toolbar,
-.nw-root[data-theme="card"] .nw-toolbar,
 .nw-root[data-theme="newspaper"] .nw-toolbar,
-.nw-root[data-theme="guofeng"] .nw-toolbar{
+.nw-root[data-theme="magazine"] .nw-toolbar{
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--nw-surface-overlay) 55%, transparent), transparent 84%),
     var(--nw-bg);
@@ -18555,7 +18555,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-root[data-theme="newspaper"] .nw-card,
 .nw-root[data-theme="newspaper"] .nw-journal-item,
 .nw-root[data-theme="newspaper"] .nw-choice{
-  border-radius:2px;
+  border-radius:var(--nw-r-hair);
 }
 .nw-root[data-theme="newspaper"] .nw-toolbar,
 .nw-root[data-theme="newspaper"] .nw-statusbar{
@@ -18572,52 +18572,6 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   letter-spacing:.06em;
 }
 
-.nw-root[data-theme="card"] .nw-btn,
-.nw-root[data-theme="card"] .nw-iconbtn,
-.nw-root[data-theme="card"] .nw-input,
-.nw-root[data-theme="card"] .nw-select{
-  border-radius:12px;
-}
-.nw-root[data-theme="card"] .nw-modal{
-  border-radius:18px;
-  border:1px solid var(--dsw-alias-border-l1);
-}
-.nw-root[data-theme="card"] .nw-card,
-.nw-root[data-theme="card"] .nw-journal-item,
-.nw-root[data-theme="card"] .nw-choice,
-.nw-root[data-theme="card"] .nw-setting-group{
-  border-radius:16px;
-  border-color:transparent;
-  box-shadow:var(--nw-shadow-1);
-  background:var(--nw-surface-overlay);
-}
-.nw-root[data-theme="card"] .nw-btn{
-  border-color:transparent;
-  background:var(--nw-sunken);
-}
-.nw-root[data-theme="card"] .nw-btn:hover{
-  background:color-mix(in srgb, var(--dsw-alias-label-primary) 9%, var(--nw-bg));
-}
-
-.nw-root[data-theme="guofeng"] .nw-btn,
-.nw-root[data-theme="guofeng"] .nw-iconbtn,
-.nw-root[data-theme="guofeng"] .nw-input,
-.nw-root[data-theme="guofeng"] .nw-select,
-.nw-root[data-theme="guofeng"] .nw-modal,
-.nw-root[data-theme="guofeng"] .nw-card{
-  border-radius:6px;
-}
-.nw-root[data-theme="guofeng"] .nw-toolbar-label,
-.nw-root[data-theme="guofeng"] .nw-title,
-.nw-root[data-theme="guofeng"] .nw-dialog-title{
-  font-family:"Songti SC","STSong","Noto Serif CJK SC","SimSun",serif;
-  letter-spacing:.08em;
-}
-/* 印章感：强调色只出现在实心主按钮上，像一方朱砂印。 */
-.nw-root[data-theme="guofeng"] .nw-btn-primary{
-  background:var(--dsw-alias-brand-primary);
-  color:#faf6ea;
-}
 `);
 })();
 
@@ -18659,16 +18613,16 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   /* The modal is the one surface that must never be narrower than its content:
      a 680px settings dialog inside a 700px panel leaves 10px of scrim. */
   .nw-modal{max-width:100% !important;border-radius:var(--nw-r-card);}
-  .nw-modal-mask{padding:14px;}
+  .nw-modal-mask{padding:var(--nw-sp-4);}
   .nw-modal-head{padding:15px 16px 13px;}
-  .nw-modal-body{padding:16px;}
+  .nw-modal-body{padding:var(--nw-sp-4);}
   .nw-modal-foot{padding:12px 16px;flex-wrap:wrap;}
 
   /* Settings: the sticky left rail becomes a horizontal scroller on top. */
   .nw-settings{grid-template-columns:minmax(0,1fr);gap:var(--nw-sp-2);}
   .nw-settings-nav{
     position:static;flex-direction:row;flex-wrap:nowrap;overflow-x:auto;
-    gap:6px;padding-bottom:6px;border-bottom:1px solid var(--nw-line-soft);
+    gap:var(--nw-sp-0);padding-bottom:var(--nw-sp-0);border-bottom:1px solid var(--nw-line-soft);
   }
   .nw-settings-navbtn{width:auto;flex:0 0 auto;padding:0 12px;}
   .nw-settings-pane{max-height:none;overflow:visible;}
@@ -18697,17 +18651,17 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
      the inline style (the user may have set 300px); it is simply no longer
      taking room from the manuscript. */
   .nw-side{
-    position:absolute;left:0;top:0;bottom:0;z-index:34;
+    position:absolute;left:0;top:0;bottom:0;z-index:var(--nw-z-panel);
     max-width:min(88%,320px);
-    box-shadow:0 2px 8px rgba(0,0,0,.08), 0 18px 44px rgba(0,0,0,.18);
+    box-shadow:var(--nw-shadow-3);
   }
   .nw-splitter{display:none !important;}
 
   /* The advice panel does the same: overlay, anchored right. */
   .nw-suggest{
-    position:absolute;right:0;top:0;bottom:0;z-index:33;
+    position:absolute;right:0;top:0;bottom:0;z-index:var(--nw-z-panel);
     width:min(92%,360px) !important;max-width:92% !important;
-    box-shadow:0 2px 8px rgba(0,0,0,.08), 0 18px 44px rgba(0,0,0,.18);
+    box-shadow:var(--nw-shadow-3);
   }
 
   /* Reading measure: 48px of gutter on a 520px panel eats a fifth of the line.
@@ -18721,12 +18675,12 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   /* Below the shelf overlay (34) and the advice overlay (33): when the shelf is
      lifted out of the flow it must be able to cover the dock, otherwise its
      bottom buttons are unreachable on a phone-sized panel. */
-  .nw-dock{right:10px;bottom:46px;z-index:30;}
+  .nw-dock{right:10px;bottom:46px;z-index:var(--nw-z-panel);}
   .nw-dock-fab{width:40px;height:40px;}
   .nw-notes-tabtxt{display:none;}
 
   .nw-status{padding:0 var(--nw-sp-2);font-size:12px;flex-wrap:wrap;row-gap:2px;height:auto;min-height:var(--nw-h-status);}
-  .nw-status .nw-status-mid{gap:8px !important;}
+  .nw-status .nw-status-mid{gap:var(--nw-sp-1) !important;}
 }
 
 /* Touch and coarse pointers: no hover, so anything hidden behind :hover has to

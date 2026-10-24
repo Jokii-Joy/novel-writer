@@ -29,6 +29,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-bench{display:flex;flex:1 1 auto;min-height:0;min-width:0;position:relative;}
 .nw-bench-paper{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;min-height:0;position:relative;}
 .nw-suggest{
+  position:relative;
   flex:0 0 auto;display:flex;flex-direction:column;min-height:0;
   width:336px;
   /* R13: was 46vw. The panel lives inside a ~600px column most of the time, so
@@ -37,47 +38,80 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   max-width:46%;
   border-left:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-layer-1);
-  animation:nw-slide-in .18s var(--nw-ease,ease);
+  animation:nw-slide-in var(--nw-dur) var(--nw-ease,ease);
+}
+/* R19 B2: adviceWidth and its localStorage key have existed since R12, but
+   nothing ever called the setter — the column was 336px forever. This grip is
+   the missing half: the same pointer-drag idiom as .nw-splitter, mirrored to
+   the panel's left edge (dragging left makes the panel wider). */
+.nw-suggest-grip{
+  position:absolute;left:-3px;top:0;bottom:0;width:6px;z-index:var(--nw-z-float);
+  cursor:col-resize;background:transparent;border:0;padding:0;
+  transition:background var(--nw-dur) var(--nw-ease,ease);
+}
+.nw-suggest-grip:hover,.nw-suggest-grip:focus-visible,.nw-suggest-grip[data-drag="1"]{
+  background:color-mix(in srgb, var(--nw-brand) 45%, transparent);
+  outline:none;
 }
 @keyframes nw-slide-in{from{opacity:0;transform:translateX(14px);}to{opacity:1;transform:none;}}
 .nw-suggest-head{
-  display:flex;align-items:center;gap:8px;flex:0 0 auto;
+  display:flex;align-items:center;gap:var(--nw-sp-1);flex:0 0 auto;
   padding:10px 10px 8px 14px;border-bottom:1px solid var(--dsw-alias-border-l1);
 }
 .nw-suggest-title{font-size:14px;font-weight:600;color:var(--dsw-alias-label-primary);}
 .nw-suggest-count{font-size:12px;color:var(--dsw-alias-label-secondary);}
-.nw-suggest-body{flex:1 1 auto;min-height:0;overflow:auto;padding:10px;display:flex;flex-direction:column;gap:8px;}
+.nw-suggest-body{flex:1 1 auto;min-height:0;overflow:auto;padding:var(--nw-sp-2);display:flex;flex-direction:column;gap:var(--nw-sp-1);}
 .nw-advice{
-  display:flex;flex-direction:column;gap:6px;padding:11px 12px;
-  border-radius:10px;border:1px solid var(--dsw-alias-border-l1);
+  display:flex;flex-direction:column;gap:var(--nw-sp-0);padding:11px 12px;
+  border-radius:var(--nw-r-card);border:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-base);cursor:pointer;text-align:left;
   font-family:inherit;
-  transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease;
+  transition:border-color var(--nw-dur) ease,box-shadow var(--nw-dur) ease,transform var(--nw-dur) ease;
 }
 .nw-advice:hover{border-color:var(--dsw-alias-border-l2);transform:translateY(-1px);}
 .nw-advice[data-active="1"]{border-color:var(--dsw-alias-brand-primary);box-shadow:inset 0 0 0 1px var(--dsw-alias-brand-primary);}
 .nw-advice-quote{
   font-family:var(--nw-reading-font,inherit);font-size:13px;line-height:1.7;
   color:var(--dsw-alias-label-secondary);
-  border-left:3px solid var(--dsw-alias-border-l2);padding-left:9px;
+  border-left:3px solid var(--dsw-alias-border-l2);padding-left:var(--nw-sp-1);
   max-height:4.8em;overflow:hidden;
 }
-.nw-advice-issue{font-size:13px;font-weight:600;line-height:1.55;color:var(--dsw-alias-label-primary);}
-.nw-advice-why{font-size:12.5px;line-height:1.65;color:var(--dsw-alias-label-secondary);}
-.nw-advice-do{font-size:13px;line-height:1.65;color:var(--dsw-alias-label-primary);}
+.nw-advice-issue{font-size:var(--nw-fs-micro);font-weight:600;line-height:1.55;color:var(--dsw-alias-label-primary);}
+/* R19 B3: eight cards × five lines was a wall of grey. The quote and the advice
+   are what the writer reads; the reasoning collapses to a single clamped line
+   and the rewrite example to two. Nothing is lost — hovering a card or opening
+   it (data-active) unfolds the whole thing. */
+.nw-advice-why{
+  font-size:var(--nw-fs-tiny);line-height:1.65;color:var(--dsw-alias-label-secondary);
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;overflow:hidden;
+}
+.nw-advice:hover .nw-advice-why,.nw-advice[data-active="1"] .nw-advice-why{
+  display:block;-webkit-line-clamp:unset;overflow:visible;
+}
+.nw-advice-do{
+  font-size:var(--nw-fs-micro);line-height:1.65;color:var(--dsw-alias-label-primary);
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;
+}
+.nw-advice:hover .nw-advice-do,.nw-advice[data-active="1"] .nw-advice-do{
+  display:block;-webkit-line-clamp:unset;overflow:visible;
+}
 /* The suggested rewrite is quoted prose, so it gets the reading face and a
    tinted block instead of another paragraph of grey — it is the one part of the
    card the writer may copy straight into the manuscript. */
 .nw-advice-example{
-  font-family:var(--nw-reading-font,inherit);font-size:13px;line-height:1.75;
-  padding:7px 10px;border-radius:8px;
+  font-family:var(--nw-reading-font,inherit);font-size:var(--nw-fs-micro);line-height:1.75;
+  padding:7px 10px;border-radius:var(--nw-r-control);
   background:color-mix(in srgb, var(--dsw-alias-brand-primary) 7%, var(--dsw-alias-bg-layer-1));
   border:1px dashed color-mix(in srgb, var(--dsw-alias-brand-primary) 26%, var(--dsw-alias-border-l1));
   color:var(--dsw-alias-label-primary);
   white-space:pre-wrap;word-break:break-word;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;
+}
+.nw-advice:hover .nw-advice-example,.nw-advice[data-active="1"] .nw-advice-example{
+  display:block;-webkit-line-clamp:unset;overflow:visible;
 }
 .nw-advice-kind{
-  align-self:flex-start;font-size:11px;line-height:1;padding:3px 7px;border-radius:999px;
+  align-self:flex-start;font-size:var(--nw-fs-tiny);line-height:1;padding:3px 7px;border-radius:var(--nw-r-pill);
   background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);
 }
 .nw-advice-kind[data-sev="high"]{
@@ -85,19 +119,19 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   color:var(--dsw-alias-state-error-primary);
 }
 .nw-advice-kind[data-sev="low"]{opacity:.72;}
-.nw-advice-foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.nw-advice-foot{display:flex;align-items:center;gap:var(--nw-sp-0);flex-wrap:wrap;}
 /* Ten dimensions do not fit one segmented control, and a <select> would hide
    nine tenths of them behind a click. Chips wrap onto as many rows as needed. */
 .nw-advice-focus{
-  flex:0 0 auto;display:flex;flex-wrap:wrap;gap:5px;
+  flex:0 0 auto;display:flex;flex-wrap:wrap;gap:var(--nw-sp-0);
   padding:8px 12px 9px;border-bottom:1px solid var(--dsw-alias-border-l1);
 }
 .nw-advice-chip{
-  height:24px;padding:0 10px;border-radius:999px;
+  height:24px;padding:0 10px;border-radius:var(--nw-r-pill);
   border:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary);
   font-family:inherit;font-size:12px;line-height:22px;cursor:pointer;
-  transition:background .14s ease,border-color .14s ease,color .14s ease;
+  transition:background var(--nw-dur) ease,border-color var(--nw-dur) ease,color var(--nw-dur) ease;
 }
 .nw-advice-chip:hover:not(:disabled){border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);}
 .nw-advice-chip[data-on="1"]{
@@ -112,7 +146,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 .nw-advice-note{flex:0 0 auto;padding:0 12px 9px;}
 .nw-advice-note textarea{
   width:100%;box-sizing:border-box;min-height:34px;max-height:96px;resize:vertical;
-  padding:7px 9px;border-radius:8px;
+  padding:7px 9px;border-radius:var(--nw-r-control);
   border:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);
   font-family:inherit;font-size:12.5px;line-height:1.6;
@@ -122,68 +156,68 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   box-shadow:0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent);
 }
 .nw-advice-note textarea::placeholder{color:var(--dsw-alias-label-secondary);opacity:.8;}
-.nw-advice-notebar{display:flex;align-items:center;gap:6px;margin-top:5px;}
-.nw-advice-notehint{font-size:11px;color:var(--dsw-alias-label-secondary);opacity:.8;}
+.nw-advice-notebar{display:flex;align-items:center;gap:var(--nw-sp-0);margin-top:var(--nw-sp-0);}
+.nw-advice-notehint{font-size:var(--nw-fs-tiny);color:var(--dsw-alias-label-secondary);opacity:.8;}
 .nw-suggest-empty{
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--nw-sp-2);
   flex:1 1 auto;padding:24px 18px;text-align:center;
   color:var(--dsw-alias-label-secondary);font-size:13px;line-height:1.7;
 }
 .nw-suggest-foot{
-  flex:0 0 auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  flex:0 0 auto;display:flex;align-items:center;gap:var(--nw-sp-1);flex-wrap:wrap;
   padding:9px 12px;border-top:1px solid var(--dsw-alias-border-l1);
 }
 /* R6: 收起侧栏 曾是一扇单向门 —— 仓库头部的收起按钮随侧栏一起消失，回来只能靠
    浮动坞（先点圆钮再点「显示目录」）。这个把手常驻在写作列左缘，任何时刻一次点击
    就能把目录要回来。沉浸模式不渲染它（沉浸是纯画布，Esc 退出）。 */
 .nw-shelfrestore{
-  position:absolute;z-index:39;left:0;top:50%;transform:translateY(-50%);
-  display:inline-flex;flex-direction:column;align-items:center;gap:8px;
+  position:absolute;z-index:var(--nw-z-float);left:0;top:50%;transform:translateY(-50%);
+  display:inline-flex;flex-direction:column;align-items:center;gap:var(--nw-sp-1);
   padding:10px 6px;border-radius:0 10px 10px 0;
   border:1px solid var(--dsw-alias-border-l1);border-left:none;
   background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
   color:var(--dsw-alias-label-secondary);
   cursor:pointer;opacity:.5;font-size:12px;line-height:1;
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease),
-             color var(--nw-dur,.18s) var(--nw-ease,ease),
-             padding var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+             color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+             padding var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelfrestore:hover,.nw-shelfrestore:focus-visible{
-  opacity:1;color:var(--dsw-alias-label-primary);padding-left:10px;
+  opacity:1;color:var(--dsw-alias-label-primary);padding-left:var(--nw-sp-2);
 }
 .nw-shelfrestore-txt{writing-mode:vertical-rl;letter-spacing:.2em;max-height:72px;overflow:hidden;}
 .nw-shelfrestore-ico{display:inline-flex;flex:0 0 auto;}
 .nw-dock{
-  position:absolute;z-index:40;
+  position:absolute;z-index:var(--nw-z-float);
   right:20px;bottom:56px;
-  display:flex;flex-direction:column;align-items:flex-end;gap:8px;
+  display:flex;flex-direction:column;align-items:flex-end;gap:var(--nw-sp-1);
   opacity:.35;
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock:hover,.nw-dock:focus-within,.nw-dock[data-open="1"]{opacity:1;}
 .nw-dock-fab{
-  width:44px;height:44px;border-radius:999px;
+  width:44px;height:44px;border-radius:var(--nw-r-pill);
   display:inline-flex;align-items:center;justify-content:center;
   border:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
   color:var(--dsw-alias-label-primary);
   box-shadow:0 2px 6px rgba(0,0,0,.08),0 12px 30px rgba(0,0,0,.10);
   cursor:pointer;font-size:18px;line-height:1;
-  transition:transform var(--nw-dur,.18s) var(--nw-ease,ease),box-shadow var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock-fab:hover{transform:translateY(-2px);box-shadow:0 4px 10px rgba(0,0,0,.1),0 16px 36px rgba(0,0,0,.14);}
 .nw-dock-fab:active{transform:translateY(0) scale(.97);}
-.nw-dock-menu{display:flex;flex-direction:column;align-items:flex-end;gap:8px;}
-.nw-dock-menu[data-open="1"]{animation:nw-pop .18s var(--nw-ease,ease);}
+.nw-dock-menu{display:flex;flex-direction:column;align-items:flex-end;gap:var(--nw-sp-1);}
+.nw-dock-menu[data-open="1"]{animation:nw-pop var(--nw-dur) var(--nw-ease,ease);}
 .nw-dock-btn{
-  display:inline-flex;align-items:center;gap:8px;
-  height:38px;padding:0 16px;border-radius:999px;
+  display:inline-flex;align-items:center;gap:var(--nw-sp-1);
+  height:38px;padding:0 16px;border-radius:var(--nw-r-pill);
   border:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
   color:var(--dsw-alias-label-primary);
   font-size:14px;cursor:pointer;white-space:nowrap;
-  box-shadow:0 2px 8px rgba(0,0,0,.08);
-  transition:transform var(--nw-dur,.18s) var(--nw-ease,ease),background var(--nw-dur,.18s) var(--nw-ease,ease);
+  box-shadow:var(--nw-shadow-1);
+  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock-btn:hover{transform:translateY(-1px);background:var(--dsw-alias-bg-layer-2);}
 .nw-dock-btn[disabled]{opacity:.45;cursor:default;transform:none;}
@@ -203,23 +237,23 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
    there) and one layer *below* it, so opening 查找 covers the note card instead
    of the card covering the search box. */
 .nw-notes{
-  position:absolute;z-index:7;top:52px;right:14px;
-  display:flex;flex-direction:column;align-items:flex-end;gap:8px;
+  position:absolute;z-index:var(--nw-z-float);top:52px;right:14px;
+  display:flex;flex-direction:column;align-items:flex-end;gap:var(--nw-sp-1);
   max-width:calc(100% - 28px);
   pointer-events:none;
 }
 .nw-notes > *{pointer-events:auto;}
 .nw-notes-tab{
-  display:inline-flex;align-items:center;gap:6px;
-  height:32px;padding:0 11px;border-radius:999px;
+  display:inline-flex;align-items:center;gap:var(--nw-sp-0);
+  height:32px;padding:0 11px;border-radius:var(--nw-r-pill);
   border:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
   color:var(--dsw-alias-label-secondary);
   font-size:13px;cursor:pointer;opacity:.55;
   box-shadow:0 1px 3px rgba(0,0,0,.06);
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease),
-             transform var(--nw-dur,.18s) var(--nw-ease,ease),
-             border-color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+             transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+             border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-notes-tab:hover,.nw-notes-tab:focus-visible{opacity:1;transform:translateY(-1px);border-color:var(--dsw-alias-border-l2);}
 .nw-notes-tab[aria-expanded="true"]{opacity:0;}
@@ -238,12 +272,12 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
      the textarea drives its own height, the card only caps how far it may go. */
   max-height:min(560px,calc(100vh - 200px));
   display:flex;flex-direction:column;min-height:0;
-  border-radius:12px;
+  border-radius:var(--nw-r-card);
   border:1px solid var(--dsw-alias-border-l2);
   background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));
-  box-shadow:0 2px 8px rgba(0,0,0,.08), 0 18px 44px rgba(0,0,0,.14);
+  box-shadow:var(--nw-shadow-3);
   overflow:hidden;
-  animation:nw-notes-in .18s var(--nw-ease,ease);
+  animation:nw-notes-in var(--nw-dur) var(--nw-ease,ease);
 }
 @keyframes nw-notes-in{
   from{opacity:0;transform:translateY(-6px) scale(.985);}
@@ -252,15 +286,15 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 /* Floating corner: state word + close. Fades in on hover/focus so it never
    competes with the text, but stays reachable for keyboard users. */
 .nw-notes-tools{
-  position:absolute;top:6px;right:6px;z-index:2;
+  position:absolute;top:6px;right:6px;z-index:var(--nw-z-base);
   display:inline-flex;align-items:center;gap:4px;
-  padding:2px 4px 2px 8px;border-radius:999px;
+  padding:2px 4px 2px 8px;border-radius:var(--nw-r-pill);
   background:color-mix(in srgb, var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base)) 88%, transparent);
-  opacity:0;transition:opacity .16s ease;
+  opacity:0;transition:opacity var(--nw-dur) ease;
 }
 .nw-notes-card:hover .nw-notes-tools,
 .nw-notes-card:focus-within .nw-notes-tools{opacity:1;}
-.nw-notes-state{font-size:11.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap;opacity:.85;}
+.nw-notes-state{font-size:var(--nw-fs-tiny);color:var(--dsw-alias-label-secondary);white-space:nowrap;opacity:.85;}
 .nw-notes-input{
   flex:1 1 auto;width:100%;min-height:96px;box-sizing:border-box;
   border:none;outline:none;resize:none;background:transparent;
@@ -273,7 +307,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
   /* R14 ③: height is set from scrollHeight on every change (auto-grow), so the
      textarea itself must never scroll — the card's own max-height governs. */
   overflow:hidden;
-  transition:height .12s ease;
+  transition:height var(--nw-dur) ease;
 }
 .nw-notes-input::placeholder{color:var(--dsw-alias-label-secondary);opacity:.65;}
 @media (prefers-reduced-motion: reduce){
@@ -400,7 +434,19 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
    * @returns {object|null} patch to persist, or null when nothing changed
    */
   function migrateTheme(next) {
-    const map = { light: 'claude', dark: 'night', parchment: 'ink' };
+    // R19 dropped four palettes. Anything stored under an id that no longer
+    // exists has to land on a survivor, otherwise 60-editor.js falls back to
+    // claude on its own while the swatch row shows nothing selected.
+    const map = {
+      light: 'claude',
+      harness: 'claude',
+      card: 'claude',
+      dark: 'night',
+      ink: 'night',
+      parchment: 'night',
+      guofeng: 'newspaper',
+      paper: 'newspaper',
+    };
     const current = String((next && next.theme) || '');
     const mapped = map[current];
     if (!mapped) return null;
@@ -1994,6 +2040,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
                         chapter: chapter,
                         editorApi: editorRef,
                         width: adviceWidth,
+                        onResize: setAdviceWidth,
                         onClose: () => setAdviceOpen(false),
                       })
                     : null,
@@ -2263,6 +2310,32 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
     const runRef = useRef(0);
     const noteRef = useRef('');
     noteRef.current = note;
+    /** R19 B2: pointer-drag on the left edge, mirrored from NW.Splitter. */
+    const [dragging, setDragging] = useState(false);
+    const widthRef = useRef(clampNum(Number(p.width) || 336, 260, 600));
+    widthRef.current = clampNum(Number(p.width) || 336, 260, 600);
+
+    React.useEffect(() => {
+      if (!dragging) return undefined;
+      const move = (ev) => {
+        // The panel grows to the LEFT: its right edge is pinned to the bench.
+        const panel = document.querySelector('.nw-suggest');
+        const bench = panel && panel.parentElement;
+        if (!bench) return;
+        const box = bench.getBoundingClientRect();
+        const next = Math.max(260, Math.min(600, box.right - ev.clientX));
+        if (typeof p.onResize === 'function') p.onResize(Math.round(next));
+      };
+      const up = () => setDragging(false);
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+      window.addEventListener('pointercancel', up);
+      return () => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        window.removeEventListener('pointercancel', up);
+      };
+    }, [dragging, p.onResize]);
 
     const chapterId = p.chapter ? String(p.chapter.id) : '';
 
@@ -2530,6 +2603,28 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
           )
         : null;
 
+    // R19 B2: the grip is a real button so the column can also be resized with
+    // the keyboard (left/right = ±16px), matching the shelf splitter.
+    const grip = h('button', {
+      type: 'button',
+      className: 'nw-suggest-grip',
+      'data-drag': dragging ? '1' : '0',
+      'aria-label': NW.t('调整建议栏宽度'),
+      title: NW.t('拖拽调整建议栏宽度'),
+      tabIndex: 0,
+      onPointerDown: (ev) => {
+        ev.preventDefault();
+        setDragging(true);
+      },
+      onKeyDown: (ev) => {
+        if (typeof p.onResize !== 'function') return;
+        const step = ev.key === 'ArrowLeft' ? 16 : ev.key === 'ArrowRight' ? -16 : 0;
+        if (!step) return;
+        ev.preventDefault();
+        p.onResize(clampNum(widthRef.current + step, 260, 600));
+      },
+    });
+
     return h(
       'aside',
       {
@@ -2537,6 +2632,7 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
         'aria-label': NW.t('修改建议'),
         style: { width: clampNum(Number(p.width) || 336, 260, 600) + 'px' },
       },
+      grip,
       head,
       focusRow,
       noteBox,

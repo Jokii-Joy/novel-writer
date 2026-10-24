@@ -1055,8 +1055,8 @@
   font-family:var(--nw-ui-font);
   font-size:var(--nw-fs-base);line-height:var(--nw-lh-base);
   -webkit-font-smoothing:antialiased;
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease),
-    transform var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf *{box-sizing:border-box;}
 /* 90-app 收起侧栏时整列不渲染；data-collapsed 只负责离场姿态的过渡。 */
@@ -1082,15 +1082,15 @@
   flex:0 0 auto;width:32px;height:32px;padding:0;
   border:1px solid transparent;border-radius:var(--nw-r-control);
   background:transparent;color:var(--nw-fg-soft);
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 /* Six 32px buttons do not fit next to the label at the 220px minimum width, so
    the action cluster tightens to 24px targets and the label yields first. */
 .nw-shelf-topacts{display:flex;align-items:center;gap:1px;flex:0 0 auto;min-width:0;}
 .nw-shelf-topacts .nw-btn[data-kind="icon"],
 .nw-shelf-topacts .nw-shelf-iconbtn{
-  width:24px;height:24px;border-radius:8px;
+  width:24px;height:24px;border-radius:var(--nw-r-control);
 }
 .nw-shelf-topacts .nw-shelf-iconbtn > svg,
 .nw-shelf-topacts .nw-btn[data-kind="icon"] > span > svg{display:block;}
@@ -1112,8 +1112,8 @@
   border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
   background:var(--nw-bg);color:var(--nw-fg);
   font-family:inherit;font-size:var(--nw-fs-base);line-height:1.4;outline:none;
-  transition:border-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf .nw-input::placeholder,
 .nw-shelf-input::placeholder{color:var(--nw-fg-soft);opacity:.72;}
@@ -1126,8 +1126,8 @@
   flex:0 0 auto;width:32px;height:32px;padding:0;
   border:1px solid transparent;border-radius:var(--nw-r-control);
   background:transparent;color:var(--nw-fg-soft);
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-searchbar > .nw-btn[data-kind="icon"]:hover:not(:disabled),
 .nw-shelf-searchbar > .nw-shelf-iconbtn:hover{
@@ -1148,11 +1148,11 @@
 .nw-shelf-scroll::-webkit-scrollbar-track{background:transparent;}
 /* 拖拽插入指示线：2px 品牌色 + 一点光晕，位置由 JS 写 inline top/opacity。 */
 .nw-shelf-indicator{
-  position:absolute;z-index:4;left:var(--nw-sp-2);right:var(--nw-sp-2);top:0;height:2px;
-  border-radius:2px;opacity:0;pointer-events:none;
+  position:absolute;z-index:var(--nw-z-float);left:var(--nw-sp-2);right:var(--nw-sp-2);top:0;height:2px;
+  border-radius:var(--nw-r-hair);opacity:0;pointer-events:none;
   background:var(--nw-brand);
   box-shadow:0 0 8px color-mix(in srgb, var(--nw-brand) 55%, transparent);
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 
 /* ------------------------------------------------------ 小说卡片 ---- */
@@ -1164,8 +1164,8 @@
   margin:0 var(--nw-sp-2) 6px;padding:var(--nw-sp-3);
   border:1px solid transparent;border-radius:var(--nw-r-card);
   cursor:pointer;outline:none;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    border-color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-novel:hover{background:var(--nw-surface-2);}
 .nw-shelf-novel:focus-visible{outline:2px solid var(--nw-brand);outline-offset:-2px;}
@@ -1177,14 +1177,14 @@
 }
 .nw-shelf-novel::after{
   content:'';position:absolute;left:0;top:var(--nw-sp-3);bottom:var(--nw-sp-3);width:3px;
-  border-radius:2px;background:var(--nw-brand);opacity:0;pointer-events:none;
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease);
+  border-radius:var(--nw-r-hair);background:var(--nw-brand);opacity:0;pointer-events:none;
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-novel.is-active::after{opacity:1;}
 /* 纯 CSS 封面：品牌色线性渐变 + 一道中性书脊，不用图片。 */
 .nw-shelf-cover{
   position:relative;grid-column:1;grid-row:1 / span 2;
-  width:34px;height:34px;border-radius:8px;
+  width:34px;height:34px;border-radius:var(--nw-r-control);
   background-image:linear-gradient(135deg,
     var(--nw-brand) 0%,
     color-mix(in srgb, var(--nw-brand) 62%, var(--nw-bg)) 100%);
@@ -1192,13 +1192,13 @@
 }
 .nw-shelf-cover::after{
   content:'';position:absolute;left:8px;top:9px;bottom:9px;width:2px;
-  border-radius:2px;background:color-mix(in srgb, var(--nw-bg) 55%, transparent);
+  border-radius:var(--nw-r-hair);background:color-mix(in srgb, var(--nw-bg) 55%, transparent);
 }
 .nw-shelf-novel-title{
   grid-column:2;grid-row:1;min-width:0;
   font-size:var(--nw-fs-base);font-weight:600;line-height:1.35;letter-spacing:.01em;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  transition:padding-right var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:padding-right var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-novel-meta{
   grid-column:2;grid-row:2;min-width:0;
@@ -1222,16 +1222,16 @@
   border-radius:var(--nw-r-control);
   font-size:var(--nw-fs-base);line-height:1.4;color:var(--nw-fg);
   cursor:pointer;outline:none;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-row:hover{background:var(--nw-surface-2);}
 .nw-shelf-row:focus-visible{outline:2px solid var(--nw-brand);outline-offset:-2px;}
 .nw-shelf-row.is-active{background:var(--nw-surface-2);color:var(--nw-fg);font-weight:500;}
 .nw-shelf-row.is-active::after{
   content:'';position:absolute;left:2px;top:7px;bottom:7px;width:3px;
-  border-radius:2px;background:var(--nw-brand);
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease);
+  border-radius:var(--nw-r-hair);background:var(--nw-brand);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 /* 层级连接线：行上 aria-level = 深度 + 1，每级缩进 14px，
    所以线要落在祖先 caret 的中线（行内 left 16px 起，每级 +14px）。 */
@@ -1249,14 +1249,14 @@
 .nw-shelf-row[aria-level="9"]::before{width:99px;background:repeating-linear-gradient(90deg,var(--nw-line-soft) 0,var(--nw-line-soft) 1px,transparent 1px,transparent 14px);}
 .nw-shelf-caret{
   flex:0 0 auto;display:flex;align-items:center;justify-content:center;
-  width:20px;height:20px;border-radius:6px;color:var(--nw-fg-soft);cursor:pointer;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease);
+  width:20px;height:20px;border-radius:var(--nw-r-control);color:var(--nw-fg-soft);cursor:pointer;
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-caret svg{
   /* size comes from the icon ladder in 42-icons; only the rotation is ours */
   transform:rotate(90deg);
-  transition:transform var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-caret[data-open="0"] svg{transform:rotate(0deg);}
 .nw-shelf-caret:hover{background:var(--nw-surface-2);color:var(--nw-fg);}
@@ -1268,14 +1268,14 @@
 .nw-shelf-row-meta{
   flex:0 0 auto;font-size:var(--nw-fs-micro);line-height:1.4;color:var(--nw-fg-soft);
   font-variant-numeric:tabular-nums;
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 /* 悬停时动作条浮在行右侧，字数先淡出让位，避免被按钮压住。 */
 .nw-shelf-row:hover .nw-shelf-row-meta{opacity:0;}
 
 /* --------------------------------------------- 行内动作按钮（悬停显示） ---- */
 .nw-row-actions{
-  position:absolute;z-index:2;top:50%;right:var(--nw-sp-1);transform:translateY(-50%);
+  position:absolute;z-index:var(--nw-z-base);top:50%;right:var(--nw-sp-1);transform:translateY(-50%);
   display:flex;align-items:center;gap:1px;padding:2px;
   border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
   background:var(--nw-surface-overlay);
@@ -1283,7 +1283,7 @@
 }
 /* 97-theme 给 .nw-row-actions .nw-btn 定的 32px 高在这里压回紧凑尺寸（0,4,0）。 */
 .nw-shelf .nw-row-actions .nw-btn[data-kind="icon"]{
-  width:26px;height:26px;padding:0;border:0;border-radius:8px;
+  width:26px;height:26px;padding:0;border:0;border-radius:var(--nw-r-control);
   background:transparent;color:var(--nw-fg-soft);
 }
 .nw-shelf .nw-row-actions .nw-btn[data-kind="icon"]:hover:not(:disabled){
@@ -1292,7 +1292,7 @@
 }
 /* NW.ui 缺失时的回退按钮（.nw-shelf-iconbtn）同样压到 26×26。 */
 .nw-shelf .nw-row-actions .nw-shelf-iconbtn{
-  width:26px;height:26px;padding:0;border:0;border-radius:8px;
+  width:26px;height:26px;padding:0;border:0;border-radius:var(--nw-r-control);
   background:transparent;color:var(--nw-fg-soft);
 }
 .nw-shelf .nw-row-actions .nw-shelf-iconbtn:hover{
@@ -1301,7 +1301,7 @@
 .nw-shelf-novel .nw-row-actions{
   top:var(--nw-sp-1);right:var(--nw-sp-1);transform:none;
   opacity:0;pointer-events:none;
-  transition:opacity var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 /* 菜单打开时即使指针移开也要保住动作条，否则「⋯」锚点会被卸载。 */
 .nw-shelf-novel:hover .nw-row-actions,
@@ -1309,7 +1309,7 @@
 .nw-shelf-novel[data-menu-open="1"] .nw-row-actions{opacity:1;pointer-events:auto;}
 .nw-shelf-novel:hover .nw-shelf-novel-title,
 .nw-shelf-novel:focus-within .nw-shelf-novel-title,
-.nw-shelf-novel[data-menu-open="1"] .nw-shelf-novel-title{padding-right:96px;}
+.nw-shelf-novel[data-menu-open="1"] .nw-shelf-novel-title{padding-right:var(--nw-sp-6);}
 
 /* --------------------------------------------------- 「⋯」动作菜单 ---- */
 /* 绝对定位在 .nw-shelf 内（侧栏 overflow:hidden 会裁切，所以 JS 已把
@@ -1317,7 +1317,7 @@
 /* 宽度固定 184px（border-box），与 api.openMenu 里的夹取常量一致，
    保证贴着侧栏右缘时不会被 .nw-shelf 的 overflow:hidden 裁掉。 */
 .nw-shelf-menu{
-  position:absolute;z-index:20;width:184px;padding:6px;
+  position:absolute;z-index:var(--nw-z-panel);width:184px;padding:var(--nw-sp-0);
   display:flex;flex-direction:column;gap:2px;
   border:1px solid var(--nw-line);border-radius:var(--nw-r-card);
   background:var(--nw-surface-overlay);
@@ -1330,8 +1330,8 @@
   border:0;border-radius:var(--nw-r-control);background:transparent;color:var(--nw-fg);
   font-family:var(--nw-ui-font);font-size:var(--nw-fs-second);font-weight:500;
   line-height:1;text-align:left;cursor:pointer;appearance:none;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-menu-item:hover{background:var(--nw-surface-2);}
 .nw-shelf-menu-item:focus-visible{outline:2px solid var(--nw-brand);outline-offset:-2px;}
@@ -1350,7 +1350,7 @@
 .nw-shelf-result{
   position:relative;margin:1px var(--nw-sp-2);padding:var(--nw-sp-2) var(--nw-sp-3);
   border-radius:var(--nw-r-control);cursor:pointer;outline:none;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-result:hover{background:var(--nw-surface-2);}
 .nw-shelf-result:focus-visible{outline:2px solid var(--nw-brand);outline-offset:-2px;}
@@ -1363,16 +1363,16 @@
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
 .nw-shelf-result-snippet{
-  margin-top:5px;font-size:var(--nw-fs-second);line-height:1.6;color:var(--nw-fg-soft);
+  margin-top:var(--nw-sp-0);font-size:var(--nw-fs-second);line-height:1.6;color:var(--nw-fg-soft);
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
   word-break:break-word;
 }
 .nw-shelf-hit{
-  border-radius:3px;padding:0 2px;font-weight:700;text-decoration:none;
+  border-radius:var(--nw-r-hair);padding:0 2px;font-weight:700;text-decoration:none;
   background:color-mix(in srgb, var(--nw-brand) 16%, transparent);
   color:var(--nw-brand);
 }
-.nw-shelf-dropend{position:relative;height:16px;margin:2px var(--nw-sp-2) var(--nw-sp-1);border-radius:6px;}
+.nw-shelf-dropend{position:relative;height:16px;margin:2px var(--nw-sp-2) var(--nw-sp-1);border-radius:var(--nw-r-control);}
 
 /* -------------------------------------------------------- 页脚工具栏 ---- */
 .nw-shelf-foot{
@@ -1387,10 +1387,10 @@
   flex:1 1 0;min-width:40px;width:auto;height:40px;padding:0;
   border:1px solid transparent;border-radius:var(--nw-r-control);
   background:transparent;color:var(--nw-fg-soft);
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease),
-    transform var(--nw-dur,.18s) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-foot .nw-btn[data-kind="icon"]:hover:not(:disabled),
 .nw-shelf-foot .nw-shelf-iconbtn:hover{
@@ -1447,8 +1447,8 @@
   border:1px solid var(--nw-line-soft);background:transparent;
   color:var(--nw-fg);font-family:var(--nw-ui-font);font-size:var(--nw-fs-second);
   cursor:pointer;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    border-color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-btn-fallback:hover{background:var(--nw-surface-2);border-color:var(--nw-line);}
 .nw-shelf-btn-fallback.is-primary{
@@ -1459,8 +1459,8 @@
   width:var(--nw-h-iconbtn);height:var(--nw-h-iconbtn);padding:0;
   border:1px solid transparent;border-radius:var(--nw-r-control);
   background:transparent;color:var(--nw-fg-soft);cursor:pointer;
-  transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
-    color var(--nw-dur,.18s) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-shelf-iconbtn:hover{background:var(--nw-surface-2);color:var(--nw-fg);}
 
