@@ -707,5 +707,110 @@
   font-size:var(--nw-fs-micro);font-weight:600;
   color:var(--nw-brand);white-space:nowrap;
 }
+
+/* ---------------------------------------------------- R32 ② 逐条邮箱编辑 ---
+   One bordered block per inbox. The address gets the full width so it is never
+   truncated; the 体裁 chips sit directly under it and the 字数区间 + delete share a
+   row, because those two are what the author changes least often. */
+.nw-emailrows{display:flex;flex-direction:column;gap:8px;margin-top:8px;}
+.nw-emailrow{
+  display:flex;flex-direction:column;gap:6px;
+  padding:10px;border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
+  background:var(--nw-sunken);
+}
+.nw-emailrow-tags{display:flex;flex-wrap:wrap;gap:5px;}
+.nw-emailrow-chip{
+  height:24px;padding:0 9px;border-radius:999px;
+  border:1px solid var(--nw-line-strong);background:transparent;
+  color:var(--nw-fg-soft);font-family:inherit;font-size:var(--nw-fs-micro);
+  line-height:1;cursor:pointer;
+  transition:background var(--nw-dur) var(--nw-ease),color var(--nw-dur) var(--nw-ease),border-color var(--nw-dur) var(--nw-ease);
+}
+.nw-emailrow-chip:hover{border-color:var(--nw-brand);color:var(--nw-brand);}
+.nw-emailrow-chip[data-on="1"]{
+  background:color-mix(in srgb, var(--nw-brand) 12%, transparent);
+  border-color:color-mix(in srgb, var(--nw-brand) 55%, transparent);
+  color:var(--nw-brand);font-weight:600;
+}
+.nw-emailrow-side{display:flex;gap:6px;align-items:center;}
+.nw-emailrow-side > *:first-child{flex:1 1 auto;}
+
+/* R32: the library list shows every stored inbox, one per line. */
+.nw-journal-mails{display:flex;flex-direction:column;gap:2px;margin-top:2px;}
+.nw-journal-mail{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;line-height:1.5;}
+.nw-journal-mailaddr{
+  font-family:var(--nw-mono, ui-monospace, monospace);
+  font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);
+  word-break:break-all;
+}
+.nw-journal-mail[data-main="1"] .nw-journal-mailaddr{color:var(--nw-fg);}
+.nw-journal-mailtags{font-size:var(--nw-fs-tiny);color:var(--nw-fg-soft);}
+
+/* ------------------------------------------------- R32 ① 投稿准备进度页 ---
+   Step 3 opens here and stays here until the host answers. The five rows are
+   the work the host actually does, so the wait reads as "it is doing the right
+   things" instead of "it froze". */
+.nw-prep{
+  display:flex;flex-direction:column;align-items:center;gap:var(--nw-sp-3);
+  padding:var(--nw-sp-5) var(--nw-sp-3) var(--nw-sp-4);
+  border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-card);
+  background:var(--nw-panel);
+}
+.nw-prep-head{display:flex;align-items:center;gap:10px;}
+.nw-prep-orb{
+  width:14px;height:14px;flex:0 0 auto;border-radius:50%;
+  background:var(--nw-brand);
+  box-shadow:0 0 0 0 color-mix(in srgb, var(--nw-brand) 55%, transparent);
+  animation:nw-prep-pulse 1.5s var(--nw-ease) infinite;
+}
+@keyframes nw-prep-pulse{
+  0%{box-shadow:0 0 0 0 color-mix(in srgb, var(--nw-brand) 45%, transparent);}
+  70%{box-shadow:0 0 0 12px color-mix(in srgb, var(--nw-brand) 0%, transparent);}
+  100%{box-shadow:0 0 0 0 color-mix(in srgb, var(--nw-brand) 0%, transparent);}
+}
+.nw-prep-title{font-size:var(--nw-fs-base);font-weight:600;color:var(--nw-fg);}
+.nw-prep-steps{
+  display:flex;flex-direction:column;gap:2px;width:100%;max-width:420px;
+  margin:0;padding:0;list-style:none;
+}
+.nw-prep-step{
+  display:flex;align-items:center;gap:9px;height:26px;
+  font-size:var(--nw-fs-second);color:var(--nw-fg-soft);
+  transition:color var(--nw-dur) var(--nw-ease),opacity var(--nw-dur) var(--nw-ease);
+  opacity:.55;
+}
+.nw-prep-step[data-on="1"]{opacity:.9;color:var(--nw-fg);}
+.nw-prep-step[data-now="1"]{opacity:1;color:var(--nw-brand);font-weight:600;}
+.nw-prep-dot{
+  width:6px;height:6px;flex:0 0 auto;border-radius:50%;
+  background:currentColor;opacity:.45;
+}
+.nw-prep-step[data-on="1"] .nw-prep-dot{
+  opacity:1;background:var(--nw-brand);
+}
+.nw-prep-step[data-now="1"] .nw-prep-dot{animation:nw-prep-blink 1s var(--nw-ease) infinite;}
+@keyframes nw-prep-blink{0%,100%{opacity:1}50%{opacity:.25}}
+.nw-prep-bar{
+  position:relative;width:100%;max-width:420px;height:3px;overflow:hidden;
+  border-radius:999px;background:color-mix(in srgb, var(--nw-fg) 9%, transparent);
+}
+.nw-prep-bar > i{
+  position:absolute;top:0;left:0;height:100%;width:38%;
+  border-radius:999px;background:var(--nw-brand);
+  animation:nw-prep-sweep 1.6s var(--nw-ease) infinite;
+}
+@keyframes nw-prep-sweep{
+  0%{transform:translateX(-100%);}
+  100%{transform:translateX(320%);}
+}
+.nw-prep-hint{
+  max-width:420px;text-align:center;
+  font-size:var(--nw-fs-micro);line-height:1.65;color:var(--nw-fg-soft);
+}
+@media (prefers-reduced-motion: reduce){
+  .nw-prep-orb{animation:none;box-shadow:none;}
+  .nw-prep-bar > i{animation:none;width:100%;opacity:.4;}
+  .nw-prep-step[data-now="1"] .nw-prep-dot{animation:none;}
+}
 `);
 })();

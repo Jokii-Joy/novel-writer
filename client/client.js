@@ -5083,6 +5083,111 @@ window.__ModuleLoader__.load({
   font-size:var(--nw-fs-micro);font-weight:600;
   color:var(--nw-brand);white-space:nowrap;
 }
+
+/* ---------------------------------------------------- R32 ② 逐条邮箱编辑 ---
+   One bordered block per inbox. The address gets the full width so it is never
+   truncated; the 体裁 chips sit directly under it and the 字数区间 + delete share a
+   row, because those two are what the author changes least often. */
+.nw-emailrows{display:flex;flex-direction:column;gap:8px;margin-top:8px;}
+.nw-emailrow{
+  display:flex;flex-direction:column;gap:6px;
+  padding:10px;border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
+  background:var(--nw-sunken);
+}
+.nw-emailrow-tags{display:flex;flex-wrap:wrap;gap:5px;}
+.nw-emailrow-chip{
+  height:24px;padding:0 9px;border-radius:999px;
+  border:1px solid var(--nw-line-strong);background:transparent;
+  color:var(--nw-fg-soft);font-family:inherit;font-size:var(--nw-fs-micro);
+  line-height:1;cursor:pointer;
+  transition:background var(--nw-dur) var(--nw-ease),color var(--nw-dur) var(--nw-ease),border-color var(--nw-dur) var(--nw-ease);
+}
+.nw-emailrow-chip:hover{border-color:var(--nw-brand);color:var(--nw-brand);}
+.nw-emailrow-chip[data-on="1"]{
+  background:color-mix(in srgb, var(--nw-brand) 12%, transparent);
+  border-color:color-mix(in srgb, var(--nw-brand) 55%, transparent);
+  color:var(--nw-brand);font-weight:600;
+}
+.nw-emailrow-side{display:flex;gap:6px;align-items:center;}
+.nw-emailrow-side > *:first-child{flex:1 1 auto;}
+
+/* R32: the library list shows every stored inbox, one per line. */
+.nw-journal-mails{display:flex;flex-direction:column;gap:2px;margin-top:2px;}
+.nw-journal-mail{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;line-height:1.5;}
+.nw-journal-mailaddr{
+  font-family:var(--nw-mono, ui-monospace, monospace);
+  font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);
+  word-break:break-all;
+}
+.nw-journal-mail[data-main="1"] .nw-journal-mailaddr{color:var(--nw-fg);}
+.nw-journal-mailtags{font-size:var(--nw-fs-tiny);color:var(--nw-fg-soft);}
+
+/* ------------------------------------------------- R32 ① 投稿准备进度页 ---
+   Step 3 opens here and stays here until the host answers. The five rows are
+   the work the host actually does, so the wait reads as "it is doing the right
+   things" instead of "it froze". */
+.nw-prep{
+  display:flex;flex-direction:column;align-items:center;gap:var(--nw-sp-3);
+  padding:var(--nw-sp-5) var(--nw-sp-3) var(--nw-sp-4);
+  border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-card);
+  background:var(--nw-panel);
+}
+.nw-prep-head{display:flex;align-items:center;gap:10px;}
+.nw-prep-orb{
+  width:14px;height:14px;flex:0 0 auto;border-radius:50%;
+  background:var(--nw-brand);
+  box-shadow:0 0 0 0 color-mix(in srgb, var(--nw-brand) 55%, transparent);
+  animation:nw-prep-pulse 1.5s var(--nw-ease) infinite;
+}
+@keyframes nw-prep-pulse{
+  0%{box-shadow:0 0 0 0 color-mix(in srgb, var(--nw-brand) 45%, transparent);}
+  70%{box-shadow:0 0 0 12px color-mix(in srgb, var(--nw-brand) 0%, transparent);}
+  100%{box-shadow:0 0 0 0 color-mix(in srgb, var(--nw-brand) 0%, transparent);}
+}
+.nw-prep-title{font-size:var(--nw-fs-base);font-weight:600;color:var(--nw-fg);}
+.nw-prep-steps{
+  display:flex;flex-direction:column;gap:2px;width:100%;max-width:420px;
+  margin:0;padding:0;list-style:none;
+}
+.nw-prep-step{
+  display:flex;align-items:center;gap:9px;height:26px;
+  font-size:var(--nw-fs-second);color:var(--nw-fg-soft);
+  transition:color var(--nw-dur) var(--nw-ease),opacity var(--nw-dur) var(--nw-ease);
+  opacity:.55;
+}
+.nw-prep-step[data-on="1"]{opacity:.9;color:var(--nw-fg);}
+.nw-prep-step[data-now="1"]{opacity:1;color:var(--nw-brand);font-weight:600;}
+.nw-prep-dot{
+  width:6px;height:6px;flex:0 0 auto;border-radius:50%;
+  background:currentColor;opacity:.45;
+}
+.nw-prep-step[data-on="1"] .nw-prep-dot{
+  opacity:1;background:var(--nw-brand);
+}
+.nw-prep-step[data-now="1"] .nw-prep-dot{animation:nw-prep-blink 1s var(--nw-ease) infinite;}
+@keyframes nw-prep-blink{0%,100%{opacity:1}50%{opacity:.25}}
+.nw-prep-bar{
+  position:relative;width:100%;max-width:420px;height:3px;overflow:hidden;
+  border-radius:999px;background:color-mix(in srgb, var(--nw-fg) 9%, transparent);
+}
+.nw-prep-bar > i{
+  position:absolute;top:0;left:0;height:100%;width:38%;
+  border-radius:999px;background:var(--nw-brand);
+  animation:nw-prep-sweep 1.6s var(--nw-ease) infinite;
+}
+@keyframes nw-prep-sweep{
+  0%{transform:translateX(-100%);}
+  100%{transform:translateX(320%);}
+}
+.nw-prep-hint{
+  max-width:420px;text-align:center;
+  font-size:var(--nw-fs-micro);line-height:1.65;color:var(--nw-fg-soft);
+}
+@media (prefers-reduced-motion: reduce){
+  .nw-prep-orb{animation:none;box-shadow:none;}
+  .nw-prep-bar > i{animation:none;width:100%;opacity:.4;}
+  .nw-prep-step[data-now="1"] .nw-prep-dot{animation:none;}
+}
 `);
 })();
 
@@ -14131,66 +14236,171 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   };
   const EMAIL_BAND_LABELS = { weixiaoshuo: '微小说', duanpian: '短篇', zhongpian: '中篇', changpian: '长篇' };
 
-  function parseVariantLines(text) {
-    const out = [];
-    String(text == null ? '' : text)
-      .split('\n')
-      .forEach((raw) => {
-        const line = String(raw || '').trim();
-        if (!line) return;
-        const parts = line.split('|').map((part) => String(part || '').trim());
-        const email = parts[0] || '';
-        if (email.indexOf('@') <= 0) return;
-        const genres = {};
-        String(parts[1] || '')
-          .split(/[,，、\s]+/)
-          .forEach((word) => {
-            if (!word) return;
-            const key = EMAIL_GENRE_KEYS[word] || EMAIL_GENRE_KEYS[word.toLowerCase()];
-            if (key) genres[key] = true;
-          });
-        let band = '';
-        let minWords = 0;
-        let maxWords = 0;
-        const range = String(parts[2] || '')
-          .replace(/字|words?/gi, '')
-          .trim();
-        const nums = range.match(/\d+/g);
-        if (nums && nums.length >= 2) {
-          minWords = Number(nums[0]) || 0;
-          maxWords = Number(nums[1]) || 0;
-          if (minWords > maxWords) {
-            const swap = minWords;
-            minWords = maxWords;
-            maxWords = swap;
-          }
-        } else if (nums && nums.length === 1) {
-          minWords = Number(nums[0]) || 0;
-        } else if (range) {
-          band = EMAIL_BAND_KEYS[range] || EMAIL_BAND_KEYS[range.toLowerCase()] || '';
-        }
-        out.push({ email: email, genres: genres, band: band, minWords: minWords, maxWords: maxWords, note: parts[3] || '' });
-      });
-    return out;
+  /**
+   * R32 ②: one editable row per inbox. Kept deliberately close to the shape the
+   * host stores so variantFromRow() is a straight read, not a re-parse.
+   */
+  function variantRowsOf(rows) {
+    return (Array.isArray(rows) ? rows : [])
+      .filter((row) => row && String(row.email || '').indexOf('@') > 0)
+      .map((row) => ({
+        email: String(row.email || ''),
+        genres: Object.keys(row.genres || {}).filter((key) => row.genres[key]),
+        range: Number(row.minWords) || Number(row.maxWords)
+          ? String(Number(row.minWords) || 0) + '-' + String(Number(row.maxWords) || 0)
+          : '',
+        note: String(row.note || ''),
+      }));
   }
 
-  function formatVariantLines(rows) {
-    return (Array.isArray(rows) ? rows : [])
-      .map((row) => {
-        if (!row || String(row.email || '').indexOf('@') <= 0) return '';
-        const genres = Object.keys(row.genres || {})
-          .filter((key) => row.genres[key])
-          .map((key) => EMAIL_GENRE_LABELS[key] || key);
-        let range = '';
-        if (Number(row.minWords) || Number(row.maxWords)) {
-          range = String(Number(row.minWords) || 0) + '-' + String(Number(row.maxWords) || 0);
-        } else if (row.band) {
-          range = EMAIL_BAND_LABELS[row.band] || String(row.band);
-        }
-        return [String(row.email), genres.join(','), range, String(row.note || '')].join(' | ').replace(/(\s\|\s)+$/, '');
-      })
-      .filter(Boolean)
-      .join('\n');
+  function variantFromRow(row) {
+    if (!row) return null;
+    const email = String(row.email || '').trim();
+    if (email.indexOf('@') <= 0) return null;
+    const genres = {};
+    (Array.isArray(row.genres) ? row.genres : []).forEach((key) => {
+      if (EMAIL_GENRE_KEYS[key]) genres[EMAIL_GENRE_KEYS[key]] = true;
+    });
+    const nums = String(row.range || '').replace(/字|words?/gi, '').match(/\d+/g) || [];
+    let minWords = 0;
+    let maxWords = 0;
+    if (nums.length >= 2) {
+      minWords = Number(nums[0]) || 0;
+      maxWords = Number(nums[1]) || 0;
+      if (minWords > maxWords) {
+        const swap = minWords;
+        minWords = maxWords;
+        maxWords = swap;
+      }
+    } else if (nums.length === 1) {
+      minWords = Number(nums[0]) || 0;
+    }
+    return {
+      email: email,
+      genres: genres,
+      band: '',
+      minWords: minWords,
+      maxWords: maxWords,
+      note: String(row.note || '').trim(),
+    };
+  }
+
+  /**
+   * R32 ②: one bordered block per inbox, shared by 期刊库 and the wizard's inline
+   * 编辑期刊信息 form. Keeping a single implementation matters — the two places
+   * drifted apart before, and only one of them learned about multiple addresses.
+   *
+   * handlers: { setRow(index, patch), addRow(), removeRow(index), toggleGenre(list, value) }
+   */
+  function emailRowEditor(rows, handlers) {
+    const list = Array.isArray(rows) ? rows : [];
+    const addRow = handlers && handlers.addRow;
+    return NW.React.createElement(
+      'div',
+      { className: 'nw-field' },
+      NW.React.createElement('label', null, '按体裁 / 篇幅分列的收稿邮箱'),
+      NW.React.createElement(
+        'span',
+        { className: 'nw-hint' },
+        '这家刊有几个收稿邮箱就登记几行。体裁和字数都不填 = 任何稿件都能投这个地址。',
+      ),
+      list.length === 0
+        ? NW.React.createElement('div', { className: 'nw-dim', style: { padding: '6px 0' } }, '还没有分列邮箱。')
+        : NW.React.createElement(
+            'div',
+            { className: 'nw-emailrows' },
+            list.map((row, index) =>
+              NW.React.createElement(
+                'div',
+                { key: 'emailrow-' + String(index), className: 'nw-emailrow' },
+                NW.ui.input({
+                  value: row.email,
+                  placeholder: '收稿邮箱',
+                  ariaLabel: '第 ' + String(index + 1) + ' 个收稿邮箱',
+                  onChange: (v) => handlers.setRow(index, { email: v }),
+                }),
+                NW.React.createElement(
+                  'div',
+                  { className: 'nw-emailrow-tags' },
+                  GENRE_OPTIONS.map((option) =>
+                    NW.React.createElement(
+                      'button',
+                      {
+                        key: 'g-' + String(index) + '-' + option.value,
+                        type: 'button',
+                        className: 'nw-emailrow-chip',
+                        'data-on': row.genres.indexOf(option.value) >= 0 ? '1' : '0',
+                        'aria-pressed': row.genres.indexOf(option.value) >= 0 ? 'true' : 'false',
+                        onClick: () => handlers.setRow(index, { genres: handlers.toggleGenre(row.genres, option.value) }),
+                      },
+                      option.label,
+                    ),
+                  ),
+                ),
+                NW.React.createElement(
+                  'div',
+                  { className: 'nw-emailrow-side' },
+                  NW.ui.input({
+                    value: row.range,
+                    placeholder: '字数 如 5000-30000',
+                    ariaLabel: '第 ' + String(index + 1) + ' 个邮箱的字数范围',
+                    onChange: (v) => handlers.setRow(index, { range: v }),
+                  }),
+                  NW.ui.btn({
+                    kind: 'ghost',
+                    onClick: () => handlers.removeRow(index),
+                    title: '删除这个邮箱',
+                    ariaLabel: '删除第 ' + String(index + 1) + ' 个收稿邮箱',
+                    children: '删除',
+                  }),
+                ),
+                NW.ui.input({
+                  value: row.note,
+                  placeholder: '备注（例如：只收中长篇；请在邮件主题注明篇幅）',
+                  ariaLabel: '第 ' + String(index + 1) + ' 个邮箱的备注',
+                  onChange: (v) => handlers.setRow(index, { note: v }),
+                }),
+              ),
+            ),
+          ),
+      addRow
+        ? NW.React.createElement(
+            'div',
+            { className: 'nw-inline', style: { gap: '6px', marginTop: '8px', flexWrap: 'wrap' } },
+            NW.ui.btn({ onClick: addRow, children: '＋ 添加一个收稿邮箱' }),
+          )
+        : null,
+    );
+  }
+
+  /**
+   * R32: flatten one journal into display lines — the default inbox first, then
+   * each per-体裁 address with its own filter summary.
+   */
+  function journalMailLines(entry) {
+    const safe = entry || {};
+    const lines = [];
+    const main = String(safe.email || '').trim();
+    if (main) lines.push({ email: main, tags: '', main: true });
+    const variants = Array.isArray(safe.emails) ? safe.emails : [];
+    variants.forEach((row) => {
+      const email = String((row && row.email) || '').trim();
+      if (!email) return;
+      const tags = [];
+      const genres = Object.keys((row && row.genres) || {})
+        .filter((key) => row.genres[key])
+        .map((key) => EMAIL_GENRE_LABELS[key] || key);
+      if (genres.length) tags.push(genres.join('/'));
+      if (Number(row.minWords) || Number(row.maxWords)) {
+        tags.push(String(Number(row.minWords) || 0) + '-' + String(Number(row.maxWords) || 0) + ' 字');
+      } else if (row.band) {
+        tags.push(EMAIL_BAND_LABELS[row.band] || String(row.band));
+      }
+      if (row.note) tags.push(String(row.note));
+      lines.push({ email: email, tags: tags.join(' · '), main: false });
+    });
+    if (lines.length === 0) lines.push({ email: '未收录邮箱', tags: '', main: true });
+    return lines;
   }
 
   /**
@@ -16551,6 +16761,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [selectedId, setSelectedId] = useState(String((p.dialog && p.dialog.journalId) || ''));
     const [manage, setManage] = useState(false);
     const [editEmail, setEditEmail] = useState('');
+    const [editEmailRows, setEditEmailRows] = useState([]);
     const [editRange, setEditRange] = useState('');
     const [editTier, setEditTier] = useState('other');
     const [editRequirements, setEditRequirements] = useState('');
@@ -16587,6 +16798,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      */
     const [emailInfo, setEmailInfo] = useState(null);
     const [prepareError, setPrepareError] = useState('');
+    // R32 ①: the progress panel steps through these while the host works. The
+    // tick is cosmetic — it never gats the request, it only keeps the screen
+    // telling the truth ("something is happening") on a slow model.
+    const [prepareTick, setPrepareTick] = useState(0);
     const [subject, setSubject] = useState('');
     const [body, setBody] = useState('');
     /** Editable inbox — the resolved address is a suggestion, not a cage. */
@@ -16898,6 +17113,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           })
       : [];
 
+    useEffect(() => {
+      if (!preparing) return undefined;
+      setPrepareTick(0);
+      const id = setInterval(() => {
+        setPrepareTick((n) => (n >= 5 ? n : n + 1));
+      }, 1100);
+      return () => clearInterval(id);
+    }, [preparing]);
+
     // -------------------------------------------------------------- prepare --
     const runPrepare = async () => {
       if (!(NW.io && NW.io.submit && NW.io.submit.prepare)) {
@@ -17003,6 +17227,30 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     // ---------------------------------------------------------------- send ---
     const toAddress = String(toDraft || suggestedTo || '').trim();
+    // R32 3: say which inbox this is. When the journal publishes four addresses
+    // and the app silently picks one, the author has no way to tell whether the
+    // pick was "the 中篇 desk" or "the only address we found".
+    const matchedVariant =
+      emailInfo && emailInfo.matched === 'variant'
+        ? (Array.isArray(emailInfo.variants) ? emailInfo.variants : []).filter(
+            (row) => row && row.qualified && String(row.email || '') === String(emailInfo.email || ''),
+          )[0] || null
+        : null;
+    const toWhy = (() => {
+      if (matchedVariant) {
+        const bits = [];
+        if (emailInfo.bandLabel) bits.push(String(emailInfo.bandLabel));
+        const genres = Object.keys(matchedVariant.genres || {})
+          .filter((key) => matchedVariant.genres[key])
+          .map((key) => EMAIL_GENRE_LABELS[key] || key);
+        if (genres.length) bits.push(genres.join('/'));
+        return '按本稿篇幅匹配到这家刊的这一条收稿邮箱' + (bits.length ? '：' + bits.join(' · ') : '') + '。';
+      }
+      if (emailInfo && emailInfo.matched === 'default' && Array.isArray(emailInfo.variants) && emailInfo.variants.length) {
+        return '这家刊分设了多个收稿邮箱，但当前篇幅没有单独对应的那一条，填的是通用邮箱，可核对后手动改。';
+      }
+      return '';
+    })();
 
     const doSend = async () => {
       if (!(NW.io && NW.io.submit && NW.io.submit.send)) {
@@ -17069,6 +17317,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         return;
       }
       setEditEmail(String(selected.email || ''));
+      setEditEmailRows(variantRowsOf(selected.emails));
       setEditRange(String(selected.wordRange || ''));
       setEditTier(String(selected.tier || 'other'));
       const requirements = Array.isArray(selected.requirements) ? selected.requirements : [];
@@ -17087,6 +17336,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           .filter(Boolean);
         const entry = Object.assign({}, selected, {
           email: String(editEmail || '').trim(),
+          emails: (Array.isArray(editEmailRows) ? editEmailRows : []).map(variantFromRow).filter(Boolean),
           wordRange: String(editRange || '').trim(),
           requirements: lines,
           tier: String(editTier || 'other'),
@@ -17339,12 +17589,21 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             }),
           }),
           NW.ui.field({
-            label: '投稿邮箱',
+            label: '默认收稿邮箱',
+            hint: '不带分类条件的通用邮箱；下面登记了分体裁邮箱的，投稿时优先用那一行。',
             children: NW.ui.input({
               value: editEmail,
               placeholder: '编辑部收稿邮箱',
               onChange: (v) => setEditEmail(v),
             }),
+          }),
+          emailRowEditor(editEmailRows, {
+            setRow: (index, patch) =>
+              setEditEmailRows((prev) => prev.map((row, i) => (i === index ? Object.assign({}, row, patch) : row))),
+            addRow: () => setEditEmailRows((prev) => prev.concat([{ email: '', genres: [], range: '', note: '' }])),
+            removeRow: (index) => setEditEmailRows((prev) => prev.filter((row, i) => i !== index)),
+            toggleGenre: (current, value) =>
+              current.indexOf(value) >= 0 ? current.filter((item) => item !== value) : current.concat([value]),
           }),
           NW.ui.field({
             label: '字数区间',
@@ -17512,6 +17771,64 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             : h('p', { className: 'nw-hint-block' }, '历史投稿记录会保存在本机，最多 50 条。'),
         );
         if (sendError) stepBody.push(h('div', { className: 'nw-lock-error', role: 'alert' }, sendError));
+      } else if (preparing || (!prepared && !prepareError)) {
+        // R32 ①: nothing of the letter is shown until the letter exists. A
+        // preview that grows in field by field reads as "it broke".
+        const stages = ['读取稿件与章节', '分析期刊偏好与征稿要求', '按体裁匹配收稿邮箱', '撰写投稿邮件', '排版并生成附件'];
+        const reached = Math.min(stages.length, prepareTick);
+        stepBody.push(
+          h(
+            'div',
+            { className: 'nw-prep', role: 'status', 'aria-live': 'polite' },
+            h(
+              'div',
+              { className: 'nw-prep-head' },
+              h('span', { className: 'nw-prep-orb', 'aria-hidden': 'true' }),
+              h(
+                'span',
+                { className: 'nw-prep-title' },
+                selected ? '正在为《' + String(selected.name || '') + '》准备投稿邮件' : '正在准备投稿邮件',
+              ),
+            ),
+            h(
+              'ol',
+              { className: 'nw-prep-steps' },
+              stages.map((label, index) =>
+                h(
+                  'li',
+                  {
+                    key: 'stage-' + String(index),
+                    className: 'nw-prep-step',
+                    'data-on': index < reached ? '1' : '0',
+                    'data-now': index === reached && preparing ? '1' : '0',
+                  },
+                  h('span', { className: 'nw-prep-dot', 'aria-hidden': 'true' }),
+                  h('span', null, label),
+                ),
+              ),
+            ),
+            h('div', { className: 'nw-prep-bar', 'aria-hidden': 'true' }, h('i', null)),
+            h(
+              'div',
+              { className: 'nw-prep-hint' },
+              '模型正在通读全文并比对这家刊的征稿要求，通常十几秒。完成后直接进入预览，届时每个字段都能改。',
+            ),
+          ),
+        );
+      } else if (prepareError) {
+        // R32 1: a failed prepare must not fall through to an empty preview.
+        stepBody.push(
+          h(
+            'div',
+            { className: 'nw-lock-error', role: 'alert' },
+            prepareError,
+            h(
+              'div',
+              { className: 'nw-inline', style: { marginTop: '8px' } },
+              NW.ui.btn({ onClick: runPrepare, disabled: preparing, children: '重试' }),
+            ),
+          ),
+        );
       } else {
         if (!smtp.loading && !smtp.configured) {
           stepBody.push(
@@ -17531,22 +17848,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             ),
           );
         }
-        if (preparing) stepBody.push(h('div', { className: 'nw-inline' }, NW.ui.spinner('正在按期刊要求整理稿件…')));
-        if (prepareError) {
-          stepBody.push(
-            h(
-              'div',
-              { className: 'nw-lock-error', role: 'alert' },
-              prepareError,
-              h(
-                'div',
-                { className: 'nw-inline', style: { marginTop: '8px' } },
-                NW.ui.btn({ onClick: runPrepare, disabled: preparing, children: '重试' }),
-              ),
-            ),
-          );
-        }
-
         // 期刊 + 收件人 — both editable: the automation is a suggestion and the
         // author is the one signing the letter.
         const journalOptions = [{ value: '', label: '（未选择）' }].concat(
@@ -17581,7 +17882,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 },
               }),
             }),
-            NW.ui.field({ label: '收件人', hint: emailNote || '可以直接改成编辑部的其他邮箱。', children: toBox }),
+            NW.ui.field({
+              label: '收件人',
+              hint: [toWhy, emailNote || '可以直接改成编辑部的其他邮箱。'].filter(Boolean).join(' '),
+              children: toBox,
+            }),
           ),
         );
 
@@ -17855,6 +18160,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           children: NW.t('完成'),
         }),
       );
+    } else if (preparing || (!prepared && !prepareError && step >= 3)) {
+      // R32 ①: step 3 shows the progress panel, so the only honest action is 取消.
+      footer.push(closeBtn(p));
     } else {
       footer.push(closeBtn(p));
       if (step > 1) footer.push(NW.ui.btn({ onClick: back, disabled: sending, children: '上一步' }));
@@ -18468,6 +18776,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [query, setQuery] = useState('');
     const [onlyMissing, setOnlyMissing] = useState(false);
     const [editing, setEditing] = useState(null);
+    // R32 ②: the row editor works on this array; form.emailRows mirrors it so a
+    // plain setForm() elsewhere never loses what the author typed.
+    const [emailRows, setEmailRows] = useState([]);
     const [form, setForm] = useState({ name: '', email: '', website: '', wordRange: '', requirements: '', emails: '' });
     const [busy, setBusy] = useState('');
     const [error, setError] = useState('');
@@ -18507,15 +18818,35 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         website: String(entry.website || ''),
         wordRange: String(entry.wordRange || ''),
         requirements: (Array.isArray(entry.requirements) ? entry.requirements : []).join('\n'),
-        emails: formatVariantLines(entry.emails),
+        // R32 ②: the row editor is the only representation of the per-体裁
+        // inboxes now; this string is kept empty for older call sites.
+        emails: '',
+        emailRows: [],
       });
+      setEmailRows(variantRowsOf(entry.emails));
     };
 
     /** R11 ⑦: start a blank record — the id is derived from the name on save. */
     const startCreate = () => {
       setEditing(NEW_JOURNAL);
-      setForm({ name: '', email: '', website: '', wordRange: '', requirements: '', emails: '' });
+      setForm({ name: '', email: '', website: '', wordRange: '', requirements: '', emails: '', emailRows: [] });
+      setEmailRows([]);
       setError('');
+    };
+
+    const setEmailRow = (index, patch) => {
+      setEmailRows((prev) => prev.map((row, i) => (i === index ? Object.assign({}, row, patch) : row)));
+    };
+
+    const toggleRowGenre = (current, value) =>
+      current.indexOf(value) >= 0 ? current.filter((item) => item !== value) : current.concat([value]);
+
+    const addEmailRow = () => {
+      setEmailRows((prev) => prev.concat([{ email: '', genres: [], range: '', note: '' }]));
+    };
+
+    const removeEmailRow = (index) => {
+      setEmailRows((prev) => prev.filter((row, i) => i !== index));
     };
 
     const saveEdit = async () => {
@@ -18547,8 +18878,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             website: String(form.website || '').trim(),
             wordRange: String(form.wordRange || '').trim(),
             requirements: requirements,
-            // R6 ④: keep the per-genre / per-length inboxes the user typed.
-            emails: parseVariantLines(form.emails),
+            // R32 ②: rows win over the textarea. A row whose address has no
+            // '@' is simply not saved — the old pipe grammar dropped the whole
+            // line silently, which is how a four-inbox journal ended up with one.
+            emails: (Array.isArray(emailRows) ? emailRows : [])
+              .map(variantFromRow)
+              .filter(Boolean),
             verified: Boolean(String(form.email || '').trim()),
           }),
         ]);
@@ -18718,8 +19053,26 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 h(
                   'span',
                   { className: 'nw-journal-row-meta' },
-                  String(entry.email || '未收录邮箱') + ' · ' + String(entry.wordRange || '字数未注明') +
-                    (Array.isArray(entry.emails) && entry.emails.length ? ' · 另有 ' + entry.emails.length + ' 个分体裁邮箱' : ''),
+                  String(entry.wordRange || '字数未注明'),
+                ),
+                // R32: every inbox on its own line — a journal with four
+                // addresses used to read as one address plus "另有 3 个", which
+                // is exactly the state that made 「只能编辑一个」 believable.
+                h(
+                  'span',
+                  { className: 'nw-journal-mails' },
+                  journalMailLines(entry).map((line, lineIndex) =>
+                    h(
+                      'span',
+                      {
+                        key: 'mail-' + String(entry.id) + '-' + String(lineIndex),
+                        className: 'nw-journal-mail',
+                        'data-main': lineIndex === 0 && line.main ? '1' : '0',
+                      },
+                      h('span', { className: 'nw-journal-mailaddr' }, line.email),
+                      line.tags ? h('span', { className: 'nw-journal-mailtags' }, line.tags) : null,
+                    ),
+                  ),
                 ),
               ),
               String(entry.email || '').trim() ? badge(String(entry.verified ? '已核对' : '待核对'), entry.verified ? 'ok' : 'warn') : badge('待核对', 'warn'),
@@ -18760,7 +19113,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               })
             : null,
           NW.ui.field({
-            label: '投稿邮箱',
+            label: '默认收稿邮箱',
+            hint: '不带任何分类条件的通用邮箱。下面按体裁 / 篇幅单独登记了的，投稿时会优先用那一行。',
             children: NW.ui.input({ value: form.email, placeholder: '编辑部收稿邮箱', onChange: (v) => setForm(Object.assign({}, form, { email: v })) }),
           }),
           NW.ui.field({
@@ -18771,16 +19125,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             label: '字数区间',
             children: NW.ui.input({ value: form.wordRange, onChange: (v) => setForm(Object.assign({}, form, { wordRange: v })) }),
           }),
-          NW.ui.field({
-            label: '按体裁 / 篇幅分列的投稿邮箱（每行一条）',
-            hint: '格式：邮箱 | 体裁 | 字数范围或 短篇/中篇/长篇 | 备注。例：duanpian@x.com | 短篇,中篇 | 5000-30000 | 只收现实题材。留空的筛选条件表示不限。',
-            children: NW.ui.textarea({
-              rows: 4,
-              value: form.emails,
-              placeholder: 'changpian@x.com | 长篇 | 80000-9999999 | 长篇连载专用',
-              onChange: (v) => setForm(Object.assign({}, form, { emails: v })),
-              ariaLabel: '分体裁篇幅的投稿邮箱',
-            }),
+          emailRowEditor(emailRows, {
+            setRow: setEmailRow,
+            addRow: addEmailRow,
+            removeRow: removeEmailRow,
+            toggleGenre: toggleRowGenre,
           }),
           NW.ui.field({
             label: '投稿要求（每行一条）',
