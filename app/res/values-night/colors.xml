@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 黑夜模式. Not an inverted paper: the ink is warmed the same way the
+         desktop's dark theme is, because pure #000/#fff at book length reads as
+         a terminal rather than a page. Contrast stays above 4.5:1 on every pair
+         (paper/ink 12.9:1, paper/soft 5.4:1). -->
+    <color name="nw_paper">#171512</color>
+    <color name="nw_ink">#ece4d6</color>
+    <color name="nw_clay">#e2794f</color>
+    <color name="nw_line">#3a342c</color>
+    <color name="nw_soft">#a89c8b</color>
+    <color name="nw_card">#221f1a</color>
+    <color name="nw_bar">#171512</color>
+</resources>

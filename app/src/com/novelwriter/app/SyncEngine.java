@@ -102,6 +102,10 @@ public final class SyncEngine {
             out.merged = stats == null ? 0 : stats.optInt("added", 0) + stats.optInt("updated", 0) + stats.optInt("deleted", 0);
         }
         out.ok = true;
+        // Stamp each book at the version the desktop just confirmed, so the
+        // shelf can say "synced" without another round trip — and can say
+        // "pending" the moment a local edit moves a book past that stamp.
+        if (out.library != null) store.markBooksSynced(out.library);
         // The service and the button both come through here, so this is the one
         // place that can keep "上次同步" honest for the background path too.
         store.markSynced();

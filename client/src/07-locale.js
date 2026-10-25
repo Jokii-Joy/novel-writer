@@ -111,6 +111,14 @@
     '复制失败，请手动选中这两行': 'Copy failed — select the two lines by hand',
     '正在生成二维码…': 'Generating QR…',
     '还没有同步过': 'Never synced',
+    // R38: the phone's pairing panel is inline in settings now, and the sync row
+    // reports the host's own last-merge time instead of the browser counters.
+    '最近一次同步 {0}': 'Last synced {0}',
+    '最近一次收到手机改动 {0}': 'Last change received from the phone {0}',
+    '配对码 {0} 秒后失效': 'Code expires in {0}s',
+    '正在读取…': 'Reading…',
+    '未命名设备': 'Unnamed device',
+    '解除': 'Unpair',
     '同步状态': 'Sync status',
     '最近一次交给同步 {0}': 'Last handed to sync {0}',
     '{0} 台已配对': '{0} paired',

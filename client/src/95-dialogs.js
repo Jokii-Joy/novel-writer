@@ -2855,18 +2855,11 @@
         // ------------------------------------------------------ 6 手机同步 ----
         section(
           '手机同步',
-          h(
-            'div',
-            { className: 'nw-row' },
-            h('span', null, '手机配对'),
-            h(
-              'div',
-              { className: 'nw-inline', style: { gap: '6px' } },
-              h('span', { className: 'nw-dim' }, lanSync && lanSync.peers ? lanSync.peers + ' 台已配对' : '还没有配对'),
-              NW.ui.btn({ onClick: () => (p.onOpenPair ? p.onOpenPair() : openSibling(p, 'pair', {})), children: '显示配对地址和配对码…' }),
-            ),
-          ),
-          h('p', { className: 'nw-hint-block' }, '手机装好 App 后扫一次码即可。之后只要在同一个 Wi-Fi 下，修改会自动双向同步；不同书各自保留，同一本书以最后修改时间为准。'),
+          h('p', { className: 'nw-hint-block' }, '手机装好 App 后配对一次即可。之后只要在同一个 Wi-Fi 下，修改会自动双向同步；不同书各自保留，同一本书以最后修改时间为准。'),
+          // R38: the pairing panel is rendered in place instead of behind a button
+          // that swapped this window for another one. The values a phone needs are
+          // what people come here for; hiding them one click deeper was the bug.
+          h(PairPanel, { onToast: typeof p.onToast === 'function' ? p.onToast : null }),
           // R36: users who turned on 正文加密 need to know that syncing does not
           // carry the encryption to the phone — the desktop decrypts on the way
           // out, because the phone has no key and never will.
@@ -2880,11 +2873,17 @@
             h(
               'span',
               { className: 'nw-dim' },
-              lanSync && lanSync.pulledAt
-                ? '最近一次收到手机改动 ' + NW.fmtDate(lanSync.pulledAt)
-                : lanSync && lanSync.lastPushAt
-                  ? '最近一次交给同步 ' + NW.fmtDate(lanSync.lastPushAt)
-                  : '还没有同步过',
+              // R38: a phone sync never touches the browser's own counters — it goes
+              // host-to-phone — so `lastSyncAt` (written by the host when a phone
+              // merges) is the honest answer. The browser counters stay as a
+              // fallback for the old in-page sync paths.
+              lanSync && lanSync.lastSyncAt
+                ? NW.t('最近一次同步 {0}', NW.fmtDate(lanSync.lastSyncAt))
+                : lanSync && lanSync.pulledAt
+                  ? NW.t('最近一次收到手机改动 {0}', NW.fmtDate(lanSync.pulledAt))
+                  : lanSync && lanSync.lastPushAt
+                    ? NW.t('最近一次交给同步 {0}', NW.fmtDate(lanSync.lastPushAt))
+                    : NW.t('还没有同步过'),
             ),
           ),
           // Why the address is spelled out even though there is a QR: the phone
@@ -4557,18 +4556,17 @@
 
   // ============================================================== Pair =====
   /**
-   * 「手机配对」— shows the QR and the addresses a phone could reach us on.
+   * 手机配对—the two values a phone needs, and the devices already paired.
    *
-   * Why a QR at all: the token has to travel out of band (screen → camera is the
-   * only channel an attacker on the LAN cannot read), and a code is one tap for
-   * the phone. But point-and-shoot pairing proved to be the fragile half of the
-   * feature — autofocus on a lit screen, glare, and phone apps that decode the
-   * code and then reject our payload all cost more time than typing two lines.
-   * So the panel now *prints* the two values the phone's form wants, and the QR
-   * is the shortcut rather than the only road. The code is still regenerated on
-   * demand, so an old screenshot stops working after five minutes.
+   * R38: this is a panel, not a dialog. It used to be reachable only through a
+   * 「显示配对地址和配对码…」 button that closed the settings window and opened a
+   * second one, so reading a code and then typing it on the phone meant juggling
+   * two windows — and on a small laptop the second window covered the first.
+   * The settings section renders this in place now; `NW.dialogs.Pair` is a thin
+   * wrapper kept for the header entry point, so both roads share one
+   * implementation instead of drifting apart.
    */
-  NW.dialogs.Pair = function Pair(props) {
+  function PairPanel(props) {
     const p = props || {};
     const [info, setInfo] = useState(null);
     const [busy, setBusy] = useState('');
@@ -4599,7 +4597,7 @@
     }, [info]);
 
     // Poll for "did the phone accept yet" while the code is on screen — the
-    // desktop cannot know otherwise, and without this the dialog would still say
+    // desktop cannot know otherwise, and without this the panel would still say
     // 「等待扫码」 after a successful pair.
     // The countdown above re-renders once a second, so this effect must not
     // depend on `left`: doing so tore down and rebuilt the interval before its
@@ -4686,70 +4684,79 @@
       toast(copied ? NW.t('已复制地址和配对码') : NW.t('复制失败，请手动选中这两行'), copied ? 'ok' : 'warn');
     }
 
-    const body = [];
-    body.push(
+    return h('div', { className: 'nw-pair nw-pair-inline' }, [
+      h(
+        'p',
+        { className: 'nw-hint-block' },
+        NW.t('在手机上打开「精神空间」→「配对」，把下面的「电脑地址」和「配对码」填进去；也可以「改成扫码」对准二维码。配对一次即可，之后在同一个 Wi-Fi 下会自动同步。'),
+      ),
+      error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
+      info
+        ? h('div', { className: 'nw-pair-stack' }, [
+            // Typing comes first: the address and code are what the phone form
+            // actually asks for, and a code that is printed can always be copied.
+            info.token
+              ? h('div', { className: 'nw-pair-manual' }, [
+                  h('div', { className: 'nw-pair-manual-head' }, NW.t('在手机「配对」里填这两行')),
+                  h('div', { className: 'nw-pair-manual-row' }, [
+                    h('span', { className: 'nw-pair-manual-key' }, NW.t('电脑地址')),
+                    h('code', { className: 'nw-pair-manual-value' }, `${info.address || '未知'}:${info.port || '?'}`),
+                  ]),
+                  h('div', { className: 'nw-pair-manual-row' }, [
+                    h('span', { className: 'nw-pair-manual-key' }, NW.t('配对码')),
+                    h('code', { className: 'nw-pair-manual-value' }, String(info.token)),
+                  ]),
+                ])
+              : null,
+            h('div', { className: 'nw-pair-box' }, [
+              h('div', { className: 'nw-pair-code', 'aria-hidden': 'true', dangerouslySetInnerHTML: { __html: String(info.svg || '') } }),
+              h('div', { className: 'nw-pair-meta' }, [
+                h('div', { className: 'nw-pair-addr' }, NW.t('电脑地址：{0}:{1}', info.address || '未知', info.port || '?')),
+                Array.isArray(info.addresses) && info.addresses.length > 1
+                  ? h('div', { className: 'nw-hint-block' }, NW.t('其他可能地址：{0}', info.addresses.slice(1).join('、')))
+                  : null,
+                h('div', { className: 'nw-pair-timer' }, left > 0 ? NW.t('配对码 {0} 秒后失效', left) : NW.t('配对码已失效，请重新生成')),
+                h('div', { className: 'nw-hint-block' }, NW.t('也可以让手机「改成扫码」对准这个二维码')),
+              ]),
+            ]),
+          ])
+        : h('div', { className: 'nw-pair-empty' }, busy ? NW.ui.spinner('正在生成配对信息…') : '点下面的「生成配对码」。'),
       h(
         'div',
-        { className: 'nw-pair' },
-        h('p', { className: 'nw-hint-block' }, NW.t('在手机上打开「精神空间」→「配对」，把下面的「电脑地址」和「配对码」填进去；也可以「改成扫码」对准二维码。配对一次即可，之后在同一个 Wi-Fi 下会自动同步。')),
-        error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
-        info
-          ? h('div', { className: 'nw-pair-stack' }, [
-              // Typing comes first: the address and code are what the phone form
-              // actually asks for, and a code that is printed can always be copied.
-              info.token
-                ? h('div', { className: 'nw-pair-manual' }, [
-                    h('div', { className: 'nw-pair-manual-head' }, NW.t('在手机「配对」里填这两行')),
-                    h('div', { className: 'nw-pair-manual-row' }, [
-                      h('span', { className: 'nw-pair-manual-key' }, NW.t('电脑地址')),
-                      h('code', { className: 'nw-pair-manual-value' }, `${info.address || '未知'}:${info.port || '?'}`),
-                    ]),
-                    h('div', { className: 'nw-pair-manual-row' }, [
-                      h('span', { className: 'nw-pair-manual-key' }, NW.t('配对码')),
-                      h('code', { className: 'nw-pair-manual-value' }, String(info.token)),
-                    ]),
-                    h('div', { className: 'nw-pair-manual-acts' },
-                      NW.ui.btn({ kind: 'ghost', onClick: copyManual, children: NW.t('复制这两行') })),
-                  ])
-                : null,
-              h('div', { className: 'nw-pair-box' }, [
-                h('div', { className: 'nw-pair-code', 'aria-hidden': 'true', dangerouslySetInnerHTML: { __html: String(info.svg || '') } }),
-                h('div', { className: 'nw-pair-meta' }, [
-                  h('div', { className: 'nw-pair-addr' }, `电脑地址：${info.address || '未知'}:${info.port || '?'}`),
-                  Array.isArray(info.addresses) && info.addresses.length > 1
-                    ? h('div', { className: 'nw-hint-block' }, `其他可能地址：${info.addresses.slice(1).join('、')}`)
-                    : null,
-                  h('div', { className: 'nw-pair-timer' }, left > 0 ? `配对码 ${left} 秒后失效` : '配对码已失效，请重新生成'),
-                  h('div', { className: 'nw-hint-block' }, NW.t('也可以让手机「改成扫码」对准这个二维码')),
-                ]),
-              ]),
-            ])
-          : h('div', { className: 'nw-pair-empty' }, busy ? NW.ui.spinner('正在生成配对信息…') : '点下面的「生成配对码」。'),
-        h('div', { className: 'nw-pair-actions' }, NW.ui.btn({ kind: 'primary', onClick: showCode, disabled: !!busy, children: info ? '重新生成' : '生成配对码' })),
+        { className: 'nw-pair-actions' },
+        NW.ui.btn({ kind: 'primary', onClick: showCode, disabled: !!busy, children: info ? NW.t('重新生成') : NW.t('生成配对码') }),
+        info && info.token ? NW.ui.btn({ kind: 'ghost', onClick: copyManual, children: NW.t('复制这两行') }) : null,
       ),
-    );
-
-    body.push(h('h3', { className: 'nw-fold-head' }, '已配对设备'));
-    if (!peers) body.push(NW.ui.spinner('正在读取…'));
-    else if (!peers.length) body.push(h('p', { className: 'nw-hint-block' }, '还没有配对任何设备。'));
-    else
-      body.push(
-        h(
-          'ul',
-          { className: 'nw-pair-peers' },
-          peers.map((peer) =>
-            h(
-              'li',
-              { key: peer.id, className: 'nw-pair-peer' },
-              h('span', { className: 'nw-pair-peername' }, peer.name || '未命名设备'),
-              h('span', { className: 'nw-hint-block' }, peer.lastSyncAt ? `上次同步 ${NW.fmtDate(peer.lastSyncAt)}` : '还没有同步过'),
-              NW.ui.btn({ kind: 'ghost', onClick: () => unpair(peer), children: '解除配对' }),
+      h('h3', { className: 'nw-pair-subhead' }, NW.t('已配对设备')),
+      peers === null
+        ? NW.ui.spinner(NW.t('正在读取…'))
+        : !peers.length
+          ? h('p', { className: 'nw-hint-block' }, NW.t('还没有配对任何设备。'))
+          : h(
+              'ul',
+              { className: 'nw-pair-peers' },
+              peers.map((peer) =>
+                h(
+                  'li',
+                  { key: peer.id, className: 'nw-pair-peer' },
+                  h('span', { className: 'nw-pair-peername' }, peer.name || NW.t('未命名设备')),
+                  h('span', { className: 'nw-hint-block' }, peer.lastSyncAt ? NW.t('上次同步 {0}', NW.fmtDate(peer.lastSyncAt)) : NW.t('还没有同步过')),
+                  NW.ui.btn({ kind: 'ghost', onClick: () => unpair(peer), children: NW.t('解除配对') }),
+                ),
+              ),
             ),
-          ),
-        ),
-      );
+    ]);
+  }
 
-    return modal('手机配对', h('div', null, body), [closeBtn(p)], '560px', p.onClose);
+  NW.dialogs.Pair = function Pair(props) {
+    const p = props || {};
+    return modal(
+      '手机配对',
+      h(PairPanel, { onToast: typeof p.onToast === 'function' ? p.onToast : null }),
+      [closeBtn(p)],
+      '560px',
+      p.onClose,
+    );
   };
 
   // ============================================================ Versions ====

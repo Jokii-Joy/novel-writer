@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Colours come from @color so a night variant of this file plus the same
+         name in values-night is all the theming machinery this app needs. -->
     <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:colorPrimary">#c4532f</item>
-        <item name="android:colorAccent">#c4532f</item>
-        <item name="android:windowBackground">#faf4e9</item>
-        <item name="android:statusBarColor">#f4efe3</item>
-        <item name="android:navigationBarColor">#f4efe3</item>
+        <item name="android:colorPrimary">@color/nw_clay</item>
+        <item name="android:colorAccent">@color/nw_clay</item>
+        <item name="android:windowBackground">@color/nw_paper</item>
+        <item name="android:statusBarColor">@color/nw_bar</item>
+        <item name="android:navigationBarColor">@color/nw_bar</item>
         <item name="android:windowLightStatusBar">true</item>
     </style>
 

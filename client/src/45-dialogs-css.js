@@ -863,6 +863,19 @@
   font-size:var(--nw-fs-second);color:var(--nw-fg);overflow-wrap:anywhere;user-select:all;
 }
 .nw-pair-manual-acts{display:flex;gap:var(--nw-sp-2);margin-top:2px;}
+/* R38: the settings page renders the panel in place — this wrapper gives it a
+   quiet frame of its own instead of the modal's padding, and the peers list a
+   heading that reads as a section rather than a second dialog. */
+.nw-pair-inline{
+  padding:var(--nw-sp-3);border:1px solid var(--nw-line-soft);
+  border-radius:var(--nw-r-card);background:var(--nw-surface-1);
+}
+.nw-pair-inline > .nw-pair-box{background:var(--nw-panel);}
+.nw-pair-inline .nw-pair-actions{align-items:center;flex-wrap:wrap;}
+.nw-pair-subhead{
+  margin:var(--nw-sp-2) 0 0;font-size:var(--nw-fs-micro);font-weight:600;
+  letter-spacing:.02em;color:var(--nw-fg-soft);
+}
 
 /* R34: model picker shown when every configured model failed. The tried list is
    the useful half — it turns 「打不开」 into 「这三个都不通，各自的原因如下」. */

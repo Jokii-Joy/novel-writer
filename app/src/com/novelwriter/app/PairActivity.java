@@ -1,6 +1,7 @@
 package com.novelwriter.app;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
 import android.text.InputType;
@@ -35,6 +36,11 @@ public final class PairActivity extends Activity {
     private EditText tokenField;
     private TextView status;
     private Button pairButton;
+
+    @Override
+    protected void attachBaseContext(Context base) {
+        super.attachBaseContext(Skin.wrap(base));
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -128,6 +134,7 @@ public final class PairActivity extends Activity {
         root.addView(scan, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         setContentView(scroll);
+        Skin.applyBars(this);
 
         if (getIntent() != null) {
             String seeded = getIntent().getStringExtra("address");

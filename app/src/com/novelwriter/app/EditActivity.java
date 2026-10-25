@@ -1,6 +1,7 @@
 package com.novelwriter.app;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
 import android.text.Editable;
@@ -41,8 +42,17 @@ public final class EditActivity extends Activity {
 
     private EditText bodyField;
     private Library.Chapter openChapter;
+    private TextView countLabel;
     private final android.os.Handler saver = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable saveTick = this::flush;
+    /** 字数, recomputed after typing pauses instead of on every key. */
+    private final Runnable countTick = this::recount;
+
+    /** R38: night colours are chosen before the first view is built. */
+    @Override
+    protected void attachBaseContext(Context base) {
+        super.attachBaseContext(Skin.wrap(base));
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -53,6 +63,7 @@ public final class EditActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(getResources().getColor(R.color.nw_paper));
         setContentView(root);
+        Skin.applyBars(this);
         showChapters();
     }
 
@@ -99,6 +110,8 @@ public final class EditActivity extends Activity {
         title.setTextColor(getResources().getColor(R.color.nw_ink));
         header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
+        header.addView(skinButton());
+
         Button add = new Button(this);
         add.setText("＋");
         add.setTextSize(20);
@@ -128,11 +141,63 @@ public final class EditActivity extends Activity {
         for (Library.Chapter chapter : book.chapters) list.addView(chapterRow(book, chapter));
     }
 
+    private int color(int id) {
+        return Skin.color(this, id);
+    }
+
+    /** 白天 / 黑夜 switch, shown on both the chapter list and the editor. */
+    private Button skinButton() {
+        Button skin = new Button(this);
+        skin.setText(Skin.night(this) ? "☀" : "☾");
+        skin.setTextSize(18);
+        skin.setContentDescription("切换白天黑夜");
+        skin.setTextColor(getResources().getColor(R.color.nw_ink));
+        skin.setBackgroundColor(0);
+        skin.setOnClickListener(v -> {
+            Skin.toggle(this);
+            recreate();
+        });
+        return skin;
+    }
+
+    /**
+     * One 字号 step, persisted.
+     *
+     * A reader who has to zoom by pinching has already lost their place; two
+     * buttons that keep the caret where it was are worth more than a setting
+     * buried three taps away.
+     */
+    private Button fontButton(String label, float delta) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setTextSize(12);
+        button.setMinimumWidth(0);
+        button.setMinWidth(0);
+        button.setPadding(dp(8), 0, dp(8), 0);
+        button.setTextColor(getResources().getColor(R.color.nw_soft));
+        button.setBackgroundColor(0);
+        button.setOnClickListener(v -> {
+            float next = Math.max(14f, Math.min(34f, store.editTextSize() + delta));
+            store.setEditTextSize(next);
+            applyTextSize();
+        });
+        return button;
+    }
+
+    private void applyTextSize() {
+        if (bodyField == null) return;
+        float size = store.editTextSize();
+        bodyField.setTextSize(size);
+        // Leading scales with the type: a fixed gap makes large text a wall and
+        // small text float apart.
+        bodyField.setLineSpacing(Math.round(size * 0.5f * getResources().getDisplayMetrics().scaledDensity), 1f);
+    }
+
     private View chapterRow(Library.Book book, Library.Chapter chapter) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
         row.setPadding(dp(14), dp(12), dp(14), dp(12));
-        row.setBackgroundColor(0xFFFFFFFF);
+        row.setBackgroundColor(color(R.color.nw_card));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         params.setMargins(0, 0, 0, dp(8));
         row.setLayoutParams(params);
@@ -247,18 +312,22 @@ public final class EditActivity extends Activity {
         name.setTextColor(getResources().getColor(R.color.nw_soft));
         header.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        TextView count = new TextView(this);
-        count.setTextSize(12);
-        count.setTextColor(getResources().getColor(R.color.nw_soft));
-        header.addView(count);
+        header.addView(fontButton("A-", -1f));
+        header.addView(fontButton("A+", 1f));
+
+        countLabel = new TextView(this);
+        countLabel.setTextSize(12);
+        countLabel.setTextColor(getResources().getColor(R.color.nw_soft));
+        countLabel.setText(Library.words(chapter.content) + " 字");
+        header.addView(countLabel);
         root.addView(header);
 
         bodyField = new EditText(this);
         bodyField.setText(chapter.content == null ? "" : chapter.content);
-        bodyField.setTextSize(17);
-        bodyField.setLineSpacing(dp(8), 1f);
+        applyTextSize();
         bodyField.setPadding(dp(18), dp(8), dp(18), dp(24));
-        bodyField.setBackgroundColor(0xFFFFFFFF);
+        bodyField.setBackgroundColor(color(R.color.nw_card));
+        bodyField.setTextColor(color(R.color.nw_ink));
         bodyField.setGravity(Gravity.TOP | Gravity.START);
         bodyField.setVerticalScrollBarEnabled(true);
         bodyField.addTextChangedListener(new TextWatcher() {
@@ -272,9 +341,14 @@ public final class EditActivity extends Activity {
 
             @Override
             public void afterTextChanged(Editable editable) {
-                String text = editable.toString();
-                openChapter.content = text;
-                count.setText(new String(text).replaceAll("\\s", "").length() + " 字");
+                // R38 ③: nothing is copied here. The old version called
+                // editable.toString() — a full copy of a chapter that can be
+                // 30k characters — and then ran a regex over it on *every*
+                // keystroke, so typing outran the field on a long chapter. Both
+                // the word count and the save now read the field once, after
+                // typing pauses.
+                saver.removeCallbacks(countTick);
+                saver.postDelayed(countTick, 260);
                 // Debounced: writing to SharedPreferences on every keystroke would
                 // serialise the whole library a dozen times per sentence.
                 saver.removeCallbacks(saveTick);
@@ -282,6 +356,12 @@ public final class EditActivity extends Activity {
             }
         });
         root.addView(bodyField, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+    }
+
+    /** 字数, from the live field, a beat after the last keystroke. */
+    private void recount() {
+        if (bodyField == null || countLabel == null) return;
+        countLabel.setText(Library.words(bodyField.getText()) + " 字");
     }
 
     /**
@@ -297,7 +377,13 @@ public final class EditActivity extends Activity {
     private void flush() {
         saver.removeCallbacks(saveTick);
         if (openChapter == null) return;
-        String text = openChapter.content == null ? "" : openChapter.content;
+        // The live field is the source of truth while it exists: afterTextChanged
+        // no longer copies the text on every key, so `openChapter.content` is one
+        // debounce behind until this runs.
+        String text = bodyField != null
+            ? bodyField.getText().toString()
+            : (openChapter.content == null ? "" : openChapter.content);
+        openChapter.content = text;
         Library library = store.library();
         Library.Book book = library.find(bookId);
         if (book == null || book.deleted) return;

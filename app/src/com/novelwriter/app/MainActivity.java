@@ -2,6 +2,7 @@ package com.novelwriter.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -43,6 +44,18 @@ public final class MainActivity extends Activity {
     private LinearLayout listBox;
     private TextView statusLine;
     private TextView emptyHint;
+    /**
+     * Book id → {updatedAt, 字数}, so a redraw does not recount every chapter of
+     * every book. Invalidated by the timestamp it was computed from, which is
+     * exactly what changes when the text does.
+     */
+    private final java.util.Map<String, long[]> wordCache = new java.util.HashMap<>();
+
+    /** R38: the night/resources override has to be in place before any view. */
+    @Override
+    protected void attachBaseContext(Context base) {
+        super.attachBaseContext(Skin.wrap(base));
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -86,6 +99,22 @@ public final class MainActivity extends Activity {
         title.setTypeface(Typeface.create("serif", Typeface.BOLD));
         title.setTextColor(color(R.color.nw_ink));
         header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        // R38 ⑤: 白天 / 黑夜. A glyph rather than a label so it does not compete
+        // with ＋; the content description carries the meaning for TalkBack.
+        Button skin = new Button(this);
+        skin.setText(Skin.night(this) ? "☀" : "☾");
+        skin.setTextSize(19);
+        skin.setContentDescription("切换白天黑夜");
+        skin.setTextColor(color(R.color.nw_ink));
+        skin.setBackgroundColor(Color.TRANSPARENT);
+        skin.setOnClickListener(v -> {
+            Skin.toggle(this);
+            // Recreate instead of repainting: every colour already comes from a
+            // resource, so a new activity picks up the other palette for free.
+            recreate();
+        });
+        header.addView(skin);
 
         Button add = new Button(this);
         add.setText("＋");
@@ -147,6 +176,7 @@ public final class MainActivity extends Activity {
         listBox.addView(emptyHint);
 
         setContentView(root);
+        Skin.applyBars(this);
     }
 
     private void render() {
@@ -173,7 +203,7 @@ public final class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
         row.setPadding(dp(14), dp(13), dp(14), dp(13));
-        row.setBackgroundColor(Color.WHITE);
+        row.setBackgroundColor(color(R.color.nw_card));
 
         TextView name = new TextView(this);
         name.setText(book.title == null || book.title.isEmpty() ? "未命名" : book.title);
@@ -182,17 +212,32 @@ public final class MainActivity extends Activity {
         name.setTextColor(color(R.color.nw_ink));
         row.addView(name);
 
-        int words = 0;
-        for (Library.Chapter chapter : book.chapters) {
-            String text = chapter.content == null ? "" : chapter.content;
-            words += text.replaceAll("\\s", "").length();
+        long[] cached = wordCache.get(book.id);
+        if (cached == null || cached[0] != book.updatedAt) {
+            int words = 0;
+            for (Library.Chapter chapter : book.chapters) words += Library.words(chapter.content);
+            cached = new long[] {book.updatedAt, words};
+            wordCache.put(book.id, cached);
         }
         TextView meta = new TextView(this);
-        meta.setText(book.chapters.size() + " 章 · " + words + " 字 · " + new SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(new Date(book.updatedAt)));
+        meta.setText(book.chapters.size() + " 章 · " + cached[1] + " 字 · " + new SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(new Date(book.updatedAt)));
         meta.setTextSize(12);
         meta.setTextColor(color(R.color.nw_soft));
         meta.setPadding(0, dp(4), 0, 0);
         row.addView(meta);
+
+        // R38 ④: per-book sync state. Only meaningful while paired — an unpaired
+        // phone has no mirror to be behind, and saying 「未同步」 on every row
+        // before the first pairing would read as an error.
+        if (store.paired()) {
+            int state = store.bookSyncState(book.id, book.updatedAt);
+            TextView tag = new TextView(this);
+            tag.setText(state == Store.SYNC_DONE ? "已同步" : state == Store.SYNC_PENDING ? "有改动待同步" : "还没有同步过");
+            tag.setTextSize(11);
+            tag.setTextColor(state == Store.SYNC_PENDING ? color(R.color.nw_clay) : color(R.color.nw_soft));
+            tag.setPadding(0, dp(2), 0, 0);
+            row.addView(tag);
+        }
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         params.setMargins(0, 0, 0, dp(8));

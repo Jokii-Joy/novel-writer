@@ -595,7 +595,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * `lastPushAt` when this browser last handed its library over — shown in the
      * pairing dialog so "is it actually syncing?" has an answer visible on screen.
      */
-    const [lanSync, setLanSync] = useState({ books: 0, lastPushAt: 0, pulledAt: 0, pulled: 0, peers: 0, lan: null, stats: null });
+    const [lanSync, setLanSync] = useState({ books: 0, lastPushAt: 0, pulledAt: 0, pulled: 0, peers: 0, lastSyncAt: 0, lan: null, stats: null });
     /** Studio's own sidebar (the chapter tree) can be hidden independently of the host rail. */
     const [shelfOpen, setShelfOpen] = useState(() => lsGet(LS_SHELF_OPEN) !== '0');
     /**
@@ -1390,9 +1390,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         .then(() => NW.io.pair.info())
         .then((data) => {
           if (!alive || !data) return;
+          // R38: keep the peers themselves, not just their count. The settings
+          // page now shows "最近一次同步" for the phone, and only the host knows
+          // when a phone last merged — this is the field that was always 0.
           setLanSync((prev) =>
             Object.assign({}, prev, {
               peers: Array.isArray(data.peers) ? data.peers.length : prev.peers,
+              lastSyncAt: Array.isArray(data.peers) && data.peers.length ? data.peers.reduce((at, row) => Math.max(at, Number(row && row.lastSyncAt) || 0), 0) || prev.lastSyncAt : prev.lastSyncAt,
               lan: { running: data.running === true, port: Number(data.port) || 0, addresses: Array.isArray(data.addresses) ? data.addresses : [] },
             })
           );
@@ -1614,6 +1618,23 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const pullSync = useCallback(async () => {
       try {
         const data = await NW.io.sync.pull();
+        // R38: the pull doubles as the heartbeat for "did a phone sync recently".
+        // `lastSyncAt` is written host-side by markPeerSync(); before this the
+        // settings page could only report the browser's own counters, which a
+        // phone sync never touches — hence 「还没有同步过」 on a phone that had
+        // just synced. Fold it in before the early return so a quiet tick still
+        // refreshes the timestamp.
+        if (aliveRef.current) {
+          const hostSync = Number(data && data.lastSyncAt) || 0;
+          const peerCount = Number(data && data.peers) || 0;
+          setLanSync((prev) => {
+            if (hostSync <= Number(prev.lastSyncAt || 0) && peerCount === Number(prev.peers || 0)) return prev;
+            return Object.assign({}, prev, {
+              lastSyncAt: Math.max(Number(prev.lastSyncAt || 0), hostSync),
+              peers: peerCount || prev.peers,
+            });
+          });
+        }
         const remote = data && data.library && Array.isArray(data.library.books) ? data.library.books : [];
         if (!remote.length) return 0;
         const local = new Map();

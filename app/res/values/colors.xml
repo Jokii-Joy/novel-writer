@@ -1,8 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- The desktop's warm-paper palette, so the two apps do not look like
+         different products. Night values live in values-night/colors.xml; every
+         screen reads these by name instead of hard-coding a hex, which is what
+         makes the 白天/黑夜 switch a one-line change in Skin. -->
     <color name="nw_paper">#faf4e9</color>
     <color name="nw_ink">#22201d</color>
     <color name="nw_clay">#c4532f</color>
     <color name="nw_line">#e2dccf</color>
     <color name="nw_soft">#8a8177</color>
+    <!-- Card surface: the row a book sits on. Literal white in daylight,
+         a lifted charcoal at night. -->
+    <color name="nw_card">#ffffff</color>
+    <!-- Status / navigation bar strip, a shade darker than the page. -->
+    <color name="nw_bar">#f4efe3</color>
 </resources>

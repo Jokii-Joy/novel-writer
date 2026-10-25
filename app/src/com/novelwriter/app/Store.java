@@ -201,6 +201,72 @@ public final class Store {
         prefs.edit().putLong("lastSyncAt", System.currentTimeMillis()).apply();
     }
 
+    // ------------------------------------------------------------- 阅读与显示
+
+    /**
+     * The editor's body text size, in sp.
+     *
+     * 19 sp rather than the 17 this shipped with: 17 is the size of a chat
+     * message, not of a page you read for an hour. Kept in preferences so the
+     * choice survives the activity, the process and the 白天/黑夜 recreate.
+     */
+    public float editTextSize() {
+        float size = prefs.getFloat("editTextSize", 19f);
+        return size < 14f || size > 34f ? 19f : size;
+    }
+
+    public void setEditTextSize(float size) {
+        prefs.edit().putFloat("editTextSize", size).apply();
+    }
+
+    // ---------------------------------------------------------- 书级同步标记
+
+    /**
+     * Book id → the updatedAt this phone had *when it last synced that book*.
+     *
+     * "Did this book sync" cannot be read off the library alone: after an edit the
+     * book is simply newer than the mirror, which is also what a book that never
+     * synced looks like. Remembering the timestamp at the moment the sync landed
+     * turns the comparison into three honest answers — 已同步 / 有改动待同步 /
+     * 从未同步 — without adding a field to the wire protocol.
+     */
+    private org.json.JSONObject syncMarks() {
+        String raw = prefs.getString("syncedBooks", "{}");
+        try {
+            return new org.json.JSONObject(raw == null || raw.isEmpty() ? "{}" : raw);
+        } catch (Exception error) {
+            return new org.json.JSONObject();
+        }
+    }
+
+    /** Called once per successful sync, with the merged library. */
+    public void markBooksSynced(Library library) {
+        if (library == null) return;
+        synchronized (LOCK) {
+            org.json.JSONObject marks = syncMarks();
+            for (Library.Book book : library.books) {
+                if (book == null || book.id == null) continue;
+                try {
+                    marks.put(book.id, book.updatedAt);
+                } catch (Exception ignored) {
+                    // A single malformed id must not lose the whole map.
+                }
+            }
+            prefs.edit().putString("syncedBooks", marks.toString()).apply();
+        }
+    }
+
+    public static final int SYNC_NEVER = 0;
+    public static final int SYNC_DONE = 1;
+    public static final int SYNC_PENDING = 2;
+
+    public int bookSyncState(String bookId, long updatedAt) {
+        if (bookId == null || bookId.isEmpty()) return SYNC_NEVER;
+        org.json.JSONObject marks = syncMarks();
+        if (!marks.has(bookId)) return SYNC_NEVER;
+        return marks.optLong(bookId, -1L) == updatedAt ? SYNC_DONE : SYNC_PENDING;
+    }
+
     /**
      * Whether the "let it run in the background" prompt has been shown.
      *

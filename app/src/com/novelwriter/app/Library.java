@@ -221,6 +221,31 @@ public final class Library {
         return book;
     }
 
+    /**
+     * 字数: non-whitespace characters.
+     *
+     * Replaces `text.replaceAll("\\s", "").length()`, which compiled a regex and
+     * allocated a whole new string on every keystroke and for every chapter of
+     * every book on every list redraw — the main reason the shelf and the editor
+     * stuttered on a long book. Counts code points, so an emoji is one 字 rather
+     * than two, and never allocates.
+     */
+    public static int words(CharSequence text) {
+        if (text == null) return 0;
+        int total = 0;
+        for (int i = 0; i < text.length(); ) {
+            int step = Character.charCount(Character.codePointAt(text, i));
+            int cp = Character.codePointAt(text, i);
+            if (!Character.isWhitespace(cp) && !Character.isSpaceChar(cp)) total += 1;
+            i += step;
+        }
+        return total;
+    }
+
+    public static int words(String text) {
+        return words((CharSequence) text);
+    }
+
     public static Chapter createChapter(Book book, String title) {
         Chapter chapter = new Chapter();
         chapter.id = UUID.randomUUID().toString();

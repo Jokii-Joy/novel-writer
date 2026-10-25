@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Same names, dark parent: an AlertDialog or an EditText we did not colour
+         by hand still gets light-on-dark defaults instead of black on black. -->
+    <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:colorPrimary">@color/nw_clay</item>
+        <item name="android:colorAccent">@color/nw_clay</item>
+        <item name="android:windowBackground">@color/nw_paper</item>
+        <item name="android:statusBarColor">@color/nw_bar</item>
+        <item name="android:navigationBarColor">@color/nw_bar</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <style name="AppTheme.NoActionBar" parent="AppTheme">
+        <item name="android:windowFullscreen">true</item>
+    </style>
+</resources>

@@ -7,6 +7,21 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.2.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第三十八轮（R38）改造：**让手机端真的能上手用，并把同步状态说清楚** —— ① 桌面「设置 → 手机同步」
+  里的「同步状态」一直写「还没有同步过」：桌面只在自己推送时记时间，手机推上来的那次没人记。现在
+  `lib/lansync.js` 新增 `markPeerSync()` / `peerSyncSummary()`，LAN 同步端点与 `peer.apply` 都会落一笔，
+  `sync.pull` 顺带返回它，面板显示「最近一次同步 …」。② 配对面板不再弹新窗口：原来的 `NW.dialogs.Pair`
+  拆出 `PairPanel` 组件，直接内联在设置分区里（地址、配对码、倒计时、已配对设备、生成 / 重新生成、复制、
+  解除全部原地完成），独立弹窗只留一个薄壳。③ 手机编辑器正文字号可从 header 的 **A- / A+** 调
+  （14–34，默认 19，存 `SharedPreferences`，行距跟着字号的 0.5 倍走），而且**长章不再卡**：
+  `afterTextChanged` 过去每敲一个字就把整章 `editable.toString()` 复制一遍、再跑一次去空白正则数字数；
+  现在字数改成打字停下 260ms 后从输入框读一次（`recount()`），保存仍走 1.2s 防抖，`flush()` 直接从输入框
+  取正文、不再依赖那份延迟同步的副本。④ 书架每本书带**同步状态**标签（「已同步」/「有改动待同步」/
+  「还没有同步过」）：`Store` 记 `bookId → updatedAt`，`SyncEngine` 每次同步成功后 `markBooksSynced()`，
+  字数也改成按 `updatedAt` 缓存、用逐码点的 `Library.words()` 算（不再 `replaceAll`）。⑤ **白天 / 黑夜主题**：
+  新增 `Skin.java`（`res/values-night/` 一整套配色 + `attachBaseContext` 里改 `uiMode`，第一帧就是对的），
+  书架、章列表、编辑器、配对页 header 都有 ☀ / ☾ 开关，`recreate()` 立即生效，状态栏与导航栏图标跟着反色。
+  刻意没用 AppCompatDelegate —— 工程没有 AndroidX、单 dex。
 - 第三十七轮（R37）改造：**把插件从头到尾审一遍** —— ① 手机端：编辑章正文后无条件 `touch()`，
   「打开看一眼就返回」也算修改、配对时用电脑的库**覆盖**手机上离线写的书、`Store` 的 `synchronized`
   因为每次 `new Store()` 形同虚设（改成静态锁）、删章不写墓碑、相机授权后预览不开、`SyncEngine` 推完不
@@ -52,7 +67,7 @@
   选择器，成功时告知「原模型没有响应，已改用 X」。③ 修掉两个真 bug：一本书被删除之后又被编辑时，
   墓碑的胜负判断写反了，「复活」永远不生效、书会永久消失；`pair.info` 把 UDP 发现端口（41287）当成
   手机该连的 Web 端口上报。④ 新增「设置 → 手机同步」分区与配对面板（**默认照着面板手填「电脑地址 + 配对码」**，
-  扫码是备选），以及可直接安装的 `dist/精神空间.apk`（0.51 MB）。
+  扫码是备选），以及可直接安装的 `dist/精神空间.apk`（0.52 MB）。
 - 第三十三轮（R33）改造：点写作页左上角的**首页**时，回首页的同时**把目录也展开** —— 首页就是挑书的地方，
   目录还收着会让人以为按钮没反应。既然首页已经能把目录叫回来，左上角那枚**「目录开合」按钮就删掉了**，
   胶囊里只剩「首页 | 发丝线 | 锁定」两枚。目录收起时写作列左缘的竖排「目录」把手恢复常驻（沉浸模式除外），
@@ -523,9 +538,11 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
 4. **隐私与锁定**：自动锁定、锁定超时、正文加密存储、密码设置 / 修改 / 清除。
 5. **投稿**：**服务商预设胶囊**（QQ / 163 / 126 / Yeah / 新浪 / 阿里 / Gmail / Outlook / iCloud，一键填主机 + 端口 + SSL）、
    SMTP 主机 / 端口 / TLS / 用户名 / 密码 / 保存 / 测试连接；默认笔名、联系方式、回信邮箱；期刊库入口。
-6. **手机同步**（R34）：**手机配对**（显示已配对台数 + 「显示配对地址和配对码…」）、**同步状态**（最近一次把改动
-   交给同步 / 收到手机改动的时间）、**局域网地址**（LAN 监听真的在跑时才逐条列出 `http://192.168.x.x:41288`，
-   否则写「未启动（生成配对码时会自动启动）」）。配对细节走独立的「手机配对」面板。
+6. **手机同步**（R34 / R38）：**配对面板就地展开**（R38 ②，不再另开窗口）——「电脑地址」「配对码」两行字、
+   倒计时、「复制这两行」、「生成 / 重新生成配对码」、已配对设备列表与「解除」，全部在这个分区里完成；
+   **同步状态**（R38 ①）优先显示 `lastSyncAt`（最近一次同步，含手机推上来的那次），没有才回落到桌面自己的
+   推送 / 拉取时间，再没有就是「还没有同步过」；**局域网地址**（LAN 监听真的在跑时才逐条列出
+   `http://192.168.x.x:41288`，否则写「未启动（生成配对码时会自动启动）」）。
 7. **快捷键**：完整键位表。
 
 ### 手机同步与手机 App（R34）
@@ -591,6 +608,18 @@ HTTP 服务（默认端口 **41288**，可用 `lan.start {port}` 换端口），
 点进一本书看章列表（新建 / 重命名 / 删除 / 编辑正文，纯文本）、手动「同步」、配对（**默认手填地址 + 配对码**，
 可切「改成扫码」）与解除配对；`SyncService` + `BootReceiver` 做后台同步（需要通知权限，拒绝时仍可手动同步）。
 
+**手机端的阅读与同步体验（R38）**
+- **字号可调**：编辑器 header 的 **A- / A+** 每按一次走 1 号（14–34，默认 19），写进 `SharedPreferences`，
+  下次打开还是这个字号；行距按字号的 0.5 倍算，大字号不会挤成墙、小字号不会飘。
+- **长章输入不再掉队**：过去每敲一个字符就要整章 `toString()` + 一次去空白正则（3 万字的章等于每键几 MB 的
+  临时字符串），现在字数在停手 260ms 后读一次输入框，保存仍在停手 1.2s 后整库落盘（见已知限制 41）。
+- **每本书带同步标记**：书脊下方显示「已同步」/「有改动待同步」/「还没有同步过」。判定是
+  `Store` 里记的 `bookId → updatedAt` 与这本书当前的 `updatedAt` 是否相等 —— 同步成功后 `SyncEngine` 把
+  每本书的版本盖一次章，之后任何本地改动都会把这本书推进「待同步」。
+- **白天 / 黑夜**：书架、章列表、编辑器、配对页 header 都有 ☀ / ☾（`Skin.java`），切换后 `recreate()` 立即
+  换配色，状态栏与导航栏图标跟着反色；`res/values-night/` 里是一套独立的深色（纸 #171512 / 墨 #ece4d6 /
+  陶土 #e2794f）。不用 AppCompatDelegate：工程没有 AndroidX，单 dex 塞不进它。
+
 **安全边界**：配对 token 一次性且 5 分钟过期；同步请求带设备 id + 共享密钥签名，未配对设备读不到任何东西；
 LAN 端口是**明文 HTTP、无 TLS**，默认只在同一 Wi-Fi 内可达。**不要把 41288 端口映射到公网**。
 **和「正文加密存储」怎么共存**：手机没有密钥，也永远不会拿到（配对只下发共享密钥，不是加密口令），
@@ -600,7 +629,7 @@ LAN 端口是**明文 HTTP、无 TLS**，默认只在同一 Wi-Fi 内可达。**
 **手机端是明文存储**：SharedPreferences 里的书稿没有加密，手机丢了等于书稿丢了，这一点别指望加密能救。
 
 **APK**
-- 产物：`dist/精神空间.apk`（**533289 B ≈ 0.51 MB**；另有 `.idsig`）。package `com.novelwriter.app`，
+- 产物：`dist/精神空间.apk`（**541481 B ≈ 0.52 MB**；另有 `.idsig`）。package `com.novelwriter.app`，
   versionCode 1 / versionName 1.0.0，minSdk **24（Android 7.0）**、target 34；权限只有
   `INTERNET` / `ACCESS_NETWORK_STATE` / `ACCESS_WIFI_STATE` / `CAMERA`（扫码）/ `POST_NOTIFICATIONS`。
 - 安装：把 APK 拷到手机点开，按提示允许「安装未知来源应用」；**直接覆盖安装即可升级**，
@@ -694,6 +723,21 @@ LAN 端口是**明文 HTTP、无 TLS**，默认只在同一 Wi-Fi 内可达。**
 「已尝试 SSL 465✗ / STARTTLS 587✓」显示在设置里。
 
 ## 3. 验收状态
+
+> **第三十八轮（R38）**：桌面「上次同步」显示、配对面板内联、手机字号与卡顿、书级同步标记、白天黑夜主题。
+> 按要求仍不做真机回归，只跑离线脚本、语法、客户端构建与 APK 重打：
+>
+> | 检查 | 命令 / 方式 | 结果 |
+> | --- | --- | --- |
+> | 语法 | `node --check` 全量（`lib/*.js` / `client/src/*.js` / `scripts/*.mjs`） | 除 `00-boot.js`、`99-end.js`（bundle 包裹片段，天生不能单独 parse）外全部 exit 0 |
+> | **宿主离线测试** | `node scripts/verify-host.mjs` | **174 项，失败 0**（`peerSyncSummary` 只在 LAN 端点与 `peer.apply` 里写入，未加新用例） |
+> | 构建 + 加载校验 | `node scripts/build-client.mjs` | **20 parts → 883321 字节**，`verify-client-load: ok` |
+> | 语言表 | 扫本轮新增中文串对 EN 词典 | 新增 6 条（`最近一次同步 {0}`、`配对码 {0} 秒后失效`、`未命名设备`、`解除`、`正在读取…`、`最近一次收到手机改动 {0}`）已补 |
+> | **APK 重打** | `node tools/build-apk.mjs` | aapt2 → javac → d8 → zipalign → apksigner 全过，**541481 B**（`Skin`、`values-night/` 已进包） |
+>
+> 没做的：真机上看白天 / 黑夜两套配色（尤其 `AlertDialog` 与 `EditText` 的默认文字色）、A- / A+ 的实际手感、
+> 书架同步标签在「电脑端改过、手机还没同步」时的表现、内联配对面板在窄窗口下的换行、`recreate()` 之后
+> 编辑器滚动位置（会回到章节开头）。
 
 > **第三十七轮（R37）**：全插件审计（Host / 客户端 / Android）。按要求不做真机回归，只跑离线脚本、语法、
 > 客户端构建与 APK 重打：
@@ -911,7 +955,7 @@ novel-writer/
 │  │                        pair.accept / sync，别的一概不接
 │  └─ qr.js                 纯 JS QR 编码（无依赖），输出配对二维码 SVG
 ├─ client/
-│  ├─ client.js             构建产物（勿手改，20 parts 拼接 → 880561 字节落盘）
+│  ├─ client.js             构建产物（勿手改，20 parts 拼接 → 883321 字节落盘）
 │  └─ src/                  00→99 按文件名字典序拼接
 │     ├─ 00-boot / 99-end        __ModuleLoader__ 封装与 apply 导出
 │     ├─ 05-css                  设计 token 层（16/14/13px、圆角、控件高度、间距、阴影）
@@ -950,14 +994,15 @@ novel-writer/
 │  │  ├─ ScanActivity       扫码（备选）取 `nw1:host:port:token`，右侧就是「手动输入地址」
 │  │  ├─ Discovery          UDP 41287 广播发现；LanClient 是 LAN HTTP 客户端
 │  │  ├─ SyncEngine         push / pull + 合并；Library / Store 是本机书库
+│  │  ├─ Skin               白天 / 黑夜：改 uiMode 后再 createConfigurationContext
 │  │  └─ SyncService / BootReceiver  前台同步服务与开机自启
-│  └─ res/                  图标（五档 mipmap）与主题色
+│  └─ res/                  图标（五档 mipmap）、values/ 与 values-night/ 两套配色
 ├─ tools/                   构建与发布脚本
 │  ├─ build-apk.mjs         aapt2 → javac → d8 → zipalign → apksigner（无 Gradle）
 │  ├─ zip-append.mjs        把 classes.dex 追加进 APK（自写 zip 目录重写）
 │  ├─ setup-android.ps1     下载 build-tools 34 / platform 34 / 便携 JDK
 │  └─ publish-github.mjs    经 api.github.com 上传（git push 在本机不稳定）
-└─ dist/                    构建产物：精神空间.apk（0.51 MB）与 .idsig
+└─ dist/                    构建产物：精神空间.apk（0.52 MB）与 .idsig
 ```
 
 客户端与宿主的唯一通道是 `POST /novel-writer/api/<method>`，恒定 HTTP 200，
@@ -1033,7 +1078,8 @@ body 为 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`，错误绝不�
     所以在手机上删掉的章，电脑下一次推送会让它复活（电脑那侧的章还在）。R37 只修了「删书能同步」，
     章级墓碑要改协议与两侧合并逻辑，本轮没做。真要在手机上删章并且让电脑也删，请在电脑端再删一次。
 41. **手机端把整库 JSON 放在主线程读写**：`Store` 每次保存都把整本书序列化进 `SharedPreferences`，
-    书架上每次 `render()` 也会整库拉一遍；几十万字的库在低端机上可能出现掉帧甚至 ANR。
+    书架上每次 `render()` 也会整库拉一遍；几十万字的库在低端机上可能出现掉帧甚至 ANR。R38 只去掉了「每键
+    复制整章 + 正则数字数」这一处大头（字数改 260ms 后读一次、按 `updatedAt` 缓存），整库序列化本身没动。
     另外扫码回调把相机的复用 buffer 直接丢给解码线程，下一帧可能把它覆写（偶尔解不出，重扫即可）。
 42. **`Store` 遇到损坏的库 JSON 会回落到空库并照常保存**：`SharedPreferences` 里的 `library` 解析失败时，
     手机按「空书架」启动，随后任何一次编辑都会把空库写回去，原来的书就只剩电脑那一份（同步会重新拉回来，
@@ -1043,5 +1089,11 @@ body 为 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`，错误绝不�
     `parseFullBody` 收原始 `Buffer` 而不是已经 `toString('utf8')` 过的字符串，属重构，本轮没做。
 44. **离线测试脚本只覆盖宿主**：`scripts/verify-host.mjs` 现在跑 174 项（ping / models / proofread /
     export.build / secrets / library / selftest / lansync 合并），**云备份那一整套用例随 R9 一起删掉了**，
-    客户端界面（Esc 栈、校对护栏、配对轮询）与 Java 侧没有任何自动化覆盖；
+    客户端界面（Esc 栈、校对护栏、配对轮询、内联配对面板）与 Java 侧没有任何自动化覆盖；
     `scripts/verify-e2e.mjs` 需要先在跑的宿主（`NOVEL_WRITER_BASE` 可指定端口）。
+45. **手机主题是手动开关，不跟系统深色模式**：☀ / ☾ 只写 `Skin` 自己的偏好，读系统 `uiMode` 只在首次
+    没有记录时借用一次；系统在日落时自动切深色时，App 不会跟着变。切换走 `recreate()`，编辑器会回到
+    章节开头（正文不丢，`onPause` 里已经 `flush()`），长章里换主题等于重新找到刚才那一行。
+46. **书架的「已同步」是本地时间戳推断**：它记的是「这台手机上次同步成功时，这本书的 `updatedAt`」，
+    所以电脑端之后又改过这本书、而手机还没再同步时，手机仍会显示「已同步」——它只回答「我这边有没有
+    未推出去的改动」，不回答「电脑那边有没有更新的稿子」。真要知道，点一次「同步」。
