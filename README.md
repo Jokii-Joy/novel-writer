@@ -245,6 +245,9 @@ CSS 是用模板字符串写的，注释里多写一个反引号就会让整块�
    ```
 3. 启用钩子：`node tools/auto-push.mjs --install`（等价于 `git config core.hooksPath .githooks`）。
 
+当前已配置为 **`Jokii-Joy/novel-writer`（public, main）**；本仓库的提交身份已设为
+`Jokii-Joy <39142551+Jokii-Joy@users.noreply.github.com>`（GitHub 的 noreply 地址，不暴露真实邮箱）。
+
 之后**每次 `git commit` 都会自动上传**：`.githooks/post-commit` 立刻返回，`tools/auto-push.mjs`
 在后台把当前分支 `git push` 到 `origin`。网络抖动时最多重试 4 次（0/5/15/45 秒退避），
 仍然失败就写进 `.tools/push-pending`，下次提交或手动跑一次 `node tools/auto-push.mjs` 会补上。
