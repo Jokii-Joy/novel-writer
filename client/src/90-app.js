@@ -2199,6 +2199,56 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [novels, activeNovelId, settings.exportFormat, pushToast],
     );
 
+    /**
+     * R35 ②: 一键导出所有书籍. The in-memory chapter list only covers the active
+     * novel, so every other book is read chapter by chapter here; the host then
+     * builds all the documents and hands back one zip.
+     */
+    const exportAllNow = useCallback(
+      async (options) => {
+        const opts = options || {};
+        const books = novels.filter(Boolean);
+        if (books.length === 0) {
+          pushToast('还没有作品可导出', 'error');
+          return;
+        }
+        const format = String(opts.format || settings.exportFormat || 'docx');
+        setBusy('正在导出全部作品…');
+        try {
+          const payloads = [];
+          for (const novel of books) {
+            const rows = await NW.db.listChapters(novel.id);
+            payloads.push({
+              title: novel.title || '未命名小说',
+              author: opts.includeMeta === false ? '' : novel.author || '',
+              chapters: (rows || [])
+                .filter((row) => row && row.id)
+                .map((row, index) => ({
+                  title: row.title || NW.t('章节') + ' ' + (index + 1),
+                  content: String(row.content || ''),
+                })),
+            });
+          }
+          const hostOptions = Object.assign({}, opts.options || {});
+          if (opts.appendOn !== false && opts.appendText) {
+            hostOptions.appendText = String(opts.appendText).slice(0, 8000);
+          }
+          const result = await NW.io.exportAll(payloads, format, hostOptions);
+          const failed = result && Array.isArray(result.failed) ? result.failed : [];
+          if (failed.length) {
+            pushToast('已导出 ' + result.count + ' 部，' + failed.length + ' 部失败', 'error');
+          } else {
+            pushToast('已导出 ' + result.count + ' 部作品', 'ok');
+          }
+        } catch (err) {
+          pushToast(errText(err, '导出失败'), 'error');
+        } finally {
+          if (aliveRef.current) setBusy('');
+        }
+      },
+      [novels, settings.exportFormat, pushToast],
+    );
+
     // -------------------------------------------------------------- import --
     const importNow = useCallback(async () => {
       try {
@@ -2700,6 +2750,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             onLock: doLock,
             onLockSetup: lockAfterSetup,
             onToggleEncryption: toggleEncryption,
+            // R35 ②: the settings page's 「一键导出全部书籍」 row.
+            onExportAll: exportAllNow,
             onOpenBackup: () => setDialog({ kind: 'backup' }),
             // Settings hosts the entry points that used to live in the toolbar
             // (backup, version history, submission, export defaults), so it needs

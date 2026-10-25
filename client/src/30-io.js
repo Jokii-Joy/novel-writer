@@ -313,6 +313,50 @@
     return { filename: data.filename, mime: data.mime, size: bytes.length };
   }
 
+  /**
+   * R35 ②: 一键导出所有书籍 — every book into one zip.
+   *
+   * Deliberately a single host call: exporting N books in the browser would
+   * trigger N downloads (Chrome blocks the second one without a prompt) and N
+   * round trips carrying N copies of the library. The host builds every document
+   * and zips them, so the writer gets one file and one click.
+   *
+   * A book that cannot be built (e.g. PDF engine down) does not abort the rest;
+   * the host reports it in `failed` and the caller decides what to say.
+   */
+  async function exportAll(novels, format, options) {
+    const list = Array.isArray(novels) ? novels.filter(Boolean) : [];
+    if (list.length === 0) throw new Error('没有可导出的作品');
+    const payload = {
+      format: format || 'docx',
+      novels: list.map(function (book) {
+        return {
+          title: String(book.title || '未命名小说'),
+          author: String(book.author || ''),
+          chapters: (Array.isArray(book.chapters) ? book.chapters : []).map(function (row) {
+            return {
+              title: String((row && row.title) || ''),
+              content: String((row && row.content) || ''),
+            };
+          }),
+        };
+      }),
+      options: options || {},
+    };
+    const built = (await api('export.all', payload)) || {};
+    const base64 = String(built.base64 || '');
+    if (!base64) throw new Error('导出失败：没有拿到压缩包数据');
+    const bytes = fromBase64(base64);
+    const blob = new Blob([bytes], { type: String(built.mime || 'application/zip') });
+    download(String(built.filename || 'novel-writer.zip'), blob);
+    return {
+      filename: built.filename,
+      size: bytes.length,
+      count: Number(built.count) || list.length,
+      failed: Array.isArray(built.failed) ? built.failed : [],
+    };
+  }
+
   // --------------------------------- backups ---------------------------------
 
   function backupStamp() {
@@ -969,6 +1013,7 @@
     pickFiles: pickFiles,
     importFile: importFile,
     exportProject: exportProject,
+    exportAll: exportAll,
     download: download,
     exportBackupJson: exportBackupJson,
     importBackupJson: importBackupJson,

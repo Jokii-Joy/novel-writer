@@ -11,7 +11,9 @@
   //   1. what am I working on      → 正在创作 (novel cards, newest first)
   //   2. how much have I written   → 创作统计 (book / novel / 7-day / today)
   //   3. where did I submit        → 投稿记录 (status badge + days since)
-  //   4. what do I want to do now  → 快捷入口 (continue / new / import / submit)
+  //   4. what do I want to do now  → the header actions (new / import / submit
+  //                                  / 期刊库 / 投稿管理); R35 ③ dropped the
+  //                                  快捷入口 card and promoted the last two.
   //
   // Props are all optional — a missing list renders an empty state rather than
   // throwing, because this component also runs during the very first boot when
@@ -231,6 +233,11 @@
           'send',
           novels.length === 0,
         ),
+        // R35 ③: 期刊库 and 投稿管理 used to live in a 快捷入口 card below the
+        // fold — two tools a writer reaches for constantly, one scroll away.
+        // They now sit with the other three actions, where the eye already is.
+        btn('期刊库', () => typeof p.onOpenJournals === 'function' && p.onOpenJournals(), 'ghost', 'journal'),
+        btn('投稿管理', () => typeof p.onOpenSubmitManager === 'function' && p.onOpenSubmitManager(), 'ghost', 'mail'),
       ),
     );
 
@@ -546,37 +553,9 @@
         : null,
     );
 
-    // ---- 快捷入口 ---------------------------------------------------------
-    // R17: 继续写作 left this grid — the 「正在创作」 card above already opens
-    // the last chapter, so it was the same action twice on one screen.
-    const quick = [
-      { icon: 'journal', label: '期刊库', onClick: p.onOpenJournals },
-      { icon: 'mail', label: '投稿管理', onClick: p.onOpenSubmitManager },
-      { icon: 'gear', label: tr('设置'), onClick: p.onOpenSettings },
-    ];
-    const quickCard = card(
-      '快捷入口',
-      NW.h(
-        'div',
-        { className: 'nw-welcome-quick' },
-        quick.map((item) =>
-          NW.h(
-            'button',
-            {
-              key: item.label,
-              type: 'button',
-              className: 'nw-welcome-quickbtn',
-              disabled: !!item.disabled,
-              onClick: () => {
-                if (typeof item.onClick === 'function') item.onClick();
-              },
-            },
-            NW.h('span', { className: 'nw-welcome-quickicon', 'aria-hidden': 'true' }, NW.icon(item.icon, { size: 18 })),
-            NW.h('span', null, item.label),
-          ),
-        ),
-      ),
-    );
+    // R35 ③: 快捷入口 is gone. 期刊库 / 投稿管理 moved up into the header, and
+    // 设置 already has a permanent home in the sidebar — a card whose only job
+    // was to repeat two links one scroll below their real home was pure height.
 
     return NW.h(
       'div',
@@ -587,7 +566,6 @@
         header,
         NW.h('div', { className: 'nw-welcome-grid' }, novelCard, statsCard),
         NW.h('div', { className: 'nw-welcome-grid' }, inboxCard, subsCard),
-        NW.h('div', { className: 'nw-welcome-grid' }, quickCard),
       ),
     );
   }
@@ -811,33 +789,7 @@
 .nw-badge[data-tone="brand"]{background:color-mix(in srgb, var(--nw-brand) 22%, transparent);color:var(--nw-brand);}
 .nw-badge[data-tone="idle"]{background:color-mix(in srgb, var(--nw-fg-soft) 10%, transparent);color:var(--nw-fg-soft);}
 
-/* -------------------------------------------------------- 快捷入口 ----- */
-.nw-welcome-quick{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px,100%),1fr));gap:var(--nw-sp-2);}
-.nw-welcome-quickbtn{
-  display:flex;align-items:center;gap:var(--nw-sp-2);
-  padding:12px 14px;border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
-  background:var(--nw-surface-1);color:var(--nw-fg);cursor:pointer;
-  font-family:inherit;font-size:var(--nw-fs-second);text-align:left;
-  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
-    border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
-    transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
-}
-.nw-welcome-quickbtn:hover:not(:disabled){
-  background:var(--nw-surface-2);border-color:var(--nw-line-strong);
-  box-shadow:var(--nw-shadow-1);transform:translateY(-1px);
-}
-.nw-welcome-quickbtn:active:not(:disabled){transform:none;box-shadow:none;}
-.nw-welcome-quickbtn:disabled{opacity:.45;cursor:default;}
-.nw-welcome-quickbtn:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
-.nw-welcome-quickicon{
-  color:var(--nw-fg-soft);display:flex;flex:0 0 auto;
-  width:26px;height:26px;align-items:center;justify-content:center;
-  border-radius:var(--nw-r-control);background:color-mix(in srgb, var(--nw-fg) 6%, transparent);
-  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
-    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
-}
-.nw-welcome-quickbtn:hover:not(:disabled) .nw-welcome-quickicon{background:var(--nw-brand);color:var(--nw-bg);}
+
 
 /* R17: card header row — title on the left, one inline action on the right. */
 .nw-welcome-cardhead{display:flex;align-items:center;justify-content:space-between;gap:var(--nw-sp-2);margin:0 0 var(--nw-sp-3);}
@@ -856,8 +808,6 @@
 .nw-welcome-refresh:disabled .nw-welcome-refreshicon{animation:nw-refresh-spin 1s linear infinite;}
 @keyframes nw-refresh-spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
 @media (prefers-reduced-motion: reduce){
-  .nw-welcome-quickbtn{transition:none;}
-  .nw-welcome-quickbtn:hover:not(:disabled){transform:none;}
   .nw-welcome-refresh:disabled .nw-welcome-refreshicon{animation:none;}
   .nw-skel-row{animation:none;background:color-mix(in srgb, var(--nw-fg) 8%, transparent);}
 }
@@ -865,7 +815,7 @@
 /* R13: container tiers, not window tiers — the home screen is a column. */
 @container nw (max-width: 620px){
   .nw-welcome{padding:20px 14px;}
-  .nw-welcome-stats,.nw-welcome-quick{grid-template-columns:minmax(0,1fr);}
+  .nw-welcome-stats{grid-template-columns:minmax(0,1fr);}
 }
 `);
 })();

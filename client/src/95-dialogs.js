@@ -2384,6 +2384,34 @@
                 options: ['docx', 'pdf', 'epub', 'txt'].map((value) => ({ value: value, label: formatLabelOf(value) })),
               }),
             }),
+            // R35 ②: one click for the whole library. It sits next to the format
+            // field because that is the format it will use — no second dialog,
+            // no per-book file picker.
+            h(
+              'div',
+              { className: 'nw-row' },
+              h('span', null, NW.t('一键导出全部书籍')),
+              h(
+                'span',
+                { className: 'nw-inline', style: { gap: '6px' } },
+                h('span', { className: 'nw-dim' }, NW.t('每部作品一个文件，打成一个 zip')),
+                NW.ui.btn({
+                  onClick: () => {
+                    if (typeof p.onExportAll !== 'function') return;
+                    const format = String(draft.exportFormat || 'docx');
+                    p.onExportAll({
+                      format: format,
+                      includeMeta: draft.exportIncludeMeta !== false,
+                      appendOn: draft.exportSignatureOn === true,
+                      appendText: String(draft.exportSignature || ''),
+                      options: { includeMeta: draft.exportIncludeMeta !== false, pageBreaks: true, toc: false },
+                    });
+                  },
+                  disabled: typeof p.onExportAll !== 'function',
+                  children: NW.t('导出全部…'),
+                }),
+              ),
+            ),
             h(
               'div',
               { className: 'nw-row' },

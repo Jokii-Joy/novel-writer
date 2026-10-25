@@ -405,6 +405,9 @@ window.__ModuleLoader__.load({
     '一键排版': 'Typeset',
     '导入': 'Import',
     '导出': 'Export',
+    '一键导出全部书籍': 'Export every book at once',
+    '导出全部…': 'Export all…',
+    '每部作品一个文件，打成一个 zip': 'One file per book, packed into a zip',
     '备份': 'Backup',
     '主题': 'Theme',
     '护眼': 'Eye care',
@@ -3422,6 +3425,50 @@ window.__ModuleLoader__.load({
     return { filename: data.filename, mime: data.mime, size: bytes.length };
   }
 
+  /**
+   * R35 ②: 一键导出所有书籍 — every book into one zip.
+   *
+   * Deliberately a single host call: exporting N books in the browser would
+   * trigger N downloads (Chrome blocks the second one without a prompt) and N
+   * round trips carrying N copies of the library. The host builds every document
+   * and zips them, so the writer gets one file and one click.
+   *
+   * A book that cannot be built (e.g. PDF engine down) does not abort the rest;
+   * the host reports it in `failed` and the caller decides what to say.
+   */
+  async function exportAll(novels, format, options) {
+    const list = Array.isArray(novels) ? novels.filter(Boolean) : [];
+    if (list.length === 0) throw new Error('没有可导出的作品');
+    const payload = {
+      format: format || 'docx',
+      novels: list.map(function (book) {
+        return {
+          title: String(book.title || '未命名小说'),
+          author: String(book.author || ''),
+          chapters: (Array.isArray(book.chapters) ? book.chapters : []).map(function (row) {
+            return {
+              title: String((row && row.title) || ''),
+              content: String((row && row.content) || ''),
+            };
+          }),
+        };
+      }),
+      options: options || {},
+    };
+    const built = (await api('export.all', payload)) || {};
+    const base64 = String(built.base64 || '');
+    if (!base64) throw new Error('导出失败：没有拿到压缩包数据');
+    const bytes = fromBase64(base64);
+    const blob = new Blob([bytes], { type: String(built.mime || 'application/zip') });
+    download(String(built.filename || 'novel-writer.zip'), blob);
+    return {
+      filename: built.filename,
+      size: bytes.length,
+      count: Number(built.count) || list.length,
+      failed: Array.isArray(built.failed) ? built.failed : [],
+    };
+  }
+
   // --------------------------------- backups ---------------------------------
 
   function backupStamp() {
@@ -4078,6 +4125,7 @@ window.__ModuleLoader__.load({
     pickFiles: pickFiles,
     importFile: importFile,
     exportProject: exportProject,
+    exportAll: exportAll,
     download: download,
     exportBackupJson: exportBackupJson,
     importBackupJson: importBackupJson,
@@ -7416,7 +7464,9 @@ window.__ModuleLoader__.load({
   //   1. what am I working on      → 正在创作 (novel cards, newest first)
   //   2. how much have I written   → 创作统计 (book / novel / 7-day / today)
   //   3. where did I submit        → 投稿记录 (status badge + days since)
-  //   4. what do I want to do now  → 快捷入口 (continue / new / import / submit)
+  //   4. what do I want to do now  → the header actions (new / import / submit
+  //                                  / 期刊库 / 投稿管理); R35 ③ dropped the
+  //                                  快捷入口 card and promoted the last two.
   //
   // Props are all optional — a missing list renders an empty state rather than
   // throwing, because this component also runs during the very first boot when
@@ -7636,6 +7686,11 @@ window.__ModuleLoader__.load({
           'send',
           novels.length === 0,
         ),
+        // R35 ③: 期刊库 and 投稿管理 used to live in a 快捷入口 card below the
+        // fold — two tools a writer reaches for constantly, one scroll away.
+        // They now sit with the other three actions, where the eye already is.
+        btn('期刊库', () => typeof p.onOpenJournals === 'function' && p.onOpenJournals(), 'ghost', 'journal'),
+        btn('投稿管理', () => typeof p.onOpenSubmitManager === 'function' && p.onOpenSubmitManager(), 'ghost', 'mail'),
       ),
     );
 
@@ -7951,37 +8006,9 @@ window.__ModuleLoader__.load({
         : null,
     );
 
-    // ---- 快捷入口 ---------------------------------------------------------
-    // R17: 继续写作 left this grid — the 「正在创作」 card above already opens
-    // the last chapter, so it was the same action twice on one screen.
-    const quick = [
-      { icon: 'journal', label: '期刊库', onClick: p.onOpenJournals },
-      { icon: 'mail', label: '投稿管理', onClick: p.onOpenSubmitManager },
-      { icon: 'gear', label: tr('设置'), onClick: p.onOpenSettings },
-    ];
-    const quickCard = card(
-      '快捷入口',
-      NW.h(
-        'div',
-        { className: 'nw-welcome-quick' },
-        quick.map((item) =>
-          NW.h(
-            'button',
-            {
-              key: item.label,
-              type: 'button',
-              className: 'nw-welcome-quickbtn',
-              disabled: !!item.disabled,
-              onClick: () => {
-                if (typeof item.onClick === 'function') item.onClick();
-              },
-            },
-            NW.h('span', { className: 'nw-welcome-quickicon', 'aria-hidden': 'true' }, NW.icon(item.icon, { size: 18 })),
-            NW.h('span', null, item.label),
-          ),
-        ),
-      ),
-    );
+    // R35 ③: 快捷入口 is gone. 期刊库 / 投稿管理 moved up into the header, and
+    // 设置 already has a permanent home in the sidebar — a card whose only job
+    // was to repeat two links one scroll below their real home was pure height.
 
     return NW.h(
       'div',
@@ -7992,7 +8019,6 @@ window.__ModuleLoader__.load({
         header,
         NW.h('div', { className: 'nw-welcome-grid' }, novelCard, statsCard),
         NW.h('div', { className: 'nw-welcome-grid' }, inboxCard, subsCard),
-        NW.h('div', { className: 'nw-welcome-grid' }, quickCard),
       ),
     );
   }
@@ -8216,33 +8242,7 @@ window.__ModuleLoader__.load({
 .nw-badge[data-tone="brand"]{background:color-mix(in srgb, var(--nw-brand) 22%, transparent);color:var(--nw-brand);}
 .nw-badge[data-tone="idle"]{background:color-mix(in srgb, var(--nw-fg-soft) 10%, transparent);color:var(--nw-fg-soft);}
 
-/* -------------------------------------------------------- 快捷入口 ----- */
-.nw-welcome-quick{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px,100%),1fr));gap:var(--nw-sp-2);}
-.nw-welcome-quickbtn{
-  display:flex;align-items:center;gap:var(--nw-sp-2);
-  padding:12px 14px;border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
-  background:var(--nw-surface-1);color:var(--nw-fg);cursor:pointer;
-  font-family:inherit;font-size:var(--nw-fs-second);text-align:left;
-  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
-    border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
-    transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
-}
-.nw-welcome-quickbtn:hover:not(:disabled){
-  background:var(--nw-surface-2);border-color:var(--nw-line-strong);
-  box-shadow:var(--nw-shadow-1);transform:translateY(-1px);
-}
-.nw-welcome-quickbtn:active:not(:disabled){transform:none;box-shadow:none;}
-.nw-welcome-quickbtn:disabled{opacity:.45;cursor:default;}
-.nw-welcome-quickbtn:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
-.nw-welcome-quickicon{
-  color:var(--nw-fg-soft);display:flex;flex:0 0 auto;
-  width:26px;height:26px;align-items:center;justify-content:center;
-  border-radius:var(--nw-r-control);background:color-mix(in srgb, var(--nw-fg) 6%, transparent);
-  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
-    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
-}
-.nw-welcome-quickbtn:hover:not(:disabled) .nw-welcome-quickicon{background:var(--nw-brand);color:var(--nw-bg);}
+
 
 /* R17: card header row — title on the left, one inline action on the right. */
 .nw-welcome-cardhead{display:flex;align-items:center;justify-content:space-between;gap:var(--nw-sp-2);margin:0 0 var(--nw-sp-3);}
@@ -8261,8 +8261,6 @@ window.__ModuleLoader__.load({
 .nw-welcome-refresh:disabled .nw-welcome-refreshicon{animation:nw-refresh-spin 1s linear infinite;}
 @keyframes nw-refresh-spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
 @media (prefers-reduced-motion: reduce){
-  .nw-welcome-quickbtn{transition:none;}
-  .nw-welcome-quickbtn:hover:not(:disabled){transform:none;}
   .nw-welcome-refresh:disabled .nw-welcome-refreshicon{animation:none;}
   .nw-skel-row{animation:none;background:color-mix(in srgb, var(--nw-fg) 8%, transparent);}
 }
@@ -8270,7 +8268,7 @@ window.__ModuleLoader__.load({
 /* R13: container tiers, not window tiers — the home screen is a column. */
 @container nw (max-width: 620px){
   .nw-welcome{padding:20px 14px;}
-  .nw-welcome-stats,.nw-welcome-quick{grid-template-columns:minmax(0,1fr);}
+  .nw-welcome-stats{grid-template-columns:minmax(0,1fr);}
 }
 `);
 })();
@@ -13251,6 +13249,56 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [novels, activeNovelId, settings.exportFormat, pushToast],
     );
 
+    /**
+     * R35 ②: 一键导出所有书籍. The in-memory chapter list only covers the active
+     * novel, so every other book is read chapter by chapter here; the host then
+     * builds all the documents and hands back one zip.
+     */
+    const exportAllNow = useCallback(
+      async (options) => {
+        const opts = options || {};
+        const books = novels.filter(Boolean);
+        if (books.length === 0) {
+          pushToast('还没有作品可导出', 'error');
+          return;
+        }
+        const format = String(opts.format || settings.exportFormat || 'docx');
+        setBusy('正在导出全部作品…');
+        try {
+          const payloads = [];
+          for (const novel of books) {
+            const rows = await NW.db.listChapters(novel.id);
+            payloads.push({
+              title: novel.title || '未命名小说',
+              author: opts.includeMeta === false ? '' : novel.author || '',
+              chapters: (rows || [])
+                .filter((row) => row && row.id)
+                .map((row, index) => ({
+                  title: row.title || NW.t('章节') + ' ' + (index + 1),
+                  content: String(row.content || ''),
+                })),
+            });
+          }
+          const hostOptions = Object.assign({}, opts.options || {});
+          if (opts.appendOn !== false && opts.appendText) {
+            hostOptions.appendText = String(opts.appendText).slice(0, 8000);
+          }
+          const result = await NW.io.exportAll(payloads, format, hostOptions);
+          const failed = result && Array.isArray(result.failed) ? result.failed : [];
+          if (failed.length) {
+            pushToast('已导出 ' + result.count + ' 部，' + failed.length + ' 部失败', 'error');
+          } else {
+            pushToast('已导出 ' + result.count + ' 部作品', 'ok');
+          }
+        } catch (err) {
+          pushToast(errText(err, '导出失败'), 'error');
+        } finally {
+          if (aliveRef.current) setBusy('');
+        }
+      },
+      [novels, settings.exportFormat, pushToast],
+    );
+
     // -------------------------------------------------------------- import --
     const importNow = useCallback(async () => {
       try {
@@ -13752,6 +13800,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             onLock: doLock,
             onLockSetup: lockAfterSetup,
             onToggleEncryption: toggleEncryption,
+            // R35 ②: the settings page's 「一键导出全部书籍」 row.
+            onExportAll: exportAllNow,
             onOpenBackup: () => setDialog({ kind: 'backup' }),
             // Settings hosts the entry points that used to live in the toolbar
             // (backup, version history, submission, export defaults), so it needs
@@ -17211,6 +17261,34 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 options: ['docx', 'pdf', 'epub', 'txt'].map((value) => ({ value: value, label: formatLabelOf(value) })),
               }),
             }),
+            // R35 ②: one click for the whole library. It sits next to the format
+            // field because that is the format it will use — no second dialog,
+            // no per-book file picker.
+            h(
+              'div',
+              { className: 'nw-row' },
+              h('span', null, NW.t('一键导出全部书籍')),
+              h(
+                'span',
+                { className: 'nw-inline', style: { gap: '6px' } },
+                h('span', { className: 'nw-dim' }, NW.t('每部作品一个文件，打成一个 zip')),
+                NW.ui.btn({
+                  onClick: () => {
+                    if (typeof p.onExportAll !== 'function') return;
+                    const format = String(draft.exportFormat || 'docx');
+                    p.onExportAll({
+                      format: format,
+                      includeMeta: draft.exportIncludeMeta !== false,
+                      appendOn: draft.exportSignatureOn === true,
+                      appendText: String(draft.exportSignature || ''),
+                      options: { includeMeta: draft.exportIncludeMeta !== false, pageBreaks: true, toc: false },
+                    });
+                  },
+                  disabled: typeof p.onExportAll !== 'function',
+                  children: NW.t('导出全部…'),
+                }),
+              ),
+            ),
             h(
               'div',
               { className: 'nw-row' },

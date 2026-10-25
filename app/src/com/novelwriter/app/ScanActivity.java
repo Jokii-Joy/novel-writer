@@ -14,6 +14,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.ViewGroup;
@@ -25,6 +26,7 @@ import android.widget.Toast;
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.BinaryBitmap;
 import com.google.zxing.DecodeHintType;
+import com.google.zxing.LuminanceSource;
 import com.google.zxing.MultiFormatReader;
 import com.google.zxing.PlanarYUVLuminanceSource;
 import com.google.zxing.Result;
@@ -32,6 +34,7 @@ import com.google.zxing.common.HybridBinarizer;
 
 import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -57,6 +60,9 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
     private Camera camera;
     private MultiFormatReader reader;
     private long lastDecodeAt = 0;
+    /** Preview size actually granted by the HAL (not the one we asked for). */
+    private int previewWidth = 0;
+    private int previewHeight = 0;
     private volatile boolean decoding = false;
     private volatile boolean finished = false;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -131,6 +137,93 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
 
     // ------------------------------------------------------------------ camera
 
+    /**
+     * R35 ①: the preview used to come up sideways. The sensor is mounted in
+     * landscape, so a phone held upright showed a rotated, stretched picture —
+     * the code sat on its side and there was no way to aim. `setDisplayOrientation`
+     * is what rotates the preview back; the camera HAL then hands out landscape
+     * frames, which is why {@link #decode} also tries the quarter turns.
+     */
+    private int displayOrientation() {
+        int degrees = 0;
+        switch (getWindowManager().getDefaultDisplay().getRotation()) {
+            case Surface.ROTATION_90:
+                degrees = 90;
+                break;
+            case Surface.ROTATION_180:
+                degrees = 180;
+                break;
+            case Surface.ROTATION_270:
+                degrees = 270;
+                break;
+            default:
+                degrees = 0;
+                break;
+        }
+        Camera.CameraInfo info = new Camera.CameraInfo();
+        try {
+            Camera.getCameraInfo(0, info);
+        } catch (Exception ignored) {
+            return degrees;
+        }
+        if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+            return (360 - (info.orientation + degrees) % 360) % 360;
+        }
+        return (info.orientation - degrees + 360) % 360;
+    }
+
+    /**
+     * 16:9 near 1280x720 if the device offers it, otherwise the closest
+     * supported size. Asking for a size the HAL does not know makes
+     * `setParameters` throw, and the preview silently keeps the default (often
+     * 640x480), which is both blurry and the wrong aspect for the surface.
+     */
+    private static Camera.Size bestPreviewSize(Camera.Parameters params) {
+        List<Camera.Size> sizes = params.getSupportedPreviewSizes();
+        if (sizes == null || sizes.isEmpty()) return null;
+        Camera.Size best = null;
+        double bestScore = Double.MAX_VALUE;
+        for (Camera.Size size : sizes) {
+            if (size == null || size.width < 640 || size.height < 480) continue;
+            if (size.width > 1920 || size.height > 1080) continue;
+            double aspect = (double) size.width / (double) size.height;
+            double score = Math.abs(aspect - 16.0 / 9.0) * 10.0
+                + Math.abs(size.width - 1280) / 1280.0;
+            if (score < bestScore) {
+                bestScore = score;
+                best = size;
+            }
+        }
+        return best;
+    }
+
+    private void applyCameraParameters(Camera cam) {
+        Camera.Parameters params = cam.getParameters();
+        Camera.Size size = bestPreviewSize(params);
+        if (size != null) {
+            try {
+                params.setPreviewSize(size.width, size.height);
+            } catch (Exception ignored) {
+                // The size disappeared between getParameters and setParameters.
+            }
+        }
+        List<String> focusModes = params.getSupportedFocusModes();
+        if (focusModes != null) {
+            if (focusModes.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE)) {
+                params.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE);
+            } else if (focusModes.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_VIDEO)) {
+                params.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_VIDEO);
+            } else if (focusModes.contains(Camera.Parameters.FOCUS_MODE_AUTO)) {
+                params.setFocusMode(Camera.Parameters.FOCUS_MODE_AUTO);
+            }
+        }
+        try {
+            cam.setParameters(params);
+        } catch (Exception ignored) {
+            // Keep whatever the HAL chose rather than losing the preview.
+        }
+    }
+
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         if (!hasCameraPermission()) return;
@@ -140,16 +233,12 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
             hint.setText("打不开相机：" + (error.getMessage() == null ? "未知原因" : error.getMessage()));
             return;
         }
-        Camera.Parameters params = camera.getParameters();
-        params.setPreviewSize(1280, 720);
-        params.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE);
+        applyCameraParameters(camera);
+        Camera.Size granted = camera.getParameters().getPreviewSize();
+        previewWidth = granted.width;
+        previewHeight = granted.height;
         try {
-            camera.setParameters(params);
-        } catch (Exception ignored) {
-            // Not every device honours 1280x720; the default preview size still
-            // scans, it is only slower on a small code.
-        }
-        try {
+            camera.setDisplayOrientation(displayOrientation());
             camera.setPreviewDisplay(holder);
         } catch (Exception error) {
             hint.setText("无法把画面输出到屏幕：" + error.getMessage());
@@ -161,9 +250,15 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
 
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-        if (camera != null) {
+        if (camera == null) return;
+        try {
             camera.stopPreview();
+            // The rotation can change between create and change (the activity is
+            // not locked, so a user may turn the phone while pairing).
+            camera.setDisplayOrientation(displayOrientation());
             camera.startPreview();
+        } catch (Exception ignored) {
+            // Preview already gone; surfaceDestroyed will release the camera.
         }
     }
 
@@ -197,26 +292,48 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
         if (now - lastDecodeAt < DECODE_INTERVAL_MS) return;
         lastDecodeAt = now;
         decoding = true;
-        Camera.Size size = source.getParameters().getPreviewSize();
-        int width = size.width;
-        int height = size.height;
-        new Thread(() -> decode(data, width, height), "nw-qr").start();
+        int width = previewWidth;
+        int height = previewHeight;
+        if (width <= 0 || height <= 0) {
+            Camera.Size size = source.getParameters().getPreviewSize();
+            width = size.width;
+            height = size.height;
+        }
+        int frameWidth = width;
+        int frameHeight = height;
+        new Thread(() -> decode(data, frameWidth, frameHeight), "nw-qr").start();
     }
 
     private void decode(byte[] data, int width, int height) {
         try {
-            PlanarYUVLuminanceSource source = new PlanarYUVLuminanceSource(data, width, height, 0, 0, width, height, false);
-            BinaryBitmap bitmap = new BinaryBitmap(new HybridBinarizer(source));
-            Result result = reader.decodeWithState(bitmap);
+            LuminanceSource source = new PlanarYUVLuminanceSource(data, width, height, 0, 0, width, height, false);
+            Result result = scan(source);
+            // R35 ①: preview frames always arrive in sensor orientation, so the
+            // code is lying on its side whenever the phone is upright. ZXing's
+            // detector copes with some tilt but not reliably with a quarter turn,
+            // so the frame is retried at 90/180/270 before this one is dropped.
+            LuminanceSource turned = source;
+            for (int i = 0; result == null && i < 3 && turned.isRotateSupported(); i += 1) {
+                turned = turned.rotateCounterClockwise();
+                result = scan(turned);
+            }
             if (result != null && !finished) {
                 finished = true;
                 String text = result.getText();
                 main.post(() -> handlePayload(text));
             }
-        } catch (Exception notFound) {
-            // NotFoundException is the normal case: most frames have no code yet.
         } finally {
             decoding = false;
+        }
+    }
+
+    /** One binarise+detect pass; null means "no code in this frame". */
+    private Result scan(LuminanceSource source) {
+        try {
+            return reader.decodeWithState(new BinaryBitmap(new HybridBinarizer(source)));
+        } catch (Exception notFound) {
+            // NotFoundException is the normal case: most frames have no code yet.
+            return null;
         }
     }
 
