@@ -21,6 +21,7 @@
   const STATUS_META = {
     sent: { label: '已投稿', tone: 'idle' },
     pending: { label: '等待回复', tone: 'info' },
+    overdue: { label: '已超期', tone: 'warn' },
     accepted: { label: '已过稿', tone: 'ok' },
     rejected: { label: '已退稿', tone: 'danger' },
     published: { label: '已发表', tone: 'brand' },
@@ -322,19 +323,40 @@
               subsFold.visible.map((row) => {
                 const meta = statusOf(row);
                 const days = Number(row.daysAgo);
+                const open = typeof p.onOpenSubmitManager === 'function';
                 return NW.h(
                   'li',
-                  { key: String(row.id), className: 'nw-welcome-sub' },
+                  { key: String(row.id), className: 'nw-welcome-subrow' },
+                  // R34 a: a submission row is a door into 投稿管理, not a label.
+                  // The whole row is the hit target; the badge rides outside the
+                  // button so a status change never sits under the cursor.
                   NW.h(
-                    'span',
-                    { className: 'nw-welcome-submain' },
-                    NW.h('span', { className: 'nw-welcome-subtitle' }, row.title || row.subject || '未命名稿件'),
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'nw-welcome-sub nw-welcome-subbtn',
+                      title: `${row.title || row.subject || '未命名稿件'} — 打开投稿管理`,
+                      disabled: !open,
+                      onClick: () => open && p.onOpenSubmitManager(),
+                    },
                     NW.h(
                       'span',
-                      { className: 'nw-welcome-submeta' },
-                      `${row.journalName || '未指定期刊'} · ${dayStamp(row.at)}` +
-                        (Number.isFinite(days) && days > 0 ? ` · ${days} 天前` : ''),
+                      { className: 'nw-welcome-submain' },
+                      NW.h('span', { className: 'nw-welcome-subtitle' }, row.title || row.subject || '未命名稿件'),
+                      NW.h(
+                        'span',
+                        { className: 'nw-welcome-submeta' },
+                        `${row.journalName || '未指定期刊'} · ${dayStamp(row.at)}` +
+                          (Number.isFinite(days) && days > 0 ? ` · ${days} 天前` : ''),
+                      ),
                     ),
+                    open
+                      ? NW.h(
+                          'span',
+                          { className: 'nw-welcome-subarrow', 'aria-hidden': 'true' },
+                          NW.icon('caret', { size: 13 }),
+                        )
+                      : null,
                   ),
                   NW.h('span', { className: 'nw-badge', 'data-tone': meta.tone }, meta.label),
                 );
@@ -725,6 +747,8 @@
    only becomes visible on hover/focus — the list stays quiet until you aim. */
 .nw-welcome-subrow{display:flex;align-items:stretch;gap:4px;}
 .nw-welcome-subrow > .nw-welcome-subbtn{flex:1 1 auto;min-width:0;}
+/* R34 a: the status badge sits beside the row button, so it must not stretch. */
+.nw-welcome-subrow > .nw-badge{flex:0 0 auto;align-self:center;}
 .nw-welcome-subdel{
   flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
   width:30px;padding:0;border-radius:var(--nw-r-control);

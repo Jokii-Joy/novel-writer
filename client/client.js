@@ -388,6 +388,18 @@ window.__ModuleLoader__.load({
     '只做错别字与标点这类机械校对，可以选便宜快的模型。': 'Mechanical fixes only — a cheap, fast model is fine.',
     '生成投稿邮件正文与按期刊要求排版时使用。': 'Drafts the submission mail and typesets it to the journal rules.',
     '通读全章给出修改建议，建议用能力更强的模型。': 'Reads the whole chapter for editorial advice — a stronger model helps.',
+    'AI 投稿': 'AI submission',
+    '换个模型重试': 'Try another model',
+    '改用这个模型': 'Use this model',
+    '（当前默认）': ' (current default)',
+    '本次请求': 'This request',
+    '换用 {0} 重试…': 'Retrying with {0}…',
+    '原模型没有响应，已改用 {0}': 'The chosen model did not respond — switched to {0}',
+    '{0}用 {1} · {2} 没有成功，换一个模型再试一次？': '{0} with {1} · {2} did not work — try another model?',
+    '{0}没有可用的模型，换一个模型再试一次？': '{0} has no model available — try another one?',
+    '没有可用的模型，请先在 Harness 里登录一个模型提供方。': 'No model is available — sign in to a provider in Harness first.',
+    '还没有配置可用的模型，请先在 Harness 里登录一个模型提供方。': 'No model is configured — sign in to a provider in Harness first.',
+    '模型调用失败': 'The model call failed',
     '会拼在校对提示词后面。留空就用内置默认：': 'Appended to the proofreading prompt. Empty keeps the built-in default: ',
     '例如：人名统一用「林深」，不要改成「林深先生」；保留作者刻意使用的短句。': 'e.g. keep the name as 林深, never 林深先生; keep the author deliberate short sentences.',
     '一键排版': 'Typeset',
@@ -410,6 +422,32 @@ window.__ModuleLoader__.load({
     '行距': 'Line height',
     '页宽': 'Page width',
     '快捷键': 'Shortcuts',
+    '手机同步': 'Phone sync',
+    '手机配对': 'Pair a phone',
+    '显示配对二维码…': 'Show pairing QR…',
+    '生成二维码': 'Generate QR',
+    '重新生成': 'Regenerate',
+    '已配对设备': 'Paired devices',
+    '解除配对': 'Unpair',
+    '解除与「{0}」的配对？这台设备之后需要重新扫码才能同步。': 'Unpair "{0}"? It will need to scan the code again.',
+    '还没有配对任何设备。': 'No device paired yet.',
+    '还没有配对': 'Not paired',
+    '手机已配对': 'Phone paired',
+    '已解除配对': 'Unpaired',
+    '二维码 {0} 秒后失效': 'Code expires in {0}s',
+    '二维码已失效，请重新生成': 'Code expired — generate a new one',
+    '正在生成二维码…': 'Generating QR…',
+    '还没有同步过': 'Never synced',
+    '同步状态': 'Sync status',
+    '最近一次交给同步 {0}': 'Last handed to sync {0}',
+    '{0} 台已配对': '{0} paired',
+    '手机装好 App 后扫一次码即可。之后只要在同一个 Wi-Fi 下，修改会自动双向同步；不同书各自保留，同一本书以最后修改时间为准。': 'Scan once from the phone app. After that, edits sync both ways over the same Wi-Fi; different books merge, the same book takes the newer timestamp.',
+    '在手机上的「精神空间」里选择「扫描配对」，对准下面的二维码。配对一次即可，之后在同一个 Wi-Fi 下会自动同步。': 'In the phone app choose "Scan to pair" and point it at the code. One scan is enough; afterwards it syncs automatically on the same Wi-Fi.',
+    '电脑地址：{0}:{1}': 'Desktop address {0}:{1}',
+    '其他可能地址：{0}': 'Other possible addresses: {0}',
+    '上次同步 {0}': 'Last synced {0}',
+    '还没有同步过。': 'Never synced.',
+    '生成配对码失败': 'Could not create a pairing code',
     '查找替换': 'Find & replace',
     '查找': 'Find',
     '替换为': 'Replace with',
@@ -1637,7 +1675,14 @@ window.__ModuleLoader__.load({
     const ops = [];
 
     if (item.kind === 'novel') {
-      if (payload.novel) ops.push({ store: 'novels', type: 'put', value: payload.novel });
+      // Restoring must be a deliberate resurrection, not just a re-insert of the
+      // old row: the sync engine decides tombstone-vs-live by timestamp, and the
+      // peer still carries the tombstone stamped at deletion time. Re-using the
+      // book's original `updatedAt` would therefore lose the merge and delete
+      // the book again on the next sync tick.
+      if (payload.novel) {
+        ops.push({ store: 'novels', type: 'put', value: Object.assign({}, payload.novel, { updatedAt: now() }) });
+      }
       const chapters = Array.isArray(payload.chapters) ? payload.chapters : [];
       for (let i = 0; i < chapters.length; i += 1) {
         ops.push({ store: 'chapters', type: 'put', value: chapters[i] });
@@ -1922,10 +1967,122 @@ window.__ModuleLoader__.load({
     notify();
   }
 
+  /**
+   * R34: apply books that arrived over the LAN sync mirror.
+   *
+   * Runs in ONE transaction so a phone push can never leave half a book behind.
+   * Deliberately *not* `replaceAll`: the merge already decided per book, and
+   * replaceAll clears the stores — that would drop settings, notes, versions and
+   * the trash for every book the phone does not know about.
+   *
+   * Rules, mirroring the host's merge contract:
+   *   - a tombstone (`deleted: true`) removes the book and its chapters, and
+   *     parks them in `trash` so 撤销 still works;
+   *   - a live book is stamped with the phone's `updatedAt`, not with `now()`:
+   *     keeping the peer's clock is what makes the next merge a no-op instead of
+   *     ping-ponging "mine is newer" forever on two devices with skewed clocks;
+   *   - chapters are replaced whole (book-level LWW — the product spec says the
+   *     newer book wins, not newer chapters).
+   */
+  async function applyBooks(books) {
+    const list = Array.isArray(books) ? books.filter(function (row) { return row && row.id; }) : [];
+    if (!list.length) return 0;
+    const existingNovels = (await readAll('novels')) || [];
+    const existingChapters = (await readAll('chapters')) || [];
+    const byNovel = new Map();
+    for (let i = 0; i < existingChapters.length; i += 1) {
+      const row = existingChapters[i];
+      if (!row || row.novelId == null) continue;
+      const key = String(row.novelId);
+      if (!byNovel.has(key)) byNovel.set(key, []);
+      byNovel.get(key).push(row);
+    }
+
+    const ops = [];
+    let touched = 0;
+    for (let i = 0; i < list.length; i += 1) {
+      const incoming = list[i];
+      const id = String(incoming.id);
+      const existing = existingNovels.find(function (row) { return row && String(row.id) === id; }) || null;
+      const currentChapters = byNovel.get(id) || [];
+      const stamp = Number(incoming.updatedAt) || now();
+
+      if (incoming.deleted === true) {
+        if (!existing) continue;
+        ops.push({
+          store: 'trash',
+          type: 'put',
+          value: {
+            id: uid('trash'),
+            kind: 'novel',
+            title: existing.title || '未命名小说',
+            deletedAt: now(),
+            payload: { novel: existing, chapters: currentChapters, versions: [] },
+          },
+        });
+        ops.push({ store: 'novels', type: 'delete', key: id });
+        for (let c = 0; c < currentChapters.length; c += 1) {
+          ops.push({ store: 'chapters', type: 'delete', key: currentChapters[c].id });
+        }
+        touched += 1;
+        continue;
+      }
+
+      const novelRow = {
+        id: id,
+        title: String(incoming.title || '') || (existing && existing.title) || '未命名小说',
+        author: String(incoming.author || '') || (existing && existing.author) || '',
+        description: (existing && existing.description) || '',
+        cover: (existing && existing.cover) || null,
+        createdAt: Number(existing && existing.createdAt) || stamp,
+        updatedAt: stamp,
+      };
+      ops.push({ store: 'novels', type: 'put', value: novelRow });
+
+      const incomingChapters = Array.isArray(incoming.chapters) ? incoming.chapters : [];
+      const keep = {};
+      for (let c = 0; c < incomingChapters.length; c += 1) {
+        const row = incomingChapters[c];
+        if (!row || !row.id) continue;
+        keep[String(row.id)] = true;
+        ops.push({
+          store: 'chapters',
+          type: 'put',
+          value: {
+            id: String(row.id),
+            novelId: id,
+            title: String(row.title || ''),
+            content: String(row.content == null ? '' : row.content),
+            order: Number(row.order) || 0,
+            wordCount: countWords(String(row.content || '')),
+            createdAt: Number(row.createdAt) || stamp,
+            updatedAt: stamp,
+            enc: null,
+          },
+        });
+      }
+      // Chapters the phone does not have were deleted there; drop them locally
+      // too, otherwise the next push would send them straight back.
+      for (let c = 0; c < currentChapters.length; c += 1) {
+        const row = currentChapters[c];
+        if (!row || keep[String(row.id)]) continue;
+        ops.push({ store: 'chapters', type: 'delete', key: row.id });
+      }
+      touched += 1;
+    }
+
+    if (!ops.length) return 0;
+    const ok = await writeBatch(ops);
+    if (!ok) throw new Error('应用同步数据失败');
+    notify();
+    return touched;
+  }
+
   NW.db = {
     DB_NAME: DB_NAME,
     DB_VERSION: DB_VERSION,
     DEFAULT_SETTINGS: DEFAULT_SETTINGS,
+    applyBooks: applyBooks,
     init: init,
     close: close,
     subscribe: subscribe,
@@ -3336,8 +3493,174 @@ window.__ModuleLoader__.load({
     return api('proofread', payload);
   }
 
+  /**
+   * R34: ask the writer to pick a model, then try that one.
+   *
+   * Returns `{provider, model}` or null. `NW.askModel` is installed by the app
+   * shell (it needs a dialog host); when nothing is installed we simply give up
+   * and let the original error surface.
+   */
+  async function askModelForRetry(input) {
+    if (typeof NW.askModel !== 'function') return null;
+    const picked = await NW.askModel(input);
+    if (!picked || !picked.provider || !picked.model) return null;
+    return { provider: String(picked.provider), model: String(picked.model) };
+  }
+
+  /**
+   * `proofread` with automatic model failover.
+   *
+   * The happy path costs exactly one extra request (the model list); that list
+   * is already cached by the Settings dialog in the same tick, so the practical
+   * cost of "always have a fallback" is one fetch per action.
+   */
+  async function proofreadSafe(input) {
+    const body = input || {};
+    let list = null;
+    try {
+      list = await models();
+    } catch (err) {
+      list = null;
+    }
+    const preferred = { provider: body.provider, model: body.model };
+    const call = (candidate) => proofread(Object.assign({}, body, { provider: candidate.provider, model: candidate.model }));
+    const result = await withModelFallback(list, preferred, call, {
+      emptyMessage: NW.t('还没有配置可用的模型，请先在 Harness 里登录一个模型提供方。'),
+      onRetry: body.onRetry,
+    });
+    if (result.ok) return Object.assign({}, result.data, { usedModel: result.used, failovers: result.tried });
+    // Everything failed: offer the picker once. A writer who chose the wrong
+    // model on purpose should not have to go to Settings and come back.
+    const picked = await askModelForRetry({
+      kind: 'proofread',
+      label: 'AI 校对',
+      tried: result.tried,
+      models: list,
+      preferred: preferred,
+    });
+    if (picked) {
+      const second = await call(picked);
+      return Object.assign({}, second, { usedModel: picked, failovers: result.tried });
+    }
+    const err = result.error || new Error(NW.t('模型调用失败'));
+    err.tried = result.tried;
+    throw err;
+  }
+
+  /** `revise` with automatic model failover (same contract as `proofreadSafe`). */
+  async function reviseSafe(input) {
+    const body = input || {};
+    let list = null;
+    try {
+      list = await models();
+    } catch (err) {
+      list = null;
+    }
+    const preferred = { provider: body.provider, model: body.model };
+    const call = (candidate) => revise(Object.assign({}, body, { provider: candidate.provider, model: candidate.model }));
+    const result = await withModelFallback(list, preferred, call, {
+      emptyMessage: NW.t('还没有配置可用的模型，请先在 Harness 里登录一个模型提供方。'),
+      onRetry: body.onRetry,
+    });
+    if (result.ok) return Object.assign({}, result.data, { usedModel: result.used, failovers: result.tried });
+    const picked = await askModelForRetry({
+      kind: 'revise',
+      label: '修改建议',
+      tried: result.tried,
+      models: list,
+      preferred: preferred,
+    });
+    if (picked) {
+      const second = await call(picked);
+      return Object.assign({}, second, { usedModel: picked, failovers: result.tried });
+    }
+    const err = result.error || new Error(NW.t('模型调用失败'));
+    err.tried = result.tried;
+    throw err;
+  }
+
   function selftest() {
     return api('selftest', {});
+  }
+
+  // ------------------------------ model fallback -----------------------------
+  //
+  // R34: "if the AI model cannot be reached, does it offer to pick another one?"
+  // It did not — a dead provider just surfaced 「模型调用失败」 and stopped. The
+  // two helpers below let every AI surface retry across the other configured
+  // models before giving up.
+  //
+  // They live here rather than in each dialog because there are four callers
+  // (proofread, typeset advice, submit.prepare, revise) and the ordering rule is
+  // identical: the model the writer chose first, then the harness default, then
+  // anything else the host knows about.
+
+  /**
+   * Collect `{provider, model, label}` candidates, best first.
+   *
+   * `preferred` is the writer's own choice from Settings; it leads the list even
+   * when discovery does not list it (some providers expose no model list, and a
+   * hand-typed pair is still a legitimate target).
+   */
+  function modelCandidates(list, preferred) {
+    const out = [];
+    const seen = new Set();
+    const push = (provider, model, label) => {
+      const pv = String(provider == null ? '' : provider).trim();
+      const mv = String(model == null ? '' : model).trim();
+      if (!pv || !mv) return;
+      const key = pv + '\u0000' + mv;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ provider: pv, model: mv, label: label || mv + ' · ' + pv });
+    };
+    const pref = preferred || {};
+    const defaultTarget = (list && list.current) || {};
+    // 1. the writer's pick, 2. the harness default, 3. everything discovered.
+    push(pref.provider, pref.model, pref.label);
+    push(defaultTarget.provider, defaultTarget.model, (defaultTarget.model || '') + ' · ' + (defaultTarget.provider || '') + NW.t('（当前默认）'));
+    for (const row of (list && list.models) || []) {
+      if (row) push(row.provider, row.id, (row.name || row.id) + ' · ' + row.provider);
+    }
+    return out;
+  }
+
+  /**
+   * Run `call(candidate)` until one succeeds.
+   *
+   * Returns `{ok:true, data, used, tried}` or `{ok:false, error, tried}` where
+   * `tried` is the list of `{label, message}` failures — the caller shows them
+   * so "it did not work" becomes "these three did not work, and why".
+   *
+   * `onRetry(candidate, error, index)` is called before each second-and-later
+   * attempt so a UI can say 「正在改用 X 重试…」 instead of looking frozen.
+   */
+  async function withModelFallback(list, preferred, call, options) {
+    const opts = options || {};
+    const candidates = modelCandidates(list, preferred);
+    if (!candidates.length) {
+      return { ok: false, error: new Error(opts.emptyMessage || '没有可用的模型'), tried: [], used: null };
+    }
+    const tried = [];
+    for (let index = 0; index < candidates.length; index += 1) {
+      const candidate = candidates[index];
+      if (index > 0 && typeof opts.onRetry === 'function') {
+        try {
+          opts.onRetry(candidate, tried[tried.length - 1] || null, index);
+        } catch (err) {
+          /* a UI callback must never break the retry loop */
+        }
+      }
+      try {
+        const data = await call(candidate);
+        return { ok: true, data: data, used: candidate, tried: tried };
+      } catch (err) {
+        // An abort is the writer's own doing; retrying would fight them.
+        if (err && err.code === 'aborted') return { ok: false, error: err, tried: tried, used: null };
+        tried.push({ label: candidate.label, message: String((err && err.message) || err || '失败'), code: String((err && err.code) || '') });
+      }
+    }
+    return { ok: false, error: new Error(tried.length ? tried[tried.length - 1].message : NW.t('模型调用失败')), tried: tried, used: null };
   }
 
   // --------------------------------- library ---------------------------------
@@ -3539,9 +3862,38 @@ window.__ModuleLoader__.load({
     });
   }
 
-  /** Recent submission records (newest first, capped by the host). */
-  function submitRecord() {
-    return api('submit.record', {});
+  /**
+   * Inbox rows carry an RFC 2822 `date` string, not a timestamp — `Number()`
+   * would give NaN and every reply would look like it predates the submission.
+   */
+  function mailTime(row) {
+    const stamp = Number(row && (row.at || row.time));
+    if (Number.isFinite(stamp) && stamp > 0) return stamp;
+    const text = String((row && row.date) || '');
+    if (!text) return 0;
+    const parsed = Date.parse(text);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  /**
+   * Recent submission records (newest first, capped by the host).
+   *
+   * `options.replies` is the inbox slice to reconcile against — the host derives
+   * 「等待回复」/「已超期」 from it (R34). Omitting it keeps the stored statuses, so
+   * a refresh that cannot reach IMAP never invents a status.
+   */
+  function submitRecord(options) {
+    const input = options && typeof options === 'object' ? options : {};
+    const payload = {};
+    if (Array.isArray(input.replies)) {
+      payload.replies = input.replies.map((row) => ({
+        uid: Number(row && row.uid) || 0,
+        from: String((row && (row.from || row.address)) || ''),
+        subject: String((row && row.subject) || ''),
+        at: mailTime(row),
+      }));
+    }
+    return api('submit.record', payload);
   }
 
   /** Updates one submission's status (accepted / rejected / …) or note. */
@@ -3644,6 +3996,66 @@ window.__ModuleLoader__.load({
     return api('revise', payload);
   }
 
+  // ---- LAN sync / pairing (R34) ---------------------------------------------
+  // The phone talks to the host over HTTP; these wrappers are what the desktop
+  // side of that conversation calls, so both ends speak the same method names.
+
+  /** Shows a pairing QR: `{payload, svg, token, expiresAt, addresses, port}`. */
+  function pairStart() {
+    return api('pair.start', {});
+  }
+
+  function pairStatus() {
+    return api('pair.status', {});
+  }
+
+  function pairCancel() {
+    return api('pair.cancel', {});
+  }
+
+  function pairAccept(input) {
+    const body = input && typeof input === 'object' ? input : {};
+    return api('pair.accept', {
+      token: String(body.token || ''),
+      deviceId: String(body.deviceId || ''),
+      deviceName: String(body.deviceName || ''),
+      publicKey: String(body.publicKey || ''),
+      address: String(body.address || ''),
+    });
+  }
+
+  function peersList() {
+    return api('pair.peers', {});
+  }
+
+  function peerRemove(id) {
+    return api('pair.remove', { id: String(id || '') });
+  }
+
+  function lanInfo() {
+    return api('pair.info', {});
+  }
+
+  /**
+   * Pushes the whole library into the host's sync mirror.
+   *
+   * `books` is `[{id,title,author,updatedAt,deleted,chapters}]` — the same shape
+   * the merge engine and the phone use. Sending the library whole (rather than a
+   * diff) keeps the contract honest: book-level LWW needs both sides' timestamps,
+   * and a delta would have to reconstruct them anyway.
+   */
+  function syncPush(books) {
+    return api('sync.push', { books: Array.isArray(books) ? books : [] });
+  }
+
+  function syncPull() {
+    return api('sync.pull', {});
+  }
+
+  function syncApply(books) {
+    return api('sync.apply', { books: Array.isArray(books) ? books : [] });
+  }
+
   NW.apiUrl = apiUrl;
   NW.api = api;
 
@@ -3697,6 +4109,20 @@ window.__ModuleLoader__.load({
       read: inboxRead,
       remove: inboxDelete,
     },
+    pair: {
+      start: pairStart,
+      status: pairStatus,
+      cancel: pairCancel,
+      accept: pairAccept,
+      peers: peersList,
+      remove: peerRemove,
+      info: lanInfo,
+    },
+    sync: {
+      push: syncPush,
+      pull: syncPull,
+      apply: syncApply,
+    },
   };
 
   NW.ai = {
@@ -3704,6 +4130,11 @@ window.__ModuleLoader__.load({
     proofread: proofread,
     revise: revise,
     selftest: selftest,
+    // R34: failover-aware variants. `proofread` / `revise` stay bare so the
+    // dialogs that manage their own picker keep exact control.
+    proofreadSafe: proofreadSafe,
+    reviseSafe: reviseSafe,
+    candidates: modelCandidates,
   };
 
   /**
@@ -5187,6 +5618,56 @@ window.__ModuleLoader__.load({
   .nw-prep-orb{animation:none;box-shadow:none;}
   .nw-prep-bar > i{animation:none;width:100%;opacity:.4;}
   .nw-prep-step[data-now="1"] .nw-prep-dot{animation:none;}
+}
+
+/* ---------------------------------------------------------------- pairing -- */
+/* R34 ③: the phone pairing dialog. The QR arrives as inline SVG from the host,
+   so CSS only has to give it a quiet white plate — a code drawn on a tinted
+   background loses the contrast scanners depend on. */
+.nw-pair{display:flex;flex-direction:column;gap:var(--nw-sp-3);}
+.nw-pair-box{
+  display:flex;align-items:flex-start;gap:var(--nw-sp-4);
+  padding:var(--nw-sp-3);border:1px solid var(--nw-line);border-radius:var(--nw-r-card);
+  background:var(--nw-panel);
+}
+.nw-pair-code{
+  flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+  padding:8px;border-radius:var(--nw-r-control);
+  background:#ffffff; /* deliberately literal: the quiet zone must be paper */
+}
+.nw-pair-code > svg{display:block;width:180px;height:180px;}
+.nw-pair-meta{display:flex;flex-direction:column;gap:6px;min-width:0;}
+.nw-pair-addr{font-size:var(--nw-fs-second);font-weight:600;color:var(--nw-fg);word-break:break-all;}
+.nw-pair-timer{font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);}
+.nw-pair-empty{
+  display:flex;align-items:center;justify-content:center;min-height:120px;
+  border:1px dashed var(--nw-line-strong);border-radius:var(--nw-r-card);
+  font-size:var(--nw-fs-second);color:var(--nw-fg-soft);text-align:center;padding:var(--nw-sp-3);
+}
+.nw-pair-actions{display:flex;gap:var(--nw-sp-2);}
+.nw-pair-peers{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;list-style:none;}
+.nw-pair-peer{
+  display:flex;align-items:center;gap:var(--nw-sp-2);
+  padding:var(--nw-sp-2) var(--nw-sp-3);border:1px solid var(--nw-line-soft);
+  border-radius:var(--nw-r-control);background:var(--nw-surface-1);
+}
+.nw-pair-peername{font-size:var(--nw-fs-second);font-weight:600;color:var(--nw-fg);}
+.nw-pair-peer .nw-hint-block{margin-left:auto;margin-bottom:0;}
+
+/* R34: model picker shown when every configured model failed. The tried list is
+   the useful half — it turns 「打不开」 into 「这三个都不通，各自的原因如下」. */
+.nw-picker-tried{
+  display:flex;flex-direction:column;gap:4px;
+  margin:0 0 var(--nw-sp-3);padding:var(--nw-sp-2) var(--nw-sp-3);
+  border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
+  background:var(--nw-sunken);list-style:none;
+}
+.nw-picker-tried > li{display:flex;gap:var(--nw-sp-2);align-items:baseline;font-size:var(--nw-fs-micro);line-height:1.6;}
+.nw-picker-triedname{flex:0 0 auto;color:var(--nw-fg);font-weight:600;}
+.nw-picker-triedmsg{flex:1 1 auto;min-width:0;color:var(--nw-fg-soft);overflow-wrap:anywhere;}
+@media (max-width:520px){
+  .nw-pair-box{flex-direction:column;align-items:center;}
+  .nw-pair-code > svg{width:150px;height:150px;}
 }
 `);
 })();
@@ -6913,6 +7394,7 @@ window.__ModuleLoader__.load({
   const STATUS_META = {
     sent: { label: '已投稿', tone: 'idle' },
     pending: { label: '等待回复', tone: 'info' },
+    overdue: { label: '已超期', tone: 'warn' },
     accepted: { label: '已过稿', tone: 'ok' },
     rejected: { label: '已退稿', tone: 'danger' },
     published: { label: '已发表', tone: 'brand' },
@@ -7214,19 +7696,40 @@ window.__ModuleLoader__.load({
               subsFold.visible.map((row) => {
                 const meta = statusOf(row);
                 const days = Number(row.daysAgo);
+                const open = typeof p.onOpenSubmitManager === 'function';
                 return NW.h(
                   'li',
-                  { key: String(row.id), className: 'nw-welcome-sub' },
+                  { key: String(row.id), className: 'nw-welcome-subrow' },
+                  // R34 a: a submission row is a door into 投稿管理, not a label.
+                  // The whole row is the hit target; the badge rides outside the
+                  // button so a status change never sits under the cursor.
                   NW.h(
-                    'span',
-                    { className: 'nw-welcome-submain' },
-                    NW.h('span', { className: 'nw-welcome-subtitle' }, row.title || row.subject || '未命名稿件'),
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'nw-welcome-sub nw-welcome-subbtn',
+                      title: `${row.title || row.subject || '未命名稿件'} — 打开投稿管理`,
+                      disabled: !open,
+                      onClick: () => open && p.onOpenSubmitManager(),
+                    },
                     NW.h(
                       'span',
-                      { className: 'nw-welcome-submeta' },
-                      `${row.journalName || '未指定期刊'} · ${dayStamp(row.at)}` +
-                        (Number.isFinite(days) && days > 0 ? ` · ${days} 天前` : ''),
+                      { className: 'nw-welcome-submain' },
+                      NW.h('span', { className: 'nw-welcome-subtitle' }, row.title || row.subject || '未命名稿件'),
+                      NW.h(
+                        'span',
+                        { className: 'nw-welcome-submeta' },
+                        `${row.journalName || '未指定期刊'} · ${dayStamp(row.at)}` +
+                          (Number.isFinite(days) && days > 0 ? ` · ${days} 天前` : ''),
+                      ),
                     ),
+                    open
+                      ? NW.h(
+                          'span',
+                          { className: 'nw-welcome-subarrow', 'aria-hidden': 'true' },
+                          NW.icon('caret', { size: 13 }),
+                        )
+                      : null,
                   ),
                   NW.h('span', { className: 'nw-badge', 'data-tone': meta.tone }, meta.label),
                 );
@@ -7617,6 +8120,8 @@ window.__ModuleLoader__.load({
    only becomes visible on hover/focus — the list stays quiet until you aim. */
 .nw-welcome-subrow{display:flex;align-items:stretch;gap:4px;}
 .nw-welcome-subrow > .nw-welcome-subbtn{flex:1 1 auto;min-width:0;}
+/* R34 a: the status badge sits beside the row button, so it must not stretch. */
+.nw-welcome-subrow > .nw-badge{flex:0 0 auto;align-self:center;}
 .nw-welcome-subdel{
   flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
   width:30px;padding:0;border-radius:var(--nw-r-control);
@@ -11089,12 +11594,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     });
     const [dialog, setDialog] = useState(null);
     const [modalReq, setModalReq] = useState(null);
+    const [modelPicker, setModelPicker] = useState(null);
     const [toasts, setToasts] = useState([]);
     const [locked, setLocked] = useState(false);
     const [busy, setBusy] = useState('');
     const [caps, setCaps] = useState({ docx: true, epub: true, pdf: true, txt: true });
     const [immersive, setImmersive] = useState(false);
     const [library, setLibrary] = useState({ dir: '', mirror: false, encrypt: false, lastMirrorAt: 0, dirExists: false });
+    /**
+     * LAN sync (R34). `books` is what the host mirror currently holds and
+     * `lastPushAt` when this browser last handed its library over — shown in the
+     * pairing dialog so "is it actually syncing?" has an answer visible on screen.
+     */
+    const [lanSync, setLanSync] = useState({ books: 0, lastPushAt: 0, pulledAt: 0, pulled: 0, peers: 0, lan: null, stats: null });
     /** Studio's own sidebar (the chapter tree) can be hidden independently of the host rail. */
     const [shelfOpen, setShelfOpen] = useState(() => lsGet(LS_SHELF_OPEN) !== '0');
     /**
@@ -11153,6 +11665,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const editorRef = useRef(null);
     const rootRef = useRef(null);
     const aliveRef = useRef(true);
+    // R34: the latest inbox page, read by `refreshHomeFeed` to reconcile the
+    // submission log without taking `inbox` into its dependency list.
+    const inboxRef = useRef(inbox);
+    inboxRef.current = inbox;
     // Set once a silent (autosave) mirror fails, so the user sees the error
     // once instead of on every keystroke-triggered retry.
     const mirrorFailedRef = useRef(false);
@@ -11200,6 +11716,25 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       NW.uiModalHost.request = (req) => setModalReq(req);
       return () => {
         NW.uiModalHost.request = null;
+      };
+    }, []);
+
+    /*
+     * R34: `NW.ai.*Safe` needs a place to ask "which model instead?" when every
+     * configured provider failed. It cannot render a dialog itself (it lives in
+     * 30-io, which has no React), so the shell installs this hook and the
+     * dialog below collects the answer.
+     *
+     * Resolving `null` means "cancel": the caller then rethrows the original
+     * error, so a writer who dismisses the picker still sees why it failed.
+     */
+    useEffect(() => {
+      NW.askModel = (input) =>
+        new Promise((resolve) => {
+          setModelPicker({ req: input || {}, resolve: resolve });
+        });
+      return () => {
+        NW.askModel = null;
       };
     }, []);
 
@@ -11402,7 +11937,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      */
     const refreshHomeFeed = useCallback(async () => {
       try {
-        const data = await NW.io.submit.record();
+        // R34: hand the host whatever the inbox last delivered so it can derive
+        // 「等待回复」 from a real reply instead of guessing. The state is a
+        // closure read, so this stays out of the dependency list — a new inbox
+        // page does not need to rebuild refreshHomeFeed.
+        const known = inboxRef.current && Array.isArray(inboxRef.current.messages) ? inboxRef.current.messages : [];
+        const data = await NW.io.submit.record({ replies: known.length ? known : undefined });
         if (!aliveRef.current) return;
         setSubmissions(Array.isArray(data && data.records) ? data.records : []);
       } catch (err) {
@@ -11440,6 +11980,20 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           hint: String((data && data.hint) || ''),
           at: Date.now(),
         });
+        // R34: the submission card derives 「等待回复」 from this very page, so a
+        // fresh inbox means the log's statuses are now stale. `refreshHomeFeed`
+        // reads `inboxRef`, which is assigned during render — one tick later.
+        const page = Array.isArray(data && data.messages) ? data.messages : [];
+        if (page.length) {
+          try {
+            const logged = await NW.io.submit.record({ replies: page });
+            if (aliveRef.current && Array.isArray(logged && logged.records)) {
+              setSubmissions(logged.records);
+            }
+          } catch (ignored) {
+            /* older host half: no submit.record */
+          }
+        }
       } catch (err) {
         if (!aliveRef.current) return;
         setInbox((prev) =>
@@ -11583,6 +12137,87 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * failure is reported at most once per session so a broken folder never
      * spams the user while they are typing.
      */
+    /**
+     * R34 ④: the browser's library, in the shape the sync engine merges.
+     *
+     * Why the browser pushes at all: IndexedDB is the only place the real text
+     * lives, and the host cannot read it. `sync.push` hands the host a full copy
+     * on every library change, which is what lets a phone that comes online later
+     * pull a complete, current library without the desktop having been idle.
+     *
+     * The unit is a *book* — `{id,title,author,updatedAt,deleted,chapters}` — and
+     * `deleted` is only ever true for a book still sitting in the trash: that is
+     * the tombstone, and without it a book deleted on the phone would reappear on
+     * the next pull because the desktop simply had a copy of it.
+     */
+    const syncLibrary = useCallback(async () => {
+      try {
+        const snapshot = await NW.db.dump();
+        const grouped = new Map();
+        for (const row of snapshot.chapters || []) {
+          if (!row || row.novelId == null) continue;
+          if (!grouped.has(row.novelId)) grouped.set(row.novelId, []);
+          grouped.get(row.novelId).push(row);
+        }
+        const books = (snapshot.novels || []).map((novel) => {
+          const rows = (grouped.get(novel.id) || [])
+            .slice()
+            .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || String(a.id).localeCompare(String(b.id)));
+          return {
+            id: String(novel.id),
+            title: String(novel.title || ''),
+            author: String(novel.author || ''),
+            updatedAt: Number(novel.updatedAt) || Number(novel.createdAt) || 0,
+            deleted: novel.deleted === true,
+            chapters: rows.map((row) => ({
+              id: String(row.id),
+              title: String(row.title || ''),
+              content: String(row.content || ''),
+              order: Number(row.order) || 0,
+            })),
+          };
+        });
+        // A book deleted here has to leave a tombstone, or a phone that was
+        // offline during the deletion still holds a copy and hands it straight
+        // back on its next push. The trash store already records every deleted
+        // book (kind 'novel' plus the whole payload), so the tombstone is
+        // derived from it rather than kept in a second bookkeeping store that
+        // could drift out of step with the trash screen.
+        const live = new Set(books.map((book) => book.id));
+        for (const item of snapshot.trash || []) {
+          if (!item || item.kind !== 'novel') continue;
+          const gone = item.payload && item.payload.novel;
+          if (!gone || gone.id == null) continue;
+          const id = String(gone.id);
+          if (live.has(id)) continue;
+          books.push({
+            id,
+            title: String(gone.title || ''),
+            author: String(gone.author || ''),
+            // The deletion timestamp, not the book's: that is the moment the
+            // merge has to compare against a peer's copy of the same book.
+            updatedAt: Number(item.deletedAt) || 0,
+            deleted: true,
+            chapters: [],
+          });
+        }
+        const data = await NW.io.sync.push(books);
+        if (!aliveRef.current) return data;
+        setLanSync((prev) =>
+          Object.assign({}, prev, {
+            books: Number(data && data.books) || books.length,
+            lastPushAt: Date.now(),
+            stats: (data && data.stats) || prev.stats,
+          })
+        );
+        return data;
+      } catch (err) {
+        // Sync is a background convenience: a failure must never surface as a
+        // toast on every keystroke. The pairing dialog reports it on demand.
+        return null;
+      }
+    }, [pushToast]);
+
     const mirrorLibrary = useCallback(async (options) => {
       const silent = !!(options && options.silent === true);
       // `override` lets the caller pass the settings it just persisted: the
@@ -11592,6 +12227,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       if (!cfg.dir || cfg.mirror !== true) return null;
       try {
         const snapshot = await NW.db.dump();
+        // R34: read the submission log from the host, not from React state — a
+        // status changed in 投稿管理 may still be in flight when an autosave
+        // fires, and the snapshot has to hold whatever is authoritative.
+        let log = [];
+        try {
+          const logged = await NW.io.submit.record();
+          log = Array.isArray(logged && logged.records) ? logged.records : [];
+        } catch (err) {
+          log = [];
+        }
         const grouped = new Map();
         for (const row of snapshot.chapters || []) {
           if (!row || row.novelId == null) continue;
@@ -11617,6 +12262,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           settings: snapshot.settings || {},
           // R31 ③: the same snapshot restores chapters and notes together.
           notes: snapshot.notes || [],
+          // R34: 投稿记录 travel with the book too. Statuses live on the host in
+          // submissions.json, so they are read fresh here rather than trusted
+          // from React state (a status changed in 投稿管理 may not have landed in
+          // `submissions` yet).
+          submissions: log,
           encrypt: cfg.encrypt === true || settings.libraryEncrypt === true,
         });
         if (!aliveRef.current) return data;
@@ -11667,6 +12317,39 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       return () => window.clearTimeout(timer);
     }, [ready, locked, autosaveSignature, mirrorLibrary]);
 
+    /**
+     * R34 ④: hand the library to the host's sync mirror.
+     *
+     * Separate from `autosaveSignature` on purpose — the mirror is only active
+     * when a folder has been chosen, while LAN sync should work for anyone who
+     * paired a phone. It is debounced a little longer than the folder save
+     * because the payload is the whole library and a phone pull is the only
+     * consumer, so a 2s lag is invisible.
+     */
+    const syncSignature = useMemo(() => {
+      const novelPart = novels.map((row) => [row && row.id, row && row.updatedAt].join(':')).join(',');
+      const chapterPart = chapters
+        .map((row) => [row && row.id, row && row.updatedAt, row && row.wordCount].join(':'))
+        .join(',');
+      return novelPart + '|' + chapterPart;
+    }, [novels, chapters]);
+
+    useEffect(() => {
+      if (!ready || locked || !syncSignature) return undefined;
+      const timer = window.setTimeout(() => {
+        syncLibrary();
+      }, 2000);
+      return () => window.clearTimeout(timer);
+    }, [ready, locked, syncSignature, syncLibrary]);
+
+    /**
+     * Poll for the phone's side.
+     *
+     * Lives next to `pullSync` at the bottom of the CRUD block, because the
+     * dependency array is evaluated during render — naming `pullSync` up here
+     * would read a `const` before it is initialised and take the whole panel down
+     * with a ReferenceError.
+     */
     // Host capabilities (drives which export formats the UI offers). Best effort:
     // when the host half is missing the defaults above keep every format listed and
     // the export itself surfaces the real error.
@@ -11685,7 +12368,29 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       };
     }, [ready, locked]);
 
-    // --------------------------------------------------------- saving -------
+    // Which LAN addresses the phone can call. Read once per mount and after a
+    // pairing code is generated; the listener itself is started host-side, so a
+    // failure here just means the settings page shows "未启动".
+    useEffect(() => {
+      if (!ready || locked) return undefined;
+      let alive = true;
+      Promise.resolve()
+        .then(() => NW.io.pair.info())
+        .then((data) => {
+          if (!alive || !data) return;
+          setLanSync((prev) =>
+            Object.assign({}, prev, {
+              peers: Array.isArray(data.peers) ? data.peers.length : prev.peers,
+              lan: { running: data.running === true, port: Number(data.port) || 0, addresses: Array.isArray(data.addresses) ? data.addresses : [] },
+            })
+          );
+        })
+        .catch(() => {});
+      return () => {
+        alive = false;
+      };
+    }, [ready, locked]);
+
     const patchChapterInList = useCallback((id, patch) => {
       setChapters((list) => {
         let hit = false;
@@ -11864,6 +12569,79 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       setNovels(list);
       return list;
     }, []);
+
+    /**
+     * R34 ④: pull the host mirror and apply whatever actually moved.
+     *
+     * Declared after refreshNovels/refreshChapters on purpose — a useCallback that
+     * captures them earlier would close over the temporal dead zone and the whole
+     * panel would fail to mount (the build gate catches it, but only after a full
+     * bundle pass).
+     *
+     * The diff matters more than the pull: the mirror holds the *merged* result,
+     * so applying it wholesale every few seconds would rewrite every chapter row
+     * on every tick and make the editor think the text changed underneath the
+     * caret. Only books whose remote `updatedAt` is strictly newer than the local
+     * row — or that the remote calls deleted while we still have them — reach
+     * `applyBooks`.
+     *
+     * No toast on success: this runs on a timer while the user is writing, and a
+     * book that arrived from the phone announces itself through the shelf.
+     */
+    const pullSync = useCallback(async () => {
+      try {
+        const data = await NW.io.sync.pull();
+        const remote = data && data.library && Array.isArray(data.library.books) ? data.library.books : [];
+        if (!remote.length) return 0;
+        const local = new Map();
+        for (const row of novels) if (row && row.id != null) local.set(String(row.id), row);
+        const wanted = [];
+        for (const book of remote) {
+          if (!book || book.id == null) continue;
+          const mine = local.get(String(book.id));
+          const theirs = Number(book.updatedAt) || 0;
+          if (!mine) {
+            // Unknown book: only take it if it is alive. A tombstone for a book we
+            // never had is noise from an earlier install.
+            if (book.deleted !== true) wanted.push(book);
+            continue;
+          }
+          if (book.deleted === true) {
+            wanted.push(book);
+            continue;
+          }
+          const ours = Number(mine.updatedAt) || 0;
+          if (theirs > ours) wanted.push(book);
+        }
+        if (!wanted.length) return 0;
+        const touched = await NW.db.applyBooks(wanted);
+        if (!touched) return 0;
+        await refreshNovels();
+        await refreshChapters();
+        if (!aliveRef.current) return touched;
+        setLanSync((prev) => Object.assign({}, prev, { pulledAt: Date.now(), pulled: touched }));
+        return touched;
+      } catch (err) {
+        return 0;
+      }
+    }, [novels, refreshNovels, refreshChapters]);
+
+    /**
+     * Poll for the phone's side.
+     *
+     * There is no server push into the browser: the LAN listener writes to the
+     * host mirror, and the only way the page learns about it is by asking. Six
+     * seconds is a compromise — faster makes a 30-book library do needless work
+     * every tick, slower makes an edit on the phone feel like it did not arrive.
+     * `pullSync` short-circuits before touching IndexedDB when nothing changed.
+     */
+    useEffect(() => {
+      if (!ready || locked) return undefined;
+      const timer = window.setInterval(() => {
+        pullSync();
+      }, 6000);
+      return () => window.clearInterval(timer);
+    }, [ready, locked, pullSync]);
 
     const createNovel = useCallback(async () => {
       try {
@@ -12839,6 +13617,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                         width: adviceWidth,
                         onResize: setAdviceWidth,
                         onClose: () => setAdviceOpen(false),
+                        // R34: only used to announce a silent model failover.
+                        onToast: pushToast,
                       })
                     : null,
                 )
@@ -12892,6 +13672,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             onRefreshData: async () => {
               await refreshNovels();
               await refreshChapters();
+              // R34: the submission log lives on the host and a restore may have
+              // merged statuses into it, so the home screen has to re-read it.
+              await refreshHomeFeed();
+              await refreshNotes();
               const data = await loadAll();
               if (!aliveRef.current) return;
               // A restored snapshot carries the ids of the session that produced
@@ -12941,6 +13725,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // (backup, version history, submission, export defaults), so it needs
             // a way to open another dialog on top of itself.
             onOpenDialog: (kind, extra) => openDialog(kind, extra),
+            // R34 ③: the pairing QR lives in its own dialog so the settings page
+            // stays a list of fields rather than a wall of one-off actions.
+            onOpenPair: () => openDialog('pair'),
+            // What the phone will see. Refreshed whenever the library changes, so
+            // a sync that happens while this window is open carries the latest
+            // edits instead of a boot-time copy.
+            syncLibrary: syncLibrary,
+            syncState: lanSync,
             // Defaults the Export dialog seeds itself with (closing signature).
             exportDefaults: {
               appendText: String(settings.exportSignature || ''),
@@ -12952,6 +13744,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               // Keep the home screen's 投稿记录 card honest without a reload.
               refreshHomeFeed();
             },
+            // R34 a: 投稿管理 owns the same log as the home screen's 投稿记录
+            // card. Marking a row 已撤回 there rewrote submissions.json but the
+            // card kept its boot-time copy, so the badge never moved until the
+            // next launch. Every writer of the log calls this afterwards.
+            onSubmissionChanged: refreshHomeFeed,
             // R14 ②: opening a mail marks it \Seen on the server, so the card
             // has to re-read the mailbox or it keeps showing the old 未读 count.
             // Refreshed in the background — the reader is already open.
@@ -13002,6 +13799,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           })
         : null,
       modalReq ? h(ModalRequest, { req: modalReq, onDone: () => setModalReq(null) }) : null,
+      modelPicker
+        ? h(ModelPicker, {
+            req: modelPicker.req,
+            onDone: (picked) => {
+              const resolve = modelPicker.resolve;
+              setModelPicker(null);
+              // Resolve after the state flip so the dialog is gone before the
+              // retried request starts painting a spinner somewhere else.
+              if (typeof resolve === 'function') resolve(picked || null);
+            },
+          })
+        : null,
       h(Toasts, { toasts: toasts, onDismiss: dismissToast }),
     );
   };
@@ -13152,7 +13961,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         setError('');
         setActiveId('');
         try {
-          const data = await NW.ai.revise({
+          // R34: failover. The advice panel is the surface most likely to sit
+          // on an expensive model, so it is also the one most likely to hit a
+          // provider that is down; walking the list beats a dead-end error.
+          const data = await NW.ai.reviseSafe({
             text,
             focus: nextFocus || focus,
             // `undefined` rather than '' so a stale caller cannot wipe a note
@@ -13162,8 +13974,20 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // editorial read on a stronger model than the proofreader.
             provider: (p.settings && p.settings.adviceProvider) || undefined,
             model: (p.settings && p.settings.adviceModel) || undefined,
+            onRetry: (candidate) => {
+              if (runRef.current === token) setError(NW.t('换用 {0} 重试…', candidate.label));
+            },
           });
           if (runRef.current !== token) return;
+          const used = (data && data.usedModel) || null;
+          if (used && typeof p.onToast === 'function') {
+            const wantProvider = (p.settings && p.settings.adviceProvider) || '';
+            const wantModel = (p.settings && p.settings.adviceModel) || '';
+            if (wantProvider && wantModel && (used.provider !== wantProvider || used.model !== wantModel)) {
+              p.onToast(NW.t('原模型没有响应，已改用 {0}', used.label), 'warn');
+            }
+          }
+          if (used) setError('');
           setItems(Array.isArray(data && data.suggestions) ? data.suggestions : []);
           setModel(String((data && data.model) || ''));
         } catch (err) {
@@ -13769,6 +14593,103 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     );
   }
 
+  // --------------------------------------------------------- model picker ----
+  /**
+   * R34: 「模型连不上时，弹出选择其他模型的窗口」.
+   *
+   * Shown only after every configured model has failed, so the writer never sees
+   * it during normal operation. It lists what was tried (with the host's own
+   * message for each) and every other pair the host knows about, so picking one
+   * is a single click instead of a trip through Settings.
+   */
+  function ModelPicker(props) {
+    const p = props || {};
+    const req = p.req || {};
+    const list = req.models || null;
+    const picked = req.preferred || {};
+    const options = useMemo(() => {
+      const seen = new Set();
+      const rows = [];
+      for (const row of (list && list.models) || []) {
+        if (!row) continue;
+        const key = String(row.provider) + '\u0000' + String(row.id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push({
+          value: key,
+          label: (row.name || row.id) + ' · ' + row.provider,
+        });
+      }
+      const current = (list && list.current) || {};
+      const currentKey = current.provider && current.model ? String(current.provider) + '\u0000' + String(current.model) : '';
+      if (currentKey && !seen.has(currentKey)) {
+        rows.unshift({ value: currentKey, label: String(current.model) + ' · ' + String(current.provider) + '（当前默认）' });
+      }
+      return rows;
+    }, [list]);
+
+    const [value, setValue] = useState(() => {
+      const first = options[0];
+      return first ? first.value : '';
+    });
+    const tried = Array.isArray(req.tried) ? req.tried : [];
+    // R34: the caller passes a Chinese label ('AI 校对' / 'AI 投稿' / '修改建议');
+    // translate it here so the picker reads as one sentence in either language.
+    const label = NW.t(String(req.label || '本次请求'));
+    const failedLine =
+      picked.provider && picked.model
+        ? NW.t('{0}用 {1} · {2} 没有成功，换一个模型再试一次？', label, String(picked.model), String(picked.provider))
+        : NW.t('{0}没有可用的模型，换一个模型再试一次？', label);
+
+    const confirm = () => {
+      if (!value) return;
+      const parts = value.split('\u0000');
+      p.onDone({ provider: parts[0], model: parts.slice(1).join('\u0000') });
+    };
+
+    return h(
+      'div',
+      { className: 'nw-modal-mask', role: 'presentation' },
+      h(
+        'div',
+        { className: 'nw-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': NW.t('换个模型重试') },
+        h('div', { className: 'nw-modal-head' }, h('h2', null, NW.t('换个模型重试'))),
+        h(
+          'div',
+          { className: 'nw-modal-body' },
+          h(
+            'p',
+            { className: 'nw-hint-block' },
+            failedLine,
+          ),
+          tried.length
+            ? h(
+                'ul',
+                { className: 'nw-picker-tried' },
+                tried.slice(0, 6).map((row, index) =>
+                  h('li', { key: 't' + index }, h('span', { className: 'nw-picker-triedname' }, row.label), h('span', { className: 'nw-picker-triedmsg' }, row.message)),
+                ),
+              )
+            : null,
+          h(
+            'div',
+            { className: 'nw-field' },
+            h('label', null, NW.t('改用这个模型')),
+            options.length
+              ? NW.ui.select({ value: value, options: options, onChange: setValue, ariaLabel: NW.t('改用这个模型') })
+              : h('div', { className: 'nw-lock-error' }, NW.t('没有可用的模型，请先在 Harness 里登录一个模型提供方。')),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'nw-modal-foot' },
+          NW.ui.btn({ onClick: () => p.onDone(null), children: NW.t('取消') }),
+          NW.ui.btn({ kind: 'primary', onClick: confirm, disabled: !value, children: NW.t('重试') }),
+        ),
+      ),
+    );
+  }
+
   // --------------------------------------------------------------- apply -----
   NW.apply = function apply(ctx) {
     if (NW._applied) return;
@@ -13882,7 +14803,17 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   function errText(err, fallback) {
     if (!err) return fallback || '操作失败';
     const msg = err && err.message ? String(err.message) : String(err);
-    return msg || fallback || '操作失败';
+    const base = msg || fallback || '操作失败';
+    // R34: when every model was tried, the host's message for the last one is
+    // rarely the whole story — name the models so 「失败了」 becomes actionable.
+    const tried = err && Array.isArray(err.tried) ? err.tried : null;
+    if (!tried || !tried.length) return base;
+    const names = tried
+      .slice(0, 3)
+      .map((row) => String((row && row.label) || '').trim())
+      .filter(Boolean);
+    if (!names.length) return base;
+    return base + '（已尝试：' + names.join('、') + (tried.length > 3 ? ' 等 ' + tried.length + ' 个模型' : '') + '）';
   }
 
   /** Current editor text (falls back to the stored chapter body). */
@@ -14129,6 +15060,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     { id: 'export', label: '导出与文件', icon: 'download' },
     { id: 'privacy', label: '隐私与锁定', icon: 'lock' },
     { id: 'submit', label: '投稿', icon: 'mail' },
+    { id: 'lan', label: '手机同步', icon: 'refresh' },
     { id: 'keys', label: '快捷键', icon: 'keyboard' },
   ];
 
@@ -14848,14 +15780,26 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       setSuggestions(null);
       setDecided({});
       try {
-        const data = await NW.ai.proofread({
+        // R34: failover — if the chosen model is unreachable the client walks
+        // the other configured models, and only then offers the picker. The
+        // panel itself stays the writer's explicit choice, so `preferred` wins
+        // whenever it works and nothing changes for the happy path.
+        const data = await NW.ai.proofreadSafe({
           provider: state.provider,
           model: state.model,
           text: text,
           mode: 'typo',
           // R29: the brief edited in Settings → 写作, if the writer wrote one.
           rules: String((p.settings && p.settings.proofreadRules) || ''),
+          onRetry: (candidate) => {
+            setState((prev) => Object.assign({}, prev, { error: NW.t('换用 {0} 重试…', candidate.label) }));
+          },
         });
+        const usedModel = (data && data.usedModel) || null;
+        if (usedModel && (usedModel.provider !== state.provider || usedModel.model !== state.model)) {
+          setState((prev) => Object.assign({}, prev, { provider: usedModel.provider, model: usedModel.model, error: '' }));
+          if (typeof p.onToast === 'function') p.onToast(NW.t('原模型没有响应，已改用 {0}', usedModel.label), 'warn');
+        }
         const rows = ((data && data.suggestions) || []).map((row, index) => ({
           id: row.id == null ? 's' + index : row.id,
           start: Number(row.start) || 0,
@@ -15169,12 +16113,24 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       if (!snapshot) throw new Error('备份文件里没有可恢复的内容');
       const novels = Array.isArray(snapshot.novels) ? snapshot.novels.length : 0;
       const chapters = Array.isArray(snapshot.chapters) ? snapshot.chapters.length : 0;
+      const notes = Array.isArray(snapshot.notes) ? snapshot.notes.length : 0;
+      // R34: statuses live on the host, so the merge result — not the snapshot —
+      // is what actually happened. Report it instead of implying a full restore.
+      const merged = res && res.submissions && Number(res.submissions.imported) > 0
+        ? Number(res.submissions.imported)
+        : 0;
       await NW.db.replaceAll(snapshot);
       if (typeof p.onRefreshData === 'function') await p.onRefreshData();
+      const bits = [
+        '已恢复 ' + novels + ' 部小说',
+        chapters + ' 章',
+        notes > 0 ? notes + ' 条灵感' : '',
+        merged > 0 ? merged + ' 条投稿状态' : '',
+      ].filter(Boolean);
       if (!snapshot.novels || !snapshot.novels.length) {
         setHint('备份文件是空的，本地数据已被清空。');
       } else {
-        setHint('已恢复 ' + novels + ' 部小说、' + chapters + ' 章。');
+        setHint(bits.join('、') + '。');
       }
       NW.ui.toast('已恢复 ' + novels + ' 部小说', 'ok');
       return res;
@@ -15411,6 +16367,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   NW.dialogs.Settings = function Settings(props) {
     const p = props || {};
     const settings = p.settings || {};
+    const lanSync = p.syncState || {};
     const [draft, setDraft] = useState(() => Object.assign({}, settings));
     const set = (key, value) => {
       const next = Object.assign({}, draft, { [key]: value });
@@ -16651,7 +17608,54 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           ),
           { ref: submitSectionRef },
         ),
-        // ---------------------------------------------------- 6 快捷键 ----
+        // ------------------------------------------------------ 6 手机同步 ----
+        section(
+          '手机同步',
+          h(
+            'div',
+            { className: 'nw-row' },
+            h('span', null, '手机配对'),
+            h(
+              'div',
+              { className: 'nw-inline', style: { gap: '6px' } },
+              h('span', { className: 'nw-dim' }, lanSync && lanSync.peers ? lanSync.peers + ' 台已配对' : '还没有配对'),
+              NW.ui.btn({ onClick: () => (p.onOpenPair ? p.onOpenPair() : openSibling(p, 'pair', {})), children: '显示配对二维码…' }),
+            ),
+          ),
+          h('p', { className: 'nw-hint-block' }, '手机装好 App 后扫一次码即可。之后只要在同一个 Wi-Fi 下，修改会自动双向同步；不同书各自保留，同一本书以最后修改时间为准。'),
+          h(
+            'div',
+            { className: 'nw-row' },
+            h('span', null, '同步状态'),
+            h(
+              'span',
+              { className: 'nw-dim' },
+              lanSync && lanSync.pulledAt
+                ? '最近一次收到手机改动 ' + NW.fmtDate(lanSync.pulledAt)
+                : lanSync && lanSync.lastPushAt
+                  ? '最近一次交给同步 ' + NW.fmtDate(lanSync.lastPushAt)
+                  : '还没有同步过',
+            ),
+          ),
+          // Why the address is spelled out even though there is a QR: the phone
+          // sometimes cannot use a camera (emulator, cracked screen), and the
+          // number is also the fastest way to tell whether the desktop is on the
+          // same subnet as the phone at all.
+          lanSync && lanSync.lan && lanSync.lan.running && lanSync.lan.addresses && lanSync.lan.addresses.length
+            ? h(
+                'div',
+                { className: 'nw-row' },
+                h('span', null, '局域网地址'),
+                h('span', { className: 'nw-dim' }, lanSync.lan.addresses.map((row) => row.url).join('  ·  ')),
+              )
+            : h(
+                'div',
+                { className: 'nw-row' },
+                h('span', null, '局域网地址'),
+                h('span', { className: 'nw-dim' }, '未启动（生成配对二维码时会自动启动）'),
+              ),
+        ),
+        // ---------------------------------------------------- 7 快捷键 ----
         section(
           '快捷键',
           h(
@@ -17120,7 +18124,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       try {
         const rows = workRows || (await collectWork());
         if (!rows.length) throw new Error('请先选择要投稿的稿件');
-        const data = await NW.io.submit.prepare({
+        const preparePayload = {
           journal: selected
             ? { id: selected.id, name: selected.name, email: selected.email || '', requirements: selected.requirements || [] }
             : null,
@@ -17137,11 +18141,54 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           countPunctuation: !(
             p.settings && p.settings.countPunctuation === false
           ),
-          // R29: the mail is written by the model, so it needs its own model
-          // choice — 「AI 投稿模型」 in Settings.
-          provider: (p.settings && p.settings.submitProvider) || undefined,
-          model: (p.settings && p.settings.submitModel) || undefined,
-        });
+        };
+        // R34: the letter is model-written, so a dead provider used to kill the
+        // whole flow with a bare error. Walk the other models instead, and only
+        // fall back to the picker when none of them answer.
+        let data = null;
+        let list = null;
+        try {
+          list = await NW.ai.models();
+        } catch (err) {
+          list = null;
+        }
+        const wantedProvider = (p.settings && p.settings.submitProvider) || undefined;
+        const wantedModel = (p.settings && p.settings.submitModel) || undefined;
+        const candidates = NW.ai.candidates
+          ? NW.ai.candidates(list, { provider: wantedProvider, model: wantedModel })
+          : [{ provider: wantedProvider, model: wantedModel, label: String(wantedModel || '默认模型') }];
+        const attempts = [];
+        for (let index = 0; index < candidates.length; index += 1) {
+          const candidate = candidates[index];
+          if (index > 0) setPrepareError(NW.t('换用 {0} 重试…', candidate.label));
+          try {
+            data = await NW.io.submit.prepare(
+              Object.assign({}, preparePayload, { provider: candidate.provider, model: candidate.model }),
+            );
+            if (index > 0 && typeof p.onToast === 'function') {
+              p.onToast(NW.t('原模型没有响应，已改用 {0}', candidate.label), 'warn');
+            }
+            setPrepareError('');
+            break;
+          } catch (err) {
+            if (err && err.code === 'aborted') throw err;
+            attempts.push({ label: candidate.label, message: String((err && err.message) || err || '失败') });
+          }
+        }
+        if (!data) {
+          const picked =
+            typeof NW.askModel === 'function'
+              ? await NW.askModel({ kind: 'submit', label: 'AI 投稿', tried: attempts, models: list, preferred: { provider: wantedProvider, model: wantedModel } })
+              : null;
+          if (!picked) {
+            const detail = attempts.length ? attempts[attempts.length - 1].message : '生成邮件失败';
+            const err = new Error(detail);
+            err.tried = attempts;
+            throw err;
+          }
+          data = await NW.io.submit.prepare(Object.assign({}, preparePayload, { provider: picked.provider, model: picked.model }));
+          setPrepareError('');
+        }
         setPrepared(data || null);
         setSubject(String((data && data.subject) || ''));
         setBody(String((data && data.body) || ''));
@@ -17282,6 +18329,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         }
         setSent({ record: (data && data.record) || null, at: Date.now(), to: toAddress });
         if (typeof p.onToast === 'function') p.onToast('投稿邮件已发送', 'ok');
+        if (typeof p.onSubmissionChanged === 'function') await p.onSubmissionChanged();
         if (NW.io && NW.io.submit && NW.io.submit.record) {
           try {
             const rows = await NW.io.submit.record();
@@ -18243,6 +19291,142 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     return '格式';
   }
 
+  // ============================================================== Pair =====
+  /**
+   * 「手机配对」— shows the QR and the addresses a phone could reach us on.
+   *
+   * Why a QR at all: typing an IP plus a port on a phone keyboard is the kind of
+   * step that makes people give up, and the token has to travel out of band
+   * anyway (screen → camera is the only channel an attacker on the LAN cannot
+   * read). The code is regenerated on demand rather than kept alive, so an old
+   * screenshot of it stops working after five minutes.
+   */
+  NW.dialogs.Pair = function Pair(props) {
+    const p = props || {};
+    const [info, setInfo] = useState(null);
+    const [busy, setBusy] = useState('');
+    const [error, setError] = useState('');
+    const [peers, setPeers] = useState(null);
+    const [left, setLeft] = useState(0);
+
+    const refreshPeers = () => {
+      NW.io.pair
+        .peers()
+        .then((data) => setPeers(Array.isArray(data && data.peers) ? data.peers : []))
+        .catch(() => setPeers([]));
+    };
+
+    useEffect(() => {
+      refreshPeers();
+      return undefined;
+    }, []);
+
+    // Countdown, not a progress bar: the only useful fact about a pairing code is
+    // how long it is still good for.
+    useEffect(() => {
+      if (!info || !info.expiresAt) return undefined;
+      const tick = () => setLeft(Math.max(0, Math.round((Number(info.expiresAt) - Date.now()) / 1000)));
+      tick();
+      const timer = setInterval(tick, 1000);
+      return () => clearInterval(timer);
+    }, [info]);
+
+    // Poll for "did the phone accept yet" while the code is on screen — the
+    // desktop cannot know otherwise, and without this the dialog would still say
+    // 「等待扫码」 after a successful pair.
+    useEffect(() => {
+      if (!info || !info.expiresAt || left <= 0) return undefined;
+      const timer = setInterval(() => {
+        NW.io.pair
+          .status()
+          .then((data) => {
+            if (!data || data.active !== false) return;
+            refreshPeers();
+            p.onToast && p.onToast('手机已配对', 'ok');
+          })
+          .catch(() => {});
+      }, 2500);
+      return () => clearInterval(timer);
+    }, [info, left]);
+
+    function showCode() {
+      setError('');
+      setBusy('正在生成二维码…');
+      NW.io.pair
+        .start()
+        .then((data) => {
+          setInfo(data);
+          refreshPeers();
+        })
+        .catch((err) => setError(errText(err, '生成配对码失败')))
+        .then(() => setBusy(''));
+    }
+
+    function unpair(peer) {
+      NW.ui
+        .confirm(`解除与「${peer.name}」的配对？这台设备之后需要重新扫码才能同步。`, {
+          title: '解除配对',
+          danger: true,
+          okText: '解除',
+        })
+        .then((yes) => {
+          if (!yes) return null;
+          return NW.io.pair.remove(peer.id).then(() => {
+            refreshPeers();
+            p.onToast && p.onToast('已解除配对', 'ok');
+          });
+        })
+        .catch((err) => setError(errText(err, '解除配对失败')));
+    }
+
+    const body = [];
+    body.push(
+      h(
+        'div',
+        { className: 'nw-pair' },
+        h('p', { className: 'nw-hint-block' }, '在手机上的「精神空间」里选择「扫描配对」，对准下面的二维码。配对一次即可，之后在同一个 Wi-Fi 下会自动同步。'),
+        error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
+        info
+          ? h(
+              'div',
+              { className: 'nw-pair-box' },
+              h('div', { className: 'nw-pair-code', 'aria-hidden': 'true', dangerouslySetInnerHTML: { __html: String(info.svg || '') } }),
+              h('div', { className: 'nw-pair-meta' }, [
+                h('div', { className: 'nw-pair-addr' }, `电脑地址：${info.address || '未知'}:${info.port || '?'}`),
+                Array.isArray(info.addresses) && info.addresses.length > 1
+                  ? h('div', { className: 'nw-hint-block' }, `其他可能地址：${info.addresses.slice(1).join('、')}`)
+                  : null,
+                h('div', { className: 'nw-pair-timer' }, left > 0 ? `二维码 ${left} 秒后失效` : '二维码已失效，请重新生成'),
+              ]),
+            )
+          : h('div', { className: 'nw-pair-empty' }, busy ? NW.ui.spinner('正在生成二维码…') : '点下面的「生成二维码」。'),
+        h('div', { className: 'nw-pair-actions' }, NW.ui.btn({ kind: 'primary', onClick: showCode, disabled: !!busy, children: info ? '重新生成' : '生成二维码' })),
+      ),
+    );
+
+    body.push(h('h3', { className: 'nw-fold-head' }, '已配对设备'));
+    if (!peers) body.push(NW.ui.spinner('正在读取…'));
+    else if (!peers.length) body.push(h('p', { className: 'nw-hint-block' }, '还没有配对任何设备。'));
+    else
+      body.push(
+        h(
+          'ul',
+          { className: 'nw-pair-peers' },
+          peers.map((peer) =>
+            h(
+              'li',
+              { key: peer.id, className: 'nw-pair-peer' },
+              h('span', { className: 'nw-pair-peername' }, peer.name || '未命名设备'),
+              h('span', { className: 'nw-hint-block' }, peer.lastSyncAt ? `上次同步 ${NW.fmtDate(peer.lastSyncAt)}` : '还没有同步过'),
+              NW.ui.btn({ kind: 'ghost', onClick: () => unpair(peer), children: '解除配对' }),
+            ),
+          ),
+        ),
+      );
+
+    return modal('手机配对', h('div', null, body), [closeBtn(p)], '560px', p.onClose);
+  };
+
   // ============================================================ Versions ====
   NW.dialogs.Versions = function Versions(props) {
     const p = props || {};
@@ -18581,6 +19765,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    * 状态徽章 / 手动标记 / 重新投稿. The status is local-only and never leaves the
    * machine; `submit.update` rewrites `submissions.json` atomically.
    */
+  /**
+   * Statuses the author can pick. R34: `overdue` is deliberately absent — it is
+   * derived from the journal's reply window, so offering it as a choice would
+   * let the UI claim something the mailbox has not said. It still needs a label,
+   * which `SUBMIT_STATUS_LABELS` carries.
+   */
   const SUBMIT_STATUS_OPTIONS = [
     { value: 'sent', label: '已投稿' },
     { value: 'pending', label: '等待回复' },
@@ -18590,17 +19780,42 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     { value: 'withdrawn', label: '已撤回' },
   ];
 
+  /** Every status the UI may have to render, selectable or derived. */
+  const SUBMIT_STATUS_LABELS = {
+    sent: '已投稿',
+    pending: '等待回复',
+    overdue: '已超期',
+    accepted: '已过稿',
+    rejected: '已退稿',
+    published: '已发表',
+    withdrawn: '已撤回',
+  };
+
   const SUBMIT_STATUS_TONE = {
     sent: 'idle',
     pending: 'info',
+    overdue: 'warn',
     accepted: 'ok',
     rejected: 'danger',
     published: 'brand',
     withdrawn: 'idle',
   };
 
+  /**
+   * R34: 「等待回复」 and 「已超期」 are derived by the host from the mailbox (a
+   * reply arrived / the journal's reply window elapsed), so they must not look
+   * like something the author can pick — they are shown as a read-only note next
+   * to the badge instead of being filter chips.
+   */
+  const SUBMIT_DERIVED_NOTE = {
+    reply: '期刊已回信，等待决定',
+    window: '超过该刊常见回复周期',
+    awaiting: '',
+  };
+
   function statusLabelOf(value) {
     const key = String(value || 'sent');
+    if (SUBMIT_STATUS_LABELS[key]) return SUBMIT_STATUS_LABELS[key];
     for (let i = 0; i < SUBMIT_STATUS_OPTIONS.length; i += 1) {
       if (SUBMIT_STATUS_OPTIONS[i].value === key) return SUBMIT_STATUS_OPTIONS[i].label;
     }
@@ -18644,6 +19859,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       try {
         await NW.io.submit.update({ id: String(row.id), status: status });
         await load();
+        // R34 a: the home screen holds its own copy of the log, so a status
+        // changed here has to be pushed back or the 投稿记录 card keeps
+        // showing the old badge until the next boot.
+        if (typeof p.onSubmissionChanged === 'function') await p.onSubmissionChanged();
         if (typeof p.onToast === 'function') p.onToast('已标记为「' + statusLabelOf(status) + '」', 'ok');
       } catch (err) {
         setError(errText(err, '保存投稿状态失败'));
@@ -18696,8 +19915,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           h(
             'div',
             { className: 'nw-submit-table', role: 'list' },
-            shown.map((row) =>
-              h(
+            shown.map((row) => {
+              // R34: 「等待回复」/「已超期」 come from the host's read-time
+              // derivation, so they are reported, not offered — the select stays
+              // pinned to what the author actually chose.
+              const note = SUBMIT_DERIVED_NOTE[String(row.statusReason || '')] || '';
+              const chosen = String(row.statusStored || row.status || 'sent');
+              return h(
                 'div',
                 { key: String(row.id), className: 'nw-submit-line', role: 'listitem' },
                 h(
@@ -18707,7 +19931,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                   h(
                     'span',
                     { className: 'nw-submit-line-meta' },
-                    String(row.journalName || '未注明期刊') + ' · ' + dayText(row),
+                    String(row.journalName || '未注明期刊') + ' · ' + dayText(row) +
+                      (note ? ' · ' + note : '') +
+                      (row.statusDerived && row.responseDays ? ` · 该刊常见回复期 ${row.responseDays} 天` : ''),
                   ),
                 ),
                 h('span', { className: 'nw-badge', 'data-tone': SUBMIT_STATUS_TONE[String(row.status)] || 'idle' }, statusLabelOf(row.status)),
@@ -18715,7 +19941,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                   'span',
                   { className: 'nw-submit-line-actions' },
                   NW.ui.select({
-                    value: String(row.status || 'sent'),
+                    value: chosen,
                     onChange: (value) => mark(row, value),
                     options: SUBMIT_STATUS_OPTIONS,
                     ariaLabel: '修改投稿状态',
@@ -18728,8 +19954,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     children: '重新投稿',
                   }),
                 ),
-              ),
-            ),
+              );
+            }),
           ),
         );
       }

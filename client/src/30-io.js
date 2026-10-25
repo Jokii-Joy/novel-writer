@@ -399,8 +399,174 @@
     return api('proofread', payload);
   }
 
+  /**
+   * R34: ask the writer to pick a model, then try that one.
+   *
+   * Returns `{provider, model}` or null. `NW.askModel` is installed by the app
+   * shell (it needs a dialog host); when nothing is installed we simply give up
+   * and let the original error surface.
+   */
+  async function askModelForRetry(input) {
+    if (typeof NW.askModel !== 'function') return null;
+    const picked = await NW.askModel(input);
+    if (!picked || !picked.provider || !picked.model) return null;
+    return { provider: String(picked.provider), model: String(picked.model) };
+  }
+
+  /**
+   * `proofread` with automatic model failover.
+   *
+   * The happy path costs exactly one extra request (the model list); that list
+   * is already cached by the Settings dialog in the same tick, so the practical
+   * cost of "always have a fallback" is one fetch per action.
+   */
+  async function proofreadSafe(input) {
+    const body = input || {};
+    let list = null;
+    try {
+      list = await models();
+    } catch (err) {
+      list = null;
+    }
+    const preferred = { provider: body.provider, model: body.model };
+    const call = (candidate) => proofread(Object.assign({}, body, { provider: candidate.provider, model: candidate.model }));
+    const result = await withModelFallback(list, preferred, call, {
+      emptyMessage: NW.t('还没有配置可用的模型，请先在 Harness 里登录一个模型提供方。'),
+      onRetry: body.onRetry,
+    });
+    if (result.ok) return Object.assign({}, result.data, { usedModel: result.used, failovers: result.tried });
+    // Everything failed: offer the picker once. A writer who chose the wrong
+    // model on purpose should not have to go to Settings and come back.
+    const picked = await askModelForRetry({
+      kind: 'proofread',
+      label: 'AI 校对',
+      tried: result.tried,
+      models: list,
+      preferred: preferred,
+    });
+    if (picked) {
+      const second = await call(picked);
+      return Object.assign({}, second, { usedModel: picked, failovers: result.tried });
+    }
+    const err = result.error || new Error(NW.t('模型调用失败'));
+    err.tried = result.tried;
+    throw err;
+  }
+
+  /** `revise` with automatic model failover (same contract as `proofreadSafe`). */
+  async function reviseSafe(input) {
+    const body = input || {};
+    let list = null;
+    try {
+      list = await models();
+    } catch (err) {
+      list = null;
+    }
+    const preferred = { provider: body.provider, model: body.model };
+    const call = (candidate) => revise(Object.assign({}, body, { provider: candidate.provider, model: candidate.model }));
+    const result = await withModelFallback(list, preferred, call, {
+      emptyMessage: NW.t('还没有配置可用的模型，请先在 Harness 里登录一个模型提供方。'),
+      onRetry: body.onRetry,
+    });
+    if (result.ok) return Object.assign({}, result.data, { usedModel: result.used, failovers: result.tried });
+    const picked = await askModelForRetry({
+      kind: 'revise',
+      label: '修改建议',
+      tried: result.tried,
+      models: list,
+      preferred: preferred,
+    });
+    if (picked) {
+      const second = await call(picked);
+      return Object.assign({}, second, { usedModel: picked, failovers: result.tried });
+    }
+    const err = result.error || new Error(NW.t('模型调用失败'));
+    err.tried = result.tried;
+    throw err;
+  }
+
   function selftest() {
     return api('selftest', {});
+  }
+
+  // ------------------------------ model fallback -----------------------------
+  //
+  // R34: "if the AI model cannot be reached, does it offer to pick another one?"
+  // It did not — a dead provider just surfaced 「模型调用失败」 and stopped. The
+  // two helpers below let every AI surface retry across the other configured
+  // models before giving up.
+  //
+  // They live here rather than in each dialog because there are four callers
+  // (proofread, typeset advice, submit.prepare, revise) and the ordering rule is
+  // identical: the model the writer chose first, then the harness default, then
+  // anything else the host knows about.
+
+  /**
+   * Collect `{provider, model, label}` candidates, best first.
+   *
+   * `preferred` is the writer's own choice from Settings; it leads the list even
+   * when discovery does not list it (some providers expose no model list, and a
+   * hand-typed pair is still a legitimate target).
+   */
+  function modelCandidates(list, preferred) {
+    const out = [];
+    const seen = new Set();
+    const push = (provider, model, label) => {
+      const pv = String(provider == null ? '' : provider).trim();
+      const mv = String(model == null ? '' : model).trim();
+      if (!pv || !mv) return;
+      const key = pv + '\u0000' + mv;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ provider: pv, model: mv, label: label || mv + ' · ' + pv });
+    };
+    const pref = preferred || {};
+    const defaultTarget = (list && list.current) || {};
+    // 1. the writer's pick, 2. the harness default, 3. everything discovered.
+    push(pref.provider, pref.model, pref.label);
+    push(defaultTarget.provider, defaultTarget.model, (defaultTarget.model || '') + ' · ' + (defaultTarget.provider || '') + NW.t('（当前默认）'));
+    for (const row of (list && list.models) || []) {
+      if (row) push(row.provider, row.id, (row.name || row.id) + ' · ' + row.provider);
+    }
+    return out;
+  }
+
+  /**
+   * Run `call(candidate)` until one succeeds.
+   *
+   * Returns `{ok:true, data, used, tried}` or `{ok:false, error, tried}` where
+   * `tried` is the list of `{label, message}` failures — the caller shows them
+   * so "it did not work" becomes "these three did not work, and why".
+   *
+   * `onRetry(candidate, error, index)` is called before each second-and-later
+   * attempt so a UI can say 「正在改用 X 重试…」 instead of looking frozen.
+   */
+  async function withModelFallback(list, preferred, call, options) {
+    const opts = options || {};
+    const candidates = modelCandidates(list, preferred);
+    if (!candidates.length) {
+      return { ok: false, error: new Error(opts.emptyMessage || '没有可用的模型'), tried: [], used: null };
+    }
+    const tried = [];
+    for (let index = 0; index < candidates.length; index += 1) {
+      const candidate = candidates[index];
+      if (index > 0 && typeof opts.onRetry === 'function') {
+        try {
+          opts.onRetry(candidate, tried[tried.length - 1] || null, index);
+        } catch (err) {
+          /* a UI callback must never break the retry loop */
+        }
+      }
+      try {
+        const data = await call(candidate);
+        return { ok: true, data: data, used: candidate, tried: tried };
+      } catch (err) {
+        // An abort is the writer's own doing; retrying would fight them.
+        if (err && err.code === 'aborted') return { ok: false, error: err, tried: tried, used: null };
+        tried.push({ label: candidate.label, message: String((err && err.message) || err || '失败'), code: String((err && err.code) || '') });
+      }
+    }
+    return { ok: false, error: new Error(tried.length ? tried[tried.length - 1].message : NW.t('模型调用失败')), tried: tried, used: null };
   }
 
   // --------------------------------- library ---------------------------------
@@ -602,9 +768,38 @@
     });
   }
 
-  /** Recent submission records (newest first, capped by the host). */
-  function submitRecord() {
-    return api('submit.record', {});
+  /**
+   * Inbox rows carry an RFC 2822 `date` string, not a timestamp — `Number()`
+   * would give NaN and every reply would look like it predates the submission.
+   */
+  function mailTime(row) {
+    const stamp = Number(row && (row.at || row.time));
+    if (Number.isFinite(stamp) && stamp > 0) return stamp;
+    const text = String((row && row.date) || '');
+    if (!text) return 0;
+    const parsed = Date.parse(text);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  /**
+   * Recent submission records (newest first, capped by the host).
+   *
+   * `options.replies` is the inbox slice to reconcile against — the host derives
+   * 「等待回复」/「已超期」 from it (R34). Omitting it keeps the stored statuses, so
+   * a refresh that cannot reach IMAP never invents a status.
+   */
+  function submitRecord(options) {
+    const input = options && typeof options === 'object' ? options : {};
+    const payload = {};
+    if (Array.isArray(input.replies)) {
+      payload.replies = input.replies.map((row) => ({
+        uid: Number(row && row.uid) || 0,
+        from: String((row && (row.from || row.address)) || ''),
+        subject: String((row && row.subject) || ''),
+        at: mailTime(row),
+      }));
+    }
+    return api('submit.record', payload);
   }
 
   /** Updates one submission's status (accepted / rejected / …) or note. */
@@ -707,6 +902,66 @@
     return api('revise', payload);
   }
 
+  // ---- LAN sync / pairing (R34) ---------------------------------------------
+  // The phone talks to the host over HTTP; these wrappers are what the desktop
+  // side of that conversation calls, so both ends speak the same method names.
+
+  /** Shows a pairing QR: `{payload, svg, token, expiresAt, addresses, port}`. */
+  function pairStart() {
+    return api('pair.start', {});
+  }
+
+  function pairStatus() {
+    return api('pair.status', {});
+  }
+
+  function pairCancel() {
+    return api('pair.cancel', {});
+  }
+
+  function pairAccept(input) {
+    const body = input && typeof input === 'object' ? input : {};
+    return api('pair.accept', {
+      token: String(body.token || ''),
+      deviceId: String(body.deviceId || ''),
+      deviceName: String(body.deviceName || ''),
+      publicKey: String(body.publicKey || ''),
+      address: String(body.address || ''),
+    });
+  }
+
+  function peersList() {
+    return api('pair.peers', {});
+  }
+
+  function peerRemove(id) {
+    return api('pair.remove', { id: String(id || '') });
+  }
+
+  function lanInfo() {
+    return api('pair.info', {});
+  }
+
+  /**
+   * Pushes the whole library into the host's sync mirror.
+   *
+   * `books` is `[{id,title,author,updatedAt,deleted,chapters}]` — the same shape
+   * the merge engine and the phone use. Sending the library whole (rather than a
+   * diff) keeps the contract honest: book-level LWW needs both sides' timestamps,
+   * and a delta would have to reconstruct them anyway.
+   */
+  function syncPush(books) {
+    return api('sync.push', { books: Array.isArray(books) ? books : [] });
+  }
+
+  function syncPull() {
+    return api('sync.pull', {});
+  }
+
+  function syncApply(books) {
+    return api('sync.apply', { books: Array.isArray(books) ? books : [] });
+  }
+
   NW.apiUrl = apiUrl;
   NW.api = api;
 
@@ -760,6 +1015,20 @@
       read: inboxRead,
       remove: inboxDelete,
     },
+    pair: {
+      start: pairStart,
+      status: pairStatus,
+      cancel: pairCancel,
+      accept: pairAccept,
+      peers: peersList,
+      remove: peerRemove,
+      info: lanInfo,
+    },
+    sync: {
+      push: syncPush,
+      pull: syncPull,
+      apply: syncApply,
+    },
   };
 
   NW.ai = {
@@ -767,6 +1036,11 @@
     proofread: proofread,
     revise: revise,
     selftest: selftest,
+    // R34: failover-aware variants. `proofread` / `revise` stay bare so the
+    // dialogs that manage their own picker keep exact control.
+    proofreadSafe: proofreadSafe,
+    reviseSafe: reviseSafe,
+    candidates: modelCandidates,
   };
 
   /**

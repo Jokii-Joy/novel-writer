@@ -812,5 +812,55 @@
   .nw-prep-bar > i{animation:none;width:100%;opacity:.4;}
   .nw-prep-step[data-now="1"] .nw-prep-dot{animation:none;}
 }
+
+/* ---------------------------------------------------------------- pairing -- */
+/* R34 ③: the phone pairing dialog. The QR arrives as inline SVG from the host,
+   so CSS only has to give it a quiet white plate — a code drawn on a tinted
+   background loses the contrast scanners depend on. */
+.nw-pair{display:flex;flex-direction:column;gap:var(--nw-sp-3);}
+.nw-pair-box{
+  display:flex;align-items:flex-start;gap:var(--nw-sp-4);
+  padding:var(--nw-sp-3);border:1px solid var(--nw-line);border-radius:var(--nw-r-card);
+  background:var(--nw-panel);
+}
+.nw-pair-code{
+  flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+  padding:8px;border-radius:var(--nw-r-control);
+  background:#ffffff; /* deliberately literal: the quiet zone must be paper */
+}
+.nw-pair-code > svg{display:block;width:180px;height:180px;}
+.nw-pair-meta{display:flex;flex-direction:column;gap:6px;min-width:0;}
+.nw-pair-addr{font-size:var(--nw-fs-second);font-weight:600;color:var(--nw-fg);word-break:break-all;}
+.nw-pair-timer{font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);}
+.nw-pair-empty{
+  display:flex;align-items:center;justify-content:center;min-height:120px;
+  border:1px dashed var(--nw-line-strong);border-radius:var(--nw-r-card);
+  font-size:var(--nw-fs-second);color:var(--nw-fg-soft);text-align:center;padding:var(--nw-sp-3);
+}
+.nw-pair-actions{display:flex;gap:var(--nw-sp-2);}
+.nw-pair-peers{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;list-style:none;}
+.nw-pair-peer{
+  display:flex;align-items:center;gap:var(--nw-sp-2);
+  padding:var(--nw-sp-2) var(--nw-sp-3);border:1px solid var(--nw-line-soft);
+  border-radius:var(--nw-r-control);background:var(--nw-surface-1);
+}
+.nw-pair-peername{font-size:var(--nw-fs-second);font-weight:600;color:var(--nw-fg);}
+.nw-pair-peer .nw-hint-block{margin-left:auto;margin-bottom:0;}
+
+/* R34: model picker shown when every configured model failed. The tried list is
+   the useful half — it turns 「打不开」 into 「这三个都不通，各自的原因如下」. */
+.nw-picker-tried{
+  display:flex;flex-direction:column;gap:4px;
+  margin:0 0 var(--nw-sp-3);padding:var(--nw-sp-2) var(--nw-sp-3);
+  border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
+  background:var(--nw-sunken);list-style:none;
+}
+.nw-picker-tried > li{display:flex;gap:var(--nw-sp-2);align-items:baseline;font-size:var(--nw-fs-micro);line-height:1.6;}
+.nw-picker-triedname{flex:0 0 auto;color:var(--nw-fg);font-weight:600;}
+.nw-picker-triedmsg{flex:1 1 auto;min-width:0;color:var(--nw-fg-soft);overflow-wrap:anywhere;}
+@media (max-width:520px){
+  .nw-pair-box{flex-direction:column;align-items:center;}
+  .nw-pair-code > svg{width:150px;height:150px;}
+}
 `);
 })();

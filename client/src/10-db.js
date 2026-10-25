@@ -951,7 +951,14 @@
     const ops = [];
 
     if (item.kind === 'novel') {
-      if (payload.novel) ops.push({ store: 'novels', type: 'put', value: payload.novel });
+      // Restoring must be a deliberate resurrection, not just a re-insert of the
+      // old row: the sync engine decides tombstone-vs-live by timestamp, and the
+      // peer still carries the tombstone stamped at deletion time. Re-using the
+      // book's original `updatedAt` would therefore lose the merge and delete
+      // the book again on the next sync tick.
+      if (payload.novel) {
+        ops.push({ store: 'novels', type: 'put', value: Object.assign({}, payload.novel, { updatedAt: now() }) });
+      }
       const chapters = Array.isArray(payload.chapters) ? payload.chapters : [];
       for (let i = 0; i < chapters.length; i += 1) {
         ops.push({ store: 'chapters', type: 'put', value: chapters[i] });
@@ -1236,10 +1243,122 @@
     notify();
   }
 
+  /**
+   * R34: apply books that arrived over the LAN sync mirror.
+   *
+   * Runs in ONE transaction so a phone push can never leave half a book behind.
+   * Deliberately *not* `replaceAll`: the merge already decided per book, and
+   * replaceAll clears the stores — that would drop settings, notes, versions and
+   * the trash for every book the phone does not know about.
+   *
+   * Rules, mirroring the host's merge contract:
+   *   - a tombstone (`deleted: true`) removes the book and its chapters, and
+   *     parks them in `trash` so 撤销 still works;
+   *   - a live book is stamped with the phone's `updatedAt`, not with `now()`:
+   *     keeping the peer's clock is what makes the next merge a no-op instead of
+   *     ping-ponging "mine is newer" forever on two devices with skewed clocks;
+   *   - chapters are replaced whole (book-level LWW — the product spec says the
+   *     newer book wins, not newer chapters).
+   */
+  async function applyBooks(books) {
+    const list = Array.isArray(books) ? books.filter(function (row) { return row && row.id; }) : [];
+    if (!list.length) return 0;
+    const existingNovels = (await readAll('novels')) || [];
+    const existingChapters = (await readAll('chapters')) || [];
+    const byNovel = new Map();
+    for (let i = 0; i < existingChapters.length; i += 1) {
+      const row = existingChapters[i];
+      if (!row || row.novelId == null) continue;
+      const key = String(row.novelId);
+      if (!byNovel.has(key)) byNovel.set(key, []);
+      byNovel.get(key).push(row);
+    }
+
+    const ops = [];
+    let touched = 0;
+    for (let i = 0; i < list.length; i += 1) {
+      const incoming = list[i];
+      const id = String(incoming.id);
+      const existing = existingNovels.find(function (row) { return row && String(row.id) === id; }) || null;
+      const currentChapters = byNovel.get(id) || [];
+      const stamp = Number(incoming.updatedAt) || now();
+
+      if (incoming.deleted === true) {
+        if (!existing) continue;
+        ops.push({
+          store: 'trash',
+          type: 'put',
+          value: {
+            id: uid('trash'),
+            kind: 'novel',
+            title: existing.title || '未命名小说',
+            deletedAt: now(),
+            payload: { novel: existing, chapters: currentChapters, versions: [] },
+          },
+        });
+        ops.push({ store: 'novels', type: 'delete', key: id });
+        for (let c = 0; c < currentChapters.length; c += 1) {
+          ops.push({ store: 'chapters', type: 'delete', key: currentChapters[c].id });
+        }
+        touched += 1;
+        continue;
+      }
+
+      const novelRow = {
+        id: id,
+        title: String(incoming.title || '') || (existing && existing.title) || '未命名小说',
+        author: String(incoming.author || '') || (existing && existing.author) || '',
+        description: (existing && existing.description) || '',
+        cover: (existing && existing.cover) || null,
+        createdAt: Number(existing && existing.createdAt) || stamp,
+        updatedAt: stamp,
+      };
+      ops.push({ store: 'novels', type: 'put', value: novelRow });
+
+      const incomingChapters = Array.isArray(incoming.chapters) ? incoming.chapters : [];
+      const keep = {};
+      for (let c = 0; c < incomingChapters.length; c += 1) {
+        const row = incomingChapters[c];
+        if (!row || !row.id) continue;
+        keep[String(row.id)] = true;
+        ops.push({
+          store: 'chapters',
+          type: 'put',
+          value: {
+            id: String(row.id),
+            novelId: id,
+            title: String(row.title || ''),
+            content: String(row.content == null ? '' : row.content),
+            order: Number(row.order) || 0,
+            wordCount: countWords(String(row.content || '')),
+            createdAt: Number(row.createdAt) || stamp,
+            updatedAt: stamp,
+            enc: null,
+          },
+        });
+      }
+      // Chapters the phone does not have were deleted there; drop them locally
+      // too, otherwise the next push would send them straight back.
+      for (let c = 0; c < currentChapters.length; c += 1) {
+        const row = currentChapters[c];
+        if (!row || keep[String(row.id)]) continue;
+        ops.push({ store: 'chapters', type: 'delete', key: row.id });
+      }
+      touched += 1;
+    }
+
+    if (!ops.length) return 0;
+    const ok = await writeBatch(ops);
+    if (!ok) throw new Error('应用同步数据失败');
+    notify();
+    return touched;
+  }
+
   NW.db = {
     DB_NAME: DB_NAME,
     DB_VERSION: DB_VERSION,
     DEFAULT_SETTINGS: DEFAULT_SETTINGS,
+    applyBooks: applyBooks,
     init: init,
     close: close,
     subscribe: subscribe,

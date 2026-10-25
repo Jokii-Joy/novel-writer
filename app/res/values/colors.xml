@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="nw_paper">#faf4e9</color>
+    <color name="nw_ink">#22201d</color>
+    <color name="nw_clay">#c4532f</color>
+    <color name="nw_line">#e2dccf</color>
+    <color name="nw_soft">#8a8177</color>
+</resources>

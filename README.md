@@ -7,6 +7,15 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.2.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第三十四轮（R34）改造：**手机同步 + 手机 App + 模型自动回退** —— ① 新增 Android 客户端（`app/`，
+  约 1900 行手写 Java，零第三方 UI 库，只有扫码用到 ZXing），扫码配对后与桌面双向同步；桌面侧新增
+  `lib/lansync.js`（配对 / 签名 / 合并）与 `lib/lansync-server.js`（`0.0.0.0` 上的最小 LAN 监听，默认 41288），
+  因为 `dsh web` 只监听 127.0.0.1，手机根本连不上。② 校对 / 修改建议 / 投稿三处 AI 调用在模型失败时
+  **自动换下一个候选**（设置里选的 → Harness 当前默认 → 列表其余），只有全部失败才弹「换个模型重试」
+  选择器，成功时告知「原模型没有响应，已改用 X」。③ 修掉两个真 bug：一本书被删除之后又被编辑时，
+  墓碑的胜负判断写反了，「复活」永远不生效、书会永久消失；`pair.info` 把 UDP 发现端口（41287）当成
+  手机该连的 Web 端口上报。④ 新增「设置 → 手机同步」分区、配对二维码面板，以及可直接安装的
+  `dist/精神空间.apk`（0.50 MB）。
 - 第三十三轮（R33）改造：点写作页左上角的**首页**时，回首页的同时**把目录也展开** —— 首页就是挑书的地方，
   目录还收着会让人以为按钮没反应。既然首页已经能把目录叫回来，左上角那枚**「目录开合」按钮就删掉了**，
   胶囊里只剩「首页 | 发丝线 | 锁定」两枚。目录收起时写作列左缘的竖排「目录」把手恢复常驻（沉浸模式除外），
@@ -333,6 +342,10 @@ stroke 1.5、圆头圆角，60 个名字覆盖新建 / 编辑 / 导航 / 上传�
 - 可选任意 Harness 已配置 provider 与模型（`llm.listProviders()` + `listModels()`，默认取当前 agent 默认模型）。
   下拉永远有选项：若当前默认模型不在 `listModels()` 返回里（部分 provider 不暴露列表），会把它作为「（当前默认）」补进第一项。
 - 校对按 4000 字分块串行请求，定位方式为「模型返回原文 → `indexOf` 对齐 + 块偏移」，并用 `text.slice(start,end)===original` 二次校验，对不齐的建议直接丢弃。
+- **模型失败自动回退（R34）**：一次校对按「设置里选的模型 → Harness 当前默认 → 列表其余」逐个尝试，
+  只有全部失败才停。中途失败会在面板上写一行「换用 X 重试…」，最终换了模型时提示「原模型没有响应，已改用 X」，
+  并把实际使用的模型记进结果（`usedModel` / `failovers`）。用户主动取消（`err.code === 'aborted'`）**不会**
+  触发换模型——取消是意图，不是故障。修改建议栏与投稿助手共用同一套逻辑。
 - **注意**：`llm.stream()` 不能传顶层 `system` 字段（宿主 pi 适配器会对字符串 `content` 调 `.some(...)` 崩溃）。本插件把系统提示词折进 user 消息的 text block。
 - 建议逐条勾选，支持单条接受 / 拒绝 / 全部接受 / 全部拒绝；**先预览 diff 再应用**，`applyEdits` 从右往左写入，不覆盖未接受的原文。
 - 一键排版：统一省略号与破折号、中英文标点、引号、段落两字全角缩进、空行折叠、章节标题格式、对话分段。同样先出 diff 预览，`changed === 0` 时禁用应用。
@@ -359,6 +372,8 @@ stroke 1.5、圆头圆角，60 个名字覆盖新建 / 编辑 / 导航 / 上传�
   同一根下划线（底色从 55% 降到 30%，保证字读得清）。两边都取 `--nw-brand` 而不是宿主 alias，避免色差。
 - 定位方式与校对一致：模型给的 `quote` 用 `indexOf` 回原文对齐，对不齐的条目标「原文已改动，定位不到」，
   仍然显示意见但不做高亮——宁可少给一次跳转，也不跳到错的段落。
+- **模型回退（R34）**：与校对同一条路径（`NW.ai.reviseSafe`）。审读失败先自动换候选模型重试，全失败才在栏内
+  弹「换个模型重试」选择器；错误直接显示在栏里，不会每失败一次就弹一次 toast。
 
 ### 投稿助手（R8 三步 + 智能推荐，R12 直达预览）
 右下坞 `✉ 投稿` 打开三步向导（`NW.dialogs.Submit`，宽 820px）：**先选小说 → 再选期刊 → 邮件预览**。
@@ -399,6 +414,8 @@ stroke 1.5、圆头圆角，60 个名字覆盖新建 / 编辑 / 导航 / 上传�
   正文行距放宽到 1.75 倍并在每章前分页，方便审稿人直接在纸上批注；附件行可下载与编辑部完全一致的字节。
 - **安全阀**：只有 ≤ 4000 字才把正文交给模型调整；返回的章数必须一致、每章长度在 0.7×–1.4× 之间，否则丢弃改回纯规则排版；AI 不可用时自动退回规则排版并给出 warning。
 - 未配置 SMTP 时点「确认投稿」会留在原页并提示「去配置邮箱」，不会真的发信失败。
+- **模型回退（R34）**：`submit.prepare` 失败后会依次换模型重试（顺序同校对），全部失败时弹选择器让你指定
+  一个模型再试；选择器标题是「AI 投稿」，逐条列出失败原因（最多 6 条）。
 
 ### 投稿管理（R5 新增）
 `NW.dialogs.SubmitManager`，入口在首页「快捷入口 → 投稿管理」。
@@ -450,7 +467,7 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
 
 **密钥与 API Key**：Host 侧 `DSH_HOME/novel-writer/secrets/`，`key.bin`（32B，尝试 0600）+ `store.enc`（AES-256-GCM 信封），原子写入、写操作串行化、铸钥单飞，绝不硬编码、绝不明文落盘。
 
-### 设置（左右两栏 · 六个分区）
+### 设置（左右两栏 · 七个分区）
 左侧导航 + 右侧内容，右栏单独滚动（`max-height:min(62vh,560px)`），窗口 <640px 时导航折成可换行的胶囊行：
 1. **外观**：九套主题色块、字体、字号、行距、页宽、打字机模式、沉浸模式。
 2. **写作**：**统计字数包含标点符号**（R16 ⑥，默认开）、自动保存间隔、默认导出格式、文末追加内容与开关、导出包含书名与作者、封面入口、校对默认模型。
@@ -458,7 +475,73 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
 4. **隐私与锁定**：自动锁定、锁定超时、正文加密存储、密码设置 / 修改 / 清除。
 5. **投稿**：**服务商预设胶囊**（QQ / 163 / 126 / Yeah / 新浪 / 阿里 / Gmail / Outlook / iCloud，一键填主机 + 端口 + SSL）、
    SMTP 主机 / 端口 / TLS / 用户名 / 密码 / 保存 / 测试连接；默认笔名、联系方式、回信邮箱；期刊库入口。
-6. **快捷键**：完整键位表。
+6. **手机同步**（R34）：**手机配对**（显示已配对台数 + 「显示配对二维码…」）、**同步状态**（最近一次把改动
+   交给同步 / 收到手机改动的时间）、**局域网地址**（LAN 监听真的在跑时才逐条列出 `http://192.168.x.x:41288`，
+   否则写「未启动（生成配对二维码时会自动启动）」）。配对二维码走独立的「手机配对」面板。
+7. **快捷键**：完整键位表。
+
+### 手机同步与手机 App（R34）
+
+同一 Wi-Fi 下的手机可以直接翻、改你的小说。桌面是数据的家，手机只是第二块屏幕：**没有云端、没有中继、
+没有账号**——配对一次，两边各存一份，见面时互相合并。
+
+**为什么插件里要多开一个服务器**：`dsh web` 把插件路由绑在 **127.0.0.1** 上，这是宿主的默认行为，
+不是本插件的选择，所以手机把同一套 API 打到局域网地址上必然超时（配对接口在浏览器里 200、在手机上超时，
+这一点用 netstat 核对过）。R34 因此新增 `lib/lansync-server.js`：在 `0.0.0.0` 上开一个**刻意很小**的
+HTTP 服务（默认端口 **41288**，可用 `lan.start {port}` 换端口），只有四类路径——`ping` / `pair/handshake` /
+`pair/accept` / `sync`。配对路径靠一次性 token，同步路径靠配对时下发的共享密钥签名；**没有文件访问、
+没有设置、没有 AI**——一个被攻破的 LAN 端口最多也只能搬书。
+
+**配对（只需一次）**
+1. 设置 →「手机同步」→「显示配对二维码…」，打开「手机配对」面板。
+2. 桌面**顺便把 LAN 监听拉起来**（幂等，已启动就复用），二维码内容只有 `nw1:host:port:token`——
+   **这里的端口是 LAN 监听端口，不是 DSH 的 Web 端口**（R34 修掉的 bug 就是把 UDP 发现端口 41287 写进了这里）。
+3. 手机「扫描配对」扫码 → `pair.handshake` 用 token 换取桌面的 id 与 **Ed25519 公钥**（桌面先证明自己：
+   token 是唯一只能来自「看过这块屏幕」的凭据）→ `pair.accept` 手机再自报身份 → 桌面记下 peer 与共享密钥。
+4. 二维码 **5 分钟**过期（面板里是倒计时，不是进度条），过期重新生成即可；配对成功后「等待扫码」结束。
+5. 已配对设备在面板底部逐行列名，可「解除配对」；解除后该设备必须重新扫码，桌面不再向它吐任何数据。
+
+**发现（可选，扫码不依赖它）**：桌面同时用 UDP **41287** 广播 `nw-lansync/1` 信标（`lansync.startDiscovery`），
+手机端 `Discovery.java` 收到后可自动填地址。`pair.info` 现在分别返回 **`port`**（手机该连的 LAN 端口）与
+**`discoveryPort`**（41287，只用于广播），两者不再混用。
+
+**同步怎么合并**：单位是「书」——`{id, title, author, updatedAt, deleted, chapters}`。
+- 浏览器 IndexedDB 是正本；书单或章节一变，`sync.push` 就把**整库**交给宿主镜像（宿主读不到 IndexedDB，
+  不推就永远没有可同步的数据）。推送有 2 秒防抖，且**锁定时不推**。
+- 手机推 / 拉都走 LAN 监听 → 宿主镜像 → 浏览器。浏览器每 **6 秒** `sync.pull` 一次，**只应用**
+  「远端 `updatedAt` 严格更新」或「远端说删了而本地还有」的书——不这么做的话，30 本书的库每 6 秒全量重写一遍，
+  光标底下的正文会被当成「外部改过」。
+- 合并规则（`lib/lansync.js` 的 `mergeLibraries`，注释就写在函数上方）：
+  1. 只有一边有的书**照单收下**（墓碑也算——手机上删的书必须落到桌面）；
+  2. 一边墓碑、一边活的 → **时间新的赢**；同一毫秒打平则**活的赢**（删除与编辑撞在同一毫秒时不能悄悄吃掉编辑）；
+  3. 两边都活 → `updatedAt` 新的**整本**赢；
+  4. 完全打平 → 本地赢，保证反复合并稳定、不来回振荡。
+- **墓碑**：删书进回收站，`trash` 里 `kind === 'novel'` 的条目会被 `syncLibrary()` 派生成
+  `{deleted:true, updatedAt: deletedAt}` 的墓碑。没有它，手机在删除期间离线、下次回来会把旧书原样推回来。
+  R34 修的另一处 bug 正是「墓碑与活本比较时把胜负写反」，删除后又编辑的书因此永远复活不了。
+- 手机上删书同样写墓碑（`MainActivity` 删除确认里就是这条注释），所以「手机上删 → 桌面也删」是单向可信的。
+
+**手机端能做什么**（`app/`，手写 Java，只有扫码用 ZXing）：书架（新建 / 重命名 / 删除书）、
+点进一本书看章列表（新建 / 重命名 / 删除 / 编辑正文，纯文本）、手动「同步」、「配对 / 已配对」状态与
+解除配对；`SyncService` + `BootReceiver` 做后台同步（需要通知权限，拒绝时仍可手动同步）。
+
+**安全边界**：配对 token 一次性且 5 分钟过期；同步请求带设备 id + 共享密钥签名，未配对设备读不到任何东西；
+LAN 端口是**明文 HTTP、无 TLS**，默认只在同一 Wi-Fi 内可达。**不要把 41288 端口映射到公网**。
+另外，开启「正文加密存储」时同步出去的是库里的**密文**（`enc:v1:` 前缀，手机不持有密钥、解不开），
+两者建议不要同时用。
+
+**APK**
+- 产物：`dist/精神空间.apk`（**525097 B ≈ 0.50 MB**；另有 `.idsig`）。package `com.novelwriter.app`，
+  versionCode 1 / versionName 1.0.0，minSdk **24（Android 7.0）**、target 34；权限只有
+  `INTERNET` / `ACCESS_NETWORK_STATE` / `ACCESS_WIFI_STATE` / `CAMERA`（扫码）/ `POST_NOTIFICATIONS`。
+- 安装：把 APK 拷到手机点开，按提示允许「安装未知来源应用」；**直接覆盖安装即可升级**，
+  签名用的是固定的 debug keystore（`storepass`/`keypass` 都是 `android`，别名 `novelwriter`），
+  换签名会导致必须先卸载、配对信息随之丢失。
+- 构建：`node tools/build-apk.mjs`（**不用 Gradle**：aapt2 编译资源 → javac 编译 Java → d8 出
+  `classes.dex` → zipalign → apksigner 签名，dex 用 `tools/zip-append.mjs` 的 `ZipArchive.append`
+  塞回 APK）。工具链在 `.tools/android/`（build-tools 34.0.0、platform android-34、便携 JDK），
+  缺失时可跑 `tools/setup-android.ps1` 下载；ZXing 必须作为 **program input** 交给 d8，写成 `--lib`
+  会在运行时 `NoClassDefFoundError`。
 
 ### 自动保存与恢复（R9/R10：本地文件夹 + 加密，云备份已删除）
 - **云备份整块删除**：`lib/cloud.js`、`NW.cloud`、备份面板的 WebDAV / Gist / 文件夹三种后端全部移除。
@@ -542,6 +625,21 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
 「已尝试 SSL 465✗ / STARTTLS 587✓」显示在设置里。
 
 ## 3. 验收状态
+
+> **第三十四轮（R34）**：手机同步 + 手机 App + 模型自动回退 + 两处 bug 修复。按要求「不要做太多测试」，
+> 只做语法、构建、bundle 加载校验、APK 打包与静态检查，**没有做真机同步、也没有逐条点界面**：
+>
+> | 检查 | 命令 / 方式 | 结果 |
+> | --- | --- | --- |
+> | 语法 | `node --check`（`lib/routes.js`、`lib/lansync.js`、`lib/lansync-server.js`、`lib/qr.js`、7 个改动的 client part） | 全部 exit 0 |
+> | 构建 + 加载校验 | `node scripts/build-client.mjs` | **20 parts / 861184 字符 → 889891 字节**，`verify-client-load: ok (id=@local/novel-writer, inject=["slots"])` |
+> | 语言表 | 临时脚本扫 `NW.t('…')` 字面量对 EN 词典 | literal keys **114**，缺失 **0** |
+> | **APK 打包** | `node tools/build-apk.mjs` | aapt2 compile/link → javac → d8 → zipalign → apksigner 全过，`dist/精神空间.apk` **525097 B** |
+> | APK 元数据 | `aapt2 dump badging` | `package='com.novelwriter.app' versionCode='1' versionName='1.0.0'`，minSdk 24 / target 34；权限 INTERNET / ACCESS_NETWORK_STATE / ACCESS_WIFI_STATE / CAMERA / POST_NOTIFICATIONS |
+> | APK 结构 | `unzip -l` | `classes.dex` 505772 B + `META-INF/NOVELWRI.{SF,RSA}` + `resources.arsc` |
+> | 模型回退 | 代码路径审查（无自动化） | 三处调用点都走 `withModelFallback`；`aborted` 不重试 |
+>
+> 墓碑胜负与 `pair.info` 端口这两处修复只经代码审查确认，**没有跑双端同步的回归**。
 
 > **第三十三轮（R33）**：只改了 client（左上角胶囊去掉中间的「目录开合」、首页同时展开目录、左缘把手恢复），
 > 按要求「不要测试」，只做语法、构建与 bundle 加载校验：
@@ -672,7 +770,7 @@ novel-writer/
 ├─ index.js                 Host 入口：ctx.inject(['webServer']) 延迟注册路由，异常不拖垮宿主
 ├─ cordis.patch.yml         `- insert: id: novel-writer, name: @local/novel-writer`
 ├─ lib/                     Host（Node 内置模块，零依赖）
-│  ├─ routes.js             /novel-writer/api/* 分派（41 个方法），恒 HTTP 200 {ok,data|error}
+│  ├─ routes.js             /novel-writer/api/* 分派（55 个方法），恒 HTTP 200 {ok,data|error}
 │  ├─ secrets.js            key.bin + store.enc（AES-256-GCM，原子写、单飞防并发铸钥）
 │  ├─ ai.js                 listModels / proofread / revise / chatOnce（system 折进 user block）
 │  ├─ library.js            保存目录：settings.json + docx 镜像 + NWENC1 加密镜像
@@ -685,9 +783,14 @@ novel-writer/
 │  ├─ docx.js               buildDocx / parseDocx（含 appendText 独立段落）
 │  ├─ epub.js               buildEpub / parseEpub（含 appendText 追加 <p>）
 │  ├─ pdf.js                docxToPdf（officeToPdf → libreoffice-kit 回退）
-│  └─ import-parse.js       parseImport（txt/md/docx/epub，GB18030 回退）
+│  ├─ import-parse.js       parseImport（txt/md/docx/epub，GB18030 回退）
+│  ├─ lansync.js            手机同步核心：配对 token / Ed25519 身份 / 共享密钥签名 /
+│  │                        mergeLibraries（按书合并，墓碑胜负）/ UDP 41287 发现信标 / 宿主侧镜像
+│  ├─ lansync-server.js     0.0.0.0 上的最小 HTTP 监听（默认 41288）：ping / pair.handshake /
+│  │                        pair.accept / sync，别的一概不接
+│  └─ qr.js                 纯 JS QR 编码（无依赖），输出配对二维码 SVG
 ├─ client/
-│  ├─ client.js             构建产物（勿手改，20 parts 拼接 / 701499 字符 → 724004 字节落盘）
+│  ├─ client.js             构建产物（勿手改，20 parts 拼接 / 861184 字符 → 889891 字节落盘）
 │  └─ src/                  00→99 按文件名字典序拼接
 │     ├─ 00-boot / 99-end        __ModuleLoader__ 封装与 apply 导出
 │     ├─ 05-css                  设计 token 层（16/14/13px、圆角、控件高度、间距、阴影）
@@ -703,7 +806,7 @@ novel-writer/
 │     ├─ 55-welcome              默认欢迎页（创作中小说/统计/投稿记录/收件箱/快捷入口）
 │     ├─ 60-editor               叠层编辑器 + 打字机 + 粗光标 + 首页按钮 + 沉浸写作面 + 88px 坞留白
 │     ├─ 90-app                  App 状态机（view = home | write）+ slot 注册 + 浮动坞 + 修改建议栏
-│     ├─ 95-dialogs              设置(两栏 6 分区)/自动保存与恢复/校对/排版/投稿/投稿管理/期刊/读信/锁定/版本/回收站
+│     ├─ 95-dialogs              设置(两栏 7 分区)/自动保存与恢复/手机配对/校对/排版/投稿/投稿管理/期刊/读信/锁定/版本/回收站
 │     ├─ 96-motion               动效 token 与 keyframes（nw-fade-up / toast-in / slide / pop）
 │     ├─ 97-theme               精修层（焦点环/模态/空态/滑块/色块/响应式兜底）
 │     ├─ 98-shell-theme         按 data-theme 重映射 --dsw-alias-*，让外壳跟随阅读主题
@@ -715,7 +818,23 @@ novel-writer/
 ├─ docs/CONTRACT.md         全项目接口契约（文件归属、方法表、命名空间）
 ├─ docs/CONTRACT-R3.md      第三轮改造契约（主题/光标/坞/侧栏/导出/投稿/加密）
 ├─ docs/CONTRACT-R5.md      第五轮改造契约（期刊库/投稿四步/八主题/欢迎页/图标）
-└─ scripts/                 build-client（含加载闸门）+ verify-client-load + 其余 verify
+├─ scripts/                 build-client（含加载闸门）+ verify-client-load + 其余 verify
+├─ app/                     Android 客户端（手写 Java，无 Gradle）：书架 / 章节编辑 / 扫码配对 / LAN 客户端 / 前台同步
+│  ├─ AndroidManifest.xml   minSdk 24（Android 7.0）/ target 34；INTERNET、CAMERA、POST_NOTIFICATIONS
+│  ├─ src/com/novelwriter/app/
+│  │  ├─ MainActivity       书架（新建 / 重命名 / 删除书 / 手动同步 / 配对状态 / 解除配对）
+│  │  ├─ EditActivity       章列表 + 纯文本正文编辑（新建 / 重命名 / 删除章）
+│  │  ├─ ScanActivity       扫码取 `nw1:host:port:token` 并完成握手
+│  │  ├─ Discovery          UDP 41287 广播发现；LanClient 是 LAN HTTP 客户端
+│  │  ├─ SyncEngine         push / pull + 合并；Library / Store 是本机书库
+│  │  └─ SyncService / BootReceiver  前台同步服务与开机自启
+│  └─ res/                  图标（五档 mipmap）与主题色
+├─ tools/                   构建与发布脚本
+│  ├─ build-apk.mjs         aapt2 → javac → d8 → zipalign → apksigner（无 Gradle）
+│  ├─ zip-append.mjs        把 classes.dex 追加进 APK（自写 zip 目录重写）
+│  ├─ setup-android.ps1     下载 build-tools 34 / platform 34 / 便携 JDK
+│  └─ publish-github.mjs    经 api.github.com 上传（git push 在本机不稳定）
+└─ dist/                    构建产物：精神空间.apk（0.50 MB）与 .idsig
 ```
 
 客户端与宿主的唯一通道是 `POST /novel-writer/api/<method>`，恒定 HTTP 200，
@@ -756,3 +875,21 @@ body 为 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`，错误绝不�
 28. **期刊等级是从标签推导的，不是独立数据**：`tier` 取「国家级 / 省级 / 市级」标签，没标签的一律算「其他」，所以它只是投稿难度的粗略参考；用户可以逐刊覆盖，覆盖值会写进 `settings.json` 的 `journals` 覆盖表，但一旦覆盖就不再跟随标签变化。
 29. **「统计字数包含标点符号」是全局开关**：关掉后状态栏、首页书籍总字数、投稿预览里的字数会同时扣掉标点（`\p{P}` 与 `\p{S}`），但**已经存进 IndexedDB 的 `wordCount` 字段不会重算**——旧章节要等下次保存才更新，书籍总字数因此可能在切换开关后短暂滞后。
 30. **收件箱删除是「标记 + 清空」两步**：先 `UID STORE +FLAGS (\Deleted)`，再优先 `UID EXPUNGE <uid>`（RFC 4315）；服务器不支持 `UID EXPUNGE` 时回落整箱 `EXPUNGE`。若两步都失败，返回 `expunged:false`，界面会提示「服务器只把邮件标记为已删除，需要在你自己的邮箱里再清一次」。
+31. **手机同步只在同一个局域网内成立**：没有云端、没有中继，手机与电脑必须在同一 Wi-Fi / 同一网段。桌面侧要同时满足
+    「DSH 在跑」「插件启用」「写作页没被锁」三个条件，浏览器每 6 秒才去问一次宿主镜像——关掉页面或锁屏期间手机推来的改动
+    只停在 Host 镜像里，重新打开并解锁后才会落进 IndexedDB。LAN 端口（默认 41288）是**明文 HTTP、没有 TLS**，
+    只适合可信的家庭 / 办公网络，**绝不要把端口映射到公网**；Windows 防火墙第一次询问时请放行「专用网络」，
+    UDP 41287 的发现广播被防火墙拦掉也不影响扫码配对。
+32. **清空回收站会把墓碑一起清掉**：桌面端的删除墓碑是从 `trash` 里 `kind === 'novel'` 的条目派生的，
+    「清空回收站」把整张表 `clear()`，于是这台电脑不再记得「这本书是我删的」。此时一台在删除期间离线、
+    仍持有旧书的手机下次同步会把书**原样推回来**。想彻底删掉一本书，最好在两端都删一次，或者删完先同步、
+    等手机也删掉之后再清空回收站。
+33. **「正文加密」和「手机同步」不建议同时开**：加密时 IndexedDB 里存的是 `enc:v1:` 密文，`sync.push` 推给
+    宿主的也是密文，而手机不持有密钥、解不开，正文会显示成 `enc:v1:…` 开头的一串。要同步就关掉加密，
+    要加密就只在这台电脑上用。
+34. **APK 是 debug 签名的旁加载包**：`dist/精神空间.apk` 用固定的 `debug.keystore`（`storepass`/`keypass` 都是
+    `android`）签名，没有上架任何商店、没有自动更新，升级要手动装新包；**换签名必须先卸载旧版**，配对信息也会随之丢失。
+    构建依赖 `.tools/android/` 里下载的 SDK 与便携 JDK（`tools/setup-android.ps1` 可补齐），不是一台机器都能直接出包。
+35. **手机端只是「能看能改」的第二块屏幕**：只有书架与纯文本章节编辑（新建 / 重命名 / 删除 / 改正文），
+    **没有**版本历史、校对、一键排版、导出、投稿、灵感便签、加密与锁定；后台同步受系统电池优化策略影响，
+    被系统掐掉时只能回到 App 手动点「同步」。

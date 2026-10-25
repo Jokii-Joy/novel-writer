@@ -8,7 +8,17 @@
   function errText(err, fallback) {
     if (!err) return fallback || '操作失败';
     const msg = err && err.message ? String(err.message) : String(err);
-    return msg || fallback || '操作失败';
+    const base = msg || fallback || '操作失败';
+    // R34: when every model was tried, the host's message for the last one is
+    // rarely the whole story — name the models so 「失败了」 becomes actionable.
+    const tried = err && Array.isArray(err.tried) ? err.tried : null;
+    if (!tried || !tried.length) return base;
+    const names = tried
+      .slice(0, 3)
+      .map((row) => String((row && row.label) || '').trim())
+      .filter(Boolean);
+    if (!names.length) return base;
+    return base + '（已尝试：' + names.join('、') + (tried.length > 3 ? ' 等 ' + tried.length + ' 个模型' : '') + '）';
   }
 
   /** Current editor text (falls back to the stored chapter body). */
@@ -255,6 +265,7 @@
     { id: 'export', label: '导出与文件', icon: 'download' },
     { id: 'privacy', label: '隐私与锁定', icon: 'lock' },
     { id: 'submit', label: '投稿', icon: 'mail' },
+    { id: 'lan', label: '手机同步', icon: 'refresh' },
     { id: 'keys', label: '快捷键', icon: 'keyboard' },
   ];
 
@@ -974,14 +985,26 @@
       setSuggestions(null);
       setDecided({});
       try {
-        const data = await NW.ai.proofread({
+        // R34: failover — if the chosen model is unreachable the client walks
+        // the other configured models, and only then offers the picker. The
+        // panel itself stays the writer's explicit choice, so `preferred` wins
+        // whenever it works and nothing changes for the happy path.
+        const data = await NW.ai.proofreadSafe({
           provider: state.provider,
           model: state.model,
           text: text,
           mode: 'typo',
           // R29: the brief edited in Settings → 写作, if the writer wrote one.
           rules: String((p.settings && p.settings.proofreadRules) || ''),
+          onRetry: (candidate) => {
+            setState((prev) => Object.assign({}, prev, { error: NW.t('换用 {0} 重试…', candidate.label) }));
+          },
         });
+        const usedModel = (data && data.usedModel) || null;
+        if (usedModel && (usedModel.provider !== state.provider || usedModel.model !== state.model)) {
+          setState((prev) => Object.assign({}, prev, { provider: usedModel.provider, model: usedModel.model, error: '' }));
+          if (typeof p.onToast === 'function') p.onToast(NW.t('原模型没有响应，已改用 {0}', usedModel.label), 'warn');
+        }
         const rows = ((data && data.suggestions) || []).map((row, index) => ({
           id: row.id == null ? 's' + index : row.id,
           start: Number(row.start) || 0,
@@ -1295,12 +1318,24 @@
       if (!snapshot) throw new Error('备份文件里没有可恢复的内容');
       const novels = Array.isArray(snapshot.novels) ? snapshot.novels.length : 0;
       const chapters = Array.isArray(snapshot.chapters) ? snapshot.chapters.length : 0;
+      const notes = Array.isArray(snapshot.notes) ? snapshot.notes.length : 0;
+      // R34: statuses live on the host, so the merge result — not the snapshot —
+      // is what actually happened. Report it instead of implying a full restore.
+      const merged = res && res.submissions && Number(res.submissions.imported) > 0
+        ? Number(res.submissions.imported)
+        : 0;
       await NW.db.replaceAll(snapshot);
       if (typeof p.onRefreshData === 'function') await p.onRefreshData();
+      const bits = [
+        '已恢复 ' + novels + ' 部小说',
+        chapters + ' 章',
+        notes > 0 ? notes + ' 条灵感' : '',
+        merged > 0 ? merged + ' 条投稿状态' : '',
+      ].filter(Boolean);
       if (!snapshot.novels || !snapshot.novels.length) {
         setHint('备份文件是空的，本地数据已被清空。');
       } else {
-        setHint('已恢复 ' + novels + ' 部小说、' + chapters + ' 章。');
+        setHint(bits.join('、') + '。');
       }
       NW.ui.toast('已恢复 ' + novels + ' 部小说', 'ok');
       return res;
@@ -1537,6 +1572,7 @@
   NW.dialogs.Settings = function Settings(props) {
     const p = props || {};
     const settings = p.settings || {};
+    const lanSync = p.syncState || {};
     const [draft, setDraft] = useState(() => Object.assign({}, settings));
     const set = (key, value) => {
       const next = Object.assign({}, draft, { [key]: value });
@@ -2777,7 +2813,54 @@
           ),
           { ref: submitSectionRef },
         ),
-        // ---------------------------------------------------- 6 快捷键 ----
+        // ------------------------------------------------------ 6 手机同步 ----
+        section(
+          '手机同步',
+          h(
+            'div',
+            { className: 'nw-row' },
+            h('span', null, '手机配对'),
+            h(
+              'div',
+              { className: 'nw-inline', style: { gap: '6px' } },
+              h('span', { className: 'nw-dim' }, lanSync && lanSync.peers ? lanSync.peers + ' 台已配对' : '还没有配对'),
+              NW.ui.btn({ onClick: () => (p.onOpenPair ? p.onOpenPair() : openSibling(p, 'pair', {})), children: '显示配对二维码…' }),
+            ),
+          ),
+          h('p', { className: 'nw-hint-block' }, '手机装好 App 后扫一次码即可。之后只要在同一个 Wi-Fi 下，修改会自动双向同步；不同书各自保留，同一本书以最后修改时间为准。'),
+          h(
+            'div',
+            { className: 'nw-row' },
+            h('span', null, '同步状态'),
+            h(
+              'span',
+              { className: 'nw-dim' },
+              lanSync && lanSync.pulledAt
+                ? '最近一次收到手机改动 ' + NW.fmtDate(lanSync.pulledAt)
+                : lanSync && lanSync.lastPushAt
+                  ? '最近一次交给同步 ' + NW.fmtDate(lanSync.lastPushAt)
+                  : '还没有同步过',
+            ),
+          ),
+          // Why the address is spelled out even though there is a QR: the phone
+          // sometimes cannot use a camera (emulator, cracked screen), and the
+          // number is also the fastest way to tell whether the desktop is on the
+          // same subnet as the phone at all.
+          lanSync && lanSync.lan && lanSync.lan.running && lanSync.lan.addresses && lanSync.lan.addresses.length
+            ? h(
+                'div',
+                { className: 'nw-row' },
+                h('span', null, '局域网地址'),
+                h('span', { className: 'nw-dim' }, lanSync.lan.addresses.map((row) => row.url).join('  ·  ')),
+              )
+            : h(
+                'div',
+                { className: 'nw-row' },
+                h('span', null, '局域网地址'),
+                h('span', { className: 'nw-dim' }, '未启动（生成配对二维码时会自动启动）'),
+              ),
+        ),
+        // ---------------------------------------------------- 7 快捷键 ----
         section(
           '快捷键',
           h(
@@ -3246,7 +3329,7 @@
       try {
         const rows = workRows || (await collectWork());
         if (!rows.length) throw new Error('请先选择要投稿的稿件');
-        const data = await NW.io.submit.prepare({
+        const preparePayload = {
           journal: selected
             ? { id: selected.id, name: selected.name, email: selected.email || '', requirements: selected.requirements || [] }
             : null,
@@ -3263,11 +3346,54 @@
           countPunctuation: !(
             p.settings && p.settings.countPunctuation === false
           ),
-          // R29: the mail is written by the model, so it needs its own model
-          // choice — 「AI 投稿模型」 in Settings.
-          provider: (p.settings && p.settings.submitProvider) || undefined,
-          model: (p.settings && p.settings.submitModel) || undefined,
-        });
+        };
+        // R34: the letter is model-written, so a dead provider used to kill the
+        // whole flow with a bare error. Walk the other models instead, and only
+        // fall back to the picker when none of them answer.
+        let data = null;
+        let list = null;
+        try {
+          list = await NW.ai.models();
+        } catch (err) {
+          list = null;
+        }
+        const wantedProvider = (p.settings && p.settings.submitProvider) || undefined;
+        const wantedModel = (p.settings && p.settings.submitModel) || undefined;
+        const candidates = NW.ai.candidates
+          ? NW.ai.candidates(list, { provider: wantedProvider, model: wantedModel })
+          : [{ provider: wantedProvider, model: wantedModel, label: String(wantedModel || '默认模型') }];
+        const attempts = [];
+        for (let index = 0; index < candidates.length; index += 1) {
+          const candidate = candidates[index];
+          if (index > 0) setPrepareError(NW.t('换用 {0} 重试…', candidate.label));
+          try {
+            data = await NW.io.submit.prepare(
+              Object.assign({}, preparePayload, { provider: candidate.provider, model: candidate.model }),
+            );
+            if (index > 0 && typeof p.onToast === 'function') {
+              p.onToast(NW.t('原模型没有响应，已改用 {0}', candidate.label), 'warn');
+            }
+            setPrepareError('');
+            break;
+          } catch (err) {
+            if (err && err.code === 'aborted') throw err;
+            attempts.push({ label: candidate.label, message: String((err && err.message) || err || '失败') });
+          }
+        }
+        if (!data) {
+          const picked =
+            typeof NW.askModel === 'function'
+              ? await NW.askModel({ kind: 'submit', label: 'AI 投稿', tried: attempts, models: list, preferred: { provider: wantedProvider, model: wantedModel } })
+              : null;
+          if (!picked) {
+            const detail = attempts.length ? attempts[attempts.length - 1].message : '生成邮件失败';
+            const err = new Error(detail);
+            err.tried = attempts;
+            throw err;
+          }
+          data = await NW.io.submit.prepare(Object.assign({}, preparePayload, { provider: picked.provider, model: picked.model }));
+          setPrepareError('');
+        }
         setPrepared(data || null);
         setSubject(String((data && data.subject) || ''));
         setBody(String((data && data.body) || ''));
@@ -3408,6 +3534,7 @@
         }
         setSent({ record: (data && data.record) || null, at: Date.now(), to: toAddress });
         if (typeof p.onToast === 'function') p.onToast('投稿邮件已发送', 'ok');
+        if (typeof p.onSubmissionChanged === 'function') await p.onSubmissionChanged();
         if (NW.io && NW.io.submit && NW.io.submit.record) {
           try {
             const rows = await NW.io.submit.record();
@@ -4369,6 +4496,142 @@
     return '格式';
   }
 
+  // ============================================================== Pair =====
+  /**
+   * 「手机配对」— shows the QR and the addresses a phone could reach us on.
+   *
+   * Why a QR at all: typing an IP plus a port on a phone keyboard is the kind of
+   * step that makes people give up, and the token has to travel out of band
+   * anyway (screen → camera is the only channel an attacker on the LAN cannot
+   * read). The code is regenerated on demand rather than kept alive, so an old
+   * screenshot of it stops working after five minutes.
+   */
+  NW.dialogs.Pair = function Pair(props) {
+    const p = props || {};
+    const [info, setInfo] = useState(null);
+    const [busy, setBusy] = useState('');
+    const [error, setError] = useState('');
+    const [peers, setPeers] = useState(null);
+    const [left, setLeft] = useState(0);
+
+    const refreshPeers = () => {
+      NW.io.pair
+        .peers()
+        .then((data) => setPeers(Array.isArray(data && data.peers) ? data.peers : []))
+        .catch(() => setPeers([]));
+    };
+
+    useEffect(() => {
+      refreshPeers();
+      return undefined;
+    }, []);
+
+    // Countdown, not a progress bar: the only useful fact about a pairing code is
+    // how long it is still good for.
+    useEffect(() => {
+      if (!info || !info.expiresAt) return undefined;
+      const tick = () => setLeft(Math.max(0, Math.round((Number(info.expiresAt) - Date.now()) / 1000)));
+      tick();
+      const timer = setInterval(tick, 1000);
+      return () => clearInterval(timer);
+    }, [info]);
+
+    // Poll for "did the phone accept yet" while the code is on screen — the
+    // desktop cannot know otherwise, and without this the dialog would still say
+    // 「等待扫码」 after a successful pair.
+    useEffect(() => {
+      if (!info || !info.expiresAt || left <= 0) return undefined;
+      const timer = setInterval(() => {
+        NW.io.pair
+          .status()
+          .then((data) => {
+            if (!data || data.active !== false) return;
+            refreshPeers();
+            p.onToast && p.onToast('手机已配对', 'ok');
+          })
+          .catch(() => {});
+      }, 2500);
+      return () => clearInterval(timer);
+    }, [info, left]);
+
+    function showCode() {
+      setError('');
+      setBusy('正在生成二维码…');
+      NW.io.pair
+        .start()
+        .then((data) => {
+          setInfo(data);
+          refreshPeers();
+        })
+        .catch((err) => setError(errText(err, '生成配对码失败')))
+        .then(() => setBusy(''));
+    }
+
+    function unpair(peer) {
+      NW.ui
+        .confirm(`解除与「${peer.name}」的配对？这台设备之后需要重新扫码才能同步。`, {
+          title: '解除配对',
+          danger: true,
+          okText: '解除',
+        })
+        .then((yes) => {
+          if (!yes) return null;
+          return NW.io.pair.remove(peer.id).then(() => {
+            refreshPeers();
+            p.onToast && p.onToast('已解除配对', 'ok');
+          });
+        })
+        .catch((err) => setError(errText(err, '解除配对失败')));
+    }
+
+    const body = [];
+    body.push(
+      h(
+        'div',
+        { className: 'nw-pair' },
+        h('p', { className: 'nw-hint-block' }, '在手机上的「精神空间」里选择「扫描配对」，对准下面的二维码。配对一次即可，之后在同一个 Wi-Fi 下会自动同步。'),
+        error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
+        info
+          ? h(
+              'div',
+              { className: 'nw-pair-box' },
+              h('div', { className: 'nw-pair-code', 'aria-hidden': 'true', dangerouslySetInnerHTML: { __html: String(info.svg || '') } }),
+              h('div', { className: 'nw-pair-meta' }, [
+                h('div', { className: 'nw-pair-addr' }, `电脑地址：${info.address || '未知'}:${info.port || '?'}`),
+                Array.isArray(info.addresses) && info.addresses.length > 1
+                  ? h('div', { className: 'nw-hint-block' }, `其他可能地址：${info.addresses.slice(1).join('、')}`)
+                  : null,
+                h('div', { className: 'nw-pair-timer' }, left > 0 ? `二维码 ${left} 秒后失效` : '二维码已失效，请重新生成'),
+              ]),
+            )
+          : h('div', { className: 'nw-pair-empty' }, busy ? NW.ui.spinner('正在生成二维码…') : '点下面的「生成二维码」。'),
+        h('div', { className: 'nw-pair-actions' }, NW.ui.btn({ kind: 'primary', onClick: showCode, disabled: !!busy, children: info ? '重新生成' : '生成二维码' })),
+      ),
+    );
+
+    body.push(h('h3', { className: 'nw-fold-head' }, '已配对设备'));
+    if (!peers) body.push(NW.ui.spinner('正在读取…'));
+    else if (!peers.length) body.push(h('p', { className: 'nw-hint-block' }, '还没有配对任何设备。'));
+    else
+      body.push(
+        h(
+          'ul',
+          { className: 'nw-pair-peers' },
+          peers.map((peer) =>
+            h(
+              'li',
+              { key: peer.id, className: 'nw-pair-peer' },
+              h('span', { className: 'nw-pair-peername' }, peer.name || '未命名设备'),
+              h('span', { className: 'nw-hint-block' }, peer.lastSyncAt ? `上次同步 ${NW.fmtDate(peer.lastSyncAt)}` : '还没有同步过'),
+              NW.ui.btn({ kind: 'ghost', onClick: () => unpair(peer), children: '解除配对' }),
+            ),
+          ),
+        ),
+      );
+
+    return modal('手机配对', h('div', null, body), [closeBtn(p)], '560px', p.onClose);
+  };
+
   // ============================================================ Versions ====
   NW.dialogs.Versions = function Versions(props) {
     const p = props || {};
@@ -4707,6 +4970,12 @@
    * 状态徽章 / 手动标记 / 重新投稿. The status is local-only and never leaves the
    * machine; `submit.update` rewrites `submissions.json` atomically.
    */
+  /**
+   * Statuses the author can pick. R34: `overdue` is deliberately absent — it is
+   * derived from the journal's reply window, so offering it as a choice would
+   * let the UI claim something the mailbox has not said. It still needs a label,
+   * which `SUBMIT_STATUS_LABELS` carries.
+   */
   const SUBMIT_STATUS_OPTIONS = [
     { value: 'sent', label: '已投稿' },
     { value: 'pending', label: '等待回复' },
@@ -4716,17 +4985,42 @@
     { value: 'withdrawn', label: '已撤回' },
   ];
 
+  /** Every status the UI may have to render, selectable or derived. */
+  const SUBMIT_STATUS_LABELS = {
+    sent: '已投稿',
+    pending: '等待回复',
+    overdue: '已超期',
+    accepted: '已过稿',
+    rejected: '已退稿',
+    published: '已发表',
+    withdrawn: '已撤回',
+  };
+
   const SUBMIT_STATUS_TONE = {
     sent: 'idle',
     pending: 'info',
+    overdue: 'warn',
     accepted: 'ok',
     rejected: 'danger',
     published: 'brand',
     withdrawn: 'idle',
   };
 
+  /**
+   * R34: 「等待回复」 and 「已超期」 are derived by the host from the mailbox (a
+   * reply arrived / the journal's reply window elapsed), so they must not look
+   * like something the author can pick — they are shown as a read-only note next
+   * to the badge instead of being filter chips.
+   */
+  const SUBMIT_DERIVED_NOTE = {
+    reply: '期刊已回信，等待决定',
+    window: '超过该刊常见回复周期',
+    awaiting: '',
+  };
+
   function statusLabelOf(value) {
     const key = String(value || 'sent');
+    if (SUBMIT_STATUS_LABELS[key]) return SUBMIT_STATUS_LABELS[key];
     for (let i = 0; i < SUBMIT_STATUS_OPTIONS.length; i += 1) {
       if (SUBMIT_STATUS_OPTIONS[i].value === key) return SUBMIT_STATUS_OPTIONS[i].label;
     }
@@ -4770,6 +5064,10 @@
       try {
         await NW.io.submit.update({ id: String(row.id), status: status });
         await load();
+        // R34 a: the home screen holds its own copy of the log, so a status
+        // changed here has to be pushed back or the 投稿记录 card keeps
+        // showing the old badge until the next boot.
+        if (typeof p.onSubmissionChanged === 'function') await p.onSubmissionChanged();
         if (typeof p.onToast === 'function') p.onToast('已标记为「' + statusLabelOf(status) + '」', 'ok');
       } catch (err) {
         setError(errText(err, '保存投稿状态失败'));
@@ -4822,8 +5120,13 @@
           h(
             'div',
             { className: 'nw-submit-table', role: 'list' },
-            shown.map((row) =>
-              h(
+            shown.map((row) => {
+              // R34: 「等待回复」/「已超期」 come from the host's read-time
+              // derivation, so they are reported, not offered — the select stays
+              // pinned to what the author actually chose.
+              const note = SUBMIT_DERIVED_NOTE[String(row.statusReason || '')] || '';
+              const chosen = String(row.statusStored || row.status || 'sent');
+              return h(
                 'div',
                 { key: String(row.id), className: 'nw-submit-line', role: 'listitem' },
                 h(
@@ -4833,7 +5136,9 @@
                   h(
                     'span',
                     { className: 'nw-submit-line-meta' },
-                    String(row.journalName || '未注明期刊') + ' · ' + dayText(row),
+                    String(row.journalName || '未注明期刊') + ' · ' + dayText(row) +
+                      (note ? ' · ' + note : '') +
+                      (row.statusDerived && row.responseDays ? ` · 该刊常见回复期 ${row.responseDays} 天` : ''),
                   ),
                 ),
                 h('span', { className: 'nw-badge', 'data-tone': SUBMIT_STATUS_TONE[String(row.status)] || 'idle' }, statusLabelOf(row.status)),
@@ -4841,7 +5146,7 @@
                   'span',
                   { className: 'nw-submit-line-actions' },
                   NW.ui.select({
-                    value: String(row.status || 'sent'),
+                    value: chosen,
                     onChange: (value) => mark(row, value),
                     options: SUBMIT_STATUS_OPTIONS,
                     ariaLabel: '修改投稿状态',
@@ -4854,8 +5159,8 @@
                     children: '重新投稿',
                   }),
                 ),
-              ),
-            ),
+              );
+            }),
           ),
         );
       }
