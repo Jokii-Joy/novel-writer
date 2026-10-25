@@ -1,0 +1,11 @@
+#!/bin/sh
+# Upload the branch to GitHub after every commit (R39).
+#
+# Runs detached and never fails the commit: if GitHub is unreachable the push
+# is retried in the background and .tools/push-pending remembers the failure.
+# Install once with:  node tools/auto-push.mjs --install
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+[ -f "$root/tools/auto-push.mjs" ] || exit 0
+command -v node >/dev/null 2>&1 || exit 0
+node "$root/tools/auto-push.mjs" --hook >/dev/null 2>&1 &
+exit 0

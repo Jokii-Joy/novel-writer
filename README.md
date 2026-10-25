@@ -226,27 +226,45 @@ node --check client/client.js
 `inject: ["slots"]` 与 `apply`。**语法检查抓不到的「反引号提前闭合模板字符串」只有这道闸门能拦住** ——
 CSS 是用模板字符串写的，注释里多写一个反引号就会让整块样式变成语法错误。
 
-### 上传到 GitHub（R11 附带）
+### 上传到 GitHub（R11 首次上传 · R39 改成每次提交自动上传）
 
 本机没有全局安装 git / gh，所以工具是**便携版**放在 `.tools/`（已被 `.gitignore` 忽略，不进仓库）：
 
 - `.tools/git/` — PortableGit 2.56（`git.exe`）
 - `.tools/gh-token.txt` — 你的 GitHub Token（同样被忽略，**永远不要提交**）
+- `.tools/github.json` — 仓库坐标（`{"owner":"…","repo":"novel-writer","branch":"main"}`）
+- `.tools/push.log` / `.tools/push-pending` — 自动上传的日志与失败待重试标记
 
-**手动步骤只有一个**：双击仓库根目录的 **`setup-github.cmd`**，按提示粘贴一次 Token。
+**一次性配置**（三步，之后全自动）：
 
-脚本会：`git init -b main` + 提交 → 用 Token 调 `api.github.com` 建仓库 → 逐个上传被 git 跟踪的文件
-（blobs → tree → commit → ref）→ 打印仓库地址。**无需管理员权限，不改系统环境变量，不装任何东西到系统目录。**
+1. 生成 classic token，只勾 `repo`：
+   <https://github.com/settings/tokens/new?scopes=repo&description=mindspace>
+2. 把 token 写进 `.tools/gh-token.txt`（单行，别带空格），再写 `.tools/github.json`：
+   ```json
+   { "owner": "你的用户名", "repo": "novel-writer", "branch": "main" }
+   ```
+3. 启用钩子：`node tools/auto-push.mjs --install`（等价于 `git config core.hooksPath .githooks`）。
 
-> ⚠️ 为什么不用 `git push`：这台机器到 `github.com` 的连接是间歇性的（`api.github.com` 一直正常，
-> 但 `github.com/login/device/code` 会成片超时）。`git push` 和浏览器 OAuth 都要访问 `github.com`，
-> 所以随机失败。`tools/publish-github.mjs` 改走 REST API，**完全不碰 `github.com`**，只访问
-> `api.github.com`，结果与 push 等价（同样的 tree/commit）。每个请求自带重试。
+之后**每次 `git commit` 都会自动上传**：`.githooks/post-commit` 立刻返回，`tools/auto-push.mjs`
+在后台把当前分支 `git push` 到 `origin`。网络抖动时最多重试 4 次（0/5/15/45 秒退避），
+仍然失败就写进 `.tools/push-pending`，下次提交或手动跑一次 `node tools/auto-push.mjs` 会补上。
+token 通过一次性的 `http.extraheader` 传给 git，**不写进 remote URL、不写进 `.git/config`**。
+
+常用命令：
+
+```bash
+node tools/auto-push.mjs --status    # 仓库坐标 / token 是否就位 / 上次成功时间 / 是否有待重试
+node tools/auto-push.mjs             # 立刻推一次（前台，看得到重试过程）
+tail -n 20 .tools/push.log           # 后台上传的日志
+```
+
+> 首次建仓若想走 REST API（完全不碰 `github.com`），仍可用 `tools/publish-github.mjs`：
+> 它读同一个 token 文件，调 `api.github.com` 建仓库并把被 git 跟踪的文件逐个上传
+> （blobs → tree → commit → ref）。这条路绕开 `github.com`，适合 git 协议完全连不上的时候；
+> 但它每次上传都是一个全新的提交，不保留本地历史，所以只建议用来建第一个提交。
 >
-> Token 只需要 `repo` 权限：打开 https://github.com/settings/tokens/new?scopes=repo&description=mindspace
-> 生成 classic token，粘进脚本即可。想换仓库名就改 `setup-github.cmd` 里的 `REPO=`。
-
-也可以完全不跑脚本，用 GitHub 网页「Upload files」把这个目录（除 `.tools/`）传上去。
+> Token 只需要 `repo` 权限。也可以完全不跑脚本，用 GitHub 网页「Upload files」把这个目录
+> （除 `.tools/`）传上去。
 
 
 ---
