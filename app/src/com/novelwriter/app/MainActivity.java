@@ -8,6 +8,8 @@ import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.view.Gravity;
@@ -47,6 +49,12 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         store = new Store(this);
         buildUi();
+        if (!store.backgroundAsked()) {
+            store.markBackgroundAsked();
+            // Posted so the dialog appears over a drawn screen rather than during
+            // the first frame.
+            new Handler(Looper.getMainLooper()).postDelayed(this::askForBackgroundPermissions, 400);
+        }
     }
 
     @Override

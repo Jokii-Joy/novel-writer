@@ -41,6 +41,7 @@ public final class SyncService extends Service {
     private Handler handler;
     private Runnable ticker;
     private volatile boolean working = false;
+    private volatile boolean pending = false;
     private long lastSyncAt = 0;
     private String lastMessage = "";
 
@@ -89,9 +90,22 @@ public final class SyncService extends Service {
         return START_NOT_STICKY;
     }
 
+    /**
+     * Runs one pass.
+     *
+     * A tap-to-sync that arrives while a pass is already running is remembered
+     * rather than dropped: the pass in flight may have started before the edit
+     * that prompted the tap, so returning immediately would leave that edit on the
+     * phone for up to 45 seconds — long enough to close the app and assume it
+     * synced.
+     */
     private void pass() {
-        if (working) return;
+        if (working) {
+            pending = true;
+            return;
+        }
         working = true;
+        pending = false;
         new Thread(() -> {
             try {
                 SyncEngine.Outcome outcome = SyncEngine.sync(getApplicationContext());
@@ -100,6 +114,10 @@ public final class SyncService extends Service {
                 updateNotification(outcome.ok);
             } finally {
                 working = false;
+                if (pending) {
+                    pending = false;
+                    handler.post(this::pass);
+                }
             }
         }, "nw-sync").start();
     }

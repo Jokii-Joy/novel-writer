@@ -10,6 +10,9 @@ desktop.ini
 # APK signing side-output (regenerated on every build-apk run)
 dist/*.idsig
 
+# Scratch workspace of scripts/verify-host.mjs (a crashed run can leave it)
+scripts/.tmp/
+
 # Node leftovers (the plugin itself ships no node_modules)
 node_modules/
 npm-debug.log*

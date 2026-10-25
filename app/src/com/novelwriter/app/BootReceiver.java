@@ -23,8 +23,11 @@ public final class BootReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         if (intent == null) return;
         String action = intent.getAction();
+        // `supplicant` is the real action name; the misspelt `supply` that used to
+        // sit in both the manifest and here matched nothing, so a phone that lost
+        // and regained Wi-Fi never brought the service back.
         if (!Intent.ACTION_BOOT_COMPLETED.equals(action)
-            && !"android.net.wifi.supply.STATE_CHANGE".equals(action)
+            && !"android.net.wifi.supplicant.STATE_CHANGE".equals(action)
             && !android.net.wifi.WifiManager.NETWORK_STATE_CHANGED_ACTION.equals(action)) {
             return;
         }

@@ -719,6 +719,15 @@
   /** Moves a chapter under `parentId` at `orderIndex`, renumbering its new siblings. */
   async function moveChapter(id, parentId, orderIndex) {
     if (!id) return;
+    // Two quick drags used to read the same sibling list and renumber every row
+    // from it, leaving duplicate `order` values behind; the same queue that
+    // guards createChapter keeps the second drag working from the first result.
+    return serialise('chapter', async function () {
+      await moveChapterUnlocked(id, parentId, orderIndex);
+    });
+  }
+
+  async function moveChapterUnlocked(id, parentId, orderIndex) {
     const current = await readOne('chapters', id);
     if (!current) return;
     const targetParent = parentId == null ? null : parentId;
@@ -860,6 +869,21 @@
       return;
     }
     const stored = await sealContent(text);
+    // The guard above reads the key once; the lock can land before this write
+    // lands. sealContent then falls back to plaintext on purpose (it refuses to
+    // lose a write), which here would replace an unreadable-but-intact ciphertext
+    // with readable text — a silent downgrade of the very thing the password
+    // protects. Shape beats intent: a ciphertext row stays one.
+    if (isCipher(current.content) && !isCipher(stored)) {
+      try {
+        if (typeof console !== 'undefined' && console && console.warn) {
+          console.warn('[novel-writer] 加密状态在保存过程中变化，已放弃这次写入以保住密文：' + String(id));
+        }
+      } catch (e) {
+        /* ignore */
+      }
+      return;
+    }
     const words =
       NW.format && typeof NW.format.wordCount === 'function'
         ? NW.format.wordCount(text)
@@ -1265,13 +1289,28 @@
     if (!list.length) return 0;
     const existingNovels = (await readAll('novels')) || [];
     const existingChapters = (await readAll('chapters')) || [];
+    const existingVersions = (await readAll('versions')) || [];
     const byNovel = new Map();
+    const localById = new Map();
     for (let i = 0; i < existingChapters.length; i += 1) {
       const row = existingChapters[i];
-      if (!row || row.novelId == null) continue;
+      if (!row || row.id == null) continue;
+      localById.set(String(row.id), row);
+      if (row.novelId == null) continue;
       const key = String(row.novelId);
       if (!byNovel.has(key)) byNovel.set(key, []);
       byNovel.get(key).push(row);
+    }
+    // The phone has no idea a chapter can sit inside a 卷, and normalizeBook()
+    // on the host only carries {id,title,content,order}. Keep the local parent
+    // when the incoming row is silent, otherwise one sync flattened the tree.
+    const versionsByChapter = new Map();
+    for (let i = 0; i < existingVersions.length; i += 1) {
+      const row = existingVersions[i];
+      if (!row || row.chapterId == null) continue;
+      const key = String(row.chapterId);
+      if (!versionsByChapter.has(key)) versionsByChapter.set(key, []);
+      versionsByChapter.get(key).push(row);
     }
 
     const ops = [];
@@ -1326,17 +1365,21 @@
         // here keeps a synced chapter from becoming the one plaintext row in an
         // otherwise encrypted store; the word count stays measured on plaintext.
         const sealedBody = await sealContent(body);
+        const localRow = localById.get(String(row.id)) || null;
         ops.push({
           store: 'chapters',
           type: 'put',
           value: {
             id: String(row.id),
             novelId: id,
+            parentId: row.parentId != null ? String(row.parentId) : (localRow ? localRow.parentId : null) || null,
             title: String(row.title || ''),
             content: sealedBody,
             order: Number(row.order) || 0,
             wordCount: countWords(body),
-            createdAt: Number(row.createdAt) || stamp,
+            // Both peers stamp createdAt on first sight; without the local value a
+            // chapter synced twice dates itself to the second sync.
+            createdAt: Number(row.createdAt) || Number(localRow && localRow.createdAt) || stamp,
             updatedAt: stamp,
             enc: null,
           },
@@ -1348,6 +1391,12 @@
         const row = currentChapters[c];
         if (!row || keep[String(row.id)]) continue;
         ops.push({ store: 'chapters', type: 'delete', key: row.id });
+        // Version history of a chapter nobody has is unreachable from the UI and
+        // would be restored into a hole by 回收站; drop it with the chapter.
+        const orphans = versionsByChapter.get(String(row.id)) || [];
+        for (let v = 0; v < orphans.length; v += 1) {
+          ops.push({ store: 'versions', type: 'delete', key: orphans[v].id });
+        }
       }
       touched += 1;
     }

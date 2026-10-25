@@ -13,6 +13,7 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.util.List;
 
@@ -286,22 +287,49 @@ public final class EditActivity extends Activity {
     /**
      * Writes the in-memory text back to disk.
      *
-     * Called on pause, on back, and 1.2 s after typing stops. The `openChapter`
-     * object is mutated live by the TextWatcher, so this only needs to refresh
-     * the book timestamp (the field the merge compares) and persist.
+     * Called on pause, on back, and 1.2 s after typing stops. Only a real change
+     * is written: `touch()` moves the timestamp the merge compares, so touching
+     * unconditionally meant that merely opening a chapter and going back made this
+     * phone the newest writer of the whole book, and the next sync replaced every
+     * edit the desktop had made to the other chapters since. Opening a chapter is
+     * not an edit.
      */
     private void flush() {
         saver.removeCallbacks(saveTick);
         if (openChapter == null) return;
+        String text = openChapter.content == null ? "" : openChapter.content;
         Library library = store.library();
         Library.Book book = library.find(bookId);
-        Library.Chapter hit = book == null ? null : book.chapter(openChapter.id);
-        if (hit == null) return;
-        hit.content = openChapter.content == null ? "" : openChapter.content;
-        if (hit.title == null || hit.title.trim().isEmpty()) hit.title = openChapter.title;
+        if (book == null || book.deleted) return;
+        Library.Chapter hit = book.chapter(openChapter.id);
+        if (hit == null) {
+            // The chapter was deleted elsewhere while it was open here. The text on
+            // screen is still the user's, so it goes back as a chapter rather than
+            // being dropped: the deletion was last-write-wins, and so is keeping
+            // words that were typed after it.
+            Library.Chapter again = new Library.Chapter();
+            again.id = openChapter.id;
+            again.title = isBlank(openChapter.title) ? "未命名" : openChapter.title;
+            again.content = text;
+            again.order = book.chapters.size();
+            book.chapters.add(again);
+            book.touch();
+            store.save(library);
+            Toast.makeText(this, "这一章在其它设备上被删除了，刚写的正文已恢复成新的一章", Toast.LENGTH_LONG).show();
+            SyncEngine.pushSoon(this);
+            return;
+        }
+        String before = hit.content == null ? "" : hit.content;
+        if (before.equals(text)) return;
+        hit.content = text;
+        if (isBlank(hit.title)) hit.title = openChapter.title;
         book.touch();
         store.save(library);
         SyncEngine.pushSoon(this);
+    }
+
+    private static boolean isBlank(String text) {
+        return text == null || text.trim().isEmpty();
     }
 
     private int dp(int value) {

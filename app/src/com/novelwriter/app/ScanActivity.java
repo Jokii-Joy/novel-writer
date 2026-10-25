@@ -55,6 +55,7 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
     private static final long DECODE_INTERVAL_MS = 220;
 
     private SurfaceView preview;
+    private SurfaceHolder surface;
     private TextView hint;
     private FrameLayout frame;
     private Camera camera;
@@ -131,8 +132,13 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode != PERMISSION_REQUEST) return;
         if (grantResults.length == 0 || grantResults[0] != PackageManager.PERMISSION_GRANTED) {
-            hint.setText("没有相机权限，无法扫码。可以改为在电脑上手动输入地址。");
+            hint.setText("没有相机权限，无法扫码。可以点右边的「手动输入地址」配对。");
+            return;
         }
+        // The surface was created before the dialog appeared and is not created
+        // again after it closes, so this is the only chance to start the preview.
+        hint.setText("把电脑上的配对码放进取景框；扫不动就点右边的「手动输入地址」");
+        openCamera();
     }
 
     // ------------------------------------------------------------------ camera
@@ -226,22 +232,41 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
 
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
-        if (!hasCameraPermission()) return;
+        surface = holder;
+        openCamera();
+    }
+
+    /**
+     * Opens the camera and attaches it to the surface, when both are ready.
+     *
+     * Called twice on purpose: from {@link #surfaceCreated} for the normal path,
+     * and from the permission callback for the first run — there the surface is
+     * already created when the system dialog appears, so the first call returned
+     * early and nothing ever called back afterwards. The scanner stayed black for
+     * a user who had just granted the permission.
+     */
+    private void openCamera() {
+        if (surface == null || camera != null || !hasCameraPermission()) return;
+        Camera opened;
         try {
-            camera = Camera.open();
+            opened = Camera.open();
         } catch (Exception error) {
             hint.setText("打不开相机：" + (error.getMessage() == null ? "未知原因" : error.getMessage()));
             return;
         }
+        camera = opened;
         applyCameraParameters(camera);
         Camera.Size granted = camera.getParameters().getPreviewSize();
         previewWidth = granted.width;
         previewHeight = granted.height;
         try {
             camera.setDisplayOrientation(displayOrientation());
-            camera.setPreviewDisplay(holder);
+            camera.setPreviewDisplay(surface);
         } catch (Exception error) {
             hint.setText("无法把画面输出到屏幕：" + error.getMessage());
+            // A camera that failed to attach still holds the hardware; leaving it
+            // open makes the retry fail too.
+            releaseCamera();
             return;
         }
         camera.setPreviewCallback(this);

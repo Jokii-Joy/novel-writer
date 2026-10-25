@@ -227,6 +227,14 @@
     '授权码': 'App password',
     '版本': 'Version',
     '立即快照': 'Snapshot now',
+    '已创建版本快照': 'Version snapshot saved',
+    '当前章节没有可保存的正文，未创建快照': 'Nothing to snapshot yet — the chapter is still empty',
+    '当前章': 'Current chapter',
+    // R37: stale-preview guards in the proofread / typeset dialogs
+    '正文在校对之后改过，建议的位置已经对不上。请重新校对一次再应用。':
+      'The text changed after the proofread, so the suggestions no longer line up. Run it again before applying.',
+    '正文在预览之后改过，请重新打开一次排版预览再应用。':
+      'The text changed after the preview. Reopen the typeset preview and apply again.',
     '滚动到光标处': 'Scroll to caret',
     // R11 ④: caret appearance is user-settable
     '光标粗细': 'Caret width',

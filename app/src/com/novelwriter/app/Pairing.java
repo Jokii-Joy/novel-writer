@@ -77,12 +77,13 @@ public final class Pairing {
                             isBlank(hostName) ? data.optString("deviceName", "") : hostName,
                             address,
                             port);
-                        store.markSynced();
-                        // Take the desktop's shelf as the starting point; otherwise
-                        // the first sync would push an empty library and the merge
-                        // would keep both sides.
+                        // Fold the desktop's shelf in instead of replacing the
+                        // stored one. Replacing is the obvious first sync, and it
+                        // is also how a phone that wrote offline — or was unpaired
+                        // for a while — loses those books: they are not in the
+                        // reply, so they would never be pushed either.
                         JSONObject library = data.optJSONObject("library");
-                        if (library != null) store.save(Library.fromJson(library));
+                        if (library != null) store.mergeSave(Library.fromJson(library));
                         SyncService.start(app);
                         ok = true;
                     }

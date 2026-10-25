@@ -285,11 +285,12 @@ async function verifyDocx() {
     assert.match(xml, /<w:pgMar [^>]*w:right="1247"/, '右页边距 1247');
   });
 
-  await check('正文宋体 12pt、首行缩进 2 字符、1.5 倍行距', async () => {
+  await check('正文宋体 14pt、首行缩进 2 字符、1.5 倍行距', async () => {
     const xml = parts.get('word/document.xml').toString('utf8');
     assert.match(xml, /w:eastAsia="宋体"/, '正文东亚字体为宋体');
-    assert.match(xml, /<w:sz w:val="24"\/>/, '12pt = w:sz 24');
-    assert.match(xml, /w:firstLine="480"/, '首行缩进 480 twips（2 字符）');
+    // R11 起正文是 14pt（w:sz 28）、首行缩进 560 twips；12pt/480 是更早版本的契约。
+    assert.match(xml, /<w:sz w:val="28"\/>/, '14pt = w:sz 28');
+    assert.match(xml, /w:firstLine="560"/, '首行缩进 560 twips（2 字符 × 14pt）');
     assert.match(xml, /w:line="360" w:lineRule="auto"/, '1.5 倍行距');
   });
 
@@ -854,10 +855,10 @@ async function verifyWithPython() {
   await check('python-docx 读回的排版与契约一致', async () => {
     const output = await runPython(detailScript, join(TMP, 'sample.docx'));
     console.log(output.split('\n').map((line) => `       ${line}`).join('\n'));
-    assert.match(output, /indent_twips: 480/, '首行缩进应为 480 twips（2 字符）');
+    assert.match(output, /indent_twips: 560/, '首行缩进应为 560 twips（2 字符 × 14pt）');
     assert.match(output, /line_spacing: 1\.5/, '行距应为 1.5');
     assert.match(output, /rule_is_one_and_half: True/);
-    assert.match(output, /size_pt: 12\.0/, '正文字号应为 12pt (w:sz 24)');
+    assert.match(output, /size_pt: 14\.0/, '正文字号应为 14pt (w:sz 28)');
     assert.match(output, /eastasia_font: 宋体/);
     assert.match(output, /heading_bold: True/);
     assert.match(output, /core_created_is_set: True/);

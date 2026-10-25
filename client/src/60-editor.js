@@ -2121,6 +2121,10 @@
     }
 
     function onFindKeyDown(ev, role) {
+      // Enter commits an IME candidate. Acting on that Enter moved the caret off
+      // the hit, and in the replace box it wrote a half-composed word into the
+      // manuscript — the same guard handleKeyDown has had since it was written.
+      if (ev.isComposing || ev.keyCode === 229) return;
       if (ev.key === 'Escape') {
         ev.preventDefault();
         ev.stopPropagation();

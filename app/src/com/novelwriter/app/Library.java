@@ -173,6 +173,40 @@ public final class Library {
         book.touch();
     }
 
+    /**
+     * Folds a library that came back from the desktop into this one.
+     *
+     * The desktop resolves conflicts and sends the winner, so its answer is
+     * authoritative for everything it knew about when the request left. What it
+     * cannot know about is an edit made while that request was in flight: the
+     * editor writes the whole library to SharedPreferences, and overwriting the
+     * file with the reply afterwards silently drops whatever was typed in those
+     * few hundred milliseconds. Merging by id and timestamp keeps that edit and
+     * still takes every other book, chapter change and tombstone from the reply.
+     */
+    public void mergeIn(Library incoming) {
+        if (incoming == null) return;
+        for (Book fresh : incoming.books) {
+            Book mine = find(fresh.id);
+            if (mine == null) {
+                books.add(fresh);
+                continue;
+            }
+            if (fresh.updatedAt <= mine.updatedAt) continue;
+            if (fresh.deleted) {
+                mine.deleted = true;
+                mine.chapters.clear();
+            } else {
+                mine.deleted = false;
+                mine.chapters.clear();
+                mine.chapters.addAll(fresh.chapters);
+            }
+            mine.title = fresh.title;
+            mine.author = fresh.author;
+            mine.updatedAt = fresh.updatedAt;
+        }
+    }
+
     public static Book createBook(String title) {
         Book book = new Book();
         book.id = UUID.randomUUID().toString();

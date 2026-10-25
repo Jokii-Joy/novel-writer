@@ -29,6 +29,18 @@ public final class Store {
     private static final String KEY_HOST_PORT = "hostPort";
     private static final String KEY_SECRET = "secret";
 
+    /**
+     * One lock for every instance.
+     *
+     * Each caller news up its own Store (the list, the editor, the sync thread,
+     * the service), so a per-instance `synchronized` guarded nothing at all: the
+     * UI's load → edit → save and the sync thread's whole-library save raced, and
+     * whichever wrote last won. Sharing one object across instances is what makes
+     * "read the library, change it, write it back" safe against a concurrent
+     * sync write of the same file.
+     */
+    private static final Object LOCK = new Object();
+
     private final SharedPreferences prefs;
 
     public Store(Context context) {
@@ -37,40 +49,67 @@ public final class Store {
 
     // ---------------------------------------------------------------- library
 
-    public synchronized Library library() {
-        String raw = prefs.getString(KEY_LIBRARY, "");
-        if (raw == null || raw.isEmpty()) return new Library();
-        try {
-            return Library.fromJson(new org.json.JSONObject(raw));
-        } catch (Exception error) {
-            // A corrupt blob must not brick the app: an empty library is
-            // recoverable by syncing, a crash loop is not.
-            return new Library();
+    public Library library() {
+        synchronized (LOCK) {
+            String raw = prefs.getString(KEY_LIBRARY, "");
+            if (raw == null || raw.isEmpty()) return new Library();
+            try {
+                return Library.fromJson(new org.json.JSONObject(raw));
+            } catch (Exception error) {
+                // A corrupt blob must not brick the app: an empty library is
+                // recoverable by syncing, a crash loop is not.
+                return new Library();
+            }
         }
     }
 
-    public synchronized void save(Library library) {
-        prefs.edit().putString(KEY_LIBRARY, library.toJson().toString()).apply();
+    public void save(Library library) {
+        synchronized (LOCK) {
+            prefs.edit().putString(KEY_LIBRARY, library.toJson().toString()).apply();
+        }
+    }
+
+    /** Folds a library from the desktop into the stored one, under the lock. */
+    public Library mergeSave(Library incoming) {
+        if (incoming == null) return library();
+        synchronized (LOCK) {
+            Library current = library();
+            current.mergeIn(incoming);
+            save(current);
+            return current;
+        }
     }
 
     // --------------------------------------------------------------- identity
 
+    /**
+     * The identity every request is signed under.
+     *
+     * Generated once and then read back, so two threads racing on first launch
+     * must not each mint a UUID: whichever lost would have paired with an id the
+     * file does not contain, and every later request would be "peer-unknown" with
+     * no way out except re-pairing.
+     */
     public String deviceId() {
-        String id = prefs.getString(KEY_DEVICE_ID, "");
-        if (id == null || id.isEmpty()) {
-            id = java.util.UUID.randomUUID().toString();
-            prefs.edit().putString(KEY_DEVICE_ID, id).apply();
+        synchronized (LOCK) {
+            String id = prefs.getString(KEY_DEVICE_ID, "");
+            if (id == null || id.isEmpty()) {
+                id = java.util.UUID.randomUUID().toString();
+                prefs.edit().putString(KEY_DEVICE_ID, id).apply();
+            }
+            return id;
         }
-        return id;
     }
 
     public String deviceName() {
-        String name = prefs.getString(KEY_DEVICE_NAME, "");
-        if (name == null || name.isEmpty()) {
-            name = android.os.Build.MODEL == null ? "手机" : android.os.Build.MODEL;
-            prefs.edit().putString(KEY_DEVICE_NAME, name).apply();
+        synchronized (LOCK) {
+            String name = prefs.getString(KEY_DEVICE_NAME, "");
+            if (name == null || name.isEmpty()) {
+                name = android.os.Build.MODEL == null ? "手机" : android.os.Build.MODEL;
+                prefs.edit().putString(KEY_DEVICE_NAME, name).apply();
+            }
+            return name;
         }
-        return name;
     }
 
     /**
@@ -84,14 +123,16 @@ public final class Store {
      * the protocol does not use.
      */
     public String publicKey() {
-        String key = prefs.getString("publicKey", "");
-        if (key == null || key.isEmpty()) {
-            byte[] bytes = new byte[32];
-            new java.security.SecureRandom().nextBytes(bytes);
-            key = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP | android.util.Base64.URL_SAFE);
-            prefs.edit().putString("publicKey", key).apply();
+        synchronized (LOCK) {
+            String key = prefs.getString("publicKey", "");
+            if (key == null || key.isEmpty()) {
+                byte[] bytes = new byte[32];
+                new java.security.SecureRandom().nextBytes(bytes);
+                key = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP | android.util.Base64.URL_SAFE);
+                prefs.edit().putString("publicKey", key).apply();
+            }
+            return key;
         }
-        return key;
     }
 
     // --------------------------------------------------------------- pairing
@@ -158,6 +199,22 @@ public final class Store {
 
     public void markSynced() {
         prefs.edit().putLong("lastSyncAt", System.currentTimeMillis()).apply();
+    }
+
+    /**
+     * Whether the "let it run in the background" prompt has been shown.
+     *
+     * Asked once, not on every launch: the permission dialog is dismissible and
+     * the battery-optimisation screen is a full-screen system activity, so
+     * repeating it on each start would be worse than a sync the user has to nudge
+     * by opening the app.
+     */
+    public boolean backgroundAsked() {
+        return prefs.getBoolean("backgroundAsked", false);
+    }
+
+    public void markBackgroundAsked() {
+        prefs.edit().putBoolean("backgroundAsked", true).apply();
     }
 
     /**

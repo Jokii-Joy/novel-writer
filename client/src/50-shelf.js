@@ -713,6 +713,9 @@
       placeholder: tr('搜索章节…'),
       'aria-label': tr('搜索章节…'),
       onKeyDown: (ev) => {
+        // Enter also commits an IME candidate: without this, picking a Chinese
+        // word opened the first search hit and switched books under the user.
+        if (ev.isComposing || ev.keyCode === 229) return;
         // R22: the results list is keyboard-navigable once you are in it, but
         // there was no way to get there from the box. Enter jumps to the first
         // hit, and Escape clears the filter without leaving the tree.

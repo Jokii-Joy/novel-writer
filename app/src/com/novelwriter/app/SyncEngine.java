@@ -93,14 +93,18 @@ public final class SyncEngine {
             out.message = "peer-denied".equals(result.code) ? "这台电脑不再认识本机，请重新扫码配对" : (result.message.isEmpty() ? "同步失败" : result.message);
             return out;
         }
-        JSONObject data = result.data == null ? new JSONObject() : result.data.optJSONObject("library");
+        JSONObject data = result.data == null ? null : result.data.optJSONObject("library");
         if (data != null) {
-            out.library = Library.fromJson(data);
-            store.save(out.library);
+            // Merge rather than replace: the reply was computed before anything
+            // typed during this request landed in SharedPreferences.
+            out.library = store.mergeSave(Library.fromJson(data));
             JSONObject stats = result.data.optJSONObject("stats");
             out.merged = stats == null ? 0 : stats.optInt("added", 0) + stats.optInt("updated", 0) + stats.optInt("deleted", 0);
         }
         out.ok = true;
+        // The service and the button both come through here, so this is the one
+        // place that can keep "上次同步" honest for the background path too.
+        store.markSynced();
         return out;
     }
 

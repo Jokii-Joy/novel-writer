@@ -73,8 +73,22 @@ public final class LanClient {
             }
             int status = connection.getResponseCode();
             String text = read(status >= 400 ? connection.getErrorStream() : connection.getInputStream());
+            // Something answered, so the host is up even if the body is unreadable.
             out.reachable = true;
-            out.data = text.isEmpty() ? new JSONObject() : new JSONObject(text);
+            try {
+                out.data = text.isEmpty() ? new JSONObject() : new JSONObject(text);
+            } catch (org.json.JSONException error) {
+                // Port 41288 with a 200 that is not ours: another service, a
+                // proxy, or a captive portal. Reporting "unreachable" here sent
+                // the caller off to UDP discovery, which then also failed, and the
+                // user was told the desktop could not be found while it was
+                // answering on that very address.
+                out.data = new JSONObject();
+                out.ok = false;
+                out.code = "bad-answer";
+                out.message = "电脑地址上有一个服务在回应，但不是精神空间（可能端口被别的程序占用）";
+                return out;
+            }
             out.ok = status == 200 && out.data.optBoolean("ok", false);
             out.code = out.data.optString("code", out.ok ? "" : "http-" + status);
             out.message = out.data.optString("message", "");

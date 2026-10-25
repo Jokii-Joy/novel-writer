@@ -28,11 +28,11 @@ process.env.DSH_HOME = tmpHome;
 const { registerRoutes, createHandler, methodFromPath, parseJsonBody, readBody, ROUTE_PREFIX } = await import(
   new URL('../lib/routes.js', import.meta.url).href
 );
-const cloud = await import(new URL('../lib/cloud.js', import.meta.url).href);
 const secrets = await import(new URL('../lib/secrets.js', import.meta.url).href);
 const ai = await import(new URL('../lib/ai.js', import.meta.url).href);
 const library = await import(new URL('../lib/library.js', import.meta.url).href);
 const { unzipSync } = await import(new URL('../lib/zip.js', import.meta.url).href);
+const lansync = await import(new URL('../lib/lansync.js', import.meta.url).href);
 
 let passed = 0;
 let failed = 0;
@@ -204,7 +204,7 @@ check('缺少 webServer 时返回 no-op disposer', typeof noServerDispose === 'f
 
 // path parsing
 check('methodFromPath 解析 ping', methodFromPath('/novel-writer/api/ping') === 'ping');
-check('methodFromPath 解析带查询串', methodFromPath('/novel-writer/api/cloud.status?x=1') === 'cloud.status');
+check('methodFromPath 解析带查询串', methodFromPath('/novel-writer/api/library.get?x=1') === 'library.get');
 check('parseJsonBody 空 body → {}', JSON.stringify(parseJsonBody(Buffer.alloc(0))) === '{}');
 check(
   'readBody 累计分片',
@@ -482,46 +482,6 @@ check('坏 JSON → ok:false, bad-json', badJson.json && badJson.json.ok === fal
 check('错误也是 HTTP 200', badJson.statusCode === 200);
 
 // ---------------------------------------------------------------------------
-// 5. cloud.status (unconfigured)
-// ---------------------------------------------------------------------------
-console.log('\n[5] POST cloud.status（未配置）');
-const statusRes = await call('cloud.status', {});
-check('ok === true', statusRes.json && statusRes.json.ok === true);
-const st = statusRes.json && statusRes.json.data;
-check('kind === "none"', st && st.kind === 'none', JSON.stringify(st));
-check('configured === false', st && st.configured === false);
-check('account 为空字符串', st && st.account === '');
-check('lastSync === 0', st && st.lastSync === 0);
-check('conflict === false', st && st.conflict === false);
-console.log('    →', JSON.stringify(st));
-
-for (const method of ['cloud.list', 'cloud.upload', 'cloud.download', 'cloud.login']) {
-  const payload = method === 'cloud.upload'
-    ? { name: 'a.json', base64: 'e30=' }
-    : method === 'cloud.download'
-      ? { id: 'some-file-id' }
-      : {};
-  const res = await call(method, payload);
-  check(`${method} 未配置时返回结构化错误`, res.json && res.json.ok === false && res.json.error.code === 'not-configured',
-    JSON.stringify(res.json && res.json.error));
-}
-
-// cloud.login without a Client ID must still be HTTP 200 + actionable wording.
-const loginUnset = await call('cloud.login', {});
-check('cloud.login 未配置时 HTTP 200', loginUnset.statusCode === 200, String(loginUnset.statusCode));
-check('cloud.login 未配置时 error.code === not-configured', loginUnset.json && loginUnset.json.error && loginUnset.json.error.code === 'not-configured', JSON.stringify(loginUnset.json));
-check('cloud.login 未配置时提示 Client ID', /Client ID/.test(loginUnset.json.error.message), loginUnset.json.error.message);
-
-// Kind chosen but Client ID missing → a *different*, still explicit message.
-await secrets.patchSecrets({ cloud: { kind: 'aliyun' }, aliyun: { clientId: '', clientSecret: '' } });
-const loginKind = await call('cloud.login', {});
-check('kind=aliyun 缺 clientId 仍返回 not-configured', loginKind.json && loginKind.json.ok === false && loginKind.json.error.code === 'not-configured', JSON.stringify(loginKind.json));
-check('kind=aliyun 缺 clientId 提示已选阿里云盘', /已选择阿里云盘/.test(loginKind.json.error.message), loginKind.json.error.message);
-await secrets.patchSecrets({ cloud: { kind: 'none' } });
-const disconnect = await call('cloud.disconnect', {});
-check('cloud.disconnect 未配置时也成功', disconnect.json && disconnect.json.ok === true);
-
-// ---------------------------------------------------------------------------
 // 6. secrets round trip
 // ---------------------------------------------------------------------------
 console.log('\n[6] secrets 加解密往返');
@@ -555,479 +515,12 @@ const rawStore = fs.readFileSync(storeFile, 'utf8');
 check('store.enc 不包含明文密码', !rawStore.includes('"p"') && !rawStore.includes('dav.example.com'));
 check('store.enc 是加密信封 v1', JSON.parse(rawStore).v === 1 && typeof JSON.parse(rawStore).iv === 'string');
 
-// cloud.config through the real HTTP route (the path the settings dialog uses).
-const configured = await call('cloud.config', {
-  kind: 'webdav',
-  fields: { baseUrl: 'dav.example.com/novel', username: 'u', password: 'p' },
-});
-check('cloud.config ok', configured.json && configured.json.ok === true, JSON.stringify(configured.json));
-const afterConfig = await secrets.loadSecrets();
-check('baseUrl 自动补 https://', afterConfig.webdav.baseUrl === 'https://dav.example.com/novel', afterConfig.webdav.baseUrl);
-check('cloud.kind 落盘为 webdav', afterConfig.cloud && afterConfig.cloud.kind === 'webdav');
-
-// cloud.status must now report webdav
-const statusRes2 = await call('cloud.status', {});
-check('配置 WebDAV 后 kind === "webdav"', statusRes2.json.data.kind === 'webdav', JSON.stringify(statusRes2.json.data));
-check('configured === true', statusRes2.json.data.configured === true);
-check('account 显示 user @ host', statusRes2.json.data.account.includes('dav.example.com'), statusRes2.json.data.account);
-console.log('    →', JSON.stringify(statusRes2.json.data));
-
-// conflict detection is a pure local computation over stored timestamps
-await secrets.patchSecrets({ cloud: { lastSync: 1000, remoteModified: 5000 } });
-const conflicted = await call('cloud.status', {});
-check('远端更新更晚时 conflict === true', conflicted.json.data.conflict === true, JSON.stringify(conflicted.json.data));
-await secrets.patchSecrets({ cloud: { lastSync: 9000 } });
-const notConflicted = await call('cloud.status', {});
-check('本地更新更晚时 conflict === false', notConflicted.json.data.conflict === false);
-
-// aliyun config path stores the client id but never invents tokens
-const aliCfg = await call('cloud.config', { kind: 'aliyun', fields: { clientId: 'client-abc', clientSecret: 'secret-xyz' } });
-check('cloud.config aliyun ok', aliCfg.json && aliCfg.json.ok === true);
-const afterAli = await secrets.loadSecrets();
-check('aliyun clientId 已加密落盘', afterAli.aliyun && afterAli.aliyun.clientId === 'client-abc');
-check('aliyun 不会有内置 token', !afterAli.aliyun.accessToken && !afterAli.aliyun.refreshToken);
-check('切到 aliyun 后 kind === "aliyun"', (await call('cloud.status', {})).json.data.kind === 'aliyun');
 
 await secrets.clearSecrets();
 check('clearSecrets 后 loadSecrets 回到 {}', JSON.stringify(await secrets.loadSecrets()) === '{}');
 const probe = await secrets.probeSecrets();
 check('probeSecrets 通过', probe.ok === true, probe.detail);
 
-// ---------------------------------------------------------------------------
-// 7. cloud URL / XML assembly (no network)
-// ---------------------------------------------------------------------------
-console.log('\n[7] cloud 纯函数（URL/XML 拼装，不发请求）');
-check(
-  'webdavUrl 拼接相对文件名',
-  cloud.webdavUrl('https://dav.example.com/novel', '备份 2024.json') === 'https://dav.example.com/novel/%E5%A4%87%E4%BB%BD%202024.json',
-  cloud.webdavUrl('https://dav.example.com/novel', '备份 2024.json'),
-);
-check(
-  'webdavUrl 补尾斜杠',
-  cloud.webdavUrl('https://dav.example.com/novel/') === 'https://dav.example.com/novel/',
-);
-check(
-  'webdavUrl 保留绝对 href',
-  cloud.webdavUrl('https://dav.example.com/novel', 'https://other.example.com/x.json') === 'https://other.example.com/x.json',
-);
-
-const propfindXml = `<?xml version="1.0" encoding="utf-8"?>
-<d:multistatus xmlns:d="DAV:">
-  <d:response>
-    <d:href>/novel/</d:href>
-    <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
-  </d:response>
-  <d:response>
-    <d:href>/novel/backup-2024.json</d:href>
-    <d:propstat><d:prop>
-      <d:getcontentlength>2048</d:getcontentlength>
-      <d:getlastmodified>Mon, 01 Jan 2024 00:00:00 GMT</d:getlastmodified>
-      <d:resourcetype/>
-    </d:prop></d:propstat>
-  </d:response>
-  <d:response>
-    <d:href>/novel/%E7%AC%AC%E4%BA%8C%E7%AB%A0.epub</d:href>
-    <d:propstat><d:prop>
-      <d:getcontentlength>999</d:getcontentlength>
-      <d:resourcetype/>
-    </d:prop></d:propstat>
-  </d:response>
-</d:multistatus>`;
-const parsedList = cloud.parsePropfind(propfindXml, 'https://dav.example.com/novel');
-check('PROPFIND 解析出 2 个文件（跳过目录）', parsedList.items.length === 2, `${parsedList.items.length}`);
-check('解析出文件名', parsedList.items[0].name === 'backup-2024.json', parsedList.items[0].name);
-check('解析出文件大小', parsedList.items[0].size === 2048, String(parsedList.items[0].size));
-check('解析出修改时间', parsedList.items[0].modified.includes('2024'));
-check('href 已 URL 解码', parsedList.items[1].name === '第二章.epub', parsedList.items[1].name);
-
-check('resolveKind 未配置 → none', cloud.resolveKind({}) === 'none');
-check('resolveKind 有 webdav 地址 → webdav', cloud.resolveKind({ webdav: { baseUrl: 'https://x' } }) === 'webdav');
-check('resolveKind 有 aliyun clientId → aliyun', cloud.resolveKind({ aliyun: { clientId: 'cid' } }) === 'aliyun');
-check('resolveKind 显式 none 优先', cloud.resolveKind({ cloud: { kind: 'none' }, webdav: { baseUrl: 'https://x' } }) === 'none');
-
-const authUrl = cloud.aliyunAuthorizeUrl({ clientId: 'my-client', redirectUri: 'https://cb.example.com', state: 'st' });
-check('aliyunAuthorizeUrl 带 client_id', authUrl.includes('client_id=my-client'), authUrl);
-check('aliyunAuthorizeUrl 是 /oauth/authorize', authUrl.startsWith('https://openapi.alipan.com/oauth/authorize'));
-check('aliyunAuthorizeUrl 带 response_type=code', authUrl.includes('response_type=code'));
-check('aliyunAuthorizeUrl 无 client_id 时返回空串', cloud.aliyunAuthorizeUrl({}) === '');
-
-// ---------------------------------------------------------------------------
-// 7b. WebDAV against a real loopback HTTP server
-// ---------------------------------------------------------------------------
-// This exercises the genuine node:http code path (PROPFIND / PUT / GET, Basic
-// auth, redirect-free) with no external network and no DNS: it only ever
-// connects to 127.0.0.1 on an ephemeral port, and it is hard-bounded by the
-// module's own 15 s timeout.
-console.log('\n[7b] WebDAV 真实 loopback 往返');
-const http = await import('node:http');
-const store = new Map([
-  ['备份-旧.json', Buffer.from('{"chapters":1}', 'utf8')],
-]);
-let basicAuthOk = true;
-const davServer = http.createServer((req, res) => {
-  const url = new URL(req.url, 'http://127.0.0.1');
-  const expected = `Basic ${Buffer.from('u:p').toString('base64')}`;
-  if (req.headers.authorization !== expected) {
-    basicAuthOk = false;
-    res.writeHead(401, { 'content-type': 'text/plain' });
-    res.end('unauthorized');
-    return;
-  }
-  const name = decodeURIComponent(url.pathname.replace(/^\/dav\/?/, ''));
-
-  if (req.method === 'PROPFIND') {
-    const rows = [...store.entries()]
-      .map(([key, bytes]) => `  <d:response>
-    <d:href>/dav/${encodeURIComponent(key)}</d:href>
-    <d:propstat><d:prop>
-      <d:getcontentlength>${bytes.length}</d:getcontentlength>
-      <d:getlastmodified>Mon, 01 Jan 2024 00:00:00 GMT</d:getlastmodified>
-      <d:resourcetype/>
-    </d:prop></d:propstat>
-  </d:response>`)
-      .join('\n');
-    res.writeHead(207, { 'content-type': 'application/xml; charset=utf-8' });
-    res.end(`<?xml version="1.0" encoding="utf-8"?>
-<d:multistatus xmlns:d="DAV:">
-  <d:response><d:href>/dav/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
-${rows}
-</d:multistatus>`);
-    return;
-  }
-  if (req.method === 'PUT') {
-    const chunks = [];
-    req.on('data', (chunk) => chunks.push(chunk));
-    req.on('end', () => {
-      store.set(name, Buffer.concat(chunks));
-      res.writeHead(201);
-      res.end();
-    });
-    return;
-  }
-  if (req.method === 'GET') {
-    const bytes = store.get(name);
-    if (!bytes) {
-      res.writeHead(404);
-      res.end('not found');
-      return;
-    }
-    res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(bytes.length) });
-    res.end(bytes);
-    return;
-  }
-  res.writeHead(405);
-  res.end();
-});
-
-await new Promise((resolve) => davServer.listen(0, '127.0.0.1', resolve));
-const davPort = davServer.address().port;
-const davBase = `http://127.0.0.1:${davPort}/dav`;
-
-try {
-  const cfg = await call('cloud.config', { kind: 'webdav', fields: { baseUrl: davBase, username: 'u', password: 'p' } });
-  check('配置 loopback WebDAV 成功', cfg.json && cfg.json.ok === true, JSON.stringify(cfg.json));
-
-  const davList = await call('cloud.list', {});
-  const items = (davList.json.data && davList.json.data.items) || [];
-  check('WebDAV list 走通 PROPFIND', davList.json && davList.json.ok === true, JSON.stringify(davList.json).slice(0, 160));
-  check('list 返回既有文件', items.some((i) => i.name === '备份-旧.json'), JSON.stringify(items));
-  check('list 跳过 collection 目录项', !items.some((i) => i.name === ''));
-
-  const payload = Buffer.from('{"format":"backup","chapters":3}', 'utf8');
-  const up = await call('cloud.upload', { name: '备份-新.json', base64: payload.toString('base64') });
-  check('WebDAV upload 走通 PUT', up.json && up.json.ok === true, JSON.stringify(up.json).slice(0, 160));
-  check('服务器真的收到了上传内容', store.get('备份-新.json')?.toString('utf8') === payload.toString('utf8'));
-  check('upload 返回 size', up.json.data && up.json.data.size === payload.length, JSON.stringify(up.json.data));
-
-  const down = await call('cloud.download', { id: '备份-新.json' });
-  check('WebDAV download 走通 GET', down.json && down.json.ok === true, JSON.stringify(down.json).slice(0, 160));
-  check(
-    'download 内容与上传一致',
-    down.json && Buffer.from(down.json.data.base64, 'base64').toString('utf8') === payload.toString('utf8'),
-  );
-
-  check('所有请求都带了正确的 Basic auth', basicAuthOk);
-  const afterSync = await call('cloud.status', {});
-  check('upload 之后 lastSync > 0', afterSync.json.data.lastSync > 0, String(afterSync.json.data.lastSync));
-} finally {
-  await new Promise((resolve) => davServer.close(resolve));
-}
-await secrets.clearSecrets();
-
-// ---------------------------------------------------------------------------
-// 7b-2. WebDAV with a missing backup collection (404 / 409 → MKCOL + retry)
-// ---------------------------------------------------------------------------
-// Providers differ: some answer 404 on PROPFIND for a folder that was never
-// created, and some answer 409 on PUT into it. Both must self-heal instead of
-// surfacing an error on a user's very first sync.
-console.log('\n[7b-2] WebDAV 目录不存在时自动 MKCOL 并重试');
-const dav2Store = new Map();
-const dav2Dirs = new Set(['/dav']);
-const dav2Seen = { mkcol: 0, put: 0 };
-const dav2 = http.createServer((req, res) => {
-  const url = new URL(req.url, 'http://127.0.0.1');
-  const collection = url.pathname.replace(/[^/]*$/, '');
-  const name = decodeURIComponent(url.pathname.slice(collection.length));
-  if (req.headers.authorization !== `Basic ${Buffer.from('u:p').toString('base64')}`) {
-    res.writeHead(401);
-    res.end('unauthorized');
-    return;
-  }
-  if (req.method === 'MKCOL') {
-    dav2Seen.mkcol += 1;
-    if (dav2Dirs.has(url.pathname.replace(/\/+$/, ''))) {
-      res.writeHead(405); // RFC 4918: collection already exists
-      res.end();
-      return;
-    }
-    dav2Dirs.add(url.pathname.replace(/\/+$/, ''));
-    res.writeHead(201);
-    res.end();
-    return;
-  }
-  if (req.method === 'PROPFIND') {
-    if (!dav2Dirs.has(url.pathname.replace(/\/+$/, ''))) {
-      res.writeHead(404);
-      res.end('no such collection');
-      return;
-    }
-    res.writeHead(207, { 'content-type': 'application/xml; charset=utf-8' });
-    res.end('<?xml version="1.0"?><d:multistatus xmlns:d="DAV:"></d:multistatus>');
-    return;
-  }
-  if (req.method === 'PUT') {
-    dav2Seen.put += 1;
-    if (!dav2Dirs.has(collection.replace(/\/+$/, ''))) {
-      res.writeHead(409); // parent collection missing
-      res.end('conflict');
-      return;
-    }
-    const chunks = [];
-    req.on('data', (chunk) => chunks.push(chunk));
-    req.on('end', () => {
-      dav2Store.set(name, Buffer.concat(chunks));
-      res.writeHead(201);
-      res.end();
-    });
-    return;
-  }
-  res.writeHead(405);
-  res.end();
-});
-await new Promise((resolve) => dav2.listen(0, '127.0.0.1', resolve));
-const dav2Base = `http://127.0.0.1:${dav2.address().port}/dav/fresh-folder`;
-try {
-  const cfg2 = await call('cloud.config', { kind: 'webdav', fields: { baseUrl: dav2Base, username: 'u', password: 'p' } });
-  check('配置全新（不存在的）备份目录', cfg2.json && cfg2.json.ok === true, JSON.stringify(cfg2.json).slice(0, 160));
-
-  const empty = await call('cloud.list', {});
-  check('目录不存在时 list 返回空列表而不是报错', empty.json && empty.json.ok === true, JSON.stringify(empty.json).slice(0, 160));
-  check('空列表长度 0', empty.json.data && empty.json.data.items && empty.json.data.items.length === 0, JSON.stringify(empty.json.data));
-  check('list 触发了 MKCOL', dav2Seen.mkcol > 0, String(dav2Seen.mkcol));
-  check('MKCOL 之后目录真的存在', dav2Dirs.has('/dav/fresh-folder'), JSON.stringify([...dav2Dirs]));
-
-  const payload2 = Buffer.from('{"format":"backup"}', 'utf8');
-  const up2 = await call('cloud.upload', { name: 'a.json', base64: payload2.toString('base64') });
-  check('upload 成功', up2.json && up2.json.ok === true, JSON.stringify(up2.json).slice(0, 200));
-  check('upload 内容真的落到服务器', dav2Store.get('a.json')?.toString('utf8') === '{"format":"backup"}');
-
-  // Second scenario: the folder is deleted behind our back, so PUT answers 409
-  // and the upload path itself has to create the folder and retry.
-  dav2Dirs.delete('/dav/fresh-folder');
-  const up3 = await call('cloud.upload', { name: 'b.json', base64: payload2.toString('base64') });
-  check('PUT 409 后自动 MKCOL 并重试成功', up3.json && up3.json.ok === true, JSON.stringify(up3.json).slice(0, 200));
-  check('PUT 至少尝试了两次（原始 + 重试）', dav2Seen.put >= 3, String(dav2Seen.put));
-  check('重试后内容落地', dav2Store.get('b.json') !== undefined);
-} finally {
-  await new Promise((resolve) => dav2.close(resolve));
-}
-await secrets.clearSecrets();
-
-// ---------------------------------------------------------------------------
-// 7c. Aliyun Drive protocol against a loopback stub API
-// ---------------------------------------------------------------------------
-// Exercises the real HTTP layer and the whole OAuth → list → upload → download
-// sequence against a local fake of openapi.alipan.com. No external network and
-// no credentials: the origin is redirected with NOVEL_WRITER_ALIYUN_API.
-console.log('\n[7c] 阿里云盘协议（loopback 假 API）');
-const aliStore = new Map();
-const aliCalls = [];
-let aliRefreshCount = 0;
-let aliTokenSerial = 0;
-let aliExpectedToken = '';
-let aliPort = 0;
-
-function aliJson(res, status, value) {
-  const body = Buffer.from(JSON.stringify(value), 'utf8');
-  res.writeHead(status, { 'content-type': 'application/json', 'content-length': String(body.length) });
-  res.end(body);
-}
-
-const aliServer = http.createServer((req, res) => {
-  const url = new URL(req.url, 'http://127.0.0.1');
-  const chunks = [];
-  req.on('data', (c) => chunks.push(c));
-  req.on('end', () => {
-    const raw = Buffer.concat(chunks).toString('utf8');
-    let body = {};
-    try {
-      body = raw ? JSON.parse(raw) : {};
-    } catch {
-      body = {};
-    }
-    aliCalls.push({ method: req.method, path: url.pathname, body, auth: req.headers.authorization || '' });
-
-    // ---- OAuth ----
-    if (url.pathname === '/oauth/authorize/qrcode' && req.method === 'POST') {
-      aliJson(res, 200, { qrCodeUrl: 'https://passport.alipan.com/qr/abc123', sid: 'sid-abc' });
-      return;
-    }
-    if (url.pathname === '/oauth/qrcode/sid-abc/status' && req.method === 'GET') {
-      aliJson(res, 200, { status: 'LoginSuccess', authCode: 'auth-code-1' });
-      return;
-    }
-    if (url.pathname === '/oauth/access_token' && req.method === 'POST') {
-      aliTokenSerial += 1;
-      aliExpectedToken = `access-${aliTokenSerial}`;
-      if (body.grant_type === 'refresh_token') aliRefreshCount += 1;
-      aliJson(res, 200, { access_token: aliExpectedToken, refresh_token: 'refresh-1', expires_in: 7200 });
-      return;
-    }
-
-    // ---- pre-signed URLs: no bearer token, must be handled before the auth gate ----
-    if (url.pathname === '/upload/part-1' && req.method === 'PUT') {
-      aliStore.set('上传.bak', Buffer.from(raw, 'utf8'));
-      res.writeHead(200);
-      res.end();
-      return;
-    }
-    if (url.pathname === '/download/file-new' && req.method === 'GET') {
-      const bytes = Buffer.from('{"hello":"aliyun"}', 'utf8');
-      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(bytes.length) });
-      res.end(bytes);
-      return;
-    }
-
-    // ---- authed API ----
-    if (req.headers.authorization !== `Bearer ${aliExpectedToken}`) {
-      aliJson(res, 401, { code: 'AccessTokenInvalid', message: 'token invalid' });
-      return;
-    }
-    if (url.pathname === '/adrive/v1.0/user/getDriveInfo') {
-      aliJson(res, 200, { default_drive_id: 'drive-xyz', name: '测试云盘' });
-      return;
-    }
-    if (url.pathname === '/adrive/v1.0/openFile/list') {
-      aliJson(res, 200, {
-        items: [...aliStore.entries()].map(([name, bytes], i) => ({
-          file_id: `file-${i}`,
-          name,
-          size: bytes.length,
-          updated_at: '2024-05-01T10:00:00.000Z',
-          type: 'file',
-        })),
-      });
-      return;
-    }
-    if (url.pathname === '/adrive/v1.0/openFile/create') {
-      aliJson(res, 200, {
-        file_id: 'file-new',
-        upload_id: 'upload-1',
-        part_info_list: [{ part_number: 1, upload_url: `http://127.0.0.1:${aliPort}/upload/part-1` }],
-      });
-      return;
-    }
-    if (url.pathname === '/adrive/v1.0/openFile/complete') {
-      aliJson(res, 200, { file_id: 'file-new', name: body.name || '上传.bak', size: 123 });
-      return;
-    }
-    if (url.pathname === '/adrive/v1.0/openFile/getDownloadUrl') {
-      aliJson(res, 200, { url: `http://127.0.0.1:${aliPort}/download/file-new`, expiration: '2024-05-01T12:00:00Z' });
-      return;
-    }
-    aliJson(res, 404, { code: 'NotFound', message: `未实现: ${req.method} ${url.pathname}` });
-  });
-});
-
-await new Promise((resolve) => aliServer.listen(0, '127.0.0.1', resolve));
-aliPort = aliServer.address().port;
-process.env.NOVEL_WRITER_ALIYUN_API = `http://127.0.0.1:${aliPort}`;
-
-try {
-  const aliCfg = await call('cloud.config', { kind: 'aliyun', fields: { clientId: 'cid-test', clientSecret: 'csecret-test' } });
-  check('配置阿里云盘凭据', aliCfg.json && aliCfg.json.ok === true);
-
-  const loginRes = await call('cloud.login', {});
-  check('cloud.login 返回 pending', loginRes.json.data && loginRes.json.data.state === 'pending', JSON.stringify(loginRes.json).slice(0, 160));
-  check('登录返回二维码 URL', loginRes.json.data.url === 'https://passport.alipan.com/qr/abc123', loginRes.json.data.url);
-  check('登录返回 deviceCode（sid）', loginRes.json.data.deviceCode === 'sid-abc', loginRes.json.data.deviceCode);
-
-  const pollRes = await call('cloud.poll', { deviceCode: 'sid-abc' });
-  check('cloud.poll 授权成功', pollRes.json.data && pollRes.json.data.state === 'ok', JSON.stringify(pollRes.json).slice(0, 160));
-  check('poll 返回账号名', pollRes.json.data.account === '测试云盘', pollRes.json.data.account);
-
-  const savedSecrets = await secrets.loadSecrets();
-  check('access_token 已加密落盘', savedSecrets.aliyun.accessToken === 'access-1', savedSecrets.aliyun.accessToken);
-  check('refresh_token 已落盘', savedSecrets.aliyun.refreshToken === 'refresh-1');
-  check('drive_id 缓存自 getDriveInfo', savedSecrets.aliyun.driveId === 'drive-xyz', savedSecrets.aliyun.driveId);
-  check('扫码用到了配置的 client_id', aliCalls.some((c) => c.path === '/oauth/authorize/qrcode' && c.body.client_id === 'cid-test'));
-  check('授权码兑换发送了 code', aliCalls.some((c) => c.path === '/oauth/access_token' && c.body.code === 'auth-code-1'));
-
-  aliStore.set('小说备份.json', Buffer.from('{"a":1}', 'utf8'));
-  const aliList = await call('cloud.list', {});
-  const aliItems = (aliList.json.data && aliList.json.data.items) || [];
-  check('阿里云盘 list 走通', aliList.json && aliList.json.ok === true, JSON.stringify(aliList.json).slice(0, 140));
-  check('list 映射 file_id → id', aliItems.some((i) => i.id && i.name === '小说备份.json'), JSON.stringify(aliItems));
-  check('list 请求带了 drive_id', aliCalls.some((c) => c.path === '/adrive/v1.0/openFile/list' && c.body.drive_id === 'drive-xyz'));
-  check(
-    'list 请求体符合契约（root/limit/order）',
-    aliCalls.some((c) => c.path === '/adrive/v1.0/openFile/list'
-      && c.body.parent_file_id === 'root'
-      && c.body.limit === 100
-      && c.body.order_direction === 'DESC'),
-  );
-
-  const upBytes = Buffer.from('{"format":"backup"}', 'utf8');
-  const aliUp = await call('cloud.upload', { name: '上传.bak', base64: upBytes.toString('base64') });
-  check('阿里云盘 upload 走通', aliUp.json && aliUp.json.ok === true, JSON.stringify(aliUp.json).slice(0, 140));
-  check('create 用了 check_name_mode=overwrite', aliCalls.some((c) => c.path === '/adrive/v1.0/openFile/create' && c.body.check_name_mode === 'overwrite'));
-  check('complete 被调用', aliCalls.some((c) => c.path === '/adrive/v1.0/openFile/complete' && c.body.file_id === 'file-new'));
-  const partCall = aliCalls.find((c) => c.path === '/upload/part-1');
-  check('分片 PUT 不带 Authorization', Boolean(partCall) && partCall.auth === '', partCall ? partCall.auth || '(空)' : '未发生');
-  check('服务器收到上传内容', aliStore.get('上传.bak')?.toString('utf8') === '{"format":"backup"}');
-
-  const aliDown = await call('cloud.download', { id: 'file-new' });
-  check('阿里云盘 download 走通', aliDown.json && aliDown.json.ok === true, JSON.stringify(aliDown.json).slice(0, 140));
-  check(
-    'download 返回正确内容',
-    aliDown.json && Buffer.from(aliDown.json.data.base64, 'base64').toString('utf8') === '{"hello":"aliyun"}',
-  );
-  check('getDownloadUrl 请求体带 expire_sec', aliCalls.some((c) => c.path === '/adrive/v1.0/openFile/getDownloadUrl' && c.body.expire_sec === 900));
-
-  // 401 → refresh once → retry
-  aliExpectedToken = 'stale-token';
-  const before = aliCalls.length;
-  const afterExpiry = await call('cloud.list', {});
-  const retried = aliCalls.slice(before);
-  check('token 失效时自动刷新并重试成功', afterExpiry.json && afterExpiry.json.ok === true, JSON.stringify(afterExpiry.json).slice(0, 140));
-  check('确实发生了一次 refresh_token 兑换', retried.some((c) => c.path === '/oauth/access_token' && c.body.grant_type === 'refresh_token'));
-  check('刷新后重新发起了 list 请求', retried.filter((c) => c.path === '/adrive/v1.0/openFile/list').length >= 2);
-  check('refresh 计数正确', aliRefreshCount >= 1, String(aliRefreshCount));
-
-  const disc = await call('cloud.disconnect', {});
-  check('cloud.disconnect 成功', disc.json && disc.json.ok === true);
-  const afterDisc = await secrets.loadSecrets();
-  check('disconnect 清空 access_token', !afterDisc.aliyun.accessToken);
-  check('disconnect 保留 clientId', afterDisc.aliyun.clientId === 'cid-test');
-  check('disconnect 后 kind 回到 none', (await call('cloud.status', {})).json.data.kind === 'none');
-} finally {
-  delete process.env.NOVEL_WRITER_ALIYUN_API;
-  await new Promise((resolve) => aliServer.close(resolve));
-  await secrets.clearSecrets();
-}
-
-// ---------------------------------------------------------------------------
-// 7d. library (on-disk save folder)
 // ---------------------------------------------------------------------------
 console.log('\n[7d] library 落盘（设置 / 目录 / 镜像 / 列表）');
 
@@ -1106,17 +599,18 @@ const mirrored = await library.mirrorLibrary(libDir, novels);
 check('mirrorLibrary 成功', mirrored.ok === undefined || mirrored.ok !== false, JSON.stringify(mirrored).slice(0, 160));
 check('mirror 返回 dir', mirrored.dir === libDir);
 check('mirror count 等于书本数', mirrored.count === 3, String(mirrored.count));
-check('每本一个 .md + library.json', mirrored.files.length === 4, mirrored.files.map((f) => f.name).join(','));
+check('每本一个 .docx + library.json', mirrored.files.length === 4, mirrored.files.map((f) => f.name).join(','));
 check('同名书自动去重', new Set(mirrored.files.map((f) => f.name)).size === 4, mirrored.files.map((f) => f.name).join(','));
-check('非法标题字符被替换', mirrored.files.some((f) => f.name === '斗破_苍穹.md'), mirrored.files.map((f) => f.name).join(','));
-check('空标题回落未命名作品', mirrored.files.some((f) => f.name === '未命名作品.md'));
+check('非法标题字符被替换', mirrored.files.some((f) => f.name === '斗破_苍穹.docx'), mirrored.files.map((f) => f.name).join(','));
+check('空标题回落未命名作品', mirrored.files.some((f) => f.name === '未命名作品.docx'));
 
-const bookMd = fs.readFileSync(path.join(libDir, '斗破_苍穹.md'), 'utf8');
-check('Markdown 以 # 书名 开头', bookMd.startsWith('# 斗破/苍穹\n'), JSON.stringify(bookMd.slice(0, 24)));
-check('Markdown 含作者行', bookMd.includes('*作者：天蚕土豆*'));
-check('Markdown 含章标题', bookMd.includes('## 第一章 陨落的天才') && bookMd.includes('## 第二章 斗气大陆'));
-check('Markdown 保留正文缩进', bookMd.includes('\u3000\u3000“斗之力，三段！”'));
-check('章与章之间空一行', bookMd.includes('## 第二章 斗气大陆'));
+// R16 起落盘格式只有 .docx（加密时 .docx.nwe），不再有 Markdown 预览。
+const bookXml = unzipSync(fs.readFileSync(path.join(libDir, '斗破_苍穹.docx'))).get('word/document.xml').toString('utf8');
+check('docx 含书名', bookXml.includes('斗破/苍穹'));
+check('docx 含作者行', bookXml.includes('天蚕土豆'));
+check('docx 含章标题', bookXml.includes('第一章 陨落的天才') && bookXml.includes('第二章 斗气大陆'));
+check('docx 正文保留全角缩进', bookXml.includes('“斗之力，三段！”'));
+check('docx 正文首行缩进 560 twips', bookXml.includes('w:firstLine="560"'));
 const snapshot = JSON.parse(fs.readFileSync(path.join(libDir, 'library.json'), 'utf8'));
 check('library.json version === 1', snapshot.version === 1);
 check('library.json 含 exportedAt', typeof snapshot.exportedAt === 'string' && snapshot.exportedAt.length > 0);
@@ -1134,7 +628,7 @@ check('重跑镜像覆盖旧快照', stale.files.length === 4);
 // --- listLibrary ----------------------------------------------------------
 const listed = await library.listLibrary(libDir);
 check('listLibrary 成功', listed.ok !== false, JSON.stringify(listed).slice(0, 120));
-check('listLibrary 只列 md 与 library.json', listed.files.every((f) => f.name.endsWith('.md') || f.name === 'library.json'), listed.files.map((f) => f.name).join(','));
+check('listLibrary 只列 docx 与 library.json', listed.files.every((f) => f.name.endsWith('.docx') || f.name === 'library.json'), listed.files.map((f) => f.name).join(','));
 check('listLibrary 排除无关 txt', !listed.files.some((f) => f.name === '我的笔记.txt'));
 check('listLibrary 带 bytes', listed.files.every((f) => typeof f.bytes === 'number' && f.bytes > 0));
 check('listLibrary 带 modified', listed.files.every((f) => typeof f.modified === 'number' && f.modified > 0));
@@ -1150,8 +644,12 @@ check('library.get 首次返回空目录', libGet0.json && libGet0.json.ok === t
 const setRelative = await call('library.set', { dir: 'relative/folder', mirror: false });
 check('library.set 相对路径 → dir-invalid', setRelative.json && setRelative.json.ok === false && setRelative.json.error.code === 'dir-invalid', JSON.stringify(setRelative.json));
 
+// 清空目录是「拆掉目标」的动作：此时仍开着的同步勾选不算错误，两个开关一起关掉。
 const setMirrorNoDir = await call('library.set', { dir: '', mirror: true });
-check('library.set 无目录却开镜像 → dir-invalid', setMirrorNoDir.json && setMirrorNoDir.json.ok === false && setMirrorNoDir.json.error.code === 'dir-invalid');
+check('library.set 清空目录同时关镜像', setMirrorNoDir.json && setMirrorNoDir.json.ok === true && setMirrorNoDir.json.data.mirror === false, JSON.stringify(setMirrorNoDir.json));
+// 但「本来就没有目录、只想开同步」必须明确报错。
+const mirrorWithoutDir = await call('library.set', { mirror: true });
+check('library.set 无目录却开镜像 → dir-invalid', mirrorWithoutDir.json && mirrorWithoutDir.json.ok === false && mirrorWithoutDir.json.error.code === 'dir-invalid', JSON.stringify(mirrorWithoutDir.json));
 
 const setOk = await call('library.set', { dir: libDir, mirror: true });
 check('library.set 成功', setOk.json && setOk.json.ok === true, JSON.stringify(setOk.json));
@@ -1193,10 +691,63 @@ const results = (selftest.json && selftest.json.data && selftest.json.data.resul
 check('results 是非空数组', Array.isArray(results) && results.length > 0, `${results.length} 项`);
 check('每项都有 {name, ok, detail}', results.every((r) => typeof r.name === 'string' && typeof r.ok === 'boolean' && typeof r.detail === 'string'));
 const names = results.map((r) => r.name);
-for (const expected of ['webServer', 'docx', 'epub', 'secrets', 'ai', 'cloud']) {
+for (const expected of ['webServer', 'docx', 'epub', 'secrets', 'ai']) {
   check(`自检包含 ${expected}`, names.includes(expected), names.join(','));
 }
 for (const r of results) console.log(`    ${r.ok ? '✓' : '✗'} ${r.name.padEnd(10)} ${r.detail}`);
+
+// ---------------------------------------------------------------------------
+// 9. lansync merge (book-level LWW, tombstones, sealed repair, push lock)
+// ---------------------------------------------------------------------------
+console.log('\n[9] lansync 合并与镜像串行化');
+const { mergeLibraries, pushLibrary, pullLibrary, readSyncState, writeSyncState } = lansync;
+
+const bookOf = (id, updatedAt, extra = {}) => ({
+  id,
+  title: '书' + id,
+  updatedAt,
+  chapters: [{ id: id + 'c', title: '章', content: '正文' }],
+  ...extra,
+});
+const sealedOf = (id, updatedAt) => ({
+  id,
+  title: '书' + id,
+  updatedAt,
+  chapters: [{ id: id + 'c', title: '章', content: 'enc:v1:AAAA' }],
+});
+
+// a delete made on the phone while the desktop was away must land
+const tombNewer = mergeLibraries({ books: [bookOf('a', 1000)] }, { books: [{ ...bookOf('a', 2000), deleted: true }] });
+check('更新的墓碑覆盖活书', tombNewer.library.books[0].deleted === true && tombNewer.stats.deleted === 1, JSON.stringify(tombNewer.stats));
+// ...but an edit made after the delete is a deliberate resurrection (the R34 bug)
+const tombOlder = mergeLibraries({ books: [bookOf('a', 3000)] }, { books: [{ ...bookOf('a', 2000), deleted: true }] });
+check('删除之后又编辑的书会复活', tombOlder.library.books[0].deleted === false && tombOlder.stats.localWins === 1, JSON.stringify(tombOlder.stats));
+// exact tie must not let the tombstone destroy the edit
+const tombTie = mergeLibraries({ books: [bookOf('a', 1500)] }, { books: [{ ...bookOf('a', 1500), deleted: true }] });
+check('同毫秒的墓碑不吞掉编辑', tombTie.library.books[0].deleted === false, JSON.stringify(tombTie.stats));
+// rule 5: an all-ciphertext copy never beats a readable one, whatever the clock says
+const repaired = mergeLibraries({ books: [sealedOf('a', 9000)] }, { books: [bookOf('a', 1000)] });
+check('整本密文输给可读副本（规则 5）', repaired.library.books[0].chapters[0].content === '正文' && repaired.stats.repaired === 1, JSON.stringify(repaired.stats));
+const keepSealed = mergeLibraries({ books: [bookOf('a', 9000)] }, { books: [sealedOf('a', 1000)] });
+check('可读副本不会被密文顶掉', keepSealed.library.books[0].chapters[0].content === '正文', JSON.stringify(keepSealed.stats));
+// single-sided books are taken as-is, tombstones included
+const added = mergeLibraries({ books: [] }, { books: [bookOf('n', 1), { ...bookOf('d', 2), deleted: true }] });
+check('单边书照收（含墓碑）', added.library.books.length === 2 && added.stats.added === 1 && added.stats.deleted === 1, JSON.stringify(added.stats));
+check('活书排在墓碑前面', added.library.books[0].deleted === false && added.library.books[1].deleted === true);
+
+// Concurrent pushes must not lose a book: the lock makes the second merge read
+// what the first one wrote. Without it the later write drops the earlier book.
+await writeSyncState({ books: [] });
+await Promise.all([
+  pushLibrary({ books: [bookOf('p1', 2000)] }),
+  pushLibrary({ books: [bookOf('p2', 3000)] }),
+  pushLibrary({ books: [bookOf('p3', 4000)] }),
+]);
+const afterConcurrent = await pullLibrary();
+const ids = afterConcurrent.library.books.map((b) => b.id).sort().join(',');
+check('并发 push 不丢书', ids === 'p1,p2,p3', ids);
+const stored = await readSyncState();
+check('落盘内容与 pull 一致', stored.books.length === 3, String(stored.books.length));
 
 // ---------------------------------------------------------------------------
 // Summary

@@ -572,6 +572,14 @@ window.__ModuleLoader__.load({
     '授权码': 'App password',
     '版本': 'Version',
     '立即快照': 'Snapshot now',
+    '已创建版本快照': 'Version snapshot saved',
+    '当前章节没有可保存的正文，未创建快照': 'Nothing to snapshot yet — the chapter is still empty',
+    '当前章': 'Current chapter',
+    // R37: stale-preview guards in the proofread / typeset dialogs
+    '正文在校对之后改过，建议的位置已经对不上。请重新校对一次再应用。':
+      'The text changed after the proofread, so the suggestions no longer line up. Run it again before applying.',
+    '正文在预览之后改过，请重新打开一次排版预览再应用。':
+      'The text changed after the preview. Reopen the typeset preview and apply again.',
     '滚动到光标处': 'Scroll to caret',
     // R11 ④: caret appearance is user-settable
     '光标粗细': 'Caret width',
@@ -1462,6 +1470,15 @@ window.__ModuleLoader__.load({
   /** Moves a chapter under `parentId` at `orderIndex`, renumbering its new siblings. */
   async function moveChapter(id, parentId, orderIndex) {
     if (!id) return;
+    // Two quick drags used to read the same sibling list and renumber every row
+    // from it, leaving duplicate `order` values behind; the same queue that
+    // guards createChapter keeps the second drag working from the first result.
+    return serialise('chapter', async function () {
+      await moveChapterUnlocked(id, parentId, orderIndex);
+    });
+  }
+
+  async function moveChapterUnlocked(id, parentId, orderIndex) {
     const current = await readOne('chapters', id);
     if (!current) return;
     const targetParent = parentId == null ? null : parentId;
@@ -1603,6 +1620,21 @@ window.__ModuleLoader__.load({
       return;
     }
     const stored = await sealContent(text);
+    // The guard above reads the key once; the lock can land before this write
+    // lands. sealContent then falls back to plaintext on purpose (it refuses to
+    // lose a write), which here would replace an unreadable-but-intact ciphertext
+    // with readable text — a silent downgrade of the very thing the password
+    // protects. Shape beats intent: a ciphertext row stays one.
+    if (isCipher(current.content) && !isCipher(stored)) {
+      try {
+        if (typeof console !== 'undefined' && console && console.warn) {
+          console.warn('[novel-writer] 加密状态在保存过程中变化，已放弃这次写入以保住密文：' + String(id));
+        }
+      } catch (e) {
+        /* ignore */
+      }
+      return;
+    }
     const words =
       NW.format && typeof NW.format.wordCount === 'function'
         ? NW.format.wordCount(text)
@@ -2008,13 +2040,28 @@ window.__ModuleLoader__.load({
     if (!list.length) return 0;
     const existingNovels = (await readAll('novels')) || [];
     const existingChapters = (await readAll('chapters')) || [];
+    const existingVersions = (await readAll('versions')) || [];
     const byNovel = new Map();
+    const localById = new Map();
     for (let i = 0; i < existingChapters.length; i += 1) {
       const row = existingChapters[i];
-      if (!row || row.novelId == null) continue;
+      if (!row || row.id == null) continue;
+      localById.set(String(row.id), row);
+      if (row.novelId == null) continue;
       const key = String(row.novelId);
       if (!byNovel.has(key)) byNovel.set(key, []);
       byNovel.get(key).push(row);
+    }
+    // The phone has no idea a chapter can sit inside a 卷, and normalizeBook()
+    // on the host only carries {id,title,content,order}. Keep the local parent
+    // when the incoming row is silent, otherwise one sync flattened the tree.
+    const versionsByChapter = new Map();
+    for (let i = 0; i < existingVersions.length; i += 1) {
+      const row = existingVersions[i];
+      if (!row || row.chapterId == null) continue;
+      const key = String(row.chapterId);
+      if (!versionsByChapter.has(key)) versionsByChapter.set(key, []);
+      versionsByChapter.get(key).push(row);
     }
 
     const ops = [];
@@ -2069,17 +2116,21 @@ window.__ModuleLoader__.load({
         // here keeps a synced chapter from becoming the one plaintext row in an
         // otherwise encrypted store; the word count stays measured on plaintext.
         const sealedBody = await sealContent(body);
+        const localRow = localById.get(String(row.id)) || null;
         ops.push({
           store: 'chapters',
           type: 'put',
           value: {
             id: String(row.id),
             novelId: id,
+            parentId: row.parentId != null ? String(row.parentId) : (localRow ? localRow.parentId : null) || null,
             title: String(row.title || ''),
             content: sealedBody,
             order: Number(row.order) || 0,
             wordCount: countWords(body),
-            createdAt: Number(row.createdAt) || stamp,
+            // Both peers stamp createdAt on first sight; without the local value a
+            // chapter synced twice dates itself to the second sync.
+            createdAt: Number(row.createdAt) || Number(localRow && localRow.createdAt) || stamp,
             updatedAt: stamp,
             enc: null,
           },
@@ -2091,6 +2142,12 @@ window.__ModuleLoader__.load({
         const row = currentChapters[c];
         if (!row || keep[String(row.id)]) continue;
         ops.push({ store: 'chapters', type: 'delete', key: row.id });
+        // Version history of a chapter nobody has is unreachable from the UI and
+        // would be restored into a hole by 回收站; drop it with the chapter.
+        const orphans = versionsByChapter.get(String(row.id)) || [];
+        for (let v = 0; v < orphans.length; v += 1) {
+          ops.push({ store: 'versions', type: 'delete', key: orphans[v].id });
+        }
       }
       touched += 1;
     }
@@ -4414,18 +4471,41 @@ window.__ModuleLoader__.load({
     );
   }
 
-  function Modal(props) {
-    const p = props || {};
+  // ---- one Escape closes exactly one dialog ---------------------------------
+  // Every dialog listens for Escape on window. Without an owner stack, a confirm
+  // opened from inside a dialog closes the dialog underneath (its listener was
+  // registered first) while the confirm stays on screen; the resume/delete the
+  // confirm was guarding then runs against a component that is already gone.
+  // Only the newest modal owns Escape, and the handler is read through a ref so
+  // a re-render cannot reorder the stack.
+  const escapeStack = [];
+  function useEscapeOwner(active, handler) {
+    const ref = React.useRef(handler);
+    ref.current = handler;
     React.useEffect(() => {
+      if (!active) return undefined;
+      const id = {};
+      escapeStack.push(id);
       const onKey = (ev) => {
-        if (ev.key === 'Escape' && p.onClose) {
-          ev.stopPropagation();
-          p.onClose();
-        }
+        if (ev.key !== 'Escape' && ev.key !== 'Esc') return;
+        if (escapeStack[escapeStack.length - 1] !== id) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (typeof ref.current === 'function') ref.current();
       };
       window.addEventListener('keydown', onKey, true);
-      return () => window.removeEventListener('keydown', onKey, true);
-    }, [p.onClose]);
+      return () => {
+        window.removeEventListener('keydown', onKey, true);
+        const at = escapeStack.lastIndexOf(id);
+        if (at >= 0) escapeStack.splice(at, 1);
+      };
+    }, [active]);
+  }
+  NW.useModalEscape = useEscapeOwner;
+
+  function Modal(props) {
+    const p = props || {};
+    useEscapeOwner(!!p.onClose, p.onClose);
     return h(
       'div',
       {
@@ -6474,6 +6554,9 @@ window.__ModuleLoader__.load({
       placeholder: tr('搜索章节…'),
       'aria-label': tr('搜索章节…'),
       onKeyDown: (ev) => {
+        // Enter also commits an IME candidate: without this, picking a Chinese
+        // word opened the first search hit and switched books under the user.
+        if (ev.isComposing || ev.keyCode === 229) return;
         // R22: the results list is keyboard-navigable once you are in it, but
         // there was no way to get there from the box. Enter jumps to the first
         // hit, and Escape clears the filter without leaving the tree.
@@ -10403,6 +10486,10 @@ window.__ModuleLoader__.load({
     }
 
     function onFindKeyDown(ev, role) {
+      // Enter commits an IME candidate. Acting on that Enter moved the caret off
+      // the hit, and in the replace box it wrote a half-composed word into the
+      // manuscript — the same guard handleKeyDown has had since it was written.
+      if (ev.isComposing || ev.keyCode === 229) return;
       if (ev.key === 'Escape') {
         ev.preventDefault();
         ev.stopPropagation();
@@ -11623,6 +11710,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [chapter, setChapter] = useState(null);
     const [saveState, setSaveState] = useState('saved');
     const [savedAt, setSavedAt] = useState(0);
+    /**
+     * Set when the editor reports an edit while a write is in flight.
+     *
+     * The write only knows about the text it was handed; anything typed after
+     * that is still in the textarea. Without this flag the completion handler
+     * announced "已保存" and the status line claimed the cursor was persisted
+     * while the last sentence was not.
+     */
+    const dirtyDuringSaveRef = useRef(false);
     const [selection, setSelection] = useState(null);
     const [shelfWidth, setShelfWidth] = useState(() => {
       const raw = Number(lsGet(LS_WIDTH));
@@ -12472,11 +12568,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         if (targetId == null) return;
         const text = content == null ? '' : String(content);
         setSaveState('saving');
+        // Anything the editor reports from now on happened after this snapshot.
+        dirtyDuringSaveRef.current = false;
         try {
           await NW.db.saveChapterContent(targetId, text);
           if (!aliveRef.current) return;
           const words = NW.format.wordCount(text);
-          setSaveState('saved');
+          setSaveState(dirtyDuringSaveRef.current ? 'dirty' : 'saved');
           setSavedAt(Date.now());
           patchChapterInList(targetId, { content: text, wordCount: words });
           // The write above is awaited, so the user may have switched chapters in the
@@ -12513,9 +12611,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       }
     }, []);
 
-    const snapshotVersion = useCallback(async () => {
+    /**
+     * Saves the current chapter as a version. Returns whether a snapshot was
+     * actually written. Normal chapter switches are throttled to one per minute
+     * so browsing does not flood the version list — but an explicit "restore
+     * this version" or "create a snapshot" must force one, otherwise the text
+     * being replaced can disappear without ever being recorded.
+     */
+    const snapshotVersion = useCallback(async (force) => {
       const current = chapterRef.current;
-      if (!current || current.id == null) return;
+      if (!current || current.id == null) return false;
       let text = '';
       const api = editorRef.current;
       try {
@@ -12525,13 +12630,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       }
       const prev = versionRef.current;
       const sameChapter = prev.chapterId != null && String(prev.chapterId) === String(current.id);
-      if (sameChapter && Date.now() - prev.at < 60000) return;
-      if (!text.trim()) return;
+      if (!force && sameChapter && Date.now() - prev.at < 60000) return false;
+      if (!text.trim()) return false;
       try {
         await NW.db.saveVersion(current.id, text);
         versionRef.current = { chapterId: current.id, at: Date.now() };
+        return true;
       } catch (err) {
         /* versions are best effort */
+        return false;
       }
     }, []);
 
@@ -12795,8 +12902,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // R22: remember where the doomed chapter sat before the delete, so the
           // cursor can fall through to its neighbour instead of the library head.
           const before = Array.isArray(chapters) ? chapters : [];
-          const goneIndex = before.findIndex((row) => row && String(row.id) === String(id));
-          const novelOf = (before[goneIndex] && before[goneIndex].novelId) || activeNovelId;
+          const gone = before.find((row) => row && String(row.id) === String(id)) || null;
+          const novelOf = (gone && gone.novelId) || activeNovelId;
+          // The index has to be counted inside the doomed chapter's own book.
+          // `chapters` holds every book, so an index taken from it pointed at a
+          // neighbour in another novel — or past the end — and deleting a chapter
+          // jumped to an unrelated one.
+          const siblingBefore = before.filter(
+            (row) => row && novelOf != null && String(row.novelId) === String(novelOf),
+          );
+          const goneIndex = siblingBefore.findIndex((row) => row && String(row.id) === String(id));
           if (kind === 'novel') trashId = await NW.db.deleteNovel(id);
           else trashId = await NW.db.deleteChapter(id);
           const novelRows = await refreshNovels();
@@ -12810,7 +12925,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           } else if (kind === 'chapter' && String(activeChapterId) === String(id)) {
             // Fall through to the chapter that took its place (the next sibling,
             // else the previous one) — never jump to another book.
-            const siblings = (chapterRows || []).filter((row) => row && row.novelId === novelOf);
+            const siblings = (chapterRows || []).filter(
+              (row) => row && novelOf != null && String(row.novelId) === String(novelOf),
+            );
             let next = null;
             if (goneIndex >= 0 && siblings.length > 0) {
               next = siblings[Math.min(goneIndex, siblings.length - 1)] || null;
@@ -13698,11 +13815,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       onNewChapter: () => createChapter(null),
                       onToggleAdvice: () => setAdviceOpen((v) => !v),
                       onSave: (content) => saveChapter(content, chapter.id),
-                      onDirty: (dirty) =>
+                      onDirty: (dirty) => {
+                        if (dirty) dirtyDuringSaveRef.current = true;
                         setSaveState((prev) => {
                           if (prev === 'saving') return prev;
                           return dirty ? 'dirty' : 'saved';
-                        }),
+                        });
+                      },
                       onSelectionChange: onSelectionChange,
                       registerApi: registerEditor,
                     }),
@@ -14665,6 +14784,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const submit = () => done(isPrompt ? value : true);
     const cancel = () => done(isPrompt ? null : false);
 
+    // Escape answers the request with "no". It has to be registered here: the
+    // dialog underneath already owns a window listener, and before the escape
+    // stack existed Escape closed that dialog instead, leaving this prompt
+    // stranded while its guarded action went on to run.
+    NW.useModalEscape(true, cancel);
+
     return h(
       'div',
       { className: 'nw-modal-mask', role: 'presentation' },
@@ -14956,18 +15081,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    */
   function ModalShell(props) {
     const { title, children, footer, width, onClose } = props;
-    useEffect(() => {
-      if (typeof onClose !== 'function') return undefined;
-      const onKey = (ev) => {
-        if (ev.key === 'Escape' || ev.key === 'Esc') {
-          ev.preventDefault();
-          ev.stopPropagation();
-          onClose();
-        }
-      };
-      window.addEventListener('keydown', onKey, true);
-      return () => window.removeEventListener('keydown', onKey, true);
-    }, [onClose]);
+    NW.useModalEscape(typeof onClose === 'function', onClose);
     const onPointerDown = (ev) => {
       if (ev.target === ev.currentTarget && typeof onClose === 'function') onClose();
     };
@@ -15645,8 +15759,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
 
-    const hasChapter = !!(chapter && chapter.id);
-    const target = defaultTarget.kind === 'chapter' && !hasChapter ? { kind: 'novel', id: String(novel.id || ''), title: novelTitle } : defaultTarget;
+    // The target decides everything below: the chapter tree can ask to export a
+    // chapter other than the one currently open, and silently exporting the open
+    // chapter instead is exactly the bug this branch used to have.
+    const hasChapter = !!(defaultTarget.kind === 'chapter' && defaultTarget.id);
+    const target = hasChapter ? defaultTarget : { kind: 'novel', id: String(novel.id || ''), title: novelTitle };
     const [scope, setScope] = useState(target.kind === 'chapter' ? 'chapter' : 'novel');
 
     const APPEND_LIMIT = 8000;
@@ -15663,7 +15780,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     // Chapter titles already read like "第一章 归途", so never wrap them in
     // another "第 … 章" here or the sentence stutters.
-    const chapterLabel = String((chapter && chapter.title) || '当前章');
+    const chapterLabel = String((target.kind === 'chapter' && target.title) || (chapter && chapter.title) || '当前章');
     const headline =
       scope === 'chapter'
         ? '将导出《' + novelTitle + '》的「' + chapterLabel + '」。'
@@ -15678,7 +15795,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           format: format,
           target:
             scope === 'chapter' && hasChapter
-              ? { kind: 'chapter', id: String(chapter.id), title: String(chapter.title || '') }
+              ? { kind: 'chapter', id: String(target.id), title: String(target.title || chapterLabel) }
               : { kind: 'novel', id: String(novel.id || ''), title: novelTitle },
           includeMeta: !!includeMeta,
           appendOn: !!appendOn,
@@ -15828,6 +15945,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const p = props || {};
     const [state, setState] = useState({ loading: false, models: null, error: '', provider: '', model: '' });
     const [suggestions, setSuggestions] = useState(null);
+    // The offsets in a suggestion only mean anything against the text they were
+    // computed from; a dialog stays open for minutes while the editor keeps
+    // accepting keystrokes, so keep the snapshot and refuse a stale apply.
+    const sourceRef = useRef('');
     const [decided, setDecided] = useState({});
     const [running, setRunning] = useState(false);
     const [applying, setApplying] = useState(false);
@@ -15920,6 +16041,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           reason: String(row.reason == null ? '' : row.reason),
           type: String(row.type == null ? '' : row.type),
         }));
+        sourceRef.current = text;
         setSuggestions(rows);
         const initial = {};
         rows.forEach((row) => {
@@ -15956,9 +16078,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         if (typeof p.onToast === 'function') p.onToast('没有勾选任何修改', 'error');
         return;
       }
+      const live = textOf(p);
+      if (sourceRef.current && live !== sourceRef.current) {
+        const message = '正文在校对之后改过，建议的位置已经对不上。请重新校对一次再应用。';
+        setState((prev) => Object.assign({}, prev, { error: message }));
+        if (typeof p.onToast === 'function') p.onToast(message, 'error');
+        return;
+      }
       setApplying(true);
       try {
-        const text = textOf(p);
+        const text = live;
         const ids = new Set();
         (suggestions || []).forEach((row) => {
           if (decided[row.id]) ids.add(row.id);
@@ -16097,6 +16226,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     }, [original, result.text]);
 
     const apply = async () => {
+      // The preview is a snapshot of the chapter taken when the dialog opened.
+      // Applying it after the writer typed would silently drop that typing.
+      if (textOf(p) !== original) {
+        const message = '正文在预览之后改过，请重新打开一次排版预览再应用。';
+        if (typeof p.onToast === 'function') p.onToast(message, 'error');
+        return;
+      }
       setBusy(true);
       try {
         const api = p.editorApi && p.editorApi.current;
@@ -18259,11 +18395,17 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     }, [preparing]);
 
     // -------------------------------------------------------------- prepare --
+    // Only the newest preparation may write into the form: a slow model answer
+    // for the journal the writer just switched away from must not overwrite the
+    // letter, the recipient and the attachments of the new one.
+    const prepareRunRef = useRef(0);
     const runPrepare = async () => {
       if (!(NW.io && NW.io.submit && NW.io.submit.prepare)) {
         setPrepareError('当前版本不支持投稿助手');
         return;
       }
+      const runId = (prepareRunRef.current += 1);
+      const stale = () => prepareRunRef.current !== runId;
       setPreparing(true);
       setPrepareError('');
       try {
@@ -18310,6 +18452,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             data = await NW.io.submit.prepare(
               Object.assign({}, preparePayload, { provider: candidate.provider, model: candidate.model }),
             );
+            if (stale()) return;
             if (index > 0 && typeof p.onToast === 'function') {
               p.onToast(NW.t('原模型没有响应，已改用 {0}', candidate.label), 'warn');
             }
@@ -18332,6 +18475,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             throw err;
           }
           data = await NW.io.submit.prepare(Object.assign({}, preparePayload, { provider: picked.provider, model: picked.model }));
+          if (stale()) return;
           setPrepareError('');
         }
         setPrepared(data || null);
@@ -18355,9 +18499,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const warnings = data && Array.isArray(data.warnings) ? data.warnings : [];
         if (warnings.length && typeof p.onToast === 'function') p.onToast(warnings[0], 'info');
       } catch (err) {
+        if (stale()) return;
         setPrepareError(errText(err, '生成邮件失败'));
       } finally {
-        setPreparing(false);
+        if (!stale()) setPreparing(false);
       }
     };
 
@@ -18368,6 +18513,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // though `step` stayed at 3.
     const [prepareToken, setPrepareToken] = useState(0);
     const discardPrepared = useCallback(() => {
+      // Bumped so any preparation still in flight knows its answer is obsolete.
+      prepareRunRef.current += 1;
+      // The stale run will not clear this itself (its finally only touches state
+      // it still owns), so the spinner has to be released here.
+      setPreparing(false);
       setPrepared(null);
       setSent(null);
       setSendError('');
@@ -19482,20 +19632,28 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // Poll for "did the phone accept yet" while the code is on screen — the
     // desktop cannot know otherwise, and without this the dialog would still say
     // 「等待扫码」 after a successful pair.
+    // The countdown above re-renders once a second, so this effect must not
+    // depend on `left`: doing so tore down and rebuilt the interval before its
+    // first tick ever ran and the desktop never noticed a successful pair.
+    const pairedRef = useRef(false);
     useEffect(() => {
-      if (!info || !info.expiresAt || left <= 0) return undefined;
+      if (!info || !info.expiresAt) return undefined;
+      pairedRef.current = false;
       const timer = setInterval(() => {
+        if (pairedRef.current) return;
+        if (Number(info.expiresAt) <= Date.now()) return;
         NW.io.pair
           .status()
           .then((data) => {
-            if (!data || data.active !== false) return;
+            if (!data || data.active !== false || pairedRef.current) return;
+            pairedRef.current = true;
             refreshPeers();
             p.onToast && p.onToast('手机已配对', 'ok');
           })
           .catch(() => {});
       }, 2500);
       return () => clearInterval(timer);
-    }, [info, left]);
+    }, [info]);
 
     function showCode() {
       setError('');
@@ -19656,10 +19814,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const takeSnapshot = async () => {
       setBusy('保存快照…');
       try {
-        if (typeof p.onSnapshotVersion === 'function') await p.onSnapshotVersion();
+        let saved = true;
+        if (typeof p.onSnapshotVersion === 'function') saved = await p.onSnapshotVersion(true);
         const list = await NW.db.listVersions(chapterId);
         setRows(list || []);
-        if (typeof p.onToast === 'function') p.onToast('已创建版本快照', 'ok');
+        if (typeof p.onToast === 'function') {
+          if (saved === false) p.onToast('当前章节没有可保存的正文，未创建快照', 'warn');
+          else p.onToast('已创建版本快照', 'ok');
+        }
       } catch (err) {
         setError(errText(err, '创建快照失败'));
       } finally {
@@ -19672,7 +19834,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       if (!ok) return;
       setBusy('恢复中…');
       try {
-        if (typeof p.onSnapshotVersion === 'function') await p.onSnapshotVersion();
+        // Forced: the throttle exists for browsing, not for overwriting text.
+        if (typeof p.onSnapshotVersion === 'function') await p.onSnapshotVersion(true);
         const api = p.editorApi && p.editorApi.current;
         if (api && typeof api.setContent === 'function') api.setContent(row.content || '');
         if (typeof p.onRefreshData === 'function') await p.onRefreshData();

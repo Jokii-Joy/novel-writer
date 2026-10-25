@@ -567,6 +567,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [chapter, setChapter] = useState(null);
     const [saveState, setSaveState] = useState('saved');
     const [savedAt, setSavedAt] = useState(0);
+    /**
+     * Set when the editor reports an edit while a write is in flight.
+     *
+     * The write only knows about the text it was handed; anything typed after
+     * that is still in the textarea. Without this flag the completion handler
+     * announced "已保存" and the status line claimed the cursor was persisted
+     * while the last sentence was not.
+     */
+    const dirtyDuringSaveRef = useRef(false);
     const [selection, setSelection] = useState(null);
     const [shelfWidth, setShelfWidth] = useState(() => {
       const raw = Number(lsGet(LS_WIDTH));
@@ -1416,11 +1425,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         if (targetId == null) return;
         const text = content == null ? '' : String(content);
         setSaveState('saving');
+        // Anything the editor reports from now on happened after this snapshot.
+        dirtyDuringSaveRef.current = false;
         try {
           await NW.db.saveChapterContent(targetId, text);
           if (!aliveRef.current) return;
           const words = NW.format.wordCount(text);
-          setSaveState('saved');
+          setSaveState(dirtyDuringSaveRef.current ? 'dirty' : 'saved');
           setSavedAt(Date.now());
           patchChapterInList(targetId, { content: text, wordCount: words });
           // The write above is awaited, so the user may have switched chapters in the
@@ -1457,9 +1468,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       }
     }, []);
 
-    const snapshotVersion = useCallback(async () => {
+    /**
+     * Saves the current chapter as a version. Returns whether a snapshot was
+     * actually written. Normal chapter switches are throttled to one per minute
+     * so browsing does not flood the version list — but an explicit "restore
+     * this version" or "create a snapshot" must force one, otherwise the text
+     * being replaced can disappear without ever being recorded.
+     */
+    const snapshotVersion = useCallback(async (force) => {
       const current = chapterRef.current;
-      if (!current || current.id == null) return;
+      if (!current || current.id == null) return false;
       let text = '';
       const api = editorRef.current;
       try {
@@ -1469,13 +1487,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       }
       const prev = versionRef.current;
       const sameChapter = prev.chapterId != null && String(prev.chapterId) === String(current.id);
-      if (sameChapter && Date.now() - prev.at < 60000) return;
-      if (!text.trim()) return;
+      if (!force && sameChapter && Date.now() - prev.at < 60000) return false;
+      if (!text.trim()) return false;
       try {
         await NW.db.saveVersion(current.id, text);
         versionRef.current = { chapterId: current.id, at: Date.now() };
+        return true;
       } catch (err) {
         /* versions are best effort */
+        return false;
       }
     }, []);
 
@@ -1739,8 +1759,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // R22: remember where the doomed chapter sat before the delete, so the
           // cursor can fall through to its neighbour instead of the library head.
           const before = Array.isArray(chapters) ? chapters : [];
-          const goneIndex = before.findIndex((row) => row && String(row.id) === String(id));
-          const novelOf = (before[goneIndex] && before[goneIndex].novelId) || activeNovelId;
+          const gone = before.find((row) => row && String(row.id) === String(id)) || null;
+          const novelOf = (gone && gone.novelId) || activeNovelId;
+          // The index has to be counted inside the doomed chapter's own book.
+          // `chapters` holds every book, so an index taken from it pointed at a
+          // neighbour in another novel — or past the end — and deleting a chapter
+          // jumped to an unrelated one.
+          const siblingBefore = before.filter(
+            (row) => row && novelOf != null && String(row.novelId) === String(novelOf),
+          );
+          const goneIndex = siblingBefore.findIndex((row) => row && String(row.id) === String(id));
           if (kind === 'novel') trashId = await NW.db.deleteNovel(id);
           else trashId = await NW.db.deleteChapter(id);
           const novelRows = await refreshNovels();
@@ -1754,7 +1782,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           } else if (kind === 'chapter' && String(activeChapterId) === String(id)) {
             // Fall through to the chapter that took its place (the next sibling,
             // else the previous one) — never jump to another book.
-            const siblings = (chapterRows || []).filter((row) => row && row.novelId === novelOf);
+            const siblings = (chapterRows || []).filter(
+              (row) => row && novelOf != null && String(row.novelId) === String(novelOf),
+            );
             let next = null;
             if (goneIndex >= 0 && siblings.length > 0) {
               next = siblings[Math.min(goneIndex, siblings.length - 1)] || null;
@@ -2642,11 +2672,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       onNewChapter: () => createChapter(null),
                       onToggleAdvice: () => setAdviceOpen((v) => !v),
                       onSave: (content) => saveChapter(content, chapter.id),
-                      onDirty: (dirty) =>
+                      onDirty: (dirty) => {
+                        if (dirty) dirtyDuringSaveRef.current = true;
                         setSaveState((prev) => {
                           if (prev === 'saving') return prev;
                           return dirty ? 'dirty' : 'saved';
-                        }),
+                        });
+                      },
                       onSelectionChange: onSelectionChange,
                       registerApi: registerEditor,
                     }),
@@ -3608,6 +3640,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     const submit = () => done(isPrompt ? value : true);
     const cancel = () => done(isPrompt ? null : false);
+
+    // Escape answers the request with "no". It has to be registered here: the
+    // dialog underneath already owns a window listener, and before the escape
+    // stack existed Escape closed that dialog instead, leaving this prompt
+    // stranded while its guarded action went on to run.
+    NW.useModalEscape(true, cancel);
 
     return h(
       'div',

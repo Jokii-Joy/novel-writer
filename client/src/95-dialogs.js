@@ -50,18 +50,7 @@
    */
   function ModalShell(props) {
     const { title, children, footer, width, onClose } = props;
-    useEffect(() => {
-      if (typeof onClose !== 'function') return undefined;
-      const onKey = (ev) => {
-        if (ev.key === 'Escape' || ev.key === 'Esc') {
-          ev.preventDefault();
-          ev.stopPropagation();
-          onClose();
-        }
-      };
-      window.addEventListener('keydown', onKey, true);
-      return () => window.removeEventListener('keydown', onKey, true);
-    }, [onClose]);
+    NW.useModalEscape(typeof onClose === 'function', onClose);
     const onPointerDown = (ev) => {
       if (ev.target === ev.currentTarget && typeof onClose === 'function') onClose();
     };
@@ -739,8 +728,11 @@
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
 
-    const hasChapter = !!(chapter && chapter.id);
-    const target = defaultTarget.kind === 'chapter' && !hasChapter ? { kind: 'novel', id: String(novel.id || ''), title: novelTitle } : defaultTarget;
+    // The target decides everything below: the chapter tree can ask to export a
+    // chapter other than the one currently open, and silently exporting the open
+    // chapter instead is exactly the bug this branch used to have.
+    const hasChapter = !!(defaultTarget.kind === 'chapter' && defaultTarget.id);
+    const target = hasChapter ? defaultTarget : { kind: 'novel', id: String(novel.id || ''), title: novelTitle };
     const [scope, setScope] = useState(target.kind === 'chapter' ? 'chapter' : 'novel');
 
     const APPEND_LIMIT = 8000;
@@ -757,7 +749,7 @@
 
     // Chapter titles already read like "第一章 归途", so never wrap them in
     // another "第 … 章" here or the sentence stutters.
-    const chapterLabel = String((chapter && chapter.title) || '当前章');
+    const chapterLabel = String((target.kind === 'chapter' && target.title) || (chapter && chapter.title) || '当前章');
     const headline =
       scope === 'chapter'
         ? '将导出《' + novelTitle + '》的「' + chapterLabel + '」。'
@@ -772,7 +764,7 @@
           format: format,
           target:
             scope === 'chapter' && hasChapter
-              ? { kind: 'chapter', id: String(chapter.id), title: String(chapter.title || '') }
+              ? { kind: 'chapter', id: String(target.id), title: String(target.title || chapterLabel) }
               : { kind: 'novel', id: String(novel.id || ''), title: novelTitle },
           includeMeta: !!includeMeta,
           appendOn: !!appendOn,
@@ -922,6 +914,10 @@
     const p = props || {};
     const [state, setState] = useState({ loading: false, models: null, error: '', provider: '', model: '' });
     const [suggestions, setSuggestions] = useState(null);
+    // The offsets in a suggestion only mean anything against the text they were
+    // computed from; a dialog stays open for minutes while the editor keeps
+    // accepting keystrokes, so keep the snapshot and refuse a stale apply.
+    const sourceRef = useRef('');
     const [decided, setDecided] = useState({});
     const [running, setRunning] = useState(false);
     const [applying, setApplying] = useState(false);
@@ -1014,6 +1010,7 @@
           reason: String(row.reason == null ? '' : row.reason),
           type: String(row.type == null ? '' : row.type),
         }));
+        sourceRef.current = text;
         setSuggestions(rows);
         const initial = {};
         rows.forEach((row) => {
@@ -1050,9 +1047,16 @@
         if (typeof p.onToast === 'function') p.onToast('没有勾选任何修改', 'error');
         return;
       }
+      const live = textOf(p);
+      if (sourceRef.current && live !== sourceRef.current) {
+        const message = '正文在校对之后改过，建议的位置已经对不上。请重新校对一次再应用。';
+        setState((prev) => Object.assign({}, prev, { error: message }));
+        if (typeof p.onToast === 'function') p.onToast(message, 'error');
+        return;
+      }
       setApplying(true);
       try {
-        const text = textOf(p);
+        const text = live;
         const ids = new Set();
         (suggestions || []).forEach((row) => {
           if (decided[row.id]) ids.add(row.id);
@@ -1191,6 +1195,13 @@
     }, [original, result.text]);
 
     const apply = async () => {
+      // The preview is a snapshot of the chapter taken when the dialog opened.
+      // Applying it after the writer typed would silently drop that typing.
+      if (textOf(p) !== original) {
+        const message = '正文在预览之后改过，请重新打开一次排版预览再应用。';
+        if (typeof p.onToast === 'function') p.onToast(message, 'error');
+        return;
+      }
       setBusy(true);
       try {
         const api = p.editorApi && p.editorApi.current;
@@ -3353,11 +3364,17 @@
     }, [preparing]);
 
     // -------------------------------------------------------------- prepare --
+    // Only the newest preparation may write into the form: a slow model answer
+    // for the journal the writer just switched away from must not overwrite the
+    // letter, the recipient and the attachments of the new one.
+    const prepareRunRef = useRef(0);
     const runPrepare = async () => {
       if (!(NW.io && NW.io.submit && NW.io.submit.prepare)) {
         setPrepareError('当前版本不支持投稿助手');
         return;
       }
+      const runId = (prepareRunRef.current += 1);
+      const stale = () => prepareRunRef.current !== runId;
       setPreparing(true);
       setPrepareError('');
       try {
@@ -3404,6 +3421,7 @@
             data = await NW.io.submit.prepare(
               Object.assign({}, preparePayload, { provider: candidate.provider, model: candidate.model }),
             );
+            if (stale()) return;
             if (index > 0 && typeof p.onToast === 'function') {
               p.onToast(NW.t('原模型没有响应，已改用 {0}', candidate.label), 'warn');
             }
@@ -3426,6 +3444,7 @@
             throw err;
           }
           data = await NW.io.submit.prepare(Object.assign({}, preparePayload, { provider: picked.provider, model: picked.model }));
+          if (stale()) return;
           setPrepareError('');
         }
         setPrepared(data || null);
@@ -3449,9 +3468,10 @@
         const warnings = data && Array.isArray(data.warnings) ? data.warnings : [];
         if (warnings.length && typeof p.onToast === 'function') p.onToast(warnings[0], 'info');
       } catch (err) {
+        if (stale()) return;
         setPrepareError(errText(err, '生成邮件失败'));
       } finally {
-        setPreparing(false);
+        if (!stale()) setPreparing(false);
       }
     };
 
@@ -3462,6 +3482,11 @@
     // though `step` stayed at 3.
     const [prepareToken, setPrepareToken] = useState(0);
     const discardPrepared = useCallback(() => {
+      // Bumped so any preparation still in flight knows its answer is obsolete.
+      prepareRunRef.current += 1;
+      // The stale run will not clear this itself (its finally only touches state
+      // it still owns), so the spinner has to be released here.
+      setPreparing(false);
       setPrepared(null);
       setSent(null);
       setSendError('');
@@ -4576,20 +4601,28 @@
     // Poll for "did the phone accept yet" while the code is on screen — the
     // desktop cannot know otherwise, and without this the dialog would still say
     // 「等待扫码」 after a successful pair.
+    // The countdown above re-renders once a second, so this effect must not
+    // depend on `left`: doing so tore down and rebuilt the interval before its
+    // first tick ever ran and the desktop never noticed a successful pair.
+    const pairedRef = useRef(false);
     useEffect(() => {
-      if (!info || !info.expiresAt || left <= 0) return undefined;
+      if (!info || !info.expiresAt) return undefined;
+      pairedRef.current = false;
       const timer = setInterval(() => {
+        if (pairedRef.current) return;
+        if (Number(info.expiresAt) <= Date.now()) return;
         NW.io.pair
           .status()
           .then((data) => {
-            if (!data || data.active !== false) return;
+            if (!data || data.active !== false || pairedRef.current) return;
+            pairedRef.current = true;
             refreshPeers();
             p.onToast && p.onToast('手机已配对', 'ok');
           })
           .catch(() => {});
       }, 2500);
       return () => clearInterval(timer);
-    }, [info, left]);
+    }, [info]);
 
     function showCode() {
       setError('');
@@ -4750,10 +4783,14 @@
     const takeSnapshot = async () => {
       setBusy('保存快照…');
       try {
-        if (typeof p.onSnapshotVersion === 'function') await p.onSnapshotVersion();
+        let saved = true;
+        if (typeof p.onSnapshotVersion === 'function') saved = await p.onSnapshotVersion(true);
         const list = await NW.db.listVersions(chapterId);
         setRows(list || []);
-        if (typeof p.onToast === 'function') p.onToast('已创建版本快照', 'ok');
+        if (typeof p.onToast === 'function') {
+          if (saved === false) p.onToast('当前章节没有可保存的正文，未创建快照', 'warn');
+          else p.onToast('已创建版本快照', 'ok');
+        }
       } catch (err) {
         setError(errText(err, '创建快照失败'));
       } finally {
@@ -4766,7 +4803,8 @@
       if (!ok) return;
       setBusy('恢复中…');
       try {
-        if (typeof p.onSnapshotVersion === 'function') await p.onSnapshotVersion();
+        // Forced: the throttle exists for browsing, not for overwriting text.
+        if (typeof p.onSnapshotVersion === 'function') await p.onSnapshotVersion(true);
         const api = p.editorApi && p.editorApi.current;
         if (api && typeof api.setContent === 'function') api.setContent(row.content || '');
         if (typeof p.onRefreshData === 'function') await p.onRefreshData();

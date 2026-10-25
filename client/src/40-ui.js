@@ -194,18 +194,41 @@
     );
   }
 
-  function Modal(props) {
-    const p = props || {};
+  // ---- one Escape closes exactly one dialog ---------------------------------
+  // Every dialog listens for Escape on window. Without an owner stack, a confirm
+  // opened from inside a dialog closes the dialog underneath (its listener was
+  // registered first) while the confirm stays on screen; the resume/delete the
+  // confirm was guarding then runs against a component that is already gone.
+  // Only the newest modal owns Escape, and the handler is read through a ref so
+  // a re-render cannot reorder the stack.
+  const escapeStack = [];
+  function useEscapeOwner(active, handler) {
+    const ref = React.useRef(handler);
+    ref.current = handler;
     React.useEffect(() => {
+      if (!active) return undefined;
+      const id = {};
+      escapeStack.push(id);
       const onKey = (ev) => {
-        if (ev.key === 'Escape' && p.onClose) {
-          ev.stopPropagation();
-          p.onClose();
-        }
+        if (ev.key !== 'Escape' && ev.key !== 'Esc') return;
+        if (escapeStack[escapeStack.length - 1] !== id) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (typeof ref.current === 'function') ref.current();
       };
       window.addEventListener('keydown', onKey, true);
-      return () => window.removeEventListener('keydown', onKey, true);
-    }, [p.onClose]);
+      return () => {
+        window.removeEventListener('keydown', onKey, true);
+        const at = escapeStack.lastIndexOf(id);
+        if (at >= 0) escapeStack.splice(at, 1);
+      };
+    }, [active]);
+  }
+  NW.useModalEscape = useEscapeOwner;
+
+  function Modal(props) {
+    const p = props || {};
+    useEscapeOwner(!!p.onClose, p.onClose);
     return h(
       'div',
       {
