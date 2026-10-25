@@ -69,6 +69,45 @@ public final class Store {
         }
     }
 
+    /**
+     * Read → change → write, off the UI thread.
+     *
+     * Parsing the library and serialising it back is O(whole library). Doing that
+     * on the main thread every time typing pauses (the editor's 1.2 s save) is a
+     * visible hitch on a big library, and it is exactly the kind of work that has
+     * no business competing with a scroll. The lock is taken inside the worker, so
+     * a sync landing at the same moment still cannot be lost.
+     */
+    public interface Mutator {
+        /** Returns true when something changed and the library must be written. */
+        boolean apply(Library library);
+    }
+
+    private static final java.util.concurrent.ExecutorService IO =
+        java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "nw-store");
+            thread.setDaemon(true);
+            return thread;
+        });
+
+    private static final android.os.Handler MAIN =
+        new android.os.Handler(android.os.Looper.getMainLooper());
+
+    public void updateInBackground(Mutator mutator, java.util.function.Consumer<Boolean> done) {
+        IO.execute(() -> {
+            boolean changed = false;
+            synchronized (LOCK) {
+                Library current = library();
+                changed = mutator.apply(current);
+                if (changed) save(current);
+            }
+            if (done != null) {
+                final boolean result = changed;
+                MAIN.post(() -> done.accept(result));
+            }
+        });
+    }
+
     /** Folds a library from the desktop into the stored one, under the lock. */
     public Library mergeSave(Library incoming) {
         if (incoming == null) return library();

@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
 import android.text.Editable;
+import android.text.InputType;
 import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
@@ -41,12 +42,24 @@ public final class EditActivity extends Activity {
     private boolean editing = false;
 
     private EditText bodyField;
+    /**
+     * The editor scrolls, the text field does not.
+     *
+     * A scrollable EditText scrolls *itself*: every drag moves the whole layout
+     * (and Android re-runs parts of the text layout on each move), which is what
+     * made a long chapter feel sticky. Inside a ScrollView the field is one tall
+     * block that never scrolls, so a drag is a plain translation and the caret is
+     * kept in view by hand (see keepCaretVisible).
+     */
+    private ScrollView editorScroll;
     private Library.Chapter openChapter;
     private TextView countLabel;
     private final android.os.Handler saver = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable saveTick = this::flush;
     /** 字数, recomputed after typing pauses instead of on every key. */
     private final Runnable countTick = this::recount;
+    /** Caret follow, throttled so a fast typist does not scroll per keystroke. */
+    private final Runnable caretTick = this::keepCaretVisible;
 
     /** R38: night colours are chosen before the first view is built. */
     @Override
@@ -70,9 +83,11 @@ public final class EditActivity extends Activity {
     @Override
     public void onBackPressed() {
         if (editing) {
-            flush();
+            // The save is asynchronous now, so the list is drawn *after* the write
+            // lands; otherwise the chapter list would briefly show the word count
+            // from before the last sentence.
             editing = false;
-            showChapters();
+            flushThen(this::showChapters);
             return;
         }
         super.onBackPressed();
@@ -89,6 +104,7 @@ public final class EditActivity extends Activity {
     private void showChapters() {
         editing = false;
         bodyField = null;
+        editorScroll = null;
         openChapter = null;
         root.removeAllViews();
 
@@ -211,7 +227,9 @@ public final class EditActivity extends Activity {
 
         String text = chapter.content == null ? "" : chapter.content;
         TextView meta = new TextView(this);
-        meta.setText(text.replaceAll("\\s", "").length() + " 字");
+        // Library.words never allocates; the old replaceAll built a copy of the
+        // whole chapter for every row on every redraw.
+        meta.setText(Library.words(text) + " 字");
         meta.setTextSize(12);
         meta.setTextColor(getResources().getColor(R.color.nw_soft));
         meta.setPadding(0, dp(3), 0, 0);
@@ -322,6 +340,15 @@ public final class EditActivity extends Activity {
         header.addView(countLabel);
         root.addView(header);
 
+        // The field is as tall as its text and the ScrollView does the scrolling.
+        // A scrolling EditText re-lays-out on every drag; a plain block inside a
+        // ScrollView is just translated, which is the difference between "scrolls
+        // with the text" and "sticks for a moment" on a long chapter.
+        editorScroll = new ScrollView(this);
+        editorScroll.setFillViewport(true);
+        editorScroll.setVerticalScrollBarEnabled(true);
+        editorScroll.setSmoothScrollingEnabled(false);
+
         bodyField = new EditText(this);
         bodyField.setText(chapter.content == null ? "" : chapter.content);
         applyTextSize();
@@ -329,7 +356,19 @@ public final class EditActivity extends Activity {
         bodyField.setBackgroundColor(color(R.color.nw_card));
         bodyField.setTextColor(color(R.color.nw_ink));
         bodyField.setGravity(Gravity.TOP | Gravity.START);
-        bodyField.setVerticalScrollBarEnabled(true);
+        // No inner scrolling, no horizontal scrolling, and no "automatically move
+        // the caret into view" (that is what makes a non-scrolling EditText jump
+        // when it sits inside a ScrollView). keepCaretVisible does it by hand.
+        bodyField.setVerticalScrollBarEnabled(false);
+        bodyField.setHorizontalScrollBarEnabled(false);
+        bodyField.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        // Multi-line prose, with the IME's spell-check pass switched off: the
+        // checker walks the text around the caret on every keystroke, which is
+        // pure overhead for a 30k-character chapter and adds its own hitch.
+        bodyField.setInputType(InputType.TYPE_CLASS_TEXT
+            | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         bodyField.addTextChangedListener(new TextWatcher() {
             @Override
             public void beforeTextChanged(CharSequence s, int start, int count2, int after) {
@@ -349,13 +388,46 @@ public final class EditActivity extends Activity {
                 // typing pauses.
                 saver.removeCallbacks(countTick);
                 saver.postDelayed(countTick, 260);
+                // Caret follow is throttled too: scrolling on every keystroke
+                // fights the scroll the user may be doing with a finger.
+                saver.removeCallbacks(caretTick);
+                saver.postDelayed(caretTick, 120);
                 // Debounced: writing to SharedPreferences on every keystroke would
                 // serialise the whole library a dozen times per sentence.
                 saver.removeCallbacks(saveTick);
                 saver.postDelayed(saveTick, SAVE_DELAY_MS);
             }
         });
-        root.addView(bodyField, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        editorScroll.addView(bodyField, new ScrollView.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(editorScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+    }
+
+    /**
+     * Scrolls the editor so the caret stays a comfortable distance from the edge.
+     *
+     * Only moves when the caret actually leaves the middle band, so a reader who
+     * scrolled away to re-read a passage is not yanked back on the next keystroke,
+     * and a typist near the bottom gets a page-turn instead of one line at a time.
+     */
+    private void keepCaretVisible() {
+        if (editorScroll == null || bodyField == null) return;
+        int caret = bodyField.getSelectionEnd();
+        if (caret < 0) return;
+        android.text.Layout layout = bodyField.getLayout();
+        if (layout == null) return;
+        int line = layout.getLineForOffset(caret);
+        int top = layout.getLineTop(line);
+        int bottom = layout.getLineBottom(line);
+        int viewHeight = editorScroll.getHeight() - editorScroll.getPaddingTop() - editorScroll.getPaddingBottom();
+        if (viewHeight <= 0) return;
+        int scrollY = editorScroll.getScrollY();
+        int margin = Math.max(dp(24), viewHeight / 4);
+        if (top - margin < scrollY) {
+            editorScroll.smoothScrollTo(0, Math.max(0, top - margin));
+        } else if (bottom + margin > scrollY + viewHeight) {
+            editorScroll.smoothScrollTo(0, Math.max(0, bottom + margin - viewHeight));
+        }
     }
 
     /** 字数, from the live field, a beat after the last keystroke. */
@@ -375,43 +447,55 @@ public final class EditActivity extends Activity {
      * not an edit.
      */
     private void flush() {
+        flushThen(null);
+    }
+
+    /** Saves, then runs `after` on the UI thread (or right away if there is nothing to save). */
+    private void flushThen(Runnable after) {
         saver.removeCallbacks(saveTick);
-        if (openChapter == null) return;
-        // The live field is the source of truth while it exists: afterTextChanged
-        // no longer copies the text on every key, so `openChapter.content` is one
-        // debounce behind until this runs.
-        String text = bodyField != null
-            ? bodyField.getText().toString()
-            : (openChapter.content == null ? "" : openChapter.content);
-        openChapter.content = text;
-        Library library = store.library();
-        Library.Book book = library.find(bookId);
-        if (book == null || book.deleted) return;
-        Library.Chapter hit = book.chapter(openChapter.id);
-        if (hit == null) {
-            // The chapter was deleted elsewhere while it was open here. The text on
-            // screen is still the user's, so it goes back as a chapter rather than
-            // being dropped: the deletion was last-write-wins, and so is keeping
-            // words that were typed after it.
-            Library.Chapter again = new Library.Chapter();
-            again.id = openChapter.id;
-            again.title = isBlank(openChapter.title) ? "未命名" : openChapter.title;
-            again.content = text;
-            again.order = book.chapters.size();
-            book.chapters.add(again);
-            book.touch();
-            store.save(library);
-            Toast.makeText(this, "这一章在其它设备上被删除了，刚写的正文已恢复成新的一章", Toast.LENGTH_LONG).show();
-            SyncEngine.pushSoon(this);
+        if (openChapter == null) {
+            if (after != null) after.run();
             return;
         }
-        String before = hit.content == null ? "" : hit.content;
-        if (before.equals(text)) return;
-        hit.content = text;
-        if (isBlank(hit.title)) hit.title = openChapter.title;
-        book.touch();
-        store.save(library);
-        SyncEngine.pushSoon(this);
+        // The live field is the source of truth while it exists: afterTextChanged
+        // no longer copies the text on every key, so the stored chapter is one
+        // debounce behind until this runs.
+        final String text = bodyField != null
+            ? bodyField.getText().toString()
+            : (openChapter.content == null ? "" : openChapter.content);
+        final String chapterId = openChapter.id;
+        final String chapterTitle = openChapter.title;
+        // Parse, edit and serialise on the store's worker: on a big library this
+        // is tens of milliseconds, and doing it on the main thread every 1.2 s is
+        // felt as a stutter while writing.
+        store.updateInBackground(library -> {
+            Library.Book book = library.find(bookId);
+            if (book == null || book.deleted) return false;
+            Library.Chapter hit = book.chapter(chapterId);
+            if (hit == null) {
+                // The chapter was deleted elsewhere while it was open here. The text
+                // on screen is still the user's, so it goes back as a chapter rather
+                // than being dropped: the deletion was last-write-wins, and so is
+                // keeping words that were typed after it.
+                Library.Chapter again = new Library.Chapter();
+                again.id = chapterId;
+                again.title = isBlank(chapterTitle) ? "未命名" : chapterTitle;
+                again.content = text;
+                again.order = book.chapters.size();
+                book.chapters.add(again);
+                book.touch();
+                return true;
+            }
+            String before = hit.content == null ? "" : hit.content;
+            if (before.equals(text)) return false;
+            hit.content = text;
+            if (isBlank(hit.title)) hit.title = chapterTitle;
+            book.touch();
+            return true;
+        }, changed -> {
+            if (changed) SyncEngine.pushSoon(this);
+            if (after != null) after.run();
+        });
     }
 
     private static boolean isBlank(String text) {
