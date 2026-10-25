@@ -2163,6 +2163,13 @@
     });
     let sectionIndex = 0;
     const section = (title, children, extra) => {
+      // R38 fix: this signature takes ONE body element. A second body used to
+      // land in `extra`, get spread onto the <section>, and vanish — which is
+      // how the pairing panel silently disappeared from the DOM. Fail loudly
+      // instead: a React element always carries $$typeof.
+      if (extra && typeof extra === 'object' && extra.$$typeof) {
+        throw new Error('[novel-writer] section() takes one body; wrap multiple children in an array');
+      }
       const meta = SETTINGS_TABS[sectionIndex] || { id: 'other' };
       sectionIndex += 1;
       return h(
@@ -2853,56 +2860,66 @@
           { ref: submitSectionRef },
         ),
         // ------------------------------------------------------ 6 手机同步 ----
+        // R38 fix: `section(title, children, extra)` renders exactly one child. The
+        // variadic call written here dropped everything after the intro paragraph —
+        // the panel, the sync status and the LAN addresses never reached the DOM,
+        // and the pairing element ended up spread onto the <section> as props.
         section(
           '手机同步',
-          h('p', { className: 'nw-hint-block' }, '手机装好 App 后配对一次即可。之后只要在同一个 Wi-Fi 下，修改会自动双向同步；不同书各自保留，同一本书以最后修改时间为准。'),
-          // R38: the pairing panel is rendered in place instead of behind a button
-          // that swapped this window for another one. The values a phone needs are
-          // what people come here for; hiding them one click deeper was the bug.
-          h(PairPanel, { onToast: typeof p.onToast === 'function' ? p.onToast : null }),
-          // R36: users who turned on 正文加密 need to know that syncing does not
-          // carry the encryption to the phone — the desktop decrypts on the way
-          // out, because the phone has no key and never will.
-          draft.encryption === true
-            ? h('p', { className: 'nw-hint-block' }, '正文加密已开启：同步时桌面会先解密再交给手机，所以手机上看到的是明文；同步缓存仍用本机密钥加密存放。')
-            : null,
           h(
             'div',
-            { className: 'nw-row' },
-            h('span', null, '同步状态'),
+            null,
+            [
+            h('p', { className: 'nw-hint-block' }, '手机装好 App 后配对一次即可。之后只要在同一个 Wi-Fi 下，修改会自动双向同步；不同书各自保留，同一本书以最后修改时间为准。'),
+            // R38: the pairing panel is rendered in place instead of behind a button
+            // that swapped this window for another one. The values a phone needs are
+            // what people come here for; hiding them one click deeper was the bug.
+            h(PairPanel, { onToast: typeof p.onToast === 'function' ? p.onToast : null }),
+            // R36: users who turned on 正文加密 need to know that syncing does not
+            // carry the encryption to the phone — the desktop decrypts on the way
+            // out, because the phone has no key and never will.
+            draft.encryption === true
+              ? h('p', { className: 'nw-hint-block' }, '正文加密已开启：同步时桌面会先解密再交给手机，所以手机上看到的是明文；同步缓存仍用本机密钥加密存放。')
+              : null,
             h(
-              'span',
-              { className: 'nw-dim' },
-              // R38: a phone sync never touches the browser's own counters — it goes
-              // host-to-phone — so `lastSyncAt` (written by the host when a phone
-              // merges) is the honest answer. The browser counters stay as a
-              // fallback for the old in-page sync paths.
-              lanSync && lanSync.lastSyncAt
-                ? NW.t('最近一次同步 {0}', NW.fmtDate(lanSync.lastSyncAt))
-                : lanSync && lanSync.pulledAt
-                  ? NW.t('最近一次收到手机改动 {0}', NW.fmtDate(lanSync.pulledAt))
-                  : lanSync && lanSync.lastPushAt
-                    ? NW.t('最近一次交给同步 {0}', NW.fmtDate(lanSync.lastPushAt))
-                    : NW.t('还没有同步过'),
-            ),
-          ),
-          // Why the address is spelled out even though there is a QR: the phone
-          // sometimes cannot use a camera (emulator, cracked screen), and the
-          // number is also the fastest way to tell whether the desktop is on the
-          // same subnet as the phone at all.
-          lanSync && lanSync.lan && lanSync.lan.running && lanSync.lan.addresses && lanSync.lan.addresses.length
-            ? h(
-                'div',
-                { className: 'nw-row' },
-                h('span', null, '局域网地址'),
-                h('span', { className: 'nw-dim' }, lanSync.lan.addresses.map((row) => row.url).join('  ·  ')),
-              )
-            : h(
-                'div',
-                { className: 'nw-row' },
-                h('span', null, '局域网地址'),
-                h('span', { className: 'nw-dim' }, '未启动（生成配对码时会自动启动）'),
+              'div',
+              { className: 'nw-row' },
+              h('span', null, '同步状态'),
+              h(
+                'span',
+                { className: 'nw-dim' },
+                // R38: a phone sync never touches the browser's own counters — it goes
+                // host-to-phone — so `lastSyncAt` (written by the host when a phone
+                // merges) is the honest answer. The browser counters stay as a
+                // fallback for the old in-page sync paths.
+                lanSync && lanSync.lastSyncAt
+                  ? NW.t('最近一次同步 {0}', NW.fmtDate(lanSync.lastSyncAt))
+                  : lanSync && lanSync.pulledAt
+                    ? NW.t('最近一次收到手机改动 {0}', NW.fmtDate(lanSync.pulledAt))
+                    : lanSync && lanSync.lastPushAt
+                      ? NW.t('最近一次交给同步 {0}', NW.fmtDate(lanSync.lastPushAt))
+                      : NW.t('还没有同步过'),
               ),
+            ),
+            // Why the address is spelled out even though there is a QR: the phone
+            // sometimes cannot use a camera (emulator, cracked screen), and the
+            // number is also the fastest way to tell whether the desktop is on the
+            // same subnet as the phone at all.
+            lanSync && lanSync.lan && lanSync.lan.running && lanSync.lan.addresses && lanSync.lan.addresses.length
+              ? h(
+                  'div',
+                  { className: 'nw-row' },
+                  h('span', null, '局域网地址'),
+                  h('span', { className: 'nw-dim' }, lanSync.lan.addresses.map((row) => row.url).join('  ·  ')),
+                )
+              : h(
+                  'div',
+                  { className: 'nw-row' },
+                  h('span', null, '局域网地址'),
+                  h('span', { className: 'nw-dim' }, '未启动（生成配对码时会自动启动）'),
+                ),
+            ],
+          ),
         ),
         // ---------------------------------------------------- 7 快捷键 ----
         section(
