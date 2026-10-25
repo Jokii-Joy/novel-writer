@@ -19659,6 +19659,41 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       return undefined;
     }, []);
 
+    // R38: this panel *is* the address and the code, so it must not open empty
+    // and wait for someone to find 「生成配对码」 — that was the complaint. Ask for
+    // one on mount, and reuse a still-valid offer when there is one: opening
+    // settings again mid-pairing must not invalidate the code being typed on the
+    // phone.
+    const bootRef = useRef(false);
+    useEffect(() => {
+      if (bootRef.current) return undefined;
+      bootRef.current = true;
+      let alive = true;
+      const bootBusy = NW.t('正在生成配对信息…');
+      setBusy(bootBusy);
+      NW.io.pair
+        .status()
+        .then((data) => {
+          if (!alive) return null;
+          if (data && data.active && data.token) {
+            setInfo(data);
+            return null;
+          }
+          return NW.io.pair.start().then((fresh) => {
+            if (alive) setInfo(fresh);
+          });
+        })
+        .catch((err) => {
+          if (alive) setError(errText(err, '生成配对码失败'));
+        })
+        .then(() => {
+          if (alive) setBusy((current) => (current === bootBusy ? '' : current));
+        });
+      return () => {
+        alive = false;
+      };
+    }, []);
+
     // Countdown, not a progress bar: the only useful fact about a pairing code is
     // how long it is still good for.
     useEffect(() => {
@@ -19687,6 +19722,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           .then((data) => {
             if (!data || data.active !== false || pairedRef.current) return;
             pairedRef.current = true;
+            // The offer is consumed by the accept, so the code on screen is dead
+            // text now. Drop it rather than leave a countdown running next to a
+            // code that would only answer 「过期」 if typed.
+            setInfo(null);
             refreshPeers();
             p.onToast && p.onToast('手机已配对', 'ok');
           })
