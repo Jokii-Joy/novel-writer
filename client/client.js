@@ -460,6 +460,7 @@ window.__ModuleLoader__.load({
     '最近一次交给同步 {0}': 'Last handed to sync {0}',
     '{0} 台已配对': '{0} paired',
     '手机装好 App 后扫一次码即可。之后只要在同一个 Wi-Fi 下，修改会自动双向同步；不同书各自保留，同一本书以最后修改时间为准。': 'Scan once from the phone app. After that, edits sync both ways over the same Wi-Fi; different books merge, the same book takes the newer timestamp.',
+    '正文加密已开启：同步时桌面会先解密再交给手机，所以手机上看到的是明文；同步缓存仍用本机密钥加密存放。': 'Text encryption is on: the desktop decrypts before handing a book to the phone, so the phone shows plain text. The sync cache on this computer stays encrypted with the local key.',
     '在手机上的「精神空间」里选择「扫描配对」，对准下面的二维码。配对一次即可，之后在同一个 Wi-Fi 下会自动同步。': 'In the phone app choose "Scan to pair" and point it at the code. One scan is enough; afterwards it syncs automatically on the same Wi-Fi.',
     '电脑地址：{0}:{1}': 'Desktop address {0}:{1}',
     '其他可能地址：{0}': 'Other possible addresses: {0}',
@@ -2063,6 +2064,11 @@ window.__ModuleLoader__.load({
         const row = incomingChapters[c];
         if (!row || !row.id) continue;
         keep[String(row.id)] = true;
+        const body = String(row.content == null ? '' : row.content);
+        // R36: a peer sends plaintext, but this device may have 正文加密 on. Sealing
+        // here keeps a synced chapter from becoming the one plaintext row in an
+        // otherwise encrypted store; the word count stays measured on plaintext.
+        const sealedBody = await sealContent(body);
         ops.push({
           store: 'chapters',
           type: 'put',
@@ -2070,9 +2076,9 @@ window.__ModuleLoader__.load({
             id: String(row.id),
             novelId: id,
             title: String(row.title || ''),
-            content: String(row.content == null ? '' : row.content),
+            content: sealedBody,
             order: Number(row.order) || 0,
-            wordCount: countWords(String(row.content || '')),
+            wordCount: countWords(body),
             createdAt: Number(row.createdAt) || stamp,
             updatedAt: stamp,
             enc: null,
@@ -12182,6 +12188,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      */
     const syncLibrary = useCallback(async () => {
       try {
+        // Refuse to push while a password exists but the studio is locked: the
+        // rows would be `enc:v1:` ciphertext, and the phone cannot read them. The
+        // push effect already skips this state; the guard keeps a future caller
+        // from reintroducing the bug the decryption below exists to fix.
+        if (NW.crypto.hasPassword && NW.crypto.hasPassword() && !NW.crypto.isUnlocked()) return null;
         const snapshot = await NW.db.dump();
         const grouped = new Map();
         for (const row of snapshot.chapters || []) {
@@ -12230,6 +12241,24 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             deleted: true,
             chapters: [],
           });
+        }
+        // R36: with 正文加密 on, IndexedDB stores `enc:v1:` bodies. Pushing them
+        // raw is what made the phone show ciphertext: it holds no key and the
+        // host only relays. This is the one place that can decrypt, so it does —
+        // but only when the studio is unlocked, which `encryptionOn()` implies.
+        // A body that fails to decrypt is left sealed rather than blanked:
+        // showing a garbled chapter beats silently deleting it everywhere.
+        if (await NW.crypto.encryptionOn()) {
+          for (const book of books) {
+            for (const chapter of book.chapters) {
+              if (!chapter.content || !NW.crypto.isEncrypted(chapter.content)) continue;
+              try {
+                chapter.content = await NW.crypto.decryptText(chapter.content);
+              } catch (err) {
+                /* keep the ciphertext */
+              }
+            }
+          }
         }
         const data = await NW.io.sync.push(books);
         if (!aliveRef.current) return data;
@@ -17733,6 +17762,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             ),
           ),
           h('p', { className: 'nw-hint-block' }, '手机装好 App 后扫一次码即可。之后只要在同一个 Wi-Fi 下，修改会自动双向同步；不同书各自保留，同一本书以最后修改时间为准。'),
+          // R36: users who turned on 正文加密 need to know that syncing does not
+          // carry the encryption to the phone — the desktop decrypts on the way
+          // out, because the phone has no key and never will.
+          draft.encryption === true
+            ? h('p', { className: 'nw-hint-block' }, '正文加密已开启：同步时桌面会先解密再交给手机，所以手机上看到的是明文；同步缓存仍用本机密钥加密存放。')
+            : null,
           h(
             'div',
             { className: 'nw-row' },

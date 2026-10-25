@@ -1132,6 +1132,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      */
     const syncLibrary = useCallback(async () => {
       try {
+        // Refuse to push while a password exists but the studio is locked: the
+        // rows would be `enc:v1:` ciphertext, and the phone cannot read them. The
+        // push effect already skips this state; the guard keeps a future caller
+        // from reintroducing the bug the decryption below exists to fix.
+        if (NW.crypto.hasPassword && NW.crypto.hasPassword() && !NW.crypto.isUnlocked()) return null;
         const snapshot = await NW.db.dump();
         const grouped = new Map();
         for (const row of snapshot.chapters || []) {
@@ -1180,6 +1185,24 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             deleted: true,
             chapters: [],
           });
+        }
+        // R36: with 正文加密 on, IndexedDB stores `enc:v1:` bodies. Pushing them
+        // raw is what made the phone show ciphertext: it holds no key and the
+        // host only relays. This is the one place that can decrypt, so it does —
+        // but only when the studio is unlocked, which `encryptionOn()` implies.
+        // A body that fails to decrypt is left sealed rather than blanked:
+        // showing a garbled chapter beats silently deleting it everywhere.
+        if (await NW.crypto.encryptionOn()) {
+          for (const book of books) {
+            for (const chapter of book.chapters) {
+              if (!chapter.content || !NW.crypto.isEncrypted(chapter.content)) continue;
+              try {
+                chapter.content = await NW.crypto.decryptText(chapter.content);
+              } catch (err) {
+                /* keep the ciphertext */
+              }
+            }
+          }
         }
         const data = await NW.io.sync.push(books);
         if (!aliveRef.current) return data;

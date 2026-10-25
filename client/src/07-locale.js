@@ -115,6 +115,7 @@
     '最近一次交给同步 {0}': 'Last handed to sync {0}',
     '{0} 台已配对': '{0} paired',
     '手机装好 App 后扫一次码即可。之后只要在同一个 Wi-Fi 下，修改会自动双向同步；不同书各自保留，同一本书以最后修改时间为准。': 'Scan once from the phone app. After that, edits sync both ways over the same Wi-Fi; different books merge, the same book takes the newer timestamp.',
+    '正文加密已开启：同步时桌面会先解密再交给手机，所以手机上看到的是明文；同步缓存仍用本机密钥加密存放。': 'Text encryption is on: the desktop decrypts before handing a book to the phone, so the phone shows plain text. The sync cache on this computer stays encrypted with the local key.',
     '在手机上的「精神空间」里选择「扫描配对」，对准下面的二维码。配对一次即可，之后在同一个 Wi-Fi 下会自动同步。': 'In the phone app choose "Scan to pair" and point it at the code. One scan is enough; afterwards it syncs automatically on the same Wi-Fi.',
     '电脑地址：{0}:{1}': 'Desktop address {0}:{1}',
     '其他可能地址：{0}': 'Other possible addresses: {0}',

@@ -7,6 +7,13 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.2.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第三十六轮（R36）改造：**手机不再显示密文** —— 开着「正文加密存储」时，IndexedDB 里存的是
+  `enc:v1:` 密文，而 `sync.push` 原样把密文推给宿主、宿主再原样发给手机，手机没有密钥，
+  于是正文章节显示成 `enc:v1:…`。现在桌面在推送前解密（只有它持有密钥），手机收到的是正文；
+  为本机拉回来的改动会按当时的加密状态重新封存，不会在加密库里留下唯一一条明文。
+  宿主侧的同步缓存 `sync-state.json` 也改成用本机密钥加密落盘（`NWENC1` 容器，与文件夹镜像同一把
+  派生密钥），否则「推明文」等于把加密悄悄关掉。旧缓存里的密文书靠合并规则第 5 条洗回明文：
+  一本**整本都是密文**的书永远输给可读的那份，不受时间戳平局影响。
 - 第三十五轮（R35）改造：**扫码预览取景 + 一键导出全部 + 首页更瘦** —— ① 手机扫码页面预览从来没调过
   `setDisplayOrientation`（传感器是横的），竖着拿手机看到的是旋过 90° 又被拉伸的画面，二维码自然对不上；
   现在按 `CameraInfo.orientation` 与当前屏幕旋转算出旋转角并在 `surfaceCreated` / `surfaceChanged` 两处应用，
@@ -477,6 +484,9 @@ IndexedDB `novel-writer` v2：`novels` / `chapters` / `versions` / `trash` / `se
   格式 `NWENC1` + base64(`iv[12] || tag[16] || ciphertext`)，AES-256-GCM，密钥由 Host `secrets/key.bin` 经 **HKDF-SHA256**（info `novel-writer-mirror`）派生——派生密钥不落盘。
   **R16** 起文件格式**只有 `.nwe` 一种**：明文副本的开关、按钮与文案已全部移除（R15 的 `plain` 设置位也从
   `settings.json` 里清掉），需要临时导出可读副本时仍在 `<dir>/plain/` 下操作（`library.decryptTo`）。
+- **同步缓存也加密（R36）**：`DSH_HOME/novel-writer/sync-state.json` 是手机同步的权威副本，过去是明文 JSON，
+  开着正文加密时等于把解密后的书稿摊在磁盘上；现在写成同一个 `NWENC1` 容器（同一把派生密钥），
+  旧明文文件仍能读、读不出来时退化成空库（浏览器下一次 push 会重建）。
 
 **小说保存目录**：设置 →「导出与文件」里的入口打开「自动保存与恢复」面板，选一个本机文件夹（Windows 原生目录选择器，也可手输路径），
 之后每次修改自动把每部小说覆盖成 `<书名>.docx`（加密时 `.docx.nwe`）+ 一份 `library.json` 全量快照。
@@ -563,8 +573,11 @@ HTTP 服务（默认端口 **41288**，可用 `lan.start {port}` 换端口），
 
 **安全边界**：配对 token 一次性且 5 分钟过期；同步请求带设备 id + 共享密钥签名，未配对设备读不到任何东西；
 LAN 端口是**明文 HTTP、无 TLS**，默认只在同一 Wi-Fi 内可达。**不要把 41288 端口映射到公网**。
-另外，开启「正文加密存储」时同步出去的是库里的**密文**（`enc:v1:` 前缀，手机不持有密钥、解不开），
-两者建议不要同时用。
+**和「正文加密存储」怎么共存**：手机没有密钥，也永远不会拿到（配对只下发共享密钥，不是加密口令），
+所以桌面在 `sync.push` 之前把正文解密，手机收到的就是纯文本；手机推回来的改动在写回 IndexedDB 时
+按当前加密状态重新加密（`sealContent()`），加密库里不会多出一条明文行。宿主侧的同步缓存
+`sync-state.json` 用本机密钥加密存放（`NWENC1`），推明文不会顺带把磁盘上的缓存变成明文。
+**手机端是明文存储**：SharedPreferences 里的书稿没有加密，手机丢了等于书稿丢了，这一点别指望加密能救。
 
 **APK**
 - 产物：`dist/精神空间.apk`（**533289 B ≈ 0.51 MB**；另有 `.idsig`）。package `com.novelwriter.app`，
@@ -661,6 +674,22 @@ LAN 端口是**明文 HTTP、无 TLS**，默认只在同一 Wi-Fi 内可达。**
 「已尝试 SSL 465✗ / STARTTLS 587✓」显示在设置里。
 
 ## 3. 验收状态
+
+> **第三十六轮（R36）**：手机显示密文的问题。按要求「不要做太多测试」，只做了语法、构建、同步缓存层的
+> 小脚本冒烟，**没有真机同步**（手机端 Java 未改，APK 不需要重打）：
+>
+> | 检查 | 命令 / 方式 | 结果 |
+> | --- | --- | --- |
+> | 语法 | `node --check`（`lib/lansync.js` / `lib/library.js` / `lib/secrets.js` / `10-db` / `90-app` / `95-dialogs` / `07-locale`） | 全部 exit 0 |
+> | 构建 + 加载校验 | `node scripts/build-client.mjs` | **20 parts → 871476 字节**，`verify-client-load: ok (id=@local/novel-writer, inject=["slots"])` |
+> | **同步缓存落盘** | 临时脚本（已删）在临时 `DSH_HOME` 里直调 `pushLibrary` | 文件以 `NWENC1` 开头、**不含正文**；`readSyncState()` 读回「第一章」 |
+> | **旧明文缓存兼容** | 同上，手写旧格式 `sync-state.json` | 照常读出「旧文件」 |
+> | **密文洗白（合并规则 5）** | 同上，镜像放 `enc:v1:AAAA`、同时间戳推明文 | `stats.repaired 1`，结果正文「正文」，落盘仍是密文 |
+> | **坏容器退化** | 同上，`NWENC1` 后面塞乱码 | `readSyncState()` 返回 0 本，不抛异常 |
+> | 密钥竞争修复 | 同上，全新 `DSH_HOME` 直接派生 | 修 `readStore` 前首次派生必失败（`key.bin.<hex>.tmp` 残留），改为先建密钥再读储后成功 |
+>
+> 没做的：真机「加密 + 同步」走一遍（推明文与写回加密都只经代码审查与缓存层冒烟）、
+> 手机端 SharedPreferences 明文的提示文案在真机上的显示。
 
 > **第三十五轮（R35）**：扫码取景、一键导出全部、首页去掉快捷入口卡三件事。按要求「不要做太多测试」，
 > 只做语法、构建、bundle 加载校验、导出接口冒烟与 APK 重打，**没有在真机上对着二维码扫一次**，
@@ -840,12 +869,13 @@ novel-writer/
 │  ├─ pdf.js                docxToPdf（officeToPdf → libreoffice-kit 回退）
 │  ├─ import-parse.js       parseImport（txt/md/docx/epub，GB18030 回退）
 │  ├─ lansync.js            手机同步核心：配对 token / Ed25519 身份 / 共享密钥签名 /
-│  │                        mergeLibraries（按书合并，墓碑胜负）/ UDP 41287 发现信标 / 宿主侧镜像
+│  │                        mergeLibraries（按书合并，墓碑胜负）/ UDP 41287 发现信标 /
+│  │                        宿主侧镜像 sync-state.json（NWENC1，本机密钥加密）
 │  ├─ lansync-server.js     0.0.0.0 上的最小 HTTP 监听（默认 41288）：ping / pair.handshake /
 │  │                        pair.accept / sync，别的一概不接
 │  └─ qr.js                 纯 JS QR 编码（无依赖），输出配对二维码 SVG
 ├─ client/
-│  ├─ client.js             构建产物（勿手改，20 parts 拼接 / 861184 字符 → 889891 字节落盘）
+│  ├─ client.js             构建产物（勿手改，20 parts 拼接 / 871476 字符 → 901382 字节落盘）
 │  └─ src/                  00→99 按文件名字典序拼接
 │     ├─ 00-boot / 99-end        __ModuleLoader__ 封装与 apply 导出
 │     ├─ 05-css                  设计 token 层（16/14/13px、圆角、控件高度、间距、阴影）
@@ -941,9 +971,9 @@ body 为 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`，错误绝不�
     「清空回收站」把整张表 `clear()`，于是这台电脑不再记得「这本书是我删的」。此时一台在删除期间离线、
     仍持有旧书的手机下次同步会把书**原样推回来**。想彻底删掉一本书，最好在两端都删一次，或者删完先同步、
     等手机也删掉之后再清空回收站。
-33. **「正文加密」和「手机同步」不建议同时开**：加密时 IndexedDB 里存的是 `enc:v1:` 密文，`sync.push` 推给
-    宿主的也是密文，而手机不持有密钥、解不开，正文会显示成 `enc:v1:…` 开头的一串。要同步就关掉加密，
-    要加密就只在这台电脑上用。
+33. **手机端是明文存储**：R36 之后「正文加密」和「手机同步」可以同时用，代价是加密的边界只到手机为止——
+    桌面推出去前解密，手机落地就是纯文本（`SharedPreferences` 里没有加密），所以手机丢失或被人解锁，
+    书稿就是明文。真在意这点就别配对手机，或者只在桌面端写作。
 34. **APK 是 debug 签名的旁加载包**：`dist/精神空间.apk` 用固定的 `debug.keystore`（`storepass`/`keypass` 都是
     `android`）签名，没有上架任何商店、没有自动更新，升级要手动装新包；**换签名必须先卸载旧版**，配对信息也会随之丢失。
     构建依赖 `.tools/android/` 里下载的 SDK 与便携 JDK（`tools/setup-android.ps1` 可补齐），不是一台机器都能直接出包。

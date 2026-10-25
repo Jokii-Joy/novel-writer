@@ -2856,6 +2856,12 @@
             ),
           ),
           h('p', { className: 'nw-hint-block' }, '手机装好 App 后扫一次码即可。之后只要在同一个 Wi-Fi 下，修改会自动双向同步；不同书各自保留，同一本书以最后修改时间为准。'),
+          // R36: users who turned on 正文加密 need to know that syncing does not
+          // carry the encryption to the phone — the desktop decrypts on the way
+          // out, because the phone has no key and never will.
+          draft.encryption === true
+            ? h('p', { className: 'nw-hint-block' }, '正文加密已开启：同步时桌面会先解密再交给手机，所以手机上看到的是明文；同步缓存仍用本机密钥加密存放。')
+            : null,
           h(
             'div',
             { className: 'nw-row' },

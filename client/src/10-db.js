@@ -1321,6 +1321,11 @@
         const row = incomingChapters[c];
         if (!row || !row.id) continue;
         keep[String(row.id)] = true;
+        const body = String(row.content == null ? '' : row.content);
+        // R36: a peer sends plaintext, but this device may have 正文加密 on. Sealing
+        // here keeps a synced chapter from becoming the one plaintext row in an
+        // otherwise encrypted store; the word count stays measured on plaintext.
+        const sealedBody = await sealContent(body);
         ops.push({
           store: 'chapters',
           type: 'put',
@@ -1328,9 +1333,9 @@
             id: String(row.id),
             novelId: id,
             title: String(row.title || ''),
-            content: String(row.content == null ? '' : row.content),
+            content: sealedBody,
             order: Number(row.order) || 0,
-            wordCount: countWords(String(row.content || '')),
+            wordCount: countWords(body),
             createdAt: Number(row.createdAt) || stamp,
             updatedAt: stamp,
             enc: null,
