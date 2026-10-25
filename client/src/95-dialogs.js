@@ -2824,7 +2824,7 @@
               'div',
               { className: 'nw-inline', style: { gap: '6px' } },
               h('span', { className: 'nw-dim' }, lanSync && lanSync.peers ? lanSync.peers + ' 台已配对' : '还没有配对'),
-              NW.ui.btn({ onClick: () => (p.onOpenPair ? p.onOpenPair() : openSibling(p, 'pair', {})), children: '显示配对二维码…' }),
+              NW.ui.btn({ onClick: () => (p.onOpenPair ? p.onOpenPair() : openSibling(p, 'pair', {})), children: '显示配对地址和配对码…' }),
             ),
           ),
           h('p', { className: 'nw-hint-block' }, '手机装好 App 后扫一次码即可。之后只要在同一个 Wi-Fi 下，修改会自动双向同步；不同书各自保留，同一本书以最后修改时间为准。'),
@@ -2857,7 +2857,7 @@
                 'div',
                 { className: 'nw-row' },
                 h('span', null, '局域网地址'),
-                h('span', { className: 'nw-dim' }, '未启动（生成配对二维码时会自动启动）'),
+                h('span', { className: 'nw-dim' }, '未启动（生成配对码时会自动启动）'),
               ),
         ),
         // ---------------------------------------------------- 7 快捷键 ----
@@ -4500,11 +4500,14 @@
   /**
    * 「手机配对」— shows the QR and the addresses a phone could reach us on.
    *
-   * Why a QR at all: typing an IP plus a port on a phone keyboard is the kind of
-   * step that makes people give up, and the token has to travel out of band
-   * anyway (screen → camera is the only channel an attacker on the LAN cannot
-   * read). The code is regenerated on demand rather than kept alive, so an old
-   * screenshot of it stops working after five minutes.
+   * Why a QR at all: the token has to travel out of band (screen → camera is the
+   * only channel an attacker on the LAN cannot read), and a code is one tap for
+   * the phone. But point-and-shoot pairing proved to be the fragile half of the
+   * feature — autofocus on a lit screen, glare, and phone apps that decode the
+   * code and then reject our payload all cost more time than typing two lines.
+   * So the panel now *prints* the two values the phone's form wants, and the QR
+   * is the shortcut rather than the only road. The code is still regenerated on
+   * demand, so an old screenshot stops working after five minutes.
    */
   NW.dialogs.Pair = function Pair(props) {
     const p = props || {};
@@ -4556,7 +4559,7 @@
 
     function showCode() {
       setError('');
-      setBusy('正在生成二维码…');
+      setBusy('正在生成配对码…');
       NW.io.pair
         .start()
         .then((data) => {
@@ -4584,28 +4587,78 @@
         .catch((err) => setError(errText(err, '解除配对失败')));
     }
 
+    // Copy as two lines: the phone form has one field per line. Pasting the whole
+    // thing into the address field also works — the app splits a `nw1:` payload.
+    function copyManual() {
+      const text = `${info.address || ''}:${info.port || '?'}\n${info.token || ''}`;
+      const toast = (message, kind) => p.onToast && p.onToast(message, kind);
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(
+            () => toast(NW.t('已复制地址和配对码'), 'ok'),
+            () => toast(NW.t('复制失败，请手动选中这两行'), 'warn'),
+          );
+          return;
+        }
+      } catch (error) {
+        // Clipboard API missing or blocked (no secure context) — fall through.
+      }
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      let copied = false;
+      try {
+        copied = document.execCommand('copy');
+      } catch (error) {
+        copied = false;
+      }
+      document.body.removeChild(area);
+      toast(copied ? NW.t('已复制地址和配对码') : NW.t('复制失败，请手动选中这两行'), copied ? 'ok' : 'warn');
+    }
+
     const body = [];
     body.push(
       h(
         'div',
         { className: 'nw-pair' },
-        h('p', { className: 'nw-hint-block' }, '在手机上的「精神空间」里选择「扫描配对」，对准下面的二维码。配对一次即可，之后在同一个 Wi-Fi 下会自动同步。'),
+        h('p', { className: 'nw-hint-block' }, NW.t('在手机上打开「精神空间」→「配对」，把下面的「电脑地址」和「配对码」填进去；也可以「改成扫码」对准二维码。配对一次即可，之后在同一个 Wi-Fi 下会自动同步。')),
         error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
         info
-          ? h(
-              'div',
-              { className: 'nw-pair-box' },
-              h('div', { className: 'nw-pair-code', 'aria-hidden': 'true', dangerouslySetInnerHTML: { __html: String(info.svg || '') } }),
-              h('div', { className: 'nw-pair-meta' }, [
-                h('div', { className: 'nw-pair-addr' }, `电脑地址：${info.address || '未知'}:${info.port || '?'}`),
-                Array.isArray(info.addresses) && info.addresses.length > 1
-                  ? h('div', { className: 'nw-hint-block' }, `其他可能地址：${info.addresses.slice(1).join('、')}`)
-                  : null,
-                h('div', { className: 'nw-pair-timer' }, left > 0 ? `二维码 ${left} 秒后失效` : '二维码已失效，请重新生成'),
+          ? h('div', { className: 'nw-pair-stack' }, [
+              // Typing comes first: the address and code are what the phone form
+              // actually asks for, and a code that is printed can always be copied.
+              info.token
+                ? h('div', { className: 'nw-pair-manual' }, [
+                    h('div', { className: 'nw-pair-manual-head' }, NW.t('在手机「配对」里填这两行')),
+                    h('div', { className: 'nw-pair-manual-row' }, [
+                      h('span', { className: 'nw-pair-manual-key' }, NW.t('电脑地址')),
+                      h('code', { className: 'nw-pair-manual-value' }, `${info.address || '未知'}:${info.port || '?'}`),
+                    ]),
+                    h('div', { className: 'nw-pair-manual-row' }, [
+                      h('span', { className: 'nw-pair-manual-key' }, NW.t('配对码')),
+                      h('code', { className: 'nw-pair-manual-value' }, String(info.token)),
+                    ]),
+                    h('div', { className: 'nw-pair-manual-acts' },
+                      NW.ui.btn({ kind: 'ghost', onClick: copyManual, children: NW.t('复制这两行') })),
+                  ])
+                : null,
+              h('div', { className: 'nw-pair-box' }, [
+                h('div', { className: 'nw-pair-code', 'aria-hidden': 'true', dangerouslySetInnerHTML: { __html: String(info.svg || '') } }),
+                h('div', { className: 'nw-pair-meta' }, [
+                  h('div', { className: 'nw-pair-addr' }, `电脑地址：${info.address || '未知'}:${info.port || '?'}`),
+                  Array.isArray(info.addresses) && info.addresses.length > 1
+                    ? h('div', { className: 'nw-hint-block' }, `其他可能地址：${info.addresses.slice(1).join('、')}`)
+                    : null,
+                  h('div', { className: 'nw-pair-timer' }, left > 0 ? `配对码 ${left} 秒后失效` : '配对码已失效，请重新生成'),
+                  h('div', { className: 'nw-hint-block' }, NW.t('也可以让手机「改成扫码」对准这个二维码')),
+                ]),
               ]),
-            )
-          : h('div', { className: 'nw-pair-empty' }, busy ? NW.ui.spinner('正在生成二维码…') : '点下面的「生成二维码」。'),
-        h('div', { className: 'nw-pair-actions' }, NW.ui.btn({ kind: 'primary', onClick: showCode, disabled: !!busy, children: info ? '重新生成' : '生成二维码' })),
+            ])
+          : h('div', { className: 'nw-pair-empty' }, busy ? NW.ui.spinner('正在生成配对信息…') : '点下面的「生成配对码」。'),
+        h('div', { className: 'nw-pair-actions' }, NW.ui.btn({ kind: 'primary', onClick: showCode, disabled: !!busy, children: info ? '重新生成' : '生成配对码' })),
       ),
     );
 

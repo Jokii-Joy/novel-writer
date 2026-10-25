@@ -114,7 +114,7 @@ public final class MainActivity extends Activity {
         pairBtn.setText(store.paired() ? "已配对" : "配对");
         pairBtn.setOnClickListener(v -> {
             if (store.paired()) confirmUnpair();
-            else startActivity(new Intent(this, ScanActivity.class));
+            else openPairing();
         });
         syncRow.addView(pairBtn);
         root.addView(syncRow);
@@ -151,7 +151,7 @@ public final class MainActivity extends Activity {
         for (Library.Book book : books) listBox.addView(bookRow(book));
 
         if (!store.paired()) {
-            statusLine.setText("未配对 · 在电脑插件里打开「手机同步」生成二维码");
+            statusLine.setText("未配对 · 在电脑插件里打开「手机同步」，把地址和配对码填进手机");
         } else {
             long at = store.lastSyncAt();
             String host = store.hostName();
@@ -274,7 +274,7 @@ public final class MainActivity extends Activity {
 
     private void manualSync() {
         if (!store.paired()) {
-            startActivity(new Intent(this, ScanActivity.class));
+            openPairing();
             return;
         }
         statusLine.setText("正在同步…");
@@ -291,6 +291,11 @@ public final class MainActivity extends Activity {
                 }
             });
         }, "nw-manual-sync").start();
+    }
+
+    /** Pairing starts with typed values now; the camera is the fallback. */
+    private void openPairing() {
+        startActivity(new Intent(this, PairActivity.class));
     }
 
     private void confirmUnpair() {

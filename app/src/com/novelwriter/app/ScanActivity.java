@@ -2,6 +2,7 @@ package com.novelwriter.app;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -16,6 +17,7 @@ import android.view.Gravity;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.ViewGroup;
+import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -71,7 +73,7 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
         preview.getHolder().addCallback(this);
 
         hint = new TextView(this);
-        hint.setText("把电脑上的配对二维码放进框里");
+        hint.setText("把电脑上的配对码放进取景框；扫不动就点右边的「手动输入地址」");
         hint.setTextColor(Color.WHITE);
         hint.setTextSize(14);
         hint.setGravity(Gravity.CENTER);
@@ -80,6 +82,25 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
         FrameLayout.LayoutParams hintParams = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         hintParams.gravity = Gravity.BOTTOM;
         frame.addView(hint, hintParams);
+
+        // The camera is the fallback, not the only road in: a phone whose camera
+        // will not focus on a screen still has to be able to pair.
+        Button manual = new Button(this);
+        manual.setText("手动输入地址");
+        manual.setTextSize(13);
+        manual.setTextColor(Color.WHITE);
+        manual.setBackgroundColor(0x66000000);
+        manual.setOnClickListener(v -> {
+            releaseCamera();
+            startActivity(new Intent(this, PairActivity.class));
+            finish();
+        });
+        FrameLayout.LayoutParams manualParams = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        manualParams.gravity = Gravity.BOTTOM | Gravity.END;
+        manualParams.rightMargin = dp(12);
+        manualParams.bottomMargin = dp(74);
+        frame.addView(manual, manualParams);
 
         setContentView(frame);
 
@@ -202,73 +223,78 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
     // ---------------------------------------------------------------- pairing
 
     private void handlePayload(String payload) {
-        Uri uri;
-        try {
-            uri = Uri.parse(payload);
-        } catch (Exception error) {
-            hint.setText("这个二维码不是配对码");
-            finished = false;
-            return;
+        // The desktop has always emitted `nw1:HOST:PORT:TOKEN`, while this class
+        // used to only understand an `nw-pair://` URI that nothing ever produced —
+        // so every scan decoded fine and then answered 「不是配对码」. Both shapes
+        // are accepted now, `nw1` first because that is what is on screen.
+        String text = payload == null ? "" : payload.trim();
+        String token = "";
+        String address = "";
+        String hostId = null;
+        String hostName = null;
+        int port = 41288;
+
+        if (text.startsWith("nw1:")) {
+            String[] parts = text.split(":", 4);
+            if (parts.length < 4) {
+                hint.setText("这个配对码不完整，请在电脑上重新生成");
+                finished = false;
+                return;
+            }
+            address = parts[1].trim();
+            token = parts[3].trim();
+            try {
+                port = Integer.parseInt(parts[2].trim());
+            } catch (NumberFormatException ignored) {
+                // Keep the default LAN port: a code without a usable port should
+                // still pair on the standard one instead of dying here.
+            }
+        } else {
+            Uri uri;
+            try {
+                uri = Uri.parse(text);
+            } catch (Exception error) {
+                hint.setText("这个二维码不是配对码");
+                finished = false;
+                return;
+            }
+            if (!"nw-pair".equals(uri.getScheme())) {
+                hint.setText("这个二维码不是精神空间的配对码");
+                finished = false;
+                return;
+            }
+            token = uri.getQueryParameter("tok");
+            hostId = uri.getQueryParameter("did");
+            hostName = uri.getQueryParameter("name");
+            address = uri.getQueryParameter("addr");
+            String portText = uri.getQueryParameter("port");
+            try {
+                if (portText != null) port = Integer.parseInt(portText);
+            } catch (NumberFormatException ignored) {
+                // Same fallback as above.
+            }
         }
-        if (!"nw-pair".equals(uri.getScheme())) {
-            hint.setText("这个二维码不是精神空间的配对码");
-            finished = false;
-            return;
-        }
-        String token = uri.getQueryParameter("tok");
-        String hostId = uri.getQueryParameter("did");
-        String hostName = uri.getQueryParameter("name");
-        String address = uri.getQueryParameter("addr");
-        String portText = uri.getQueryParameter("port");
-        if (token == null || token.isEmpty() || address == null || address.isEmpty()) {
+        if (token == null) token = "";
+        if (address == null) address = "";
+        if (token.isEmpty() || address.isEmpty()) {
             hint.setText("配对码不完整，请在电脑上重新生成");
             finished = false;
             return;
         }
-        int port = 41288;
-        try {
-            if (portText != null) port = Integer.parseInt(portText);
-        } catch (NumberFormatException ignored) {
-            // Fall back to the default LAN port rather than failing the scan.
-        }
 
-        hint.setText("正在与 " + (hostName == null ? "电脑" : hostName) + " 配对…");
-        final int finalPort = port;
-        final String finalAddress = address;
-        new Thread(() -> pair(finalAddress, finalPort, token, hostId, hostName), "nw-pair").start();
-    }
-
-    private void pair(String address, int port, String token, String hostId, String hostName) {
-        Store store = new Store(getApplicationContext());
-        LanClient.Result result = LanClient.accept(address, port, token, store.deviceId(), store.deviceName(), store.publicKey());
-        main.post(() -> {
-            if (result.ok) {
-                String secret = result.data == null ? "" : result.data.optString("secret", "");
-                if (secret.isEmpty()) {
-                    hint.setText("配对被接受但没有拿到密钥，请重新生成二维码");
-                    finished = false;
-                    return;
-                }
-                store.setSecret(secret);
-                store.setHost(
-                    hostId == null ? (result.data == null ? "" : result.data.optString("deviceId", "")) : hostId,
-                    hostName == null ? (result.data == null ? "" : result.data.optString("deviceName", "")) : hostName,
-                    address,
-                    port);
-                store.markSynced();
-                // Take the desktop's library as the starting point. Without this
-                // the first sync would push an empty phone library and the merge
-                // would keep both — a fresh phone would show no books until it
-                // was edited on the desktop.
-                org.json.JSONObject lib = result.data == null ? null : result.data.optJSONObject("library");
-                if (lib != null) store.save(Library.fromJson(lib));
-                SyncService.start(getApplicationContext());
+        hint.setText("正在与 " + (hostName == null || hostName.isEmpty() ? "电脑" : hostName) + " 配对…");
+        final String targetHost = address;
+        final int targetPort = port;
+        final String targetToken = token;
+        Pairing.run(this, targetHost, targetPort, targetToken, hostId, hostName, (ok, message) -> {
+            if (isFinishing()) return;
+            if (ok) {
                 Toast.makeText(this, "配对成功", Toast.LENGTH_SHORT).show();
                 setResult(RESULT_OK);
                 finish();
                 return;
             }
-            hint.setText(result.message == null || result.message.isEmpty() ? "配对失败，请重新生成二维码" : result.message);
+            hint.setText(message);
             finished = false;
         });
     }

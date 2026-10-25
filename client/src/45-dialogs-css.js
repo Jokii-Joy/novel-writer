@@ -846,6 +846,23 @@
 }
 .nw-pair-peername{font-size:var(--nw-fs-second);font-weight:600;color:var(--nw-fg);}
 .nw-pair-peer .nw-hint-block{margin-left:auto;margin-bottom:0;}
+/* R34: the two values the phone form asks for, printed so they can be typed
+   (or copied) instead of scanned. Monospace + user-select:all so one click
+   selects the whole token for a manual copy. */
+.nw-pair-stack{display:flex;flex-direction:column;gap:var(--nw-sp-3);}
+.nw-pair-manual{
+  margin:0;padding:var(--nw-sp-2) var(--nw-sp-3);
+  border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
+  background:var(--nw-sunken);display:flex;flex-direction:column;gap:4px;
+}
+.nw-pair-manual-head{font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);line-height:1.6;}
+.nw-pair-manual-row{display:flex;align-items:baseline;gap:var(--nw-sp-2);min-width:0;}
+.nw-pair-manual-key{flex:0 0 auto;font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);}
+.nw-pair-manual-value{
+  flex:1 1 auto;min-width:0;font-family:var(--nw-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);
+  font-size:var(--nw-fs-second);color:var(--nw-fg);overflow-wrap:anywhere;user-select:all;
+}
+.nw-pair-manual-acts{display:flex;gap:var(--nw-sp-2);margin-top:2px;}
 
 /* R34: model picker shown when every configured model failed. The tried list is
    the useful half — it turns 「打不开」 into 「这三个都不通，各自的原因如下」. */
