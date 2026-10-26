@@ -16,6 +16,8 @@
 //   node tools/auto-push.mjs --status   show config, last push and pending state
 //   node tools/auto-push.mjs --install  point core.hooksPath at .githooks
 import fs from 'node:fs';
+import net from 'node:net';
+import dns from 'node:dns';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +30,7 @@ const TOKEN_FILE = path.join(TOOLS, 'gh-token.txt');
 const LOG = path.join(TOOLS, 'push.log');
 const PENDING = path.join(TOOLS, 'push-pending');
 const STAMP = path.join(TOOLS, 'last-push');
+const IP_CACHE = path.join(TOOLS, 'github-ip');
 
 const args = new Set(process.argv.slice(2));
 const GIT = process.env.NW_GIT || 'git';
@@ -84,22 +87,74 @@ function git(argv, options = {}) {
 }
 
 /** One push attempt. Returns { ok, detail }. */
-function attempt(token, branch) {
+function attempt(token, branch, ip) {
   const auth = Buffer.from('x-access-token:' + token).toString('base64');
-  const out = git(
-    [
-      '-c', 'http.extraheader=Authorization: Basic ' + auth,
-      '-c', 'credential.helper=',
-      'push', '--quiet', 'origin', 'HEAD:refs/heads/' + branch,
-    ],
-    { timeout: 180000 },
-  );
+  const argv = [
+    '-c', 'http.extraheader=Authorization: Basic ' + auth,
+    '-c', 'credential.helper=',
+  ];
+  // Pinning the IP with --resolve skips a DNS answer that may point at an edge
+  // this machine cannot reach (observed: 20.205.243.166 times out here while
+  // 140.82.112.3 answers instantly), without touching the system hosts file.
+  if (ip) argv.push('-c', 'http.curloptResolve=github.com:443:' + ip);
+  argv.push('push', '--quiet', 'origin', 'HEAD:refs/heads/' + branch);
+  const out = git(argv, { timeout: 180000 });
   if (out.status === 0) return { ok: true, detail: 'ok' };
   const detail = ((out.stderr || '') + (out.stdout || '')).trim().split('\n').slice(-4).join(' | ');
   return { ok: false, detail: detail || 'exit ' + out.status };
 }
 
-function pushNow() {
+/**
+ * Candidate IPv4 addresses for github.com, best first.
+ *
+ * The ISP's resolver here answers with an Azure edge (20.205.243.166) that
+ * silently drops :443, so a plain `git push` can hang for 21s per try and then
+ * fail while the very same account works fine through the US edges. Probing a
+ * few known-good addresses with a short TCP connect keeps the retry loop honest:
+ * we only pin an IP that actually accepted a socket.
+ */
+const FALLBACK_IPS = ['140.82.112.3', '140.82.113.3', '140.82.114.3', '20.27.177.113'];
+
+function probeIPv4(ip, timeout = 3000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      try { socket.destroy(); } catch { /* ignore */ }
+      resolve(ok);
+    };
+    const socket = net.connect({ host: ip, port: 443 });
+    socket.setTimeout(timeout);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+  });
+}
+
+async function usableIPs() {
+  const list = [];
+  const push = (ip) => {
+    if (typeof ip === 'string' && /^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip) && !list.includes(ip)) list.push(ip);
+  };
+  try {
+    const cached = fs.readFileSync(IP_CACHE, 'utf8').trim();
+    push(cached);
+  } catch { /* no cache yet */ }
+  try {
+    const resolved = await dns.promises.resolve4('github.com');
+    for (const ip of resolved) push(ip);
+  } catch { /* resolver down — the fallback list still applies */ }
+  for (const ip of FALLBACK_IPS) push(ip);
+  const alive = [];
+  for (const ip of list) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await probeIPv4(ip)) alive.push(ip);
+  }
+  return alive;
+}
+
+async function pushNow() {
   const config = readConfig();
   if (!config) {
     log('skip: .tools/github.json 不存在（还没有配置仓库）');
@@ -131,15 +186,22 @@ function pushNow() {
     return 0;
   }
 
+  const ips = await usableIPs();
+  if (ips.length === 0) log('warn: 没有一个 github.com 地址能连上，将按域名直连重试');
   const waits = [0, 5000, 15000, 45000];
   let last = null;
   for (let i = 0; i < waits.length; i += 1) {
     if (waits[i]) spawnSync(process.execPath, ['-e', 'setTimeout(()=>{}, ' + waits[i] + ')']);
-    last = attempt(token, branch);
+    // First try the plain domain (normal path, and the only one that follows a
+    // future DNS change); then rotate through the edges that accepted a socket,
+    // so a blackholed or hijacked answer still recovers within the retry budget.
+    const ip = i === 0 || ips.length === 0 ? null : ips[(i - 1) % ips.length];
+    last = attempt(token, branch, ip);
     if (last.ok) {
       try { fs.writeFileSync(STAMP, new Date().toISOString() + '\n'); } catch { /* ignore */ }
+      try { if (ip) fs.writeFileSync(IP_CACHE, ip + '\n'); } catch { /* ignore */ }
       try { fs.unlinkSync(PENDING); } catch { /* nothing pending */ }
-      log('ok: ' + config.owner + '/' + config.repo + ' ' + branch);
+      log('ok: ' + config.owner + '/' + config.repo + ' ' + branch + (ip ? ' via ' + ip : ''));
       return 0;
     }
     log('retry ' + (i + 1) + '/4: ' + last.detail);
@@ -191,4 +253,4 @@ if (mode === '--hook') {
   process.exit(0);
 }
 
-process.exit(pushNow());
+process.exit(await pushNow());

@@ -29,7 +29,13 @@
   epub 的重复是以**目录标签**体现的：首章标题置空后 `buildEpub` 回退成「第1章」，正文页也就不再
   输出第二个 `<h1>`（单章书仍回退成书名，这是既有设计）。④ `scripts/verify-host.mjs` 新增 [5] 段
   14 项断言（txt 三种标题形态、docx、epub 目录与首章页、投稿预排版、邮件正文、编号保留、附件），
-  **188 项全过**。
+  **188 项全过**。⑤ 顺带修掉一个**只在这台机器上才复现的上传故障**：本机 DNS 把 `github.com`
+  解析到 `20.205.243.166`，该边缘的 443 端口是黑洞（`curl` 返回 000、`git push` 卡 21 秒后
+  `Failed to connect`），而 `api.github.com` 与美区边缘同时可用，于是 R40 的提交在本地成功、
+  自动上传连续 8 次全灭。`tools/auto-push.mjs` 现在先按 3 秒超时探活候选地址（上次成功的缓存 →
+  系统 DNS → 四个已知可用边缘），**第一次仍走域名**，之后每次重试换一个探活通过的地址并用
+  `git -c http.curloptResolve=github.com:443:IP` 钉住，成功后写进 `.tools/github-ip` 下次优先。
+  不改系统 hosts（要管理员权限，且会把一次性 DNS 故障变成永久配置）。
 
 - 第三十九轮（R39）改造：**手机端长章不再卡，并把仓库正式放到 GitHub（GPL-3.0）** —— ① 编辑器的正文
   从「自己滚动的 EditText」改成「外层 ScrollView + 不滚动的 EditText」：拖动时只平移，不再让 EditText
@@ -284,6 +290,15 @@ CSS 是用模板字符串写的，注释里多写一个反引号就会让整块�
 在后台把当前分支 `git push` 到 `origin`。网络抖动时最多重试 4 次（0/5/15/45 秒退避），
 仍然失败就写进 `.tools/push-pending`，下次提交或手动跑一次 `node tools/auto-push.mjs` 会补上。
 token 通过一次性的 `http.extraheader` 传给 git，**不写进 remote URL、不写进 `.git/config`**。
+
+> **R40 补：这个网络会把 `github.com` 解析到一个连不通的边缘地址。** 本机 DNS 返回
+> `20.205.243.166`，TCP 443 直接黑洞（`curl 000`、`git push` 每次卡 21 秒再报
+> `Failed to connect to github.com:443`），而同一时刻 `api.github.com` 与美区边缘
+> （`140.82.112.3` 等）都是 200。`auto-push.mjs` 现在会先用 3 秒超时逐个探活候选地址
+> （缓存的上次成功地址 → 系统 DNS → 四个已知可用边缘），**第一次仍按域名直连**，之后每次重试
+> 换一个探活通过的地址，通过 `git -c http.curloptResolve=github.com:443:IP` 钉住，
+> 成功后把该地址写进 `.tools/github-ip` 下次优先。**不动系统 hosts 文件**（需要管理员权限，
+> 而且会把一次性的 DNS 故障变成永久配置）。
 
 常用命令：
 
