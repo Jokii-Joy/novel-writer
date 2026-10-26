@@ -182,6 +182,11 @@
     '显示目录': 'Show contents',
     '目录': 'Contents',
     '收起/展开宿主侧栏': 'Toggle host sidebar',
+    /* R40: the toggle's own feedback — until now both outcomes were silent. */
+    '已收起宿主左侧栏': 'Host sidebar collapsed',
+    '已展开宿主左侧栏': 'Host sidebar expanded',
+    '宿主侧边栏服务暂不可用，请稍后再试': 'The host sidebar service is not available yet — try again in a moment',
+    '宿主侧边栏切换失败': 'Could not toggle the host sidebar',
     '展开写作工具': 'Open writing tools',
     '收起写作工具': 'Close writing tools',
     '投稿': 'Submit',

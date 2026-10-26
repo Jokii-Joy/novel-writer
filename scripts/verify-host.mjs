@@ -482,6 +482,122 @@ check('坏 JSON → ok:false, bad-json', badJson.json && badJson.json.ok === fal
 check('错误也是 HTTP 200', badJson.statusCode === 200);
 
 // ---------------------------------------------------------------------------
+// 5. R40: a chapter heading that only repeats the book title
+// ---------------------------------------------------------------------------
+// A one-piece story opened in a chapter named after the story, or a multi-part
+// work whose first part restates the book name, used to print the same words
+// twice — once in the title block, once as the chapter heading. The comparison
+// must be whole-title only: 「第一章 秋水」 is a real numbered chapter and has to
+// survive verbatim.
+console.log('\n[5] 书名与章节名重复时只出现一次');
+const countOf = (text, needle) => String(text).split(needle).length - 1;
+
+const dupTxt = await call('export.build', {
+  format: 'txt',
+  novel: {
+    title: '秋水',
+    chapters: [
+      { title: '秋水', content: '　　他站在雨里。' },
+      { title: '归途', content: '　　回家的路上没有灯。' },
+    ],
+  },
+});
+const dupTxtBody = dupTxt.json && dupTxt.json.ok ? Buffer.from(dupTxt.json.data.base64, 'base64').toString('utf8') : '';
+check('txt 导出成功（章节名=书名）', dupTxt.json && dupTxt.json.ok === true);
+check('txt：与书名相同的章节标题被去掉，书名只出现一次', countOf(dupTxtBody, '秋水') === 1, `出现 ${countOf(dupTxtBody, '秋水')} 次：${JSON.stringify(dupTxtBody.slice(0, 60))}`);
+check('txt：不重复的章节标题照常保留', dupTxtBody.includes('归途'));
+
+const wrappedTxt = await call('export.build', {
+  format: 'txt',
+  novel: { title: '秋水', chapters: [{ title: '《秋水》', content: '　　正文一。' }] },
+});
+const wrappedBody = wrappedTxt.json && wrappedTxt.json.ok ? Buffer.from(wrappedTxt.json.data.base64, 'base64').toString('utf8') : '';
+check('txt：书名号包裹的章节名同样算重复', countOf(wrappedBody, '秋水') === 1, JSON.stringify(wrappedBody.slice(0, 60)));
+
+const numberedTxt = await call('export.build', {
+  format: 'txt',
+  novel: { title: '秋水', chapters: [{ title: '第一章 秋水', content: '　　正文一。' }] },
+});
+const numberedBody = numberedTxt.json && numberedTxt.json.ok ? Buffer.from(numberedTxt.json.data.base64, 'base64').toString('utf8') : '';
+check('txt：带章号的标题是作者真写的，原样保留', numberedBody.includes('第一章 秋水'), JSON.stringify(numberedBody.slice(0, 60)));
+
+const dupDocx = await call('export.build', {
+  format: 'docx',
+  novel: {
+    title: '秋水',
+    chapters: [
+      { title: '秋水', content: '　　他站在雨里。' },
+      { title: '第二章 归途', content: '　　回家的路上没有灯。' },
+    ],
+  },
+});
+if (dupDocx.json && dupDocx.json.ok) {
+  const zip = unzipSync(Buffer.from(dupDocx.json.data.base64, 'base64'));
+  const documentPart = zip.get('word/document.xml');
+  const documentXml = documentPart ? documentPart.toString('utf8') : '';
+  check('docx：书名只出现一次（标题块一次，章节标题不再重复）', countOf(documentXml, '秋水') === 1, `出现 ${countOf(documentXml, '秋水')} 次`);
+  check('docx：正文与其它章节标题不受影响', documentXml.includes('他站在雨里') && documentXml.includes('第二章 归途'));
+} else {
+  check('docx 导出成功（章节名=书名）', false, JSON.stringify(dupDocx.json && dupDocx.json.error));
+}
+
+// EPUB navigates by the entry title, and a blank one falls back to 「第N章」 —
+// so the same de-duplication shows up as a changed table of contents.
+const dupEpub = await call('export.build', {
+  format: 'epub',
+  novel: {
+    title: '秋水',
+    chapters: [
+      { title: '秋水', content: '　　他站在雨里。' },
+      { title: '归途', content: '　　回家的路上没有灯。' },
+    ],
+  },
+});
+if (dupEpub.json && dupEpub.json.ok) {
+  const epubZip = unzipSync(Buffer.from(dupEpub.json.data.base64, 'base64'));
+  const navPart = epubZip.get('OEBPS/nav.xhtml');
+  const navXml = navPart ? navPart.toString('utf8') : '';
+  const labels = [...navXml.matchAll(/<a [^>]*>([^<]*)<\/a>/g)].map((m) => m[1].trim());
+  check('epub：目录里不再用书名当章名', labels.includes('第1章') && !labels.includes('秋水'), JSON.stringify(labels));
+  const pagePart = epubZip.get('OEBPS/text/chapter-1.xhtml');
+  const pageXml = pagePart ? pagePart.toString('utf8') : '';
+  check('epub：第一章页不重复书名', !pageXml.includes('秋水'), '首章页应只剩正文');
+} else {
+  check('epub 导出成功（章节名=书名）', false, JSON.stringify(dupEpub.json && dupEpub.json.error));
+}
+
+// The submission path builds the pasted body and the attachments from one
+// object, so a single assertion on the prepared mail covers both.
+const dupSubmit = await call('submit.prepare', {
+  journal: { id: 'r40-duplicate', name: '某某文学', email: 'editor@example.com', requirements: ['请在邮件正文粘贴全文'] },
+  genre: '短篇小说',
+  profile: { penName: '林某', contact: '138', email: 'lin@example.com' },
+  work: {
+    title: '秋水',
+    author: '林某',
+    chapters: [
+      { title: '秋水', content: '　　他站在雨里。' },
+      { title: '第二章 归途', content: '　　回家的路上没有灯。' },
+    ],
+  },
+});
+check('投稿预排版 ok', dupSubmit.json && dupSubmit.json.ok === true, JSON.stringify(dupSubmit.json && dupSubmit.json.error));
+const dupMail = (dupSubmit.json && dupSubmit.json.data) || {};
+const formattedChapters = (dupMail.formatted && dupMail.formatted.chapters) || [];
+check('投稿：与书名相同的章节标题被置空', formattedChapters[0] && formattedChapters[0].title === '', JSON.stringify(formattedChapters.map((c) => c.title)));
+check('投稿：邮件正文里书名只在信头出现一次', countOf(dupMail.body || '', '秋水') === 1, `出现 ${countOf(dupMail.body || '', '秋水')} 次`);
+check('投稿：其它章节保留「二、归途」编号', formattedChapters[1] && formattedChapters[1].title === '二、归途', JSON.stringify(formattedChapters[1] && formattedChapters[1].title));
+const dupAttach = (dupMail.attachments && dupMail.attachments[0]) || null;
+if (dupAttach && dupAttach.base64) {
+  const attachZip = unzipSync(Buffer.from(dupAttach.base64, 'base64'));
+  const attachPart = attachZip.get('word/document.xml');
+  const attachXml = attachPart ? attachPart.toString('utf8') : '';
+  check('投稿附件：书名也只出现一次', countOf(attachXml, '秋水') === 1, `出现 ${countOf(attachXml, '秋水')} 次`);
+} else {
+  check('投稿附件已生成', false, JSON.stringify((dupMail.attachments || []).map((a) => a.filename)));
+}
+
+// ---------------------------------------------------------------------------
 // 6. secrets round trip
 // ---------------------------------------------------------------------------
 console.log('\n[6] secrets 加解密往返');

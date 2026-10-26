@@ -2157,11 +2157,22 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * anyone who deliberately opened it again.
      */
     const collapseHostSidebar = useCallback(() => {
+      let seen = false;
       try {
-        if (sessionStorage.getItem(LS_SIDEBAR_AUTO) === '1') return;
-        sessionStorage.setItem(LS_SIDEBAR_AUTO, '1');
+        seen = sessionStorage.getItem(LS_SIDEBAR_AUTO) === '1';
       } catch (err) {
         /* private mode: fall through and try once per mount */
+      }
+      if (seen) return;
+      // R40: resolve the service *before* burning the once-per-session flag.
+      // The old order marked the session as handled even when `layout` was not
+      // there yet, so a boot that lost the race never auto-collapsed at all.
+      const layout = NW.layoutService();
+      if (!layout || typeof layout.toggleSidebar !== 'function') return;
+      try {
+        sessionStorage.setItem(LS_SIDEBAR_AUTO, '1');
+      } catch (err) {
+        /* ignore */
       }
       let collapsed = false;
       try {
@@ -2170,8 +2181,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         collapsed = false;
       }
       if (collapsed) return;
-      const layout = NW._layout;
-      if (!layout || typeof layout.toggleSidebar !== 'function') return;
       try {
         layout.toggleSidebar();
       } catch (err) {
@@ -2187,8 +2196,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * is always reachable while the studio is open.
      */
     const toggleHostSidebar = useCallback(() => {
-      const layout = NW._layout;
-      if (!layout || typeof layout.toggleSidebar !== 'function') return;
+      const layout = NW.layoutService();
+      if (!layout || typeof layout.toggleSidebar !== 'function') {
+        // R40: say so. A button that swallows the failure is indistinguishable
+        // from a broken button, which is exactly how this one got reported.
+        pushToast('宿主侧边栏服务暂不可用，请稍后再试', 'error');
+        return;
+      }
       try {
         layout.toggleSidebar();
         // The frame attribute is rendered synchronously by React, so a rAF is
@@ -2205,7 +2219,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         if (typeof requestAnimationFrame === 'function') requestAnimationFrame(done);
         else setTimeout(done, 16);
       } catch (err) {
-        /* ignore */
+        pushToast('宿主侧边栏切换失败', 'error');
       }
     }, [pushToast]);
 
@@ -2681,7 +2695,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       // R33: going home also reopens the shelf — that is where
                       // you pick the next book, and a hidden shelf turned this
                       // into a button that looked like it did nothing.
+                      // R40: immersive mode short-circuits the home branch
+                      // (`!immersive && view === 'home'`), so pressing 首页 while
+                      // the canvas was open only flipped a flag nobody could see
+                      // — the button looked dead. Leave immersive first, then
+                      // navigate; `exitImmersive` also restores fullscreen.
                       onHome: () => {
+                        if (immersiveRef.current) exitImmersive();
                         setView('home');
                         setShelfOpen(true);
                       },
@@ -3804,6 +3824,34 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     );
   }
 
+  // ----------------------------------------------------------------- services --
+  /**
+   * R40: the host's `layout` service, fetched on every use.
+   *
+   * The service is provided by the shell's own client plugin, and `ctx.get()`
+   * only answers once that plugin's fiber is active — the apply order between
+   * two plugins is not something a third one can rely on. Reading it a single
+   * time during apply therefore cached `null` on any boot where the shell came
+   * up second, which turned 「收起宿主侧栏」 into a button that did nothing at all
+   * (no error, no toast, no clue). Re-reading here is cheap: it is a map lookup
+   * on the host store, and it means a late provider heals itself on first click.
+   */
+  NW.layoutService = function layoutService() {
+    const ctx = NW._ctx;
+    if (ctx && typeof ctx.get === 'function') {
+      try {
+        const live = ctx.get('layout') || null;
+        if (live) {
+          NW._layout = live;
+          return live;
+        }
+      } catch (err) {
+        /* fall through to the cached handle */
+      }
+    }
+    return NW._layout || null;
+  };
+
   // --------------------------------------------------------------- apply -----
   NW.apply = function apply(ctx) {
     if (NW._applied) return;
@@ -3838,18 +3886,22 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       console.error('[novel-writer] stylesheet injection failed', err);
     }
 
-    let layout = null;
+    // R40: the host provides `layout` from its own client plugin, and plugin
+    // apply order is not ours to decide — reading it once here could cache null
+    // forever and leave 「收起宿主侧栏」 a dead button with no error. Keep the handle
+    // we get now for the unload hook, but let every *use* re-read the service
+    // through `NW.layoutService()`, which retries on the injected context and
+    // only then falls back to the stale handle.
     try {
-      layout = ctx.get('layout') || null;
+      NW._ctx = ctx;
     } catch (err) {
-      layout = null;
+      NW._ctx = null;
     }
-    NW._layout = layout;
+    const layout = NW.layoutService();
     // Service handles the dialogs need (uiWorkspace for the native folder
     // picker). Stored on NW so any part can reach them without threading props
     // through every component.
     try {
-      NW._ctx = ctx;
       NW._workspace = ctx.get('uiWorkspace') || null;
     } catch (err) {
       NW._workspace = null;

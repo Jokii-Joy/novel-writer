@@ -8,6 +8,29 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.2.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第四十轮（R40）改造：**两个「点了没反应」的按钮，和书名重复出现** —— ① 书架标题栏的
+  「收起/展开宿主侧栏」按钮此前完全无效：宿主把 `layout` 服务放在它自己的客户端插件里
+  `ctx.reflect.provide("layout", …)`，而插件的 apply 顺序不由我们决定，`ctx.get('layout')` 又只
+  在提供方 fiber 处于 ACTIVE 时才作答 —— 我们在 apply 里读了一次就把 `null` 永久缓存下来，之后
+  每次点击都静默 return（没有报错、没有提示，看上去就像按钮坏了）。现在改成 `NW.layoutService()`
+  每次现取（先 `ctx.get`，取不到才回退旧句柄），应用启动时也补上了 `inject: ['layout']`，让宿主
+  在服务就绪后重跑一次 apply（顺带也声明了 `locale`，标签文案同样依赖它）；仍然取不到或抛错时
+  改为弹一条 toast，不再假装没事发生。顺带修了
+  「自动收起宿主侧栏」的会话门闩：旧代码先写 `sessionStorage` 再判断 layout 在不在，一旦那次启动
+  没拿到服务，这一整轮会话就再也不会自动收起了。② 编辑区左上角的「回到首页」在**沉浸模式下**
+  点了没反应：首页的渲染分支是 `!immersive && view === 'home'`，沉浸时它被短路，点了只改了一个
+  没人看得见的 state。现在先 `exitImmersive()`（同时退出全屏）再跳首页，并顺带展开书架。
+  ③ 导出与投稿时，**章节名和书名相同时不再重复出现**：`lib/routes.js` 新增
+  `comparableTitle()` / `duplicatesBookTitle()` / `stripDuplicateTitles()`，比较时忽略《》「」『』
+  这类包裹符号、空白与大小写，但**只比较整条标题**——「第一章 秋水」是作者真写的章号，原样保留；
+  导出链在占位标题清理之后统一过一遍（txt / docx / pdf / epub 四个分支、以及投稿附件都走同一份
+  `novel.chapters`），投稿链在 `formatWork()` 拼「一、」编号**之前**判断，并在 AI 回填标题
+  （`adoptModelChapters`）之后再过一遍，所以邮件正文、正文粘贴块、docx 附件三处同时生效。
+  epub 的重复是以**目录标签**体现的：首章标题置空后 `buildEpub` 回退成「第1章」，正文页也就不再
+  输出第二个 `<h1>`（单章书仍回退成书名，这是既有设计）。④ `scripts/verify-host.mjs` 新增 [5] 段
+  14 项断言（txt 三种标题形态、docx、epub 目录与首章页、投稿预排版、邮件正文、编号保留、附件），
+  **188 项全过**。
+
 - 第三十九轮（R39）改造：**手机端长章不再卡，并把仓库正式放到 GitHub（GPL-3.0）** —— ① 编辑器的正文
   从「自己滚动的 EditText」改成「外层 ScrollView + 不滚动的 EditText」：拖动时只平移，不再让 EditText
   每次移动都重排文本；光标跟随改由 `keepCaretVisible()` 手工做（120ms 节流、只在离开中间带时滚），
