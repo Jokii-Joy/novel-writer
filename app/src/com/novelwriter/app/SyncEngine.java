@@ -11,11 +11,14 @@ import org.json.JSONObject;
  * the reconnect rules live once. The order is deliberate:
  *
  *   1. the address we remembered — the common case, same Wi-Fi as last time;
- *   2. if that fails, one UDP beacon round (the laptop may have a new address);
- *   3. if that fails too, give up quietly and let the next tick try again.
+ *      checked with a cheap GET /nw/v1/ping rather than a full library pull;
+ *   2. if that fails, a UDP probe round (the laptop may have a new address);
+ *   3. if the sync itself then fails without an answer, probe once more and
+ *      retry — a DHCP lease can move between the ping and the push;
+ *   4. if that fails too, give up quietly and let the next tick try again.
  *
- * Step 3 is the important one: an unreachable desktop is not an error the user
- * needs to see every 60 seconds. It surfaces only when they press the button.
+ * Step 4 is the important one: an unreachable desktop is not an error the user
+ * needs to see every 45 seconds. It surfaces only when they press the button.
  */
 public final class SyncEngine {
 
@@ -28,19 +31,43 @@ public final class SyncEngine {
         public int merged = 0;
     }
 
+    /**
+     * One sync at a time, process-wide.
+     *
+     * The background service already serialises its own ticks, but the button on
+     * the main screen called `sync()` directly, so a tap landing on a tick ran two
+     * lookups at once. They then fought over the same UDP socket and the second
+     * answer was "找不到电脑" even though the desktop was fine. Locking here fixes
+     * it for every caller instead of asking each one to remember.
+     */
+    private static final Object LOCK = new Object();
+
     private SyncEngine() {
     }
+
+    /** How long to spend asking the LAN where the desktop is. */
+    private static final long DISCOVERY_TIMEOUT_MS = 6000;
 
     /** Resolves a working address, updating the stored one when it moved. */
     private static String locate(Store store, boolean allowBeacon) {
         String address = store.hostAddress();
         int port = store.hostPort();
         if (!address.isEmpty() && port > 0) {
-            LanClient.Result ping = LanClient.pull(address, port, store.deviceId(), store.secret());
-            if (ping.reachable) return address + ":" + port;
+            // A GET ping, not a library pull: the old probe downloaded the whole
+            // library just to ask "are you there", which on a busy link timed out
+            // and made a perfectly reachable desktop look gone.
+            LanClient.Result ping = LanClient.ping(address, port);
+            if (ping.reachable && ping.ok) {
+                // Refuse a stranger: a neighbour's desktop on the same LAN also
+                // answers /nw/v1/ping, and syncing into it would be worse than
+                // failing. An empty hostId means "paired before we stored one".
+                String seen = ping.data == null ? "" : ping.data.optString("deviceId", "");
+                String want = store.hostId();
+                if (want.isEmpty() || seen.isEmpty() || want.equals(seen)) return address + ":" + port;
+            }
         }
         if (!allowBeacon) return "";
-        Discovery.Found found = Discovery.listen(2500, store.hostId());
+        Discovery.Found found = Discovery.listen(store.context(), DISCOVERY_TIMEOUT_MS, store.hostId());
         if (found == null) return "";
         store.updateAddress(found.address, found.port);
         return found.address + ":" + found.port;
@@ -71,6 +98,12 @@ public final class SyncEngine {
      * disagree, and a disagreement about a deletion is a resurrected book.
      */
     public static Outcome sync(Context context) {
+        synchronized (LOCK) {
+            return syncLocked(context);
+        }
+    }
+
+    private static Outcome syncLocked(Context context) {
         Store store = new Store(context);
         Outcome out = new Outcome();
         out.paired = store.paired();
@@ -86,6 +119,17 @@ public final class SyncEngine {
         out.reachable = true;
         Library library = store.library();
         LanClient.Result result = LanClient.sync(host(pair), port(pair), store.deviceId(), store.secret(), library);
+        if (!result.ok && !result.reachable) {
+            // The ping said yes but the sync itself did not get through: the
+            // address is stale after all (a lease can move between the two
+            // calls), so look it up again instead of failing on the first try.
+            Discovery.Found found = Discovery.listen(store.context(), DISCOVERY_TIMEOUT_MS, store.hostId());
+            if (found != null) {
+                store.updateAddress(found.address, found.port);
+                pair = found.address + ":" + found.port;
+                result = LanClient.sync(host(pair), port(pair), store.deviceId(), store.secret(), library);
+            }
+        }
         if (!result.ok) {
             // A rejected signature means the desktop forgot us (data cleared,
             // re-paired elsewhere). Saying so beats a generic network error the

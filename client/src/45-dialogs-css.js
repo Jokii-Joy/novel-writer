@@ -624,6 +624,9 @@
 .nw-submit-line-title{font-size:var(--nw-fs-second);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .nw-submit-line-meta{font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .nw-submit-line-actions{display:flex;align-items:center;gap:var(--nw-sp-0);flex:0 0 auto;}
+/* R42: 「关联稿件…」 only appears on rows whose book link is missing or stale. */
+.nw-submit-line-link{display:inline-flex;align-items:center;}
+.nw-submit-line-link select{color:var(--nw-accent);}
 
 /* -------------------------------------------------------- journal table --- */
 .nw-journal-toolbar{display:flex;gap:var(--nw-sp-0);margin-bottom:var(--nw-sp-1);}

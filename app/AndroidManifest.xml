@@ -26,6 +26,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- UDP broadcast beacons/probes are dropped when the Wi-Fi chip is allowed to
+         filter multicast in doze; holding a MulticastLock (see Multicast.java) is
+         the documented fix and needs this permission. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 

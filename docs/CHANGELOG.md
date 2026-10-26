@@ -8,6 +8,40 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.2.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第四十二轮（R42）改造：**手机连电脑要按好几次、投稿记录那条名字没变** —— 前一个不是网络问题，
+  后一个不是渲染问题，两边的根因都在「谁该带什么信息」上：
+  ① **局域网同步「有时候链接不上、有时候试很多次才行」**。桌面端发现层原先只会**广播**：
+  `startDiscovery` 把信标按 30 秒的节奏发出去，`receive` 侧却是一个 2.5 秒的窗口，
+  手机点「立即同步」时能不能撞上完全看运气（约 1/12 命中），于是「按几次才连得上」。
+  现在同一个 socket 上多了一条**探针应答**：手机广播 `{protocol, role:'probe'}`，桌面收到立刻
+  **单播**回一个信标（`beaconMessage(announcePort, identity)`），等待从「等下一次 tick」变成一次
+  往返；同时广播周期从 30 秒降到 10 秒，`broadcastTargets()` 每次发送时重算（换了 Wi-Fi、
+  网卡后起也能打到对的子网），并真正 `bind({port, address:'0.0.0.0', exclusive:false})`
+  来收探针；`startDiscovery` 重复调用不再早退，而是用新的 `announcePort` 刷新——端口重启后
+  信标里带着旧端口，正是「找到了却连不上」的成因之一。`discoveryStatus()` 多返回 `listening`。
+  ② 手机侧四处配合：`LanClient` 增加 `ping()`（`GET /nw/v1/ping`，4 秒超时），
+  `SyncEngine.locate()` 用 ping 取代原来的「拉整个书库当探针」——慢网下后者会超时，
+  让一台正在应答的电脑看起来「不在」；`SyncEngine.sync()` 加了进程级 `synchronized (LOCK)`，
+  手动同步与 45 秒后台 tick 不再抢同一个 UDP socket；握手/同步请求显式带 `connection: close`
+  （桌面 `keepAliveTimeout` 是 5 秒，而 `HttpURLConnection` 会缓存更久，复用一条已被对端关掉的
+  连接会抛 `unexpected end of stream`，被当成「不可达」）；`Discovery.listen` 改成绑定临时端口
+  + `setReuseAddress`（原先绑 41287，两次并发查找直接 `BindingException` 报「找不到电脑」），
+  并一边探测一边听（每 700ms 一轮）、同时发有限广播与各网卡定向广播。新增 `Multicast.java`
+  在查找期间持有 `WifiManager.MulticastLock`（仅几秒，不常驻），manifest 补
+  `CHANGE_WIFI_MULTICAST_STATE` —— 省电策略会在息屏后过滤广播包，这正是「有时行有时怎么点都不行」
+  的真身。
+  ③ **投稿记录唯一那条仍显示旧名**。R41-fix 让 `handleSubmitSend` 落 `novelId`，但客户端的
+  `NW.io.submitSend` 是个**白名单**，只透传 `to/subject/body/attachments/journalId/title/genre/wordCount`，
+  向导明明传了 `novelId`，在这一层被静默丢掉，于是记录里永远没有 id、渲染层只能回落到标题快照。
+  `30-io.js` 白名单补上 `novelId`；`submitUpdate` 改为按**属性是否存在**判断（空串 = 主动解除关联）；
+  `handleSubmitUpdate` 接受 `novelId`。历史记录已经丢了 id，且**无法自动恢复**：标题不唯一、
+  改名不留痕、`sync-state.json` 里三本旧的《暴雨附身》都是墓碑，只有靠作者说一句话——
+  所以投稿管理里对「没有 id / id 已失效」的行多一个「关联稿件…」下拉，选完即写回并刷新。
+  「重新投稿」也带上原记录的书 id，不再落到书架第一本。
+  `verify-host.mjs` 新增 [5b] 15 项（读回两条 / 老记录仍无 id / 新记录 id 原样返回 / 可补 id /
+  补 id 落盘 / 补 id 不动标题快照 / 不动状态 / 记了 updatedAt / 只改状态时 id 保留 / 空串解除关联 /
+  拒绝未知状态 / 拒绝未知记录 / 被拒的写入没改文件），共 **219 项 0 失败**；`client.js` 重建为
+  20 段 911216 字节；`dist/精神空间.apk` 重新打包（`classes.dex` 530204 字节，签名同上一版）。
 - 第四十一轮（R41）改造：**在稿纸上直接改章节名，首页告诉你正在写哪一章** —— ① 编辑器顶部的
   章节标题从「只读的展示文字」变成可点击编辑的 `contenteditable="plaintext-only"`：点一下就能改，
   Enter 提交并失焦、Esc 放弃还原、粘贴与拖入强制转纯文本、超过 120 字截断、空白一律视为误点不落库

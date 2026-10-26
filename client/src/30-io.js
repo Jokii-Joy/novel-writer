@@ -797,6 +797,12 @@
    * Sends the previewed submission through the configured SMTP account.
    * `title` / `genre` / `wordCount` are persisted with the record so the
    * 投稿管理 dialog can list a submission after the novel is renamed.
+   *
+   * `novelId` must travel with them: the title above is a snapshot of what was
+   * mailed, and the only way the log can later say 「现名（投稿时：旧名）」 is by
+   * following the book by id. Dropping it here (this object is a whitelist, so
+   * anything unlisted is silently discarded) is exactly what made a renamed
+   * book keep showing its old name even though the wizard did send the id.
    */
   function submitSend(payload) {
     const input = payload && typeof payload === 'object' ? payload : {};
@@ -806,6 +812,7 @@
       body: String(input.body || ''),
       attachments: Array.isArray(input.attachments) ? input.attachments : [],
       journalId: String(input.journalId || ''),
+      novelId: String(input.novelId || ''),
       title: String(input.title || ''),
       genre: String(input.genre || ''),
       wordCount: Number(input.wordCount) || 0,
@@ -849,11 +856,17 @@
   /** Updates one submission's status (accepted / rejected / …) or note. */
   function submitUpdate(payload) {
     const input = payload && typeof payload === 'object' ? payload : {};
-    return api('submit.update', {
+    const out = {
       id: String(input.id || ''),
       status: input.status == null ? undefined : String(input.status),
       note: input.note == null ? undefined : String(input.note),
-    });
+    };
+    // R42: a record written before the log carried `novelId` can still be
+    // pointed at its book by hand. `null`/undefined here means "leave as is";
+    // an empty string means "unlink", which is why the presence test is on the
+    // property rather than on truthiness.
+    if (input.novelId !== undefined) out.novelId = String(input.novelId || '');
+    return api('submit.update', out);
   }
 
   /** Reads one outgoing attachment back as text so ③ 预览 can show it. */

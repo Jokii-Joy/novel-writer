@@ -2958,9 +2958,17 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               });
             },
             // 投稿管理 → 「重新投稿」 reopens the wizard on step 1 with that
-            // journal already selected.
+            // journal already selected. R42: carry the book too — the record now
+            // knows which novel it belongs to, and the wizard would otherwise
+            // fall back to whatever book happens to be first in the shelf, which
+            // is how a resubmission ended up logged under the wrong work.
             onResubmit: (row) => {
-              setDialog({ kind: 'submit', step: 1, journalId: String((row && row.journalId) || '') });
+              setDialog({
+                kind: 'submit',
+                step: 1,
+                journalId: String((row && row.journalId) || ''),
+                novelId: String((row && row.novelId) || ''),
+              });
             },
             library: library,
             onLibrary: async (patch) => {

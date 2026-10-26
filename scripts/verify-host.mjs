@@ -598,9 +598,59 @@ if (dupAttach && dupAttach.base64) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. secrets round trip
+// 5b. 投稿记录（submissions.json）：novelId 落在记录里，且可事后补
 // ---------------------------------------------------------------------------
-console.log('\n[6] secrets 加解密往返');
+console.log('\n[5b] 投稿记录与 novelId');
+const submissionsFile = path.join(tmpHome, 'novel-writer', 'submissions.json');
+const seedSubmissions = (rows) => {
+  fs.mkdirSync(path.dirname(submissionsFile), { recursive: true });
+  fs.writeFileSync(submissionsFile, JSON.stringify(rows, null, 2), 'utf8');
+};
+const readLog = () => JSON.parse(fs.readFileSync(submissionsFile, 'utf8'));
+
+// A record written by an older build has no novelId at all; reading it back must
+// not invent one (an invented id would make the log claim a book it never had).
+seedSubmissions([
+  { id: 's-old', journalId: 'j1', journalName: '某某文学', title: '暴雨附身', at: 1700000000000, status: 'sent', to: ['e@example.com'] },
+  { id: 's-new', journalId: 'j1', journalName: '某某文学', novelId: 'novel_a', title: '初醒', at: 1700000000001, status: 'sent', to: ['e@example.com'] },
+]);
+const logRead = await call('submit.record', {});
+const logRows = (logRead.json && logRead.json.data && logRead.json.data.records) || [];
+check('submit.record 读回两条', logRows.length === 2, String(logRows.length));
+const oldRow = logRows.find((r) => r.id === 's-old') || {};
+const newRow = logRows.find((r) => r.id === 's-new') || {};
+check('老记录仍没有 novelId', !oldRow.novelId, JSON.stringify(oldRow.novelId));
+check('新记录的 novelId 原样返回', newRow.novelId === 'novel_a', JSON.stringify(newRow.novelId));
+
+// R42: the one repair available to an already-written record — point it at its
+// book by hand. Everything else on the row must survive.
+const linked = await call('submit.update', { id: 's-old', novelId: 'novel_a' });
+check('submit.update 可以补 novelId', linked.json && linked.json.ok === true, JSON.stringify(linked.json && linked.json.error));
+check('补上后落盘', readLog().find((r) => r.id === 's-old').novelId === 'novel_a');
+const linkedRow = readLog().find((r) => r.id === 's-old');
+check('补 id 不动标题快照', linkedRow.title === '暴雨附身', linkedRow.title);
+check('补 id 不动状态', linkedRow.status === 'sent', linkedRow.status);
+check('补 id 记了 updatedAt', Number(linkedRow.updatedAt) > 0, String(linkedRow.updatedAt));
+
+// Absent novelId must leave the stored one alone — a status change from the
+// manager dialog sends only `{id, status}`.
+const statusOnly = await call('submit.update', { id: 's-old', status: 'accepted' });
+check('只改状态时 novelId 保留', readLog().find((r) => r.id === 's-old').novelId === 'novel_a', JSON.stringify(statusOnly.json && statusOnly.json.error));
+check('状态确实改成 accepted', readLog().find((r) => r.id === 's-old').status === 'accepted');
+// An empty string is an explicit unlink, distinct from "not mentioned".
+await call('submit.update', { id: 's-old', novelId: '' });
+check('空串 = 主动解除关联', !readLog().find((r) => r.id === 's-old').novelId);
+check('解除关联不动状态', readLog().find((r) => r.id === 's-old').status === 'accepted');
+
+// Validation stays as strict as it was.
+const badStatus = await call('submit.update', { id: 's-new', status: 'nonsense' });
+check('未知状态被拒绝', badStatus.json && badStatus.json.ok === false, JSON.stringify(badStatus.json && badStatus.json.error));
+const missingId = await call('submit.update', { id: 'no-such-record', status: 'accepted' });
+check('未知记录被拒绝', missingId.json && missingId.json.ok === false, JSON.stringify(missingId.json && missingId.json.error));
+check('被拒绝的写入没有改到文件', readLog().find((r) => r.id === 's-new').status === 'sent');
+fs.rmSync(submissionsFile, { force: true });
+
+
 await secrets.clearSecrets();
 
 // First-run race: patchSecrets() on a pristine DSH_HOME must mint exactly ONE

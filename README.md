@@ -50,12 +50,13 @@ node scripts/build-client.mjs    # client/src/*.js → client/client.js（含加
 
 ## 手机端
 
-APK 在 [`dist/精神空间.apk`](dist/精神空间.apk)（约 0.52 MB，Android 7.0+，无需 Gradle 构建）。
+APK 在 [`dist/精神空间.apk`](dist/精神空间.apk)（约 0.54 MB，Android 7.0+，无需 Gradle 构建）。
 源码在 `app/`，用 `node tools/build-apk.mjs` 重新打包。
 
 配对：桌面「设置 → 手机同步」生成地址与配对码 → 手机「配对」里手填（扫码为备选）。
-同步走局域网 HTTP，端口 41288，UDP 41287 发现；正文在手机上以明文存放，
-桌面侧的同步缓存仍用本机密钥加密。
+同步走局域网 HTTP，端口 41288，UDP 41287 发现（双向：桌面每 10 秒广播一次，手机也发
+`role:'probe'` 探针、桌面立刻单播应答，所以点一次「立即同步」就能找到电脑，不必反复按）。
+正文在手机上以明文存放，桌面侧的同步缓存仍用本机密钥加密。
 
 ## 开发
 
@@ -63,6 +64,7 @@ APK 在 [`dist/精神空间.apk`](dist/精神空间.apk)（约 0.52 MB，Android
 node scripts/verify-host.mjs     # 离线宿主测试（不需要运行中的 DSH）
 node scripts/verify-docs.mjs     # 导入导出与 docx/epub 排版断言
 node tools/build-apk.mjs         # 重打 APK（工具链在 .tools/android/）
+bash tools/build-apk.sh          # 同一套五步的 bash 版（Node 的管道 spawn 被沙箱拒时用）
 ```
 
 - 运行时零第三方依赖：Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token。

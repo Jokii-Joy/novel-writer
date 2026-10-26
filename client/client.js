@@ -3991,6 +3991,12 @@ window.__ModuleLoader__.load({
    * Sends the previewed submission through the configured SMTP account.
    * `title` / `genre` / `wordCount` are persisted with the record so the
    * 投稿管理 dialog can list a submission after the novel is renamed.
+   *
+   * `novelId` must travel with them: the title above is a snapshot of what was
+   * mailed, and the only way the log can later say 「现名（投稿时：旧名）」 is by
+   * following the book by id. Dropping it here (this object is a whitelist, so
+   * anything unlisted is silently discarded) is exactly what made a renamed
+   * book keep showing its old name even though the wizard did send the id.
    */
   function submitSend(payload) {
     const input = payload && typeof payload === 'object' ? payload : {};
@@ -4000,6 +4006,7 @@ window.__ModuleLoader__.load({
       body: String(input.body || ''),
       attachments: Array.isArray(input.attachments) ? input.attachments : [],
       journalId: String(input.journalId || ''),
+      novelId: String(input.novelId || ''),
       title: String(input.title || ''),
       genre: String(input.genre || ''),
       wordCount: Number(input.wordCount) || 0,
@@ -4043,11 +4050,17 @@ window.__ModuleLoader__.load({
   /** Updates one submission's status (accepted / rejected / …) or note. */
   function submitUpdate(payload) {
     const input = payload && typeof payload === 'object' ? payload : {};
-    return api('submit.update', {
+    const out = {
       id: String(input.id || ''),
       status: input.status == null ? undefined : String(input.status),
       note: input.note == null ? undefined : String(input.note),
-    });
+    };
+    // R42: a record written before the log carried `novelId` can still be
+    // pointed at its book by hand. `null`/undefined here means "leave as is";
+    // an empty string means "unlink", which is why the presence test is on the
+    // property rather than on truthiness.
+    if (input.novelId !== undefined) out.novelId = String(input.novelId || '');
+    return api('submit.update', out);
   }
 
   /** Reads one outgoing attachment back as text so ③ 预览 can show it. */
@@ -5599,6 +5612,9 @@ window.__ModuleLoader__.load({
 .nw-submit-line-title{font-size:var(--nw-fs-second);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .nw-submit-line-meta{font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .nw-submit-line-actions{display:flex;align-items:center;gap:var(--nw-sp-0);flex:0 0 auto;}
+/* R42: 「关联稿件…」 only appears on rows whose book link is missing or stale. */
+.nw-submit-line-link{display:inline-flex;align-items:center;}
+.nw-submit-line-link select{color:var(--nw-accent);}
 
 /* -------------------------------------------------------- journal table --- */
 .nw-journal-toolbar{display:flex;gap:var(--nw-sp-0);margin-bottom:var(--nw-sp-1);}
@@ -14436,9 +14452,17 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               });
             },
             // 投稿管理 → 「重新投稿」 reopens the wizard on step 1 with that
-            // journal already selected.
+            // journal already selected. R42: carry the book too — the record now
+            // knows which novel it belongs to, and the wizard would otherwise
+            // fall back to whatever book happens to be first in the shelf, which
+            // is how a resubmission ended up logged under the wrong work.
             onResubmit: (row) => {
-              setDialog({ kind: 'submit', step: 1, journalId: String((row && row.journalId) || '') });
+              setDialog({
+                kind: 'submit',
+                step: 1,
+                journalId: String((row && row.journalId) || ''),
+                novelId: String((row && row.novelId) || ''),
+              });
             },
             library: library,
             onLibrary: async (patch) => {
@@ -20794,6 +20818,40 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       return live + '（投稿时：' + (stored || '未命名稿件') + '）';
     };
 
+    /**
+     * R42: a record can fail to follow its book for two reasons, and both are
+     * fixable by hand — the id is missing (the record predates R41-fix, which is
+     * every submission sent before the id was forwarded at all), or the book it
+     * points at is gone (deleted, or dropped by a phone↔desktop sync). Neither
+     * is recoverable automatically: titles are not unique, a rename leaves no
+     * trace in the database, and several deleted books can share the old name.
+     * So the row offers 「关联稿件」 and the author says which book it was.
+     */
+    const needsLink = (row) => {
+      const id = row && row.novelId != null ? String(row.novelId) : '';
+      return !id || !liveTitles.has(id);
+    };
+
+    const link = async (row, novelId) => {
+      if (!(NW.io && NW.io.submit && NW.io.submit.update)) {
+        setError('当前版本不支持修改投稿记录');
+        return;
+      }
+      setBusy('正在保存…');
+      try {
+        await NW.io.submit.update({ id: String(row.id), novelId: String(novelId || '') });
+        await load();
+        if (typeof p.onSubmissionChanged === 'function') await p.onSubmissionChanged();
+        if (typeof p.onToast === 'function') {
+          p.onToast(novelId ? '已关联到《' + (liveTitles.get(String(novelId)) || '') + '》' : '已取消关联', 'ok');
+        }
+      } catch (err) {
+        setError(errText(err, '关联稿件失败'));
+      } finally {
+        setBusy('');
+      }
+    };
+
     const dayText = (row) => {
       const at = Number(row && row.at) || 0;
       const days = Number(row && row.daysAgo);
@@ -20860,6 +20918,26 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 h(
                   'span',
                   { className: 'nw-submit-line-actions' },
+                  needsLink(row)
+                    ? h(
+                        'span',
+                        { className: 'nw-submit-line-link', title: '这条记录还没跟着某本书，选一本就能显示它的现名' },
+                        NW.ui.select({
+                          value: '',
+                          onChange: (value) => {
+                            if (!value) return;
+                            link(row, value);
+                          },
+                          options: [{ value: '', label: '关联稿件…' }].concat(
+                            Array.from(liveTitles.entries())
+                              .map(([id, title]) => ({ value: id, label: title || '未命名小说' }))
+                              .sort((a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN')),
+                          ),
+                          ariaLabel: '把这条投稿记录关联到一本书',
+                          style: { minWidth: '96px' },
+                        }),
+                      )
+                    : null,
                   NW.ui.select({
                     value: chosen,
                     onChange: (value) => mark(row, value),

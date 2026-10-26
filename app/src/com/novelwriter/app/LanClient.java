@@ -35,6 +35,7 @@ public final class LanClient {
 
     private static final int CONNECT_TIMEOUT_MS = 4000;
     private static final int READ_TIMEOUT_MS = 15000;
+    private static final int PING_READ_TIMEOUT_MS = 4000;
 
     private LanClient() {
     }
@@ -56,20 +57,36 @@ public final class LanClient {
     }
 
     private static Result post(String address, int port, String path, JSONObject payload) {
+        return call("POST", address, port, path, payload, READ_TIMEOUT_MS);
+    }
+
+    private static Result call(String method, String address, int port, String path, JSONObject payload, int readTimeoutMs) {
         Result out = new Result();
         HttpURLConnection connection = null;
         try {
             URL url = new URL("http://" + address + ":" + port + path);
             connection = (HttpURLConnection) url.openConnection();
-            connection.setRequestMethod("POST");
+            connection.setRequestMethod(method);
             connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            connection.setReadTimeout(READ_TIMEOUT_MS);
-            connection.setDoOutput(true);
-            connection.setRequestProperty("content-type", "application/json; charset=utf-8");
-            byte[] body = (payload == null ? "{}" : payload.toString()).getBytes(StandardCharsets.UTF_8);
-            connection.setFixedLengthStreamingMode(body.length);
-            try (OutputStream stream = connection.getOutputStream()) {
-                stream.write(body);
+            connection.setReadTimeout(readTimeoutMs);
+            // Never reuse a pooled socket. The desktop closes its keep-alive
+            // sockets after 5s, but HttpURLConnection pools them for much longer;
+            // reusing one the desktop already dropped throws "unexpected end of
+            // stream", which used to be reported as "unreachable" — so the phone
+            // went off to UDP discovery and told the user the desktop was gone
+            // while it was sitting there answering. Two taps later a fresh socket
+            // worked, which matched the "试很多次才行" symptom exactly.
+            connection.setRequestProperty("connection", "close");
+            if (payload != null) {
+                connection.setDoOutput(true);
+                connection.setRequestProperty("content-type", "application/json; charset=utf-8");
+                byte[] body = payload.toString().getBytes(StandardCharsets.UTF_8);
+                connection.setFixedLengthStreamingMode(body.length);
+                try (OutputStream stream = connection.getOutputStream()) {
+                    stream.write(body);
+                }
+            } else {
+                connection.setDoOutput(false);
             }
             int status = connection.getResponseCode();
             String text = read(status >= 400 ? connection.getErrorStream() : connection.getInputStream());
@@ -113,6 +130,18 @@ public final class LanClient {
         while ((count = stream.read(chunk)) > 0) buffer.write(chunk, 0, count);
         stream.close();
         return new String(buffer.toByteArray(), StandardCharsets.UTF_8);
+    }
+
+    /**
+     * A cheap "are you there?" — one GET, no library, short timeout.
+     *
+     * Probing used to mean `pull()`, which ships the whole library. On a slow or
+     * busy link that read could exceed the timeout, so a desktop that was
+     * perfectly reachable looked unreachable, and the caller fell back to
+     * broadcast discovery.
+     */
+    public static Result ping(String address, int port) {
+        return call("GET", address, port, "/nw/v1/ping", null, PING_READ_TIMEOUT_MS);
     }
 
     /** Step 1 of pairing: turn the scanned token into "who is this desktop". */

@@ -5293,6 +5293,40 @@
       return live + '（投稿时：' + (stored || '未命名稿件') + '）';
     };
 
+    /**
+     * R42: a record can fail to follow its book for two reasons, and both are
+     * fixable by hand — the id is missing (the record predates R41-fix, which is
+     * every submission sent before the id was forwarded at all), or the book it
+     * points at is gone (deleted, or dropped by a phone↔desktop sync). Neither
+     * is recoverable automatically: titles are not unique, a rename leaves no
+     * trace in the database, and several deleted books can share the old name.
+     * So the row offers 「关联稿件」 and the author says which book it was.
+     */
+    const needsLink = (row) => {
+      const id = row && row.novelId != null ? String(row.novelId) : '';
+      return !id || !liveTitles.has(id);
+    };
+
+    const link = async (row, novelId) => {
+      if (!(NW.io && NW.io.submit && NW.io.submit.update)) {
+        setError('当前版本不支持修改投稿记录');
+        return;
+      }
+      setBusy('正在保存…');
+      try {
+        await NW.io.submit.update({ id: String(row.id), novelId: String(novelId || '') });
+        await load();
+        if (typeof p.onSubmissionChanged === 'function') await p.onSubmissionChanged();
+        if (typeof p.onToast === 'function') {
+          p.onToast(novelId ? '已关联到《' + (liveTitles.get(String(novelId)) || '') + '》' : '已取消关联', 'ok');
+        }
+      } catch (err) {
+        setError(errText(err, '关联稿件失败'));
+      } finally {
+        setBusy('');
+      }
+    };
+
     const dayText = (row) => {
       const at = Number(row && row.at) || 0;
       const days = Number(row && row.daysAgo);
@@ -5359,6 +5393,26 @@
                 h(
                   'span',
                   { className: 'nw-submit-line-actions' },
+                  needsLink(row)
+                    ? h(
+                        'span',
+                        { className: 'nw-submit-line-link', title: '这条记录还没跟着某本书，选一本就能显示它的现名' },
+                        NW.ui.select({
+                          value: '',
+                          onChange: (value) => {
+                            if (!value) return;
+                            link(row, value);
+                          },
+                          options: [{ value: '', label: '关联稿件…' }].concat(
+                            Array.from(liveTitles.entries())
+                              .map(([id, title]) => ({ value: id, label: title || '未命名小说' }))
+                              .sort((a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN')),
+                          ),
+                          ariaLabel: '把这条投稿记录关联到一本书',
+                          style: { minWidth: '96px' },
+                        }),
+                      )
+                    : null,
                   NW.ui.select({
                     value: chosen,
                     onChange: (value) => mark(row, value),

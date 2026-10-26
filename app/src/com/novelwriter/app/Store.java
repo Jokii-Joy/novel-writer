@@ -42,9 +42,16 @@ public final class Store {
     private static final Object LOCK = new Object();
 
     private final SharedPreferences prefs;
+    private final Context context;
 
     public Store(Context context) {
+        this.context = context == null ? null : context.getApplicationContext();
         prefs = context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    /** The application context, for helpers that need a system service. */
+    Context context() {
+        return context;
     }
 
     // ---------------------------------------------------------------- library
