@@ -351,6 +351,12 @@
     '略欠': 'Not quite',
     '尚不足': 'Not yet',
     '收起': 'Collapse',
+    // R41 ①: the manuscript heading became an input, so it needs its own label
+    // (also its placeholder, which is why it must be short) and its failure.
+    '章节标题': 'Chapter title',
+    '重命名失败': 'Rename failed',
+    // R41 ③: the home screen now names the chapter being written.
+    '正在写': 'Writing',
   };
 
   const DICT = { zh: {}, en: EN };

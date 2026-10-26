@@ -1767,6 +1767,41 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [activeChapterId, refreshChapters, refreshNovels, pushToast],
     );
 
+    // R41 ①: renaming straight from the manuscript heading. Deliberately NOT a
+    // call to renameNode(): that one asks through a dialog and then reloads every
+    // chapter (including all their content) just to repaint a label. Here the
+    // list and the open chapter are patched first — the caret is already in the
+    // heading, so the change must land instantly — and only then written to the
+    // database, whose row is the authority for the final string.
+    const renameChapterTitle = useCallback(
+      async (id, nextTitle) => {
+        if (id == null) return null;
+        const value = String(nextTitle == null ? '' : nextTitle).replace(/\s+/g, ' ').trim().slice(0, 120);
+        if (!value) return null;
+        patchChapterInList(id, { title: value });
+        if (activeChapterId != null && String(id) === String(activeChapterId)) {
+          setChapter((prev) => (prev ? Object.assign({}, prev, { title: value }) : prev));
+        }
+        try {
+          const record = await NW.db.updateChapter(id, { title: value });
+          const applied = record && record.title != null ? String(record.title) : value;
+          if (applied !== value) {
+            patchChapterInList(id, { title: applied });
+            if (activeChapterId != null && String(id) === String(activeChapterId)) {
+              setChapter((prev) => (prev ? Object.assign({}, prev, { title: applied }) : prev));
+            }
+          }
+          return applied;
+        } catch (err) {
+          // The optimistic edit stays on screen (the row is still the old one in
+          // the database, so a reload shows the truth) but the writer is told.
+          pushToast(errText(err, '重命名失败'), 'error');
+          return null;
+        }
+      },
+      [activeChapterId, patchChapterInList, pushToast],
+    );
+
     const deleteNode = useCallback(
       async (kind, id) => {
         const ok = await NW.ui.confirm(
@@ -2119,6 +2154,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         // A dialog on top owns Escape; only leave immersive when nothing is
         // stacked above the writing surface.
         if (dialog || modalReq) return;
+        // R41 ①: this listener runs in the capture phase, i.e. BEFORE React's
+        // own onKeyDown reaches the chapter heading, so preventedDefault cannot
+        // be the test there. Escape inside the heading means "cancel the
+        // rename", never "leave the room".
+        const t = ev.target;
+        if (t && typeof t.closest === 'function' && t.closest('.nw-chaptertitle')) return;
         exitImmersive();
       };
       const onFsChange = () => {
@@ -2649,6 +2690,21 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 onOpenNovel: (id) => {
                   selectNovel(id);
                 },
+                // R41 ③: 正在创作 names the exact chapter now, so a click must
+                // land on it. selectChapter() bails out when the requested id is
+                // already the open one (it only guards against re-loading), and
+                // from the home screen that guard would swallow the click — the
+                // chapter is still "open" behind the welcome page. Handle that
+                // case by simply going back to the manuscript.
+                onResumeChapter: (novelId, chapterId) => {
+                  const open = chapterRef.current;
+                  if (open && chapterId != null && String(open.id) === String(chapterId)) {
+                    setView('write');
+                    return;
+                  }
+                  if (chapterId != null) selectChapter(chapterId);
+                  else selectNovel(novelId);
+                },
                 onResume: () => {
                   if (chapter) setView('write');
                   else if (novels.length > 0) selectNovel(novels[0].id);
@@ -2713,6 +2769,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       onNewChapter: () => createChapter(null),
                       onToggleAdvice: () => setAdviceOpen((v) => !v),
                       onSave: (content) => saveChapter(content, chapter.id),
+                      // R41 ①: the manuscript heading is editable in place; the
+                      // studio owns the row and answers with the stored title.
+                      onRenameTitle: (next) => renameChapterTitle(chapter.id, next),
                       onDirty: (dirty) => {
                         if (dirty) dirtyDuringSaveRef.current = true;
                         setSaveState((prev) => {

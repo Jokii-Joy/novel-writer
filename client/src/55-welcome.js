@@ -97,29 +97,56 @@
     return { total, novel, todayWords, weekWords, count, touched };
   }
 
+  /**
+   * R41 ③: which chapter is the writer actually in? The home screen used to
+   * list books only, so "正在创作" named a book but never the chapter — the one
+   * thing a returning writer needs in order to resume. The app remembers the
+   * last chapter per novel in localStorage (`nw.lastChapterByNovel`, see
+   * LS_LAST_CHAPTER in 90-app.js); when that entry is missing or points at a
+   * chapter that has since been deleted, fall back to the freshest chapter of
+   * that book, then to nothing.
+   */
+  function pickResume(rows, lastMap, novelId) {
+    if (!rows.length) return null;
+    const wanted = lastMap ? lastMap[String(novelId)] : null;
+    if (wanted != null) {
+      const hit = rows.find((row) => String(row.id) === String(wanted));
+      if (hit) return hit;
+    }
+    let best = rows[0];
+    let bestAt = -1;
+    for (const row of rows) {
+      const at = Number(row.updatedAt) || 0;
+      if (at > bestAt) { bestAt = at; best = row; }
+    }
+    return best || null;
+  }
+
   /** Per-novel rollup so each card can show chapters + words + last touched. */
-  function rollupNovels(novels, chapters) {
+  function rollupNovels(novels, chapters, lastMap) {
     const list = Array.isArray(novels) ? novels.filter(Boolean) : [];
     const rows = Array.isArray(chapters) ? chapters : [];
     const byNovel = new Map();
     for (const row of rows) {
       if (!row) continue;
       const key = String(row.novelId);
-      const cell = byNovel.get(key) || { chapters: 0, words: 0, touched: 0 };
+      const cell = byNovel.get(key) || { chapters: 0, words: 0, touched: 0, rows: [] };
       cell.chapters += 1;
       cell.words += Number(row.wordCount) || 0;
+      cell.rows.push(row);
       const at = Number(row.updatedAt) || 0;
       if (at > cell.touched) cell.touched = at;
       byNovel.set(key, cell);
     }
     return list
       .map((novel) => {
-        const cell = byNovel.get(String(novel.id)) || { chapters: 0, words: 0, touched: 0 };
+        const cell = byNovel.get(String(novel.id)) || { chapters: 0, words: 0, touched: 0, rows: [] };
         return {
           novel,
           chapters: cell.chapters,
           words: cell.words,
           touched: cell.touched || Number(novel.updatedAt) || 0,
+          resume: pickResume(cell.rows, lastMap, novel.id),
         };
       })
       .sort((a, b) => b.touched - a.touched);
@@ -178,13 +205,30 @@
     );
   }
 
+  /**
+   * The studio persists "which chapter was I in" per novel under
+   * `nw.lastChapterByNovel` (LS_LAST_CHAPTER in 90-app.js). It is read on every
+   * render instead of memoised: the app writes it in an effect right after a
+   * chapter switch, so a cached copy would routinely be one chapter behind.
+   */
+  function readLastChapterMap() {
+    try {
+      const raw = window.localStorage.getItem('nw.lastChapterByNovel');
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (err) {
+      return {};
+    }
+  }
+
   function Welcome(props) {
     const p = props || {};
     const novels = Array.isArray(p.novels) ? p.novels.filter(Boolean) : [];
     const chapters = Array.isArray(p.chapters) ? p.chapters : [];
     const submissions = Array.isArray(p.submissions) ? p.submissions : [];
     const stats = computeStats(chapters, p.activeNovelId);
-    const rollups = rollupNovels(novels, chapters);
+    const rollups = rollupNovels(novels, chapters, readLastChapterMap());
     const journalCount = Number(p.journalCount) || 0;
     // R16 ⑤: each card folds to three rows and remembers its own state.
     const [novelOpen, setNovelOpen] = NW.React.useState(false);
@@ -255,8 +299,20 @@
             NW.h(
               'ul',
               { className: 'nw-welcome-novels' },
-              novelFold.visible.map((row) =>
-                NW.h(
+              novelFold.visible.map((row) => {
+                // R41 ③: resume goes straight to the chapter the writer left,
+                // not merely to the book — landing on whatever chapter happens
+                // to be first is how a writer loses their place.
+                const resume = row.resume || null;
+                const resumeTitle = resume ? String(resume.title || '').trim() : '';
+                const openRow = () => {
+                  if (resume && typeof p.onResumeChapter === 'function') {
+                    p.onResumeChapter(row.novel.id, resume.id);
+                    return;
+                  }
+                  if (typeof p.onOpenNovel === 'function') p.onOpenNovel(row.novel.id);
+                };
+                return NW.h(
                   'li',
                   { key: String(row.novel.id) },
                   NW.h(
@@ -264,13 +320,21 @@
                     {
                       type: 'button',
                       className: 'nw-welcome-novel',
-                      onClick: () => typeof p.onOpenNovel === 'function' && p.onOpenNovel(row.novel.id),
+                      onClick: openRow,
                     },
                     NW.h('span', { className: 'nw-welcome-novelmark', 'aria-hidden': 'true' }, NW.icon('book', { size: 16 })),
                     NW.h(
                       'span',
                       { className: 'nw-welcome-novelmain' },
                       NW.h('span', { className: 'nw-welcome-novelname' }, row.novel.title || '未命名作品'),
+                      resume
+                        ? NW.h(
+                            'span',
+                            { className: 'nw-welcome-novelcurrent' },
+                            NW.h('span', { className: 'nw-welcome-novelcurrenttag' }, '正在写'),
+                            NW.h('span', { className: 'nw-welcome-novelcurrentname' }, resumeTitle || '未命名章节'),
+                          )
+                        : null,
                       NW.h(
                         'span',
                         { className: 'nw-welcome-novelmeta' },
@@ -279,8 +343,8 @@
                     ),
                     NW.h('span', { className: 'nw-welcome-novelgo', 'aria-hidden': 'true' }, NW.icon('chevright', { size: 14 })),
                   ),
-                ),
-              ),
+                );
+              }),
             ),
             moreRow(novelFold.hidden, novelOpen, () => setNovelOpen((v) => !v)),
           ),
@@ -664,6 +728,12 @@
 .nw-welcome-novelmark{color:var(--nw-fg-soft);display:flex;flex:0 0 auto;}
 .nw-welcome-novelmain{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 auto;}
 .nw-welcome-novelname{font-weight:500;color:var(--nw-fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* R41 ③: the chapter the writer left off in — the one line that makes
+   「正在创作」 actionable rather than a mere book shelf. Kept quieter than the
+   title so a list of books still scans as a list of books. */
+.nw-welcome-novelcurrent{display:flex;align-items:baseline;gap:6px;min-width:0;font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);}
+.nw-welcome-novelcurrenttag{flex:0 0 auto;opacity:.75;}
+.nw-welcome-novelcurrentname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--nw-brand);}
 .nw-welcome-novelmeta{font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .nw-welcome-novelgo{color:var(--nw-idle);display:flex;flex:0 0 auto;}
 

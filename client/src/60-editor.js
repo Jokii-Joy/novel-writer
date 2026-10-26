@@ -369,17 +369,24 @@
 }
 .nw-stack{position:relative;width:100%;contain:layout style;}
 
-/* ---- chapter heading (R17 ①, reworked R19) -------------------------------
+/* ---- chapter heading (R17 ①, reworked R19, editable R41) -----------------
    The chapter name is printed as the first line of the manuscript, centred and
    larger than the body. It lives inside .nw-page above .nw-stack so it scrolls
-   with the text, and it is deliberately NOT part of the textarea: the writer
-   renames it in the shelf, the editor only displays it. Its height is measured
-   by chapterTitleH() and subtracted from the typewriter room.
+   with the text, and it stays OUT of the textarea so that typing never risks
+   eating the heading. Its height is measured by chapterTitleH() and subtracted
+   from the typewriter room.
 
    R19: this used to be 700-weight, which read like a government notice. A book
    heading is quieter than the body, not louder: semibold, a hair of tracking,
    and a short centred rule that spans the title only. The rule is a pseudo
-   element, not a border on the block, so it never stretches the full measure. */
+   element, not a border on the block, so it never stretches the full measure.
+
+   R41: the heading is now the writer's own field (contenteditable, see
+   handleTitleKeyDown) instead of a shelf-only label. Everything measurable --
+   padding, margin, font-size, line-height -- must stay identical in every
+   state, because chapterTitleH() feeds the typewriter room; the editable
+   affordances below therefore use box-shadow (no layout cost), never borders
+   or padding. */
 .nw-chaptertitle{
   display:block;
   padding:0 calc(var(--nw-pad-x) + var(--nw-gutter-x,0px));
@@ -392,7 +399,19 @@
   text-align:center;
   color:var(--nw-fg);
   overflow-wrap:break-word;word-break:break-word;
-  user-select:none;
+  cursor:text;
+  transition:box-shadow .12s ease;
+}
+.nw-chaptertitle:hover{box-shadow:inset 0 0 0 1px var(--nw-rule);}
+.nw-chaptertitle:focus{outline:none;box-shadow:inset 0 0 0 1px var(--nw-rule);}
+/* Keyboard users still get a visible ring; the mouse-only cue above is the
+   hairline. */
+.nw-chaptertitle:focus-visible{outline:2px solid var(--nw-fg);outline-offset:4px;}
+.nw-chaptertitle[data-empty="1"]{color:var(--nw-soft);}
+.nw-chaptertitle[data-empty="1"]:empty::before{
+  content:attr(data-placeholder);
+  color:var(--nw-soft);
+  opacity:.7;
 }
 .nw-chaptertitle::after{
   content:'';
@@ -611,6 +630,10 @@
     // editor owns the keystrokes because it has focus; the app owns the actions.
     const onNewChapter = typeof p.onNewChapter === 'function' ? p.onNewChapter : null;
     const onToggleAdvice = typeof p.onToggleAdvice === 'function' ? p.onToggleAdvice : null;
+    // R41 ①: the heading is now the writer's own input. The app owns the row
+    // (its list, its database write and the toast on failure); the editor only
+    // parses the keystrokes and reports the new string back.
+    const onRenameTitle = typeof p.onRenameTitle === 'function' ? p.onRenameTitle : null;
     /** 灵感便签 lane (R10): the app mounts the notes column beside the text. */
     const notesLane = p.notesLane === true && !immersive;
     /** Page width actually applied; immersive mode guarantees a wide canvas. */
@@ -620,13 +643,16 @@
     const chapterId = chapter && chapter.id != null ? chapter.id : null;
 
     // R17 ①: the chapter name is printed as the first line of the manuscript,
-    // centred and larger than the body. Placeholder titles ("新章节" and the
-    // like) are hidden — a short story written in the auto-created chapter
-    // should read as one continuous text, not as a machine-generated heading.
-    // Declared here (not next to the JSX) because the measuring effects below
-    // depend on it.
+    // centred and larger than the body. Declared here (not next to the JSX)
+    // because the measuring effects below depend on it.
+    //
+    // R41 ①: the heading is no longer hidden for placeholder titles. It used to
+    // disappear whenever the row said "新章节", which meant the auto-created
+    // chapter had no rename entry point at all once you were inside it. Now the
+    // block is always mounted and merely dims (data-empty) with a hint, so the
+    // first thing a writer can do in a fresh chapter is click the title.
     const chapterTitle = chapter ? String(chapter.title || '').trim() : '';
-    const showTitle = Boolean(chapterTitle) && !isPlaceholderTitle(chapterTitle);
+    const titlePlaceholder = !chapterTitle || isPlaceholderTitle(chapterTitle);
 
     // ---- caret appearance (R11): width / colour / blink are user settings ----
     // The palette still owns `--nw-caret-color` per theme, so an empty
@@ -650,6 +676,11 @@
     const scrollRef = React.useRef(null);
     const pageRef = React.useRef(null);
     const titleRef = React.useRef(null);
+    // R41 ①: the title last accepted by the app. Escape restores it, and it is
+    // reset on every chapter switch so a stale string can never be restored
+    // into a different chapter.
+    const titleSavedRef = React.useRef('');
+    const titleBusyRef = React.useRef(false);
     const stackRef = React.useRef(null);
     const hlRef = React.useRef(null);
     const caretRef = React.useRef(null);
@@ -2096,6 +2127,155 @@
       }
     }
 
+    // ---- chapter heading editing (R41 ①) ----------------------------------
+    // The heading is a contenteditable div rather than an <input>: it must keep
+    // the centred, wrapping, multi-line rendering the manuscript needs, and an
+    // input would reset the height that chapterTitleH() subtracts from the
+    // typewriter room. React keeps ownership of the text while it is NOT being
+    // edited; only an accepted rename writes textContent directly, so a caret
+    // is never thrown back to column 0 by a re-render mid-edit.
+
+    function titleText() {
+      const el = titleRef.current;
+      if (!el) return '';
+      // textContent, never innerText: innerText collapses on a hidden element
+      // and would silently return '' if the pane is display:none.
+      return String(el.textContent || '');
+    }
+
+    /** Collapse runs of whitespace: a heading is one logical line. */
+    function normaliseTitle(raw) {
+      return String(raw == null ? '' : raw).replace(/\s+/g, ' ').trim().slice(0, 120);
+    }
+
+    function paintTitle(text) {
+      const el = titleRef.current;
+      if (!el) return;
+      el.textContent = text;
+      el.setAttribute('data-editing', '0');
+    }
+
+    function handleTitleFocus() {
+      const el = titleRef.current;
+      if (!el) return;
+      titleSavedRef.current = normaliseTitle(chapterTitle);
+      el.setAttribute('data-editing', '1');
+    }
+
+    function handleTitleInput() {
+      const el = titleRef.current;
+      if (!el) return;
+      // Mark the block as editing so the paint pass knows a caret lives here.
+      // Never rewrite the DOM while an IME is composing.
+      if (composingRef.current) return;
+      el.setAttribute('data-editing', '1');
+    }
+
+    async function commitTitle(discard) {
+      const el = titleRef.current;
+      if (!el || titleBusyRef.current) return;
+      if (discard === true) {
+        paintTitle(titleSavedRef.current || chapterTitle);
+        return;
+      }
+      const next = normaliseTitle(titleText());
+      const current = normaliseTitle(chapterTitle);
+      // An empty heading is almost always a mis-click on the text: keep the
+      // stored one instead of wiping the row (updateChapter would replace it
+      // with a placeholder and lose the writer's name).
+      if (!next || next === current) {
+        paintTitle(current || titleSavedRef.current);
+        return;
+      }
+      if (!onRenameTitle) {
+        paintTitle(current);
+        return;
+      }
+      titleBusyRef.current = true;
+      el.setAttribute('data-editing', '0');
+      let applied = null;
+      try {
+        applied = await onRenameTitle(chapterId, next);
+      } catch (err) {
+        applied = null;
+      }
+      titleBusyRef.current = false;
+      // The app answers with the title the row actually holds (it trims and
+      // substitutes a placeholder for an empty value). Falling back to the
+      // previous string keeps a failed write visually neutral.
+      const finalText = applied == null ? current : String(applied);
+      titleSavedRef.current = finalText;
+      paintTitle(finalText);
+      remeasureAfterTitle();
+    }
+
+    /** Renaming changes the heading's height (one line -> two) and therefore
+     *  the typewriter room; re-run the same pass the [chapterTitle] effect does. */
+    function remeasureAfterTitle() {
+      if (!surfaceRef.current || !taRef.current) return;
+      const view = resolveScroller(false);
+      if (view) applyTypewriterRoom(view);
+      autosize();
+      scheduleMeasure(false);
+    }
+
+    function handleTitleKeyDown(ev) {
+      if (!ev) return;
+      // Escape must be swallowed here: the app listens for it in the capture
+      // phase to leave immersive mode, and defaultPrevented is its only test.
+      const key = ev.key;
+      if (key === 'Enter') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const el = titleRef.current;
+        if (el && typeof el.blur === 'function') el.blur();
+        return;
+      }
+      if (key === 'Escape') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const el = titleRef.current;
+        commitTitle(true).then(() => {
+          if (el && typeof el.blur === 'function') el.blur();
+        });
+        return;
+      }
+      // Every other key stays local: the global map owns Ctrl+S, Ctrl+F, Tab.
+      ev.stopPropagation();
+    }
+
+    function handleTitleBlur() {
+      commitTitle(false);
+    }
+
+    function handleTitlePaste(ev) {
+      const clip = ev && ev.clipboardData;
+      if (!clip || typeof clip.getData !== 'function') return;
+      ev.preventDefault();
+      const raw = clip.getData('text/plain') || clip.getData('text') || '';
+      const text = normaliseTitle(raw);
+      if (!text) return;
+      // insertText keeps the browser's own undo stack alive, unlike writing
+      // textContent, and it handles an existing selection correctly.
+      let ok = false;
+      try {
+        ok = document.execCommand('insertText', false, text);
+      } catch (err) {
+        ok = false;
+      }
+      if (!ok) {
+        const el = titleRef.current;
+        if (el) el.textContent = normaliseTitle(titleText() + text);
+      }
+      handleTitleInput();
+    }
+
+    function handleTitleDrop(ev) {
+      // Dropping prose into the heading would bring invisible formatting along;
+      // the heading only ever accepts plain text, like the paste handler above.
+      ev.preventDefault();
+    }
+
     function handleBlur() {
       flushNow();
       // Unfocused editor: the painted caret hides (the browser has no caret of
@@ -2245,6 +2425,12 @@
 
       if (prevId != null && dirtyRef.current) flushNow();
       chapterIdRef.current = nextId;
+      // R41 ①: a half-typed heading belongs to the chapter it was typed in.
+      // Reset the restore point and repaint the incoming title explicitly,
+      // because React may keep the same DOM node across the switch.
+      titleSavedRef.current = chapter ? String(chapter.title || '').trim() : '';
+      titleBusyRef.current = false;
+      paintTitle(titleSavedRef.current);
       cancelSave();
 
       const ta = taRef.current;
@@ -2637,9 +2823,37 @@
       ? h(
           'div',
           { className: 'nw-page', ref: pageRef },
-          showTitle
-            ? h('div', { className: 'nw-chaptertitle', ref: titleRef, role: 'heading', 'aria-level': 1 }, chapterTitle)
-            : null,
+          // R41 ①: the heading is always mounted (a fresh chapter needs a place
+          // to type its name) and is edited in place. Its text is written by the
+          // ref callback / paintTitle instead of by React children: a re-render
+          // mid-edit (save-state flips re-render the whole studio) would otherwise
+          // reset the text to the stored title and yank the caret to column 0.
+          h(
+            'div',
+            {
+              className: 'nw-chaptertitle',
+              ref: (el) => {
+                titleRef.current = el;
+                if (!el) return;
+                if (el.getAttribute('data-editing') === '1') return;
+                if (el.textContent !== chapterTitle) el.textContent = chapterTitle;
+              },
+              role: 'heading',
+              'aria-level': 1,
+              'aria-label': NW.t('章节标题'),
+              contentEditable: onRenameTitle ? 'plaintext-only' : undefined,
+              suppressContentEditableWarning: true,
+              spellCheck: false,
+              'data-empty': titlePlaceholder ? '1' : '0',
+              'data-placeholder': NW.t('章节标题'),
+              onKeyDown: onRenameTitle ? handleTitleKeyDown : undefined,
+              onFocus: onRenameTitle ? handleTitleFocus : undefined,
+              onBlur: onRenameTitle ? handleTitleBlur : undefined,
+              onInput: onRenameTitle ? handleTitleInput : undefined,
+              onPaste: onRenameTitle ? handleTitlePaste : undefined,
+              onDrop: onRenameTitle ? handleTitleDrop : undefined,
+            },
+          ),
           h(
             'div',
             { className: 'nw-stack', ref: stackRef },

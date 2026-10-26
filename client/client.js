@@ -696,6 +696,12 @@ window.__ModuleLoader__.load({
     '略欠': 'Not quite',
     '尚不足': 'Not yet',
     '收起': 'Collapse',
+    // R41 ①: the manuscript heading became an input, so it needs its own label
+    // (also its placeholder, which is why it must be short) and its failure.
+    '章节标题': 'Chapter title',
+    '重命名失败': 'Rename failed',
+    // R41 ③: the home screen now names the chapter being written.
+    '正在写': 'Writing',
   };
 
   const DICT = { zh: {}, en: EN };
@@ -7665,29 +7671,56 @@ window.__ModuleLoader__.load({
     return { total, novel, todayWords, weekWords, count, touched };
   }
 
+  /**
+   * R41 ③: which chapter is the writer actually in? The home screen used to
+   * list books only, so "正在创作" named a book but never the chapter — the one
+   * thing a returning writer needs in order to resume. The app remembers the
+   * last chapter per novel in localStorage (`nw.lastChapterByNovel`, see
+   * LS_LAST_CHAPTER in 90-app.js); when that entry is missing or points at a
+   * chapter that has since been deleted, fall back to the freshest chapter of
+   * that book, then to nothing.
+   */
+  function pickResume(rows, lastMap, novelId) {
+    if (!rows.length) return null;
+    const wanted = lastMap ? lastMap[String(novelId)] : null;
+    if (wanted != null) {
+      const hit = rows.find((row) => String(row.id) === String(wanted));
+      if (hit) return hit;
+    }
+    let best = rows[0];
+    let bestAt = -1;
+    for (const row of rows) {
+      const at = Number(row.updatedAt) || 0;
+      if (at > bestAt) { bestAt = at; best = row; }
+    }
+    return best || null;
+  }
+
   /** Per-novel rollup so each card can show chapters + words + last touched. */
-  function rollupNovels(novels, chapters) {
+  function rollupNovels(novels, chapters, lastMap) {
     const list = Array.isArray(novels) ? novels.filter(Boolean) : [];
     const rows = Array.isArray(chapters) ? chapters : [];
     const byNovel = new Map();
     for (const row of rows) {
       if (!row) continue;
       const key = String(row.novelId);
-      const cell = byNovel.get(key) || { chapters: 0, words: 0, touched: 0 };
+      const cell = byNovel.get(key) || { chapters: 0, words: 0, touched: 0, rows: [] };
       cell.chapters += 1;
       cell.words += Number(row.wordCount) || 0;
+      cell.rows.push(row);
       const at = Number(row.updatedAt) || 0;
       if (at > cell.touched) cell.touched = at;
       byNovel.set(key, cell);
     }
     return list
       .map((novel) => {
-        const cell = byNovel.get(String(novel.id)) || { chapters: 0, words: 0, touched: 0 };
+        const cell = byNovel.get(String(novel.id)) || { chapters: 0, words: 0, touched: 0, rows: [] };
         return {
           novel,
           chapters: cell.chapters,
           words: cell.words,
           touched: cell.touched || Number(novel.updatedAt) || 0,
+          resume: pickResume(cell.rows, lastMap, novel.id),
         };
       })
       .sort((a, b) => b.touched - a.touched);
@@ -7746,13 +7779,30 @@ window.__ModuleLoader__.load({
     );
   }
 
+  /**
+   * The studio persists "which chapter was I in" per novel under
+   * `nw.lastChapterByNovel` (LS_LAST_CHAPTER in 90-app.js). It is read on every
+   * render instead of memoised: the app writes it in an effect right after a
+   * chapter switch, so a cached copy would routinely be one chapter behind.
+   */
+  function readLastChapterMap() {
+    try {
+      const raw = window.localStorage.getItem('nw.lastChapterByNovel');
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (err) {
+      return {};
+    }
+  }
+
   function Welcome(props) {
     const p = props || {};
     const novels = Array.isArray(p.novels) ? p.novels.filter(Boolean) : [];
     const chapters = Array.isArray(p.chapters) ? p.chapters : [];
     const submissions = Array.isArray(p.submissions) ? p.submissions : [];
     const stats = computeStats(chapters, p.activeNovelId);
-    const rollups = rollupNovels(novels, chapters);
+    const rollups = rollupNovels(novels, chapters, readLastChapterMap());
     const journalCount = Number(p.journalCount) || 0;
     // R16 ⑤: each card folds to three rows and remembers its own state.
     const [novelOpen, setNovelOpen] = NW.React.useState(false);
@@ -7823,8 +7873,20 @@ window.__ModuleLoader__.load({
             NW.h(
               'ul',
               { className: 'nw-welcome-novels' },
-              novelFold.visible.map((row) =>
-                NW.h(
+              novelFold.visible.map((row) => {
+                // R41 ③: resume goes straight to the chapter the writer left,
+                // not merely to the book — landing on whatever chapter happens
+                // to be first is how a writer loses their place.
+                const resume = row.resume || null;
+                const resumeTitle = resume ? String(resume.title || '').trim() : '';
+                const openRow = () => {
+                  if (resume && typeof p.onResumeChapter === 'function') {
+                    p.onResumeChapter(row.novel.id, resume.id);
+                    return;
+                  }
+                  if (typeof p.onOpenNovel === 'function') p.onOpenNovel(row.novel.id);
+                };
+                return NW.h(
                   'li',
                   { key: String(row.novel.id) },
                   NW.h(
@@ -7832,13 +7894,21 @@ window.__ModuleLoader__.load({
                     {
                       type: 'button',
                       className: 'nw-welcome-novel',
-                      onClick: () => typeof p.onOpenNovel === 'function' && p.onOpenNovel(row.novel.id),
+                      onClick: openRow,
                     },
                     NW.h('span', { className: 'nw-welcome-novelmark', 'aria-hidden': 'true' }, NW.icon('book', { size: 16 })),
                     NW.h(
                       'span',
                       { className: 'nw-welcome-novelmain' },
                       NW.h('span', { className: 'nw-welcome-novelname' }, row.novel.title || '未命名作品'),
+                      resume
+                        ? NW.h(
+                            'span',
+                            { className: 'nw-welcome-novelcurrent' },
+                            NW.h('span', { className: 'nw-welcome-novelcurrenttag' }, '正在写'),
+                            NW.h('span', { className: 'nw-welcome-novelcurrentname' }, resumeTitle || '未命名章节'),
+                          )
+                        : null,
                       NW.h(
                         'span',
                         { className: 'nw-welcome-novelmeta' },
@@ -7847,8 +7917,8 @@ window.__ModuleLoader__.load({
                     ),
                     NW.h('span', { className: 'nw-welcome-novelgo', 'aria-hidden': 'true' }, NW.icon('chevright', { size: 14 })),
                   ),
-                ),
-              ),
+                );
+              }),
             ),
             moreRow(novelFold.hidden, novelOpen, () => setNovelOpen((v) => !v)),
           ),
@@ -8232,6 +8302,12 @@ window.__ModuleLoader__.load({
 .nw-welcome-novelmark{color:var(--nw-fg-soft);display:flex;flex:0 0 auto;}
 .nw-welcome-novelmain{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 auto;}
 .nw-welcome-novelname{font-weight:500;color:var(--nw-fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* R41 ③: the chapter the writer left off in — the one line that makes
+   「正在创作」 actionable rather than a mere book shelf. Kept quieter than the
+   title so a list of books still scans as a list of books. */
+.nw-welcome-novelcurrent{display:flex;align-items:baseline;gap:6px;min-width:0;font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);}
+.nw-welcome-novelcurrenttag{flex:0 0 auto;opacity:.75;}
+.nw-welcome-novelcurrentname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--nw-brand);}
 .nw-welcome-novelmeta{font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .nw-welcome-novelgo{color:var(--nw-idle);display:flex;flex:0 0 auto;}
 
@@ -8760,17 +8836,24 @@ window.__ModuleLoader__.load({
 }
 .nw-stack{position:relative;width:100%;contain:layout style;}
 
-/* ---- chapter heading (R17 ①, reworked R19) -------------------------------
+/* ---- chapter heading (R17 ①, reworked R19, editable R41) -----------------
    The chapter name is printed as the first line of the manuscript, centred and
    larger than the body. It lives inside .nw-page above .nw-stack so it scrolls
-   with the text, and it is deliberately NOT part of the textarea: the writer
-   renames it in the shelf, the editor only displays it. Its height is measured
-   by chapterTitleH() and subtracted from the typewriter room.
+   with the text, and it stays OUT of the textarea so that typing never risks
+   eating the heading. Its height is measured by chapterTitleH() and subtracted
+   from the typewriter room.
 
    R19: this used to be 700-weight, which read like a government notice. A book
    heading is quieter than the body, not louder: semibold, a hair of tracking,
    and a short centred rule that spans the title only. The rule is a pseudo
-   element, not a border on the block, so it never stretches the full measure. */
+   element, not a border on the block, so it never stretches the full measure.
+
+   R41: the heading is now the writer's own field (contenteditable, see
+   handleTitleKeyDown) instead of a shelf-only label. Everything measurable --
+   padding, margin, font-size, line-height -- must stay identical in every
+   state, because chapterTitleH() feeds the typewriter room; the editable
+   affordances below therefore use box-shadow (no layout cost), never borders
+   or padding. */
 .nw-chaptertitle{
   display:block;
   padding:0 calc(var(--nw-pad-x) + var(--nw-gutter-x,0px));
@@ -8783,7 +8866,19 @@ window.__ModuleLoader__.load({
   text-align:center;
   color:var(--nw-fg);
   overflow-wrap:break-word;word-break:break-word;
-  user-select:none;
+  cursor:text;
+  transition:box-shadow .12s ease;
+}
+.nw-chaptertitle:hover{box-shadow:inset 0 0 0 1px var(--nw-rule);}
+.nw-chaptertitle:focus{outline:none;box-shadow:inset 0 0 0 1px var(--nw-rule);}
+/* Keyboard users still get a visible ring; the mouse-only cue above is the
+   hairline. */
+.nw-chaptertitle:focus-visible{outline:2px solid var(--nw-fg);outline-offset:4px;}
+.nw-chaptertitle[data-empty="1"]{color:var(--nw-soft);}
+.nw-chaptertitle[data-empty="1"]:empty::before{
+  content:attr(data-placeholder);
+  color:var(--nw-soft);
+  opacity:.7;
 }
 .nw-chaptertitle::after{
   content:'';
@@ -9002,6 +9097,10 @@ window.__ModuleLoader__.load({
     // editor owns the keystrokes because it has focus; the app owns the actions.
     const onNewChapter = typeof p.onNewChapter === 'function' ? p.onNewChapter : null;
     const onToggleAdvice = typeof p.onToggleAdvice === 'function' ? p.onToggleAdvice : null;
+    // R41 ①: the heading is now the writer's own input. The app owns the row
+    // (its list, its database write and the toast on failure); the editor only
+    // parses the keystrokes and reports the new string back.
+    const onRenameTitle = typeof p.onRenameTitle === 'function' ? p.onRenameTitle : null;
     /** 灵感便签 lane (R10): the app mounts the notes column beside the text. */
     const notesLane = p.notesLane === true && !immersive;
     /** Page width actually applied; immersive mode guarantees a wide canvas. */
@@ -9011,13 +9110,16 @@ window.__ModuleLoader__.load({
     const chapterId = chapter && chapter.id != null ? chapter.id : null;
 
     // R17 ①: the chapter name is printed as the first line of the manuscript,
-    // centred and larger than the body. Placeholder titles ("新章节" and the
-    // like) are hidden — a short story written in the auto-created chapter
-    // should read as one continuous text, not as a machine-generated heading.
-    // Declared here (not next to the JSX) because the measuring effects below
-    // depend on it.
+    // centred and larger than the body. Declared here (not next to the JSX)
+    // because the measuring effects below depend on it.
+    //
+    // R41 ①: the heading is no longer hidden for placeholder titles. It used to
+    // disappear whenever the row said "新章节", which meant the auto-created
+    // chapter had no rename entry point at all once you were inside it. Now the
+    // block is always mounted and merely dims (data-empty) with a hint, so the
+    // first thing a writer can do in a fresh chapter is click the title.
     const chapterTitle = chapter ? String(chapter.title || '').trim() : '';
-    const showTitle = Boolean(chapterTitle) && !isPlaceholderTitle(chapterTitle);
+    const titlePlaceholder = !chapterTitle || isPlaceholderTitle(chapterTitle);
 
     // ---- caret appearance (R11): width / colour / blink are user settings ----
     // The palette still owns `--nw-caret-color` per theme, so an empty
@@ -9041,6 +9143,11 @@ window.__ModuleLoader__.load({
     const scrollRef = React.useRef(null);
     const pageRef = React.useRef(null);
     const titleRef = React.useRef(null);
+    // R41 ①: the title last accepted by the app. Escape restores it, and it is
+    // reset on every chapter switch so a stale string can never be restored
+    // into a different chapter.
+    const titleSavedRef = React.useRef('');
+    const titleBusyRef = React.useRef(false);
     const stackRef = React.useRef(null);
     const hlRef = React.useRef(null);
     const caretRef = React.useRef(null);
@@ -10487,6 +10594,155 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // ---- chapter heading editing (R41 ①) ----------------------------------
+    // The heading is a contenteditable div rather than an <input>: it must keep
+    // the centred, wrapping, multi-line rendering the manuscript needs, and an
+    // input would reset the height that chapterTitleH() subtracts from the
+    // typewriter room. React keeps ownership of the text while it is NOT being
+    // edited; only an accepted rename writes textContent directly, so a caret
+    // is never thrown back to column 0 by a re-render mid-edit.
+
+    function titleText() {
+      const el = titleRef.current;
+      if (!el) return '';
+      // textContent, never innerText: innerText collapses on a hidden element
+      // and would silently return '' if the pane is display:none.
+      return String(el.textContent || '');
+    }
+
+    /** Collapse runs of whitespace: a heading is one logical line. */
+    function normaliseTitle(raw) {
+      return String(raw == null ? '' : raw).replace(/\s+/g, ' ').trim().slice(0, 120);
+    }
+
+    function paintTitle(text) {
+      const el = titleRef.current;
+      if (!el) return;
+      el.textContent = text;
+      el.setAttribute('data-editing', '0');
+    }
+
+    function handleTitleFocus() {
+      const el = titleRef.current;
+      if (!el) return;
+      titleSavedRef.current = normaliseTitle(chapterTitle);
+      el.setAttribute('data-editing', '1');
+    }
+
+    function handleTitleInput() {
+      const el = titleRef.current;
+      if (!el) return;
+      // Mark the block as editing so the paint pass knows a caret lives here.
+      // Never rewrite the DOM while an IME is composing.
+      if (composingRef.current) return;
+      el.setAttribute('data-editing', '1');
+    }
+
+    async function commitTitle(discard) {
+      const el = titleRef.current;
+      if (!el || titleBusyRef.current) return;
+      if (discard === true) {
+        paintTitle(titleSavedRef.current || chapterTitle);
+        return;
+      }
+      const next = normaliseTitle(titleText());
+      const current = normaliseTitle(chapterTitle);
+      // An empty heading is almost always a mis-click on the text: keep the
+      // stored one instead of wiping the row (updateChapter would replace it
+      // with a placeholder and lose the writer's name).
+      if (!next || next === current) {
+        paintTitle(current || titleSavedRef.current);
+        return;
+      }
+      if (!onRenameTitle) {
+        paintTitle(current);
+        return;
+      }
+      titleBusyRef.current = true;
+      el.setAttribute('data-editing', '0');
+      let applied = null;
+      try {
+        applied = await onRenameTitle(chapterId, next);
+      } catch (err) {
+        applied = null;
+      }
+      titleBusyRef.current = false;
+      // The app answers with the title the row actually holds (it trims and
+      // substitutes a placeholder for an empty value). Falling back to the
+      // previous string keeps a failed write visually neutral.
+      const finalText = applied == null ? current : String(applied);
+      titleSavedRef.current = finalText;
+      paintTitle(finalText);
+      remeasureAfterTitle();
+    }
+
+    /** Renaming changes the heading's height (one line -> two) and therefore
+     *  the typewriter room; re-run the same pass the [chapterTitle] effect does. */
+    function remeasureAfterTitle() {
+      if (!surfaceRef.current || !taRef.current) return;
+      const view = resolveScroller(false);
+      if (view) applyTypewriterRoom(view);
+      autosize();
+      scheduleMeasure(false);
+    }
+
+    function handleTitleKeyDown(ev) {
+      if (!ev) return;
+      // Escape must be swallowed here: the app listens for it in the capture
+      // phase to leave immersive mode, and defaultPrevented is its only test.
+      const key = ev.key;
+      if (key === 'Enter') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const el = titleRef.current;
+        if (el && typeof el.blur === 'function') el.blur();
+        return;
+      }
+      if (key === 'Escape') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const el = titleRef.current;
+        commitTitle(true).then(() => {
+          if (el && typeof el.blur === 'function') el.blur();
+        });
+        return;
+      }
+      // Every other key stays local: the global map owns Ctrl+S, Ctrl+F, Tab.
+      ev.stopPropagation();
+    }
+
+    function handleTitleBlur() {
+      commitTitle(false);
+    }
+
+    function handleTitlePaste(ev) {
+      const clip = ev && ev.clipboardData;
+      if (!clip || typeof clip.getData !== 'function') return;
+      ev.preventDefault();
+      const raw = clip.getData('text/plain') || clip.getData('text') || '';
+      const text = normaliseTitle(raw);
+      if (!text) return;
+      // insertText keeps the browser's own undo stack alive, unlike writing
+      // textContent, and it handles an existing selection correctly.
+      let ok = false;
+      try {
+        ok = document.execCommand('insertText', false, text);
+      } catch (err) {
+        ok = false;
+      }
+      if (!ok) {
+        const el = titleRef.current;
+        if (el) el.textContent = normaliseTitle(titleText() + text);
+      }
+      handleTitleInput();
+    }
+
+    function handleTitleDrop(ev) {
+      // Dropping prose into the heading would bring invisible formatting along;
+      // the heading only ever accepts plain text, like the paste handler above.
+      ev.preventDefault();
+    }
+
     function handleBlur() {
       flushNow();
       // Unfocused editor: the painted caret hides (the browser has no caret of
@@ -10636,6 +10892,12 @@ window.__ModuleLoader__.load({
 
       if (prevId != null && dirtyRef.current) flushNow();
       chapterIdRef.current = nextId;
+      // R41 ①: a half-typed heading belongs to the chapter it was typed in.
+      // Reset the restore point and repaint the incoming title explicitly,
+      // because React may keep the same DOM node across the switch.
+      titleSavedRef.current = chapter ? String(chapter.title || '').trim() : '';
+      titleBusyRef.current = false;
+      paintTitle(titleSavedRef.current);
       cancelSave();
 
       const ta = taRef.current;
@@ -11028,9 +11290,37 @@ window.__ModuleLoader__.load({
       ? h(
           'div',
           { className: 'nw-page', ref: pageRef },
-          showTitle
-            ? h('div', { className: 'nw-chaptertitle', ref: titleRef, role: 'heading', 'aria-level': 1 }, chapterTitle)
-            : null,
+          // R41 ①: the heading is always mounted (a fresh chapter needs a place
+          // to type its name) and is edited in place. Its text is written by the
+          // ref callback / paintTitle instead of by React children: a re-render
+          // mid-edit (save-state flips re-render the whole studio) would otherwise
+          // reset the text to the stored title and yank the caret to column 0.
+          h(
+            'div',
+            {
+              className: 'nw-chaptertitle',
+              ref: (el) => {
+                titleRef.current = el;
+                if (!el) return;
+                if (el.getAttribute('data-editing') === '1') return;
+                if (el.textContent !== chapterTitle) el.textContent = chapterTitle;
+              },
+              role: 'heading',
+              'aria-level': 1,
+              'aria-label': NW.t('章节标题'),
+              contentEditable: onRenameTitle ? 'plaintext-only' : undefined,
+              suppressContentEditableWarning: true,
+              spellCheck: false,
+              'data-empty': titlePlaceholder ? '1' : '0',
+              'data-placeholder': NW.t('章节标题'),
+              onKeyDown: onRenameTitle ? handleTitleKeyDown : undefined,
+              onFocus: onRenameTitle ? handleTitleFocus : undefined,
+              onBlur: onRenameTitle ? handleTitleBlur : undefined,
+              onInput: onRenameTitle ? handleTitleInput : undefined,
+              onPaste: onRenameTitle ? handleTitlePaste : undefined,
+              onDrop: onRenameTitle ? handleTitleDrop : undefined,
+            },
+          ),
           h(
             'div',
             { className: 'nw-stack', ref: stackRef },
@@ -12936,6 +13226,41 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [activeChapterId, refreshChapters, refreshNovels, pushToast],
     );
 
+    // R41 ①: renaming straight from the manuscript heading. Deliberately NOT a
+    // call to renameNode(): that one asks through a dialog and then reloads every
+    // chapter (including all their content) just to repaint a label. Here the
+    // list and the open chapter are patched first — the caret is already in the
+    // heading, so the change must land instantly — and only then written to the
+    // database, whose row is the authority for the final string.
+    const renameChapterTitle = useCallback(
+      async (id, nextTitle) => {
+        if (id == null) return null;
+        const value = String(nextTitle == null ? '' : nextTitle).replace(/\s+/g, ' ').trim().slice(0, 120);
+        if (!value) return null;
+        patchChapterInList(id, { title: value });
+        if (activeChapterId != null && String(id) === String(activeChapterId)) {
+          setChapter((prev) => (prev ? Object.assign({}, prev, { title: value }) : prev));
+        }
+        try {
+          const record = await NW.db.updateChapter(id, { title: value });
+          const applied = record && record.title != null ? String(record.title) : value;
+          if (applied !== value) {
+            patchChapterInList(id, { title: applied });
+            if (activeChapterId != null && String(id) === String(activeChapterId)) {
+              setChapter((prev) => (prev ? Object.assign({}, prev, { title: applied }) : prev));
+            }
+          }
+          return applied;
+        } catch (err) {
+          // The optimistic edit stays on screen (the row is still the old one in
+          // the database, so a reload shows the truth) but the writer is told.
+          pushToast(errText(err, '重命名失败'), 'error');
+          return null;
+        }
+      },
+      [activeChapterId, patchChapterInList, pushToast],
+    );
+
     const deleteNode = useCallback(
       async (kind, id) => {
         const ok = await NW.ui.confirm(
@@ -13288,6 +13613,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         // A dialog on top owns Escape; only leave immersive when nothing is
         // stacked above the writing surface.
         if (dialog || modalReq) return;
+        // R41 ①: this listener runs in the capture phase, i.e. BEFORE React's
+        // own onKeyDown reaches the chapter heading, so preventedDefault cannot
+        // be the test there. Escape inside the heading means "cancel the
+        // rename", never "leave the room".
+        const t = ev.target;
+        if (t && typeof t.closest === 'function' && t.closest('.nw-chaptertitle')) return;
         exitImmersive();
       };
       const onFsChange = () => {
@@ -13818,6 +14149,21 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 onOpenNovel: (id) => {
                   selectNovel(id);
                 },
+                // R41 ③: 正在创作 names the exact chapter now, so a click must
+                // land on it. selectChapter() bails out when the requested id is
+                // already the open one (it only guards against re-loading), and
+                // from the home screen that guard would swallow the click — the
+                // chapter is still "open" behind the welcome page. Handle that
+                // case by simply going back to the manuscript.
+                onResumeChapter: (novelId, chapterId) => {
+                  const open = chapterRef.current;
+                  if (open && chapterId != null && String(open.id) === String(chapterId)) {
+                    setView('write');
+                    return;
+                  }
+                  if (chapterId != null) selectChapter(chapterId);
+                  else selectNovel(novelId);
+                },
                 onResume: () => {
                   if (chapter) setView('write');
                   else if (novels.length > 0) selectNovel(novels[0].id);
@@ -13882,6 +14228,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       onNewChapter: () => createChapter(null),
                       onToggleAdvice: () => setAdviceOpen((v) => !v),
                       onSave: (content) => saveChapter(content, chapter.id),
+                      // R41 ①: the manuscript heading is editable in place; the
+                      // studio owns the row and answers with the stored title.
+                      onRenameTitle: (next) => renameChapterTitle(chapter.id, next),
                       onDirty: (dirty) => {
                         if (dirty) dirtyDuringSaveRef.current = true;
                         setSaveState((prev) => {

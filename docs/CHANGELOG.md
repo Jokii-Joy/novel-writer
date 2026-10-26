@@ -8,6 +8,25 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.2.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第四十一轮（R41）改造：**在稿纸上直接改章节名，首页告诉你正在写哪一章** —— ① 编辑器顶部的
+  章节标题从「只读的展示文字」变成可点击编辑的 `contenteditable="plaintext-only"`：点一下就能改，
+  Enter 提交并失焦、Esc 放弃还原、粘贴与拖入强制转纯文本、超过 120 字截断、空白一律视为误点不落库
+  （否则 `updateChapter` 会把空标题写死成「未命名章节」）。提交走 app 侧新增的
+  `renameChapterTitle(id, next)`：先 `patchChapterInList` + `setChapter` 让侧栏和正文顶栏立刻同步，
+  再 `NW.db.updateChapter` 落库，并用返回的最终标题回写一次（`未命名章节` 这类兜底能正确回显）；
+  **故意不走 `refreshChapters()`**，那会把整本书的正文重读一遍。② 标题元素改成**常驻挂载且 children
+  为空**，文本由 ref 回调里写：保存状态一变整个写作台都会重渲，若把标题当作 React children，重渲
+  会把输入中的文字重置回库里的旧标题、光标弹回行首。编辑中靠 `data-editing` 守卫跳过同步。同时原来
+  「占位标题不显示」的规则（R17）被推翻 —— 自动创建的章节标题是「新章节」，按老规则编辑器里根本不
+  渲染标题，用户在新章节里连入口都没有；现在始终渲染，占位时用 `data-empty` 变淡并显示「章节标题」
+  占位提示。③ 首页「正在创作」每部书多一行 **正在写 <章节名>**：章号来自 `nw.lastChapterByNovel`
+  里该书上次停留的章节，没有记录就取该书 `updatedAt` 最新的那一章；整行点击直达那一章
+  （app 侧 `onResumeChapter` 对「点的正是当前章」单独处理，否则 `selectChapter` 开头的同 id 守卫会让
+  点击变成哑炮）。④ 沉浸模式下按 Esc 原本会被宿主的 window 捕获监听直接吃掉退出沉浸，现在该监听
+  在 capture 阶段就跳过 `.nw-chaptertitle` 里的按键，标题编辑里的 Esc 只还原标题。
+  ⑤ 英文文案补 `章节标题 / 重命名失败 / 正在写` 三条；`verify-host.mjs` 188 项、`verify-docs.mjs` 44 项
+  全过，`client.js` 重新构建为 20 段 904797 字节，`verify-client-load` 报
+  `inject=["slots","layout","locale"]`。
 - 第四十轮（R40）改造：**两个「点了没反应」的按钮，和书名重复出现** —— ① 书架标题栏的
   「收起/展开宿主侧栏」按钮此前完全无效：宿主把 `layout` 服务放在它自己的客户端插件里
   `ctx.reflect.provide("layout", …)`，而插件的 apply 顺序不由我们决定，`ctx.get('layout')` 又只
