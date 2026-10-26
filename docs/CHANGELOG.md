@@ -27,6 +27,31 @@
   ⑤ 英文文案补 `章节标题 / 重命名失败 / 正在写` 三条；`verify-host.mjs` 188 项、`verify-docs.mjs` 44 项
   全过，`client.js` 重新构建为 20 段 904797 字节，`verify-client-load` 报
   `inject=["slots","layout","locale"]`。
+- 第四十一轮修补（R41-fix）：**改标题变成一串字符、保存目录越攒越多、投稿记录不改名** ——
+  三个都是 R41 上线后立刻暴露的，各自根因不同：
+  ① **标题里出现一串 id**。编辑器调用 `onRenameTitle(chapterId, next)` 时传两个参数，而 app 侧
+  接的是 `(next) => renameChapterTitle(chapter.id, next)`——于是章节 id 被当成标题落了库。
+  改成 `(id, next) => renameChapterTitle(id != null ? id : chapter.id, next)`，两边的参数个数从此
+  一起看、一起改。附带补了 IME 守卫：`handleTitleKeyDown` 开头 `if (ev.isComposing || composingRef.current) return;`，
+  否则中文输入法敲 Enter 选词会被当成「提交」，把未上屏的候选词连同半个拼音写进标题——
+  用户看到的「一串字符」两种成因都占。
+  ② **保存目录里留下一堆旧文件**。`mirrorLibrary` 一直是「只增不减」：书名一改，`旧名.docx` 留着，
+  `新名.docx` 再写一份。现在新增 `plannedNames(novels)`——把 `uniqueStem` + `safeTitle` 的重名规则
+  原样重放一遍，得到「这份清单会写出哪些文件名」；配合 `previousSnapshot(target)` 读回上一次
+  `library.json` / `library.json.nwe` 里的书名（加密时先 `deriveMirrorKey()` 解出来），两边一比对，
+  差集就是改名/删书留下的孤儿，写完全部新文件之后才逐个 `unlink`（删除失败不致命）。
+  只碰快照能推导出来的名字，用户自己放进目录的 `我的笔记.txt` 永远不动；比较走 `toLowerCase()`，
+  符合 Windows 的大小写语义。同一套重放也顺手补上了 正文加密 的开关：`plannedNames(novels, encrypt)`
+  只列出当前格式会写的名字，旧快照的格式由 `previousSnapshot` 的 `encrypted` 标志带回来，于是
+  打开加密时 `.docx` 与 `library.json` 被清掉、关掉加密时 `.docx.nwe` 与 `library.json.nwe` 被清掉，
+  同一本书永远只有一份。
+  ③ **投稿记录还显示旧书名**。记录里的 `title` 是发送时的快照（编辑收到的是那个名字，事后改写就是
+  伪造记录），所以不动它，而是让记录带上 `novelId`：`handleSubmitSend` 落 `novelId`，
+  `submit.send` 从向导传上去，投稿管理与首页投稿卡片都用 `p.novels` 把 id 解析成现名；两边不一致时
+  显示「现名（投稿时：旧名）」，一致时只显示现名，老记录没有 id 就回落到快照。
+  `verify-host.mjs` 新增 16 项镜像用例（改名后只剩一份、旧名与同名副本都被删、`library.json` 与
+  无关文件不动、改回原名也能覆盖、加密开/关各清掉另一格式的双胞胎），共 **204 项 0 失败**；`verify-docs.mjs` 44 项 0 失败；
+  `client.js` 重建为 20 段 907435 字节。
 - 第四十轮（R40）改造：**两个「点了没反应」的按钮，和书名重复出现** —— ① 书架标题栏的
   「收起/展开宿主侧栏」按钮此前完全无效：宿主把 `layout` 服务放在它自己的客户端插件里
   `ctx.reflect.provide("layout", …)`，而插件的 apply 顺序不由我们决定，`ctx.get('layout')` 又只

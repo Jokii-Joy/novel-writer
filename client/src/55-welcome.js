@@ -230,6 +230,22 @@
     const stats = computeStats(chapters, p.activeNovelId);
     const rollups = rollupNovels(novels, chapters, readLastChapterMap());
     const journalCount = Number(p.journalCount) || 0;
+    // R41 ③: a 投稿记录 row stores the title *as mailed*, so a renamed book kept
+    // showing its old name on the home screen. The record now carries the book
+    // id, which is stable across renames — the row follows it and says what the
+    // editor was sent whenever the two differ.
+    const liveTitles = new Map();
+    for (const novel of novels) {
+      if (novel && novel.id != null) liveTitles.set(String(novel.id), String(novel.title || '').trim());
+    }
+    const submissionTitle = (row) => {
+      const stored = String((row && row.title) || '').trim();
+      const fallback = stored || String((row && row.subject) || '') || '未命名稿件';
+      const id = row && row.novelId != null ? String(row.novelId) : '';
+      const live = id ? liveTitles.get(id) || '' : '';
+      if (!live || live === stored) return fallback;
+      return live + '（投稿时：' + (stored || '未命名稿件') + '）';
+    };
     // R16 ⑤: each card folds to three rows and remembers its own state.
     const [novelOpen, setNovelOpen] = NW.React.useState(false);
     const [subsOpen, setSubsOpen] = NW.React.useState(false);
@@ -406,14 +422,14 @@
                     {
                       type: 'button',
                       className: 'nw-welcome-sub nw-welcome-subbtn',
-                      title: `${row.title || row.subject || '未命名稿件'} — 打开投稿管理`,
+                      title: `${submissionTitle(row)} — 打开投稿管理`,
                       disabled: !open,
                       onClick: () => open && p.onOpenSubmitManager(),
                     },
                     NW.h(
                       'span',
                       { className: 'nw-welcome-submain' },
-                      NW.h('span', { className: 'nw-welcome-subtitle' }, row.title || row.subject || '未命名稿件'),
+                      NW.h('span', { className: 'nw-welcome-subtitle' }, submissionTitle(row)),
                       NW.h(
                         'span',
                         { className: 'nw-welcome-submeta' },

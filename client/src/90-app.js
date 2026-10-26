@@ -2771,7 +2771,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       onSave: (content) => saveChapter(content, chapter.id),
                       // R41 ①: the manuscript heading is editable in place; the
                       // studio owns the row and answers with the stored title.
-                      onRenameTitle: (next) => renameChapterTitle(chapter.id, next),
+                      // The editor calls this as `(chapterId, nextTitle)` — keep the
+                      // arity in sync, otherwise the id itself lands in the title.
+                      onRenameTitle: (id, next) =>
+                        renameChapterTitle(id != null ? id : chapter.id, next),
                       onDirty: (dirty) => {
                         if (dirty) dirtyDuringSaveRef.current = true;
                         setSaveState((prev) => {

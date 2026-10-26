@@ -741,6 +741,33 @@ check('无关文件未被删除', fs.existsSync(path.join(libDir, '我的笔记.
 const stale = await library.mirrorLibrary(libDir, novels);
 check('重跑镜像覆盖旧快照', stale.files.length === 4);
 
+// R41 ②: renaming a book must overwrite, not leave the old title on disk.
+const renamed = await library.mirrorLibrary(libDir, [Object.assign({}, novels[0], { title: '改名之后' })]);
+check('改名后仍只写一本书', renamed.files.length === 2, renamed.files.map((f) => f.name).join(','));
+check('改名后新文件名生效', renamed.files.some((f) => f.name === '改名之后.docx'), renamed.files.map((f) => f.name).join(','));
+check('改名后旧文件被删除', !fs.existsSync(path.join(libDir, '斗破_苍穹.docx')));
+check('改名后同名副本也被删除', !fs.existsSync(path.join(libDir, '斗破_苍穹 (2).docx')));
+check('改名不影响备份文件', fs.existsSync(path.join(libDir, 'library.json')));
+check('改名不动无关文件', fs.existsSync(path.join(libDir, '我的笔记.txt')));
+const readme = fs.readdirSync(libDir).filter((name) => /\.docx$/i.test(name));
+check('目录里只剩当前书名一份', readme.length === 1 && readme[0] === '改名之后.docx', readme.join(','));
+const restored = await library.mirrorLibrary(libDir, novels);
+check('改回原名也能覆盖', restored.ok !== false && fs.existsSync(path.join(libDir, '斗破_苍穹.docx')));
+check('改回原名后临时名被删除', !fs.existsSync(path.join(libDir, '改名之后.docx')));
+
+// R41 ②: toggling 正文加密 must swap the extension, not duplicate the book.
+const encDir = path.join(tmpRun, 'mirror-enc');
+fs.cpSync(libDir, encDir, { recursive: true });
+const encFirst = await library.mirrorLibrary(encDir, [novels[0]], { encrypt: true });
+check('开启加密写出 .docx.nwe', encFirst.ok !== false && fs.existsSync(path.join(encDir, '斗破_苍穹.docx.nwe')));
+check('开启加密删掉明文正文', !fs.existsSync(path.join(encDir, '斗破_苍穹.docx')));
+check('开启加密删掉明文快照', !fs.existsSync(path.join(encDir, 'library.json')));
+const encOff = await library.mirrorLibrary(encDir, [novels[0]]);
+check('关闭加密写回 .docx', encOff.ok !== false && fs.existsSync(path.join(encDir, '斗破_苍穹.docx')));
+check('关闭加密删掉密文正文', !fs.existsSync(path.join(encDir, '斗破_苍穹.docx.nwe')));
+check('关闭加密删掉密文快照', !fs.existsSync(path.join(encDir, 'library.json.nwe')));
+check('关闭加密后目录只剩一份正文', fs.readdirSync(encDir).filter((name) => /斗破/.test(name)).length === 1);
+
 // --- listLibrary ----------------------------------------------------------
 const listed = await library.listLibrary(libDir);
 check('listLibrary 成功', listed.ok !== false, JSON.stringify(listed).slice(0, 120));

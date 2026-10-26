@@ -2221,6 +2221,9 @@
 
     function handleTitleKeyDown(ev) {
       if (!ev) return;
+      // IME: while a candidate window is open, Enter/Escape pick and cancel the
+      // candidate — they are not "commit" and "revert" for the heading.
+      if (ev.isComposing || composingRef.current) return;
       // Escape must be swallowed here: the app listens for it in the capture
       // phase to leave immersive mode, and defaultPrevented is its only test.
       const key = ev.key;

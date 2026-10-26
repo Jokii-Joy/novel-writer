@@ -7804,6 +7804,22 @@ window.__ModuleLoader__.load({
     const stats = computeStats(chapters, p.activeNovelId);
     const rollups = rollupNovels(novels, chapters, readLastChapterMap());
     const journalCount = Number(p.journalCount) || 0;
+    // R41 ③: a 投稿记录 row stores the title *as mailed*, so a renamed book kept
+    // showing its old name on the home screen. The record now carries the book
+    // id, which is stable across renames — the row follows it and says what the
+    // editor was sent whenever the two differ.
+    const liveTitles = new Map();
+    for (const novel of novels) {
+      if (novel && novel.id != null) liveTitles.set(String(novel.id), String(novel.title || '').trim());
+    }
+    const submissionTitle = (row) => {
+      const stored = String((row && row.title) || '').trim();
+      const fallback = stored || String((row && row.subject) || '') || '未命名稿件';
+      const id = row && row.novelId != null ? String(row.novelId) : '';
+      const live = id ? liveTitles.get(id) || '' : '';
+      if (!live || live === stored) return fallback;
+      return live + '（投稿时：' + (stored || '未命名稿件') + '）';
+    };
     // R16 ⑤: each card folds to three rows and remembers its own state.
     const [novelOpen, setNovelOpen] = NW.React.useState(false);
     const [subsOpen, setSubsOpen] = NW.React.useState(false);
@@ -7980,14 +7996,14 @@ window.__ModuleLoader__.load({
                     {
                       type: 'button',
                       className: 'nw-welcome-sub nw-welcome-subbtn',
-                      title: `${row.title || row.subject || '未命名稿件'} — 打开投稿管理`,
+                      title: `${submissionTitle(row)} — 打开投稿管理`,
                       disabled: !open,
                       onClick: () => open && p.onOpenSubmitManager(),
                     },
                     NW.h(
                       'span',
                       { className: 'nw-welcome-submain' },
-                      NW.h('span', { className: 'nw-welcome-subtitle' }, row.title || row.subject || '未命名稿件'),
+                      NW.h('span', { className: 'nw-welcome-subtitle' }, submissionTitle(row)),
                       NW.h(
                         'span',
                         { className: 'nw-welcome-submeta' },
@@ -10688,6 +10704,9 @@ window.__ModuleLoader__.load({
 
     function handleTitleKeyDown(ev) {
       if (!ev) return;
+      // IME: while a candidate window is open, Enter/Escape pick and cancel the
+      // candidate — they are not "commit" and "revert" for the heading.
+      if (ev.isComposing || composingRef.current) return;
       // Escape must be swallowed here: the app listens for it in the capture
       // phase to leave immersive mode, and defaultPrevented is its only test.
       const key = ev.key;
@@ -14230,7 +14249,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       onSave: (content) => saveChapter(content, chapter.id),
                       // R41 ①: the manuscript heading is editable in place; the
                       // studio owns the row and answers with the stored title.
-                      onRenameTitle: (next) => renameChapterTitle(chapter.id, next),
+                      // The editor calls this as `(chapterId, nextTitle)` — keep the
+                      // arity in sync, otherwise the id itself lands in the title.
+                      onRenameTitle: (id, next) =>
+                        renameChapterTitle(id != null ? id : chapter.id, next),
                       onDirty: (dirty) => {
                         if (dirty) dirtyDuringSaveRef.current = true;
                         setSaveState((prev) => {
@@ -19074,6 +19096,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           body: body,
           attachments: attachments,
           journalId: selected ? String(selected.id) : '',
+          // R41 ③: the log follows the book by id; the title stays a snapshot of
+          // what was actually mailed, so a rename cannot rewrite history.
+          novelId: novelId ? String(novelId) : '',
           title: String((prepared && prepared.formatted && prepared.formatted.title) || activeNovel.title || ''),
           genre: String((prepared && prepared.genre) || genre || recommendedGenre || ''),
           wordCount: Number((prepared && prepared.wordCount) || workCount) || 0,
@@ -20746,6 +20771,29 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const list = Array.isArray(rows) ? rows : [];
     const shown = filter === 'all' ? list : list.filter((row) => String(row && row.status) === filter);
 
+    /**
+     * R41 ③: what to print as the work's name.
+     *
+     * The host stores the title as a snapshot — it is what the editor received,
+     * and rewriting it after a rename would falsify the record. The book itself
+     * is tracked by `novelId`, so the current name is resolvable: when the two
+     * disagree the row says 「现名（投稿时：旧名）」 instead of silently showing a
+     * name the author no longer uses. A record from before R41 has no id, and a
+     * deleted book no longer resolves, so the snapshot stays the fallback.
+     */
+    const liveTitles = new Map();
+    for (const novel of Array.isArray(p.novels) ? p.novels : []) {
+      if (novel && novel.id != null) liveTitles.set(String(novel.id), String(novel.title || '').trim());
+    }
+    const titleOf = (row) => {
+      const stored = String((row && row.title) || '').trim();
+      const fallback = stored || String((row && row.subject) || '') || '未命名稿件';
+      const id = row && row.novelId != null ? String(row.novelId) : '';
+      const live = id ? liveTitles.get(id) || '' : '';
+      if (!live || live === stored) return fallback;
+      return live + '（投稿时：' + (stored || '未命名稿件') + '）';
+    };
+
     const dayText = (row) => {
       const at = Number(row && row.at) || 0;
       const days = Number(row && row.daysAgo);
@@ -20799,7 +20847,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 h(
                   'span',
                   { className: 'nw-submit-line-main' },
-                  h('span', { className: 'nw-submit-line-title' }, String(row.title || row.subject || '未命名稿件')),
+                  h('span', { className: 'nw-submit-line-title' }, titleOf(row)),
                   h(
                     'span',
                     { className: 'nw-submit-line-meta' },

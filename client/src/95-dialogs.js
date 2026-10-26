@@ -3595,6 +3595,9 @@
           body: body,
           attachments: attachments,
           journalId: selected ? String(selected.id) : '',
+          // R41 ③: the log follows the book by id; the title stays a snapshot of
+          // what was actually mailed, so a rename cannot rewrite history.
+          novelId: novelId ? String(novelId) : '',
           title: String((prepared && prepared.formatted && prepared.formatted.title) || activeNovel.title || ''),
           genre: String((prepared && prepared.genre) || genre || recommendedGenre || ''),
           wordCount: Number((prepared && prepared.wordCount) || workCount) || 0,
@@ -5267,6 +5270,29 @@
     const list = Array.isArray(rows) ? rows : [];
     const shown = filter === 'all' ? list : list.filter((row) => String(row && row.status) === filter);
 
+    /**
+     * R41 ③: what to print as the work's name.
+     *
+     * The host stores the title as a snapshot — it is what the editor received,
+     * and rewriting it after a rename would falsify the record. The book itself
+     * is tracked by `novelId`, so the current name is resolvable: when the two
+     * disagree the row says 「现名（投稿时：旧名）」 instead of silently showing a
+     * name the author no longer uses. A record from before R41 has no id, and a
+     * deleted book no longer resolves, so the snapshot stays the fallback.
+     */
+    const liveTitles = new Map();
+    for (const novel of Array.isArray(p.novels) ? p.novels : []) {
+      if (novel && novel.id != null) liveTitles.set(String(novel.id), String(novel.title || '').trim());
+    }
+    const titleOf = (row) => {
+      const stored = String((row && row.title) || '').trim();
+      const fallback = stored || String((row && row.subject) || '') || '未命名稿件';
+      const id = row && row.novelId != null ? String(row.novelId) : '';
+      const live = id ? liveTitles.get(id) || '' : '';
+      if (!live || live === stored) return fallback;
+      return live + '（投稿时：' + (stored || '未命名稿件') + '）';
+    };
+
     const dayText = (row) => {
       const at = Number(row && row.at) || 0;
       const days = Number(row && row.daysAgo);
@@ -5320,7 +5346,7 @@
                 h(
                   'span',
                   { className: 'nw-submit-line-main' },
-                  h('span', { className: 'nw-submit-line-title' }, String(row.title || row.subject || '未命名稿件')),
+                  h('span', { className: 'nw-submit-line-title' }, titleOf(row)),
                   h(
                     'span',
                     { className: 'nw-submit-line-meta' },
