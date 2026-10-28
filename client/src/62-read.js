@@ -95,7 +95,12 @@
       const m = marks[i];
       const s = Math.max(start, Number(m.start) || 0);
       const e = Math.min(end, Number(m.end) || 0);
-      if (e > s) hits.push({ s: s - start, e: e - start, kind: m.kind, id: m.id });
+      // A mark may cross a paragraph break; each paragraph then gets its own
+      // piece. Only the piece that holds the mark's real end may carry the
+      // little comment dot, otherwise a two-paragraph comment would sprout two.
+      if (e > s) {
+        hits.push({ s: s - start, e: e - start, kind: m.kind, id: m.id, tail: e >= (Number(m.end) || 0) });
+      }
     }
     if (!hits.length) return para.text;
     hits.sort((a, b) => a.s - b.s || a.e - b.e);
@@ -109,7 +114,12 @@
       out.push(
         h(
           'span',
-          { className: 'nw-mark nw-mark-' + String(m.kind || 'underline'), key: 'm' + i + '-' + String(m.id), 'data-mark': String(m.id) },
+          {
+            className: 'nw-mark nw-mark-' + String(m.kind || 'underline'),
+            key: 'm' + i + '-' + String(m.id),
+            'data-mark': String(m.id),
+            'data-tail': m.tail ? '1' : '0',
+          },
           para.text.slice(s, m.e),
         ),
       );
@@ -201,12 +211,6 @@
   text-decoration:line-through;text-decoration-thickness:1.5px;
   text-decoration-color:var(--nw-mark-strike, var(--nw-danger));
 }
-.nw-mark-todo{
-  background-image:linear-gradient(to right,var(--nw-mark-todo, var(--nw-warn)) 0 4px,transparent 4px 8px);
-  background-repeat:repeat-x;background-position:0 100%;background-size:8px 2px;
-  box-shadow:inset 0 -1px 0 transparent;
-  padding-bottom:1px;
-}
 .nw-mark-comment{
   background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 16%, transparent);
   box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
@@ -214,11 +218,17 @@
 .nw-mark[data-active="1"]{background-color:color-mix(in srgb, var(--nw-brand) 22%, transparent);}
 /* 选中的标注：用外描边而不是换色，正文颜色始终是作者的字色。 */
 .nw-mark[data-selected="1"]{outline:1px solid color-mix(in srgb, var(--nw-brand) 55%, transparent);outline-offset:1px;}
-/* 批注角标：一个几乎不占位的圆点，说明这里挂了一条批注。 */
-.nw-mark-comment::after{
-  content:'';display:inline-block;width:4px;height:4px;margin-left:2px;
-  border-radius:var(--nw-r-pill);background:var(--nw-mark-comment, var(--nw-brand));
-  vertical-align:super;
+/* 批注角标：浮在划线末尾的一个小标识，说明这里挂了一条批注。
+   它必须「悬浮」——绝对定位、零占用，一个像素的排版都不占。行内真实的 5px
+   圆点会把后半行挤走，甚至把字挤到下一栏；那样标注就改变了分页，而这是整个
+   标注功能的前提：标注只画在字下面，永远不动字。
+   只有真正到达批注终点的那个片段才画（一条批注跨段时，段段都画就成了三个点）。 */
+.nw-mark-comment[data-tail="1"]{position:relative;}
+.nw-mark-comment[data-tail="1"]::after{
+  content:'';position:absolute;left:100%;top:0;
+  width:5px;height:5px;margin-left:2px;
+  border-radius:50%;background:var(--nw-mark-comment, var(--nw-brand));
+  pointer-events:none;
 }
 .nw-read-empty{
   display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -505,11 +515,21 @@
     }, [sel, p.onMark]);
 
     // 讲清楚「点一下标注会发生什么」：删掉它，或者改批注正文。
+    // 点亮那几个 `<span>` 用 DOM 直接改属性，不把 activeMark 塞进正文的 useMemo
+    // 依赖——否则每点一次标注就要把全书重新拆一遍段（正是 R44 修掉的卡顿）。
     const openMark = React.useCallback((id) => {
       const list = marks.filter((m) => String(m.id) === String(id));
       const mark = list[0];
       if (!mark) return;
       setActiveMark(mark);
+      const flow = flowRef.current;
+      if (flow) {
+        const spans = flow.querySelectorAll('.nw-mark[data-mark]');
+        for (let i = 0; i < spans.length; i += 1) {
+          const on = spans[i].getAttribute('data-mark') === String(id);
+          spans[i].setAttribute('data-active', on ? '1' : '0');
+        }
+      }
     }, [marks]);
 
     // ---- 量一次版面：定栏宽 → 读 scrollWidth → 得到页数 ----------------------
@@ -687,20 +707,31 @@
       return () => window.clearTimeout(timer);
     }, []);
 
-    // 点左侧回一页、点右侧翻一页。拖动/选字不算点。
+    // 点左侧回一页、点右侧翻一页。拖动/选字/点标注都不算点。
     const onPointerDown = (ev) => {
-      pointerRef.current = { x: ev.clientX, y: ev.clientY };
+      const node = ev.target;
+      // 点在标注、工具条或批注面板上时，这一下是给它们的，不是翻页的。
+      // 记下来在 pointerup 里用：一次点击会先 pointerup 再 click，如果 up 里
+      // 就翻了页，等 click 打开批注时书已经跳到下一页了。
+      const onSomething = !!(node && typeof node.closest === 'function'
+        && node.closest('.nw-mark[data-mark], .nw-mark-bar, .nw-mark-pop'));
+      pointerRef.current = { x: ev.clientX, y: ev.clientY, onSomething: onSomething };
     };
     const onPointerUp = (ev) => {
       const down = pointerRef.current;
       pointerRef.current = null;
       if (!down) return;
       if (Math.abs(ev.clientX - down.x) > 8 || Math.abs(ev.clientY - down.y) > 8) {
-        // 拖了一下 = 想标注这段字，不是想翻页。
+        // 拖了一下 = 想标注这段字，不是想翻页。从已有标注上起手也一样：
+        // 谁都会从一条下划线中间开始往外拖。
         const hit = readSelection();
         if (hit) setSel(hit);
         return;
       }
+      // 没动 = 一次点击。点在标注、工具条或批注面板上时这一下是给它们的，
+      // 不是翻页的：一次点击会先 pointerup 再 click，若在 up 里就翻了页，
+      // 等 click 打开批注时书已经跳到下一页了。
+      if (down.onSomething) return;
       const s0 = typeof window.getSelection === 'function' ? window.getSelection() : null;
       if (s0 && String(s0.toString() || '').length > 0) return;
       setSel(null);
@@ -797,12 +828,6 @@
           onClick: () => addMark('strike'),
           title: NW.t('删除线'),
         }, h('span', { style: { textDecoration: 'line-through' } }, NW.t('删除线'))),
-        h('button', {
-          type: 'button',
-          className: 'nw-mark-bar-btn',
-          onClick: () => addMark('todo'),
-          title: NW.t('待改'),
-        }, NW.t('待改')),
         h('button', {
           type: 'button',
           className: 'nw-mark-bar-btn',
@@ -918,7 +943,14 @@
                 }
               }
               // 点空白处收起面板。
-              if (activeMark) setActiveMark(null);
+              if (activeMark) {
+                setActiveMark(null);
+                const flow2 = flowRef.current;
+                if (flow2) {
+                  const spans = flow2.querySelectorAll('.nw-mark[data-mark]');
+                  for (let i = 0; i < spans.length; i += 1) spans[i].setAttribute('data-active', '0');
+                }
+              }
             },
           },
           body,

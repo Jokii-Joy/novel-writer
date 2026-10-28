@@ -1672,21 +1672,26 @@ window.__ModuleLoader__.load({
    * annotating can never reflow the sentence, and deleting a mark always
    * restores the page exactly.
    *
-   *   kind: 'underline' | 'strike' | 'todo' | 'comment'
+   *   kind: 'underline' | 'strike' | 'comment'
    *
-   * `todo` is the "改这里" flag: a wavy underline plus a checklist entry, so a
-   * writer can mark a place to come back to without stopping to fix it now.
    * `strike` is 删除线 — "this paragraph goes" — and is the reason the mark has
    * to be drawn by the editor rather than carried in the text: a struck line
    * still has to count for the word total until the writer deletes it.
+   *
+   * R48 dropped the fourth kind (待改). Three marks are enough to say what a
+   * writer actually says to themselves — "this line is good", "this line goes",
+   * "here is why" — and the extra kind only made the toolbar one button longer.
+   * Rows written by R47 keep working: `todo` is normalised to `underline`
+   * rather than rejected, so no annotation disappears from an older shelf.
    */
-  const MARK_KINDS = { underline: 1, strike: 1, todo: 1, comment: 1 };
+  const MARK_KINDS = { underline: 1, strike: 1, comment: 1 };
 
   function cleanMark(input) {
     const data = input || {};
     const chapterId = String(data.chapterId || '');
     if (!chapterId) return null;
-    const kind = MARK_KINDS[String(data.kind || '')] ? String(data.kind) : 'underline';
+    const raw = String(data.kind || '');
+    const kind = raw === 'todo' ? 'underline' : (MARK_KINDS[raw] ? raw : 'underline');
     const start = Math.max(0, Math.round(Number(data.start) || 0));
     const end = Math.max(start, Math.round(Number(data.end) || 0));
     if (end <= start) return null;
@@ -1716,6 +1721,15 @@ window.__ModuleLoader__.load({
     return (rows || [])
       .filter(function (row) {
         return row && row.id;
+      })
+      .map(function (row) {
+        // R47 rows may carry the retired `todo` kind. Rewrite it on the way out
+        // rather than rewriting the database: an older backup restored later
+        // must not bring the kind back either.
+        if (String(row.kind) === 'todo') {
+          return Object.assign({}, row, { kind: 'underline' });
+        }
+        return row;
       })
       .sort(function (a, b) {
         return (Number(a.start) || 0) - (Number(b.start) || 0) || (Number(a.end) || 0) - (Number(b.end) || 0);
@@ -8465,7 +8479,9 @@ window.__ModuleLoader__.load({
   // R47: the annotation kinds the editor knows how to draw. Each one becomes a
   // `nw-mark-<kind>` class on the mirror `<mark>`, so the look of a mark lives
   // in CSS next to the highlight mirror rather than in this function.
-  const MARK_CLASS = { underline: 1, strike: 1, todo: 1, comment: 1 };
+  // R48 dropped 待改: a mark that is neither "this line is good" nor "this line
+  // goes" is a note, and the note kind already carries a paragraph of text.
+  const MARK_CLASS = { underline: 1, strike: 1, comment: 1 };
   // Reading palettes owned by the editor. The five ids are shared with the
   // shell (client/src/98-shell-theme.js) and with settings.theme. R19 dropped
   // harness / ink / card / guofeng — see the palette comment further down.
@@ -8984,25 +9000,24 @@ window.__ModuleLoader__.load({
    legible (no faded filler) until the writer actually deletes them. The mirror
    paints every glyph transparent, so the strike is drawn with text-decoration
    on the transparent run — which is why the mark keeps its own colour clear. */
-.nw-hl .nw-mark-todo{
-  background-color:transparent;
-  box-shadow:inset 0 -2px 0 var(--nw-mark-todo, var(--nw-warn));
-  background-image:linear-gradient(
-    to right,
-    var(--nw-mark-todo, var(--nw-warn)) 0 4px,
-    transparent 4px 8px
-  );
-  background-repeat:repeat-x;
-  background-position:0 100%;
-  background-size:8px 2px;
-}
 .nw-hl .nw-mark-comment{
+  position:relative;
   background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 16%, transparent);
   box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
 }
+/* 批注角标：一个贴在划线末尾的小点。这里必须绝对定位——镜像的每一个字符都要
+   和底下的 textarea 落在同一个位置，任何占位的行内元素都会把后半行推歪。
+   读视图自己排版，那里用的是行内版本（见 62-read.js）。 */
+.nw-hl .nw-mark-comment::after{
+  content:'';position:absolute;left:100%;top:-.1em;
+  width:5px;height:5px;margin-left:2px;
+  border-radius:var(--nw-r-pill);
+  background:var(--nw-mark-comment, var(--nw-brand));
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 26%, transparent);
+  pointer-events:none;
+}
 .nw-hl .nw-mark-comment[data-active="1"],
 .nw-hl .nw-mark-underline[data-active="1"],
-.nw-hl .nw-mark-todo[data-active="1"],
 .nw-hl .nw-mark-strike[data-active="1"]{
   background-color:color-mix(in srgb, var(--nw-brand) 18%, transparent);
 }
@@ -9972,7 +9987,7 @@ window.__ModuleLoader__.load({
             active: !!r.active,
             kind: 'hl',
             // R47: the mark's type decides how it is drawn (underline / strike /
-            // todo / comment). Unknown or missing types fall back to the plain
+            // comment). Unknown or missing types fall back to the plain
             // highlight the advice panel has always used.
             mark: MARK_CLASS[r.mark] ? r.mark : '',
           });
@@ -10018,7 +10033,14 @@ window.__ModuleLoader__.load({
         if (s > pos) frag.appendChild(document.createTextNode(text.slice(pos, s)));
         const el = document.createElement('mark');
         el.className = r.kind === 'find' ? 'nw-find-hit' : 'nw-hl-mark';
-        if (r.mark) el.className += ' nw-mark-' + r.mark;
+        if (r.mark) {
+          el.className += ' nw-mark-' + r.mark;
+          // The mirror holds one `<mark>` per range (it never splits at a line
+          // break the way the reading view splits at a paragraph), so the end of
+          // that range *is* the end of the mark: the little comment dot belongs
+          // here, once.
+          if (r.mark === 'comment') el.setAttribute('data-tail', '1');
+        }
         if (r.active) el.setAttribute('data-active', '1');
         if (r.id !== undefined && r.id !== null) el.setAttribute('data-id', String(r.id));
         el.textContent = text.slice(s, r.end);
@@ -11983,7 +12005,12 @@ window.__ModuleLoader__.load({
       const m = marks[i];
       const s = Math.max(start, Number(m.start) || 0);
       const e = Math.min(end, Number(m.end) || 0);
-      if (e > s) hits.push({ s: s - start, e: e - start, kind: m.kind, id: m.id });
+      // A mark may cross a paragraph break; each paragraph then gets its own
+      // piece. Only the piece that holds the mark's real end may carry the
+      // little comment dot, otherwise a two-paragraph comment would sprout two.
+      if (e > s) {
+        hits.push({ s: s - start, e: e - start, kind: m.kind, id: m.id, tail: e >= (Number(m.end) || 0) });
+      }
     }
     if (!hits.length) return para.text;
     hits.sort((a, b) => a.s - b.s || a.e - b.e);
@@ -11997,7 +12024,12 @@ window.__ModuleLoader__.load({
       out.push(
         h(
           'span',
-          { className: 'nw-mark nw-mark-' + String(m.kind || 'underline'), key: 'm' + i + '-' + String(m.id), 'data-mark': String(m.id) },
+          {
+            className: 'nw-mark nw-mark-' + String(m.kind || 'underline'),
+            key: 'm' + i + '-' + String(m.id),
+            'data-mark': String(m.id),
+            'data-tail': m.tail ? '1' : '0',
+          },
           para.text.slice(s, m.e),
         ),
       );
@@ -12089,12 +12121,6 @@ window.__ModuleLoader__.load({
   text-decoration:line-through;text-decoration-thickness:1.5px;
   text-decoration-color:var(--nw-mark-strike, var(--nw-danger));
 }
-.nw-mark-todo{
-  background-image:linear-gradient(to right,var(--nw-mark-todo, var(--nw-warn)) 0 4px,transparent 4px 8px);
-  background-repeat:repeat-x;background-position:0 100%;background-size:8px 2px;
-  box-shadow:inset 0 -1px 0 transparent;
-  padding-bottom:1px;
-}
 .nw-mark-comment{
   background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 16%, transparent);
   box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
@@ -12102,11 +12128,17 @@ window.__ModuleLoader__.load({
 .nw-mark[data-active="1"]{background-color:color-mix(in srgb, var(--nw-brand) 22%, transparent);}
 /* 选中的标注：用外描边而不是换色，正文颜色始终是作者的字色。 */
 .nw-mark[data-selected="1"]{outline:1px solid color-mix(in srgb, var(--nw-brand) 55%, transparent);outline-offset:1px;}
-/* 批注角标：一个几乎不占位的圆点，说明这里挂了一条批注。 */
-.nw-mark-comment::after{
-  content:'';display:inline-block;width:4px;height:4px;margin-left:2px;
-  border-radius:var(--nw-r-pill);background:var(--nw-mark-comment, var(--nw-brand));
-  vertical-align:super;
+/* 批注角标：浮在划线末尾的一个小标识，说明这里挂了一条批注。
+   它必须「悬浮」——绝对定位、零占用，一个像素的排版都不占。行内真实的 5px
+   圆点会把后半行挤走，甚至把字挤到下一栏；那样标注就改变了分页，而这是整个
+   标注功能的前提：标注只画在字下面，永远不动字。
+   只有真正到达批注终点的那个片段才画（一条批注跨段时，段段都画就成了三个点）。 */
+.nw-mark-comment[data-tail="1"]{position:relative;}
+.nw-mark-comment[data-tail="1"]::after{
+  content:'';position:absolute;left:100%;top:0;
+  width:5px;height:5px;margin-left:2px;
+  border-radius:50%;background:var(--nw-mark-comment, var(--nw-brand));
+  pointer-events:none;
 }
 .nw-read-empty{
   display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -12393,11 +12425,21 @@ window.__ModuleLoader__.load({
     }, [sel, p.onMark]);
 
     // 讲清楚「点一下标注会发生什么」：删掉它，或者改批注正文。
+    // 点亮那几个 `<span>` 用 DOM 直接改属性，不把 activeMark 塞进正文的 useMemo
+    // 依赖——否则每点一次标注就要把全书重新拆一遍段（正是 R44 修掉的卡顿）。
     const openMark = React.useCallback((id) => {
       const list = marks.filter((m) => String(m.id) === String(id));
       const mark = list[0];
       if (!mark) return;
       setActiveMark(mark);
+      const flow = flowRef.current;
+      if (flow) {
+        const spans = flow.querySelectorAll('.nw-mark[data-mark]');
+        for (let i = 0; i < spans.length; i += 1) {
+          const on = spans[i].getAttribute('data-mark') === String(id);
+          spans[i].setAttribute('data-active', on ? '1' : '0');
+        }
+      }
     }, [marks]);
 
     // ---- 量一次版面：定栏宽 → 读 scrollWidth → 得到页数 ----------------------
@@ -12575,20 +12617,31 @@ window.__ModuleLoader__.load({
       return () => window.clearTimeout(timer);
     }, []);
 
-    // 点左侧回一页、点右侧翻一页。拖动/选字不算点。
+    // 点左侧回一页、点右侧翻一页。拖动/选字/点标注都不算点。
     const onPointerDown = (ev) => {
-      pointerRef.current = { x: ev.clientX, y: ev.clientY };
+      const node = ev.target;
+      // 点在标注、工具条或批注面板上时，这一下是给它们的，不是翻页的。
+      // 记下来在 pointerup 里用：一次点击会先 pointerup 再 click，如果 up 里
+      // 就翻了页，等 click 打开批注时书已经跳到下一页了。
+      const onSomething = !!(node && typeof node.closest === 'function'
+        && node.closest('.nw-mark[data-mark], .nw-mark-bar, .nw-mark-pop'));
+      pointerRef.current = { x: ev.clientX, y: ev.clientY, onSomething: onSomething };
     };
     const onPointerUp = (ev) => {
       const down = pointerRef.current;
       pointerRef.current = null;
       if (!down) return;
       if (Math.abs(ev.clientX - down.x) > 8 || Math.abs(ev.clientY - down.y) > 8) {
-        // 拖了一下 = 想标注这段字，不是想翻页。
+        // 拖了一下 = 想标注这段字，不是想翻页。从已有标注上起手也一样：
+        // 谁都会从一条下划线中间开始往外拖。
         const hit = readSelection();
         if (hit) setSel(hit);
         return;
       }
+      // 没动 = 一次点击。点在标注、工具条或批注面板上时这一下是给它们的，
+      // 不是翻页的：一次点击会先 pointerup 再 click，若在 up 里就翻了页，
+      // 等 click 打开批注时书已经跳到下一页了。
+      if (down.onSomething) return;
       const s0 = typeof window.getSelection === 'function' ? window.getSelection() : null;
       if (s0 && String(s0.toString() || '').length > 0) return;
       setSel(null);
@@ -12685,12 +12738,6 @@ window.__ModuleLoader__.load({
           onClick: () => addMark('strike'),
           title: NW.t('删除线'),
         }, h('span', { style: { textDecoration: 'line-through' } }, NW.t('删除线'))),
-        h('button', {
-          type: 'button',
-          className: 'nw-mark-bar-btn',
-          onClick: () => addMark('todo'),
-          title: NW.t('待改'),
-        }, NW.t('待改')),
         h('button', {
           type: 'button',
           className: 'nw-mark-bar-btn',
@@ -12806,7 +12853,14 @@ window.__ModuleLoader__.load({
                 }
               }
               // 点空白处收起面板。
-              if (activeMark) setActiveMark(null);
+              if (activeMark) {
+                setActiveMark(null);
+                const flow2 = flowRef.current;
+                if (flow2) {
+                  const spans = flow2.querySelectorAll('.nw-mark[data-mark]');
+                  for (let i = 0; i < spans.length; i += 1) spans[i].setAttribute('data-active', '0');
+                }
+              }
             },
           },
           body,

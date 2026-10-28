@@ -52,7 +52,9 @@
   // R47: the annotation kinds the editor knows how to draw. Each one becomes a
   // `nw-mark-<kind>` class on the mirror `<mark>`, so the look of a mark lives
   // in CSS next to the highlight mirror rather than in this function.
-  const MARK_CLASS = { underline: 1, strike: 1, todo: 1, comment: 1 };
+  // R48 dropped 待改: a mark that is neither "this line is good" nor "this line
+  // goes" is a note, and the note kind already carries a paragraph of text.
+  const MARK_CLASS = { underline: 1, strike: 1, comment: 1 };
   // Reading palettes owned by the editor. The five ids are shared with the
   // shell (client/src/98-shell-theme.js) and with settings.theme. R19 dropped
   // harness / ink / card / guofeng — see the palette comment further down.
@@ -571,25 +573,24 @@
    legible (no faded filler) until the writer actually deletes them. The mirror
    paints every glyph transparent, so the strike is drawn with text-decoration
    on the transparent run — which is why the mark keeps its own colour clear. */
-.nw-hl .nw-mark-todo{
-  background-color:transparent;
-  box-shadow:inset 0 -2px 0 var(--nw-mark-todo, var(--nw-warn));
-  background-image:linear-gradient(
-    to right,
-    var(--nw-mark-todo, var(--nw-warn)) 0 4px,
-    transparent 4px 8px
-  );
-  background-repeat:repeat-x;
-  background-position:0 100%;
-  background-size:8px 2px;
-}
 .nw-hl .nw-mark-comment{
+  position:relative;
   background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 16%, transparent);
   box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
 }
+/* 批注角标：一个贴在划线末尾的小点。这里必须绝对定位——镜像的每一个字符都要
+   和底下的 textarea 落在同一个位置，任何占位的行内元素都会把后半行推歪。
+   读视图自己排版，那里用的是行内版本（见 62-read.js）。 */
+.nw-hl .nw-mark-comment::after{
+  content:'';position:absolute;left:100%;top:-.1em;
+  width:5px;height:5px;margin-left:2px;
+  border-radius:var(--nw-r-pill);
+  background:var(--nw-mark-comment, var(--nw-brand));
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 26%, transparent);
+  pointer-events:none;
+}
 .nw-hl .nw-mark-comment[data-active="1"],
 .nw-hl .nw-mark-underline[data-active="1"],
-.nw-hl .nw-mark-todo[data-active="1"],
 .nw-hl .nw-mark-strike[data-active="1"]{
   background-color:color-mix(in srgb, var(--nw-brand) 18%, transparent);
 }
@@ -1559,7 +1560,7 @@
             active: !!r.active,
             kind: 'hl',
             // R47: the mark's type decides how it is drawn (underline / strike /
-            // todo / comment). Unknown or missing types fall back to the plain
+            // comment). Unknown or missing types fall back to the plain
             // highlight the advice panel has always used.
             mark: MARK_CLASS[r.mark] ? r.mark : '',
           });
@@ -1605,7 +1606,14 @@
         if (s > pos) frag.appendChild(document.createTextNode(text.slice(pos, s)));
         const el = document.createElement('mark');
         el.className = r.kind === 'find' ? 'nw-find-hit' : 'nw-hl-mark';
-        if (r.mark) el.className += ' nw-mark-' + r.mark;
+        if (r.mark) {
+          el.className += ' nw-mark-' + r.mark;
+          // The mirror holds one `<mark>` per range (it never splits at a line
+          // break the way the reading view splits at a paragraph), so the end of
+          // that range *is* the end of the mark: the little comment dot belongs
+          // here, once.
+          if (r.mark === 'comment') el.setAttribute('data-tail', '1');
+        }
         if (r.active) el.setAttribute('data-active', '1');
         if (r.id !== undefined && r.id !== null) el.setAttribute('data-id', String(r.id));
         el.textContent = text.slice(s, r.end);

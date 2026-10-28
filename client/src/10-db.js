@@ -1234,21 +1234,26 @@
    * annotating can never reflow the sentence, and deleting a mark always
    * restores the page exactly.
    *
-   *   kind: 'underline' | 'strike' | 'todo' | 'comment'
+   *   kind: 'underline' | 'strike' | 'comment'
    *
-   * `todo` is the "改这里" flag: a wavy underline plus a checklist entry, so a
-   * writer can mark a place to come back to without stopping to fix it now.
    * `strike` is 删除线 — "this paragraph goes" — and is the reason the mark has
    * to be drawn by the editor rather than carried in the text: a struck line
    * still has to count for the word total until the writer deletes it.
+   *
+   * R48 dropped the fourth kind (待改). Three marks are enough to say what a
+   * writer actually says to themselves — "this line is good", "this line goes",
+   * "here is why" — and the extra kind only made the toolbar one button longer.
+   * Rows written by R47 keep working: `todo` is normalised to `underline`
+   * rather than rejected, so no annotation disappears from an older shelf.
    */
-  const MARK_KINDS = { underline: 1, strike: 1, todo: 1, comment: 1 };
+  const MARK_KINDS = { underline: 1, strike: 1, comment: 1 };
 
   function cleanMark(input) {
     const data = input || {};
     const chapterId = String(data.chapterId || '');
     if (!chapterId) return null;
-    const kind = MARK_KINDS[String(data.kind || '')] ? String(data.kind) : 'underline';
+    const raw = String(data.kind || '');
+    const kind = raw === 'todo' ? 'underline' : (MARK_KINDS[raw] ? raw : 'underline');
     const start = Math.max(0, Math.round(Number(data.start) || 0));
     const end = Math.max(start, Math.round(Number(data.end) || 0));
     if (end <= start) return null;
@@ -1278,6 +1283,15 @@
     return (rows || [])
       .filter(function (row) {
         return row && row.id;
+      })
+      .map(function (row) {
+        // R47 rows may carry the retired `todo` kind. Rewrite it on the way out
+        // rather than rewriting the database: an older backup restored later
+        // must not bring the kind back either.
+        if (String(row.kind) === 'todo') {
+          return Object.assign({}, row, { kind: 'underline' });
+        }
+        return row;
       })
       .sort(function (a, b) {
         return (Number(a.start) || 0) - (Number(b.start) || 0) || (Number(a.end) || 0) - (Number(b.end) || 0);
