@@ -8,6 +8,29 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.2.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第四十六轮（R46）改造：**沉浸写作时只照亮正在写的那几行**。
+  全屏写作最想要的效果是「眼前只剩这一段」，但正文是一个 `textarea`，一个元素里的字只有
+  一个 `color`——没法只把一部分行调浅。所以用两块「纱」（`client/src/60-editor.js`）：
+  `.nw-veil-top` 从顶部铺到光标行上方 `focusLines` 行，`.nw-veil-bot` 从光标行下方铺到底，
+  中间留一条不遮的带。纱的颜色是 `color-mix(in srgb, var(--nw-bg) 72%, transparent)`，
+  跟着主题走（夜间主题就淡向深色墨，而不是把字洗白）。
+  ① **边界落在行盒上，不落在字腰上**。纱用 `linear-gradient` 在最后 `--nw-focus-feather`
+  （正好一行高，`calc(var(--nw-size) * var(--nw-line))`）内渐隐，所以淡化是从一整行的边线
+  开始散开的，不会把正在写的行的字切掉一半。
+  ② **滚动不测字**。纱是 `.nw-surface` 的子节点（不滚动），高度是视口像素；每次测量已经拿到
+  光标行的**内容坐标** top（`measureCaret().top` 本来就是那个坐标系），于是滚动时只需要
+  `content_top - scrollTop` 就能重画，不用再测镜像、不触发 reflow。滚动事件用 rAF 合并
+  （`repaintFocusSoon`），触控板一甩几十次事件也只画一帧。
+  ③ **只在沉浸模式亮**（`focusOn = immersive && settings.focusDim !== false`）。分层位置是
+  `z-index:1`：在透明 textarea（`base`）之上、厚光标（`float`）之下——光标永远不会被纱盖住。
+  ④ **可以关，也可以调宽**。设置 → 外观新增「沉浸时只照亮正在写的几行」开关与
+  「上下各留 N 行」滑杆（0–8，默认 2），存进 `DEFAULT_SETTINGS` 的 `focusDim`/`focusLines`。
+  手机端是独立原生 App，不受影响。
+  ⑤ **两种滚动容器分开算**。`.nw-scroll` 自己滚时（正常宿主）纱是视口矩形，要夹在面板高度内；
+  宿主槽位高度为 auto、改由祖先或文档滚动时，`.nw-surface` 本身跟着稿纸走，纱是内容坐标，
+  这时不夹面板高度（否则整条带会缩到顶部），让滚动容器去裁。
+  `client.js` 重建为 21 段 **942924 字节**，`verify-client-load` 仍报
+  `inject=["slots","layout","locale"]`，`verify-host` 219 项、`verify-docs` 44 项全过。
 - 第四十五轮（R45）改造：**手机改过的字，电脑跟着看那个字**。
   手机在局域网里改一段、电脑端自动同步之后，光标会跳到全章最后一行——作者本来在读第三段，
   一抬头人在文末。原因不在同步本身，在「把新文字塞进编辑器」这一步：接内容的 effect 用

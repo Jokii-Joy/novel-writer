@@ -43,6 +43,14 @@
     caretWidth: 3,
     caretColor: '',
     caretBlink: true,
+    /**
+     * R46: immersive mode can fade every line except the one being written.
+     * `focusDim` is the switch, `focusLines` how many lines either side stay
+     * clear. On by default because a writer who goes immersive has already said
+     * "give me the page and nothing else"; the setting is the way out.
+     */
+    focusDim: true,
+    focusLines: 2,
     autoSaveMs: 1200,
     /**
      * R16 ⑥: whether 字数 counts punctuation marks. Chinese word processors count

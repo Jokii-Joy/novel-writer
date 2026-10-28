@@ -277,6 +277,13 @@
      blocks below still override the colour per theme (warm ink on paper,
      near-white on the night surface). */
   --nw-caret-width:3px;--nw-caret-color:#0f0f0e;
+  /* R46: what the rest of the page fades towards while writing full screen.
+     Mixing the paper colour keeps every theme consistent — moon/night themes
+     fade towards a dark ink instead of washing the text to white. */
+  --nw-veil-ink:color-mix(in srgb, var(--nw-bg) 72%, transparent);
+  /* One line of feather, derived from the letter size, so the band edge lands
+     on the line box instead of in the middle of one. */
+  --nw-focus-feather:calc(var(--nw-size) * var(--nw-line,2));
 }
 /* Small panes: the gutter shrinks, the 88px rule does not (22 + 66 = 88).
    R13: keyed off the plugin's column (container "nw" in 05-css), not the
@@ -553,6 +560,36 @@
 /* zero-size inline-block anchored to the line box top, not to the baseline */
 .nw-caret-mark{display:inline-block;width:0;height:0;vertical-align:top;overflow:hidden;}
 
+/* ---- R46 line focus ----
+   A textarea cannot fade a range of its own lines, so the fade is drawn as two
+   veils laid over the text: one from the top of the page down to the line the
+   writer is on, one from there to the bottom. Their geometry comes from the
+   same caret measurement the typewriter already runs, which means the band
+   tracks wrapped lines for free and costs no second geometry pipeline.
+   The veils live in .nw-surface (which does not scroll), not in .nw-scroll, so
+   their heights are viewport coordinates computed from the cached content-space
+   line top minus scrollTop — scrolling therefore repaints the band without
+   measuring anything.
+   z-index 1 keeps them above the transparent textarea (base) and below the
+   thick caret (float), so the caret never sits under a veil. */
+.nw-veil{
+  position:absolute;left:0;right:0;pointer-events:none;user-select:none;
+  z-index:1;display:none;
+}
+.nw-surface[data-focus="1"] .nw-veil{display:block;}
+.nw-veil-top{
+  top:0;height:0;
+  background:linear-gradient(to bottom,var(--nw-veil-ink) 0,var(--nw-veil-ink) calc(100% - var(--nw-focus-feather)),transparent 100%);
+}
+.nw-veil-bot{
+  top:0;bottom:0;
+  background:linear-gradient(to top,var(--nw-veil-ink) 0,var(--nw-veil-ink) calc(100% - var(--nw-focus-feather)),transparent 100%);
+}
+@media (prefers-reduced-motion: reduce){
+  /* The band is geometry, not motion — it stays. Nothing animates here. */
+  .nw-veil{transition:none;}
+}
+
 /* ---- empty state ---- */
 .nw-empty{
   min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -713,6 +750,17 @@
     const caretColor = String(settings.caretColor == null ? '' : settings.caretColor).trim();
     const caretBlink = settings.caretBlink !== false;
 
+    // ---- R46 line focus ------------------------------------------------------
+    // Immersive mode already hides every panel; what is left is the page
+    // itself. Fading everything except the line being written keeps the
+    // sentence in front of the eye without touching the manuscript, the theme
+    // or the flow of the text. Two lines of context each way is the default:
+    // about what a writer can still read without moving their eyes.
+    // Deliberately immersive-only — with the shelf and toolbar on screen the
+    // fade would fight the chrome instead of helping.
+    const focusOn = immersive && settings.focusDim !== false;
+    const focusLines = clampNum(numOf(settings.focusLines, 2), 0, 8);
+
     const surfaceStyle = {
       '--nw-font': fontFamily,
       '--nw-size': fontSize + 'px',
@@ -738,13 +786,22 @@
     const caretRef = React.useRef(null);
     // The painted thick caret (positioned by paintCaret from measureCaret).
     const cursorRef = React.useRef(null);
+    // R46: the two veils that fade everything but the line being written.
+    const veilTopRef = React.useRef(null);
+    const veilBotRef = React.useRef(null);
+    // Content-space top of the caret's line, written by every measure pass.
+    // Scrolling does not change it, which is what lets a scroll event repaint
+    // the fade without measuring anything. -1 means "not measured yet".
+    const focusTopRef = React.useRef(-1);
+    // Pending frame for that repaint (0 = none queued).
+    const focusRafRef = React.useRef(0);
     const findInputRef = React.useRef(null);
     const replaceInputRef = React.useRef(null);
 
     const propsRef = React.useRef(p);
     propsRef.current = p;
     const cfgRef = React.useRef(null);
-    cfgRef.current = { autoSaveMs, typewriterOn, fontSize, lineHeight };
+    cfgRef.current = { autoSaveMs, typewriterOn, fontSize, lineHeight, focusOn, focusLines };
 
     const highlightsRef = React.useRef([]);
     const saveTimerRef = React.useRef(0);
@@ -1591,6 +1648,85 @@
     }
 
     /**
+     * R46: places the two veils so that only the caret's line and the
+     * `focusLines` lines either side of it stay unfaded.
+     *
+     * The veils are children of `.nw-surface`, which does not scroll, so their
+     * heights are viewport pixels. The caret line's *content* top is cached by
+     * every measure pass (focusTopRef), which means a scroll can repaint the
+     * band by subtracting scrollTop alone — no mirror measurement, no reflow.
+     *
+     * `origin` is the scroller's top inside `.nw-surface` (read in the measure
+     * pass, where a rect was already being taken for the caret).
+     */
+    function paintFocus(view, origin) {
+      const s = surfaceRef.current;
+      const topEl = veilTopRef.current;
+      const botEl = veilBotRef.current;
+      if (!s || !topEl || !botEl) return;
+      const sc = view && view.el;
+      const parked = !focusOn || !sc || focusTopRef.current < 0;
+      if (parked) {
+        // Hidden veils must not claim a band: data-focus is owned here (not by
+        // JSX) so an unrelated re-render cannot switch the fade back on.
+        if (s.getAttribute('data-focus') !== '0') s.setAttribute('data-focus', '0');
+        return;
+      }
+      const lh = lineHeightPx();
+      // Two coordinate spaces, because `.nw-surface` is what the veils sit in:
+      //  - own scroller (`.nw-scroll`): the surface stays put, so the band is a
+      //    viewport rectangle and must be clamped to the pane;
+      //  - ancestor/document scroller (host slot with auto height): the surface
+      //    itself travels with the page, so the band is plain content geometry
+      //    and must NOT be clamped to the pane — the scrollport crops it.
+      const own = view.kind === 'self';
+      const viewH = own ? sc.clientHeight || window.innerHeight || 0 : Infinity;
+      if (viewH <= 0) return;
+      const lineViewportTop = numOf(origin, 0) + focusTopRef.current - (own ? sc.scrollTop || 0 : 0);
+      // One line of feather on each side of the band: the edge then lands on a
+      // line boundary instead of through the middle of a glyph row.
+      const topH = Math.round(clampNum(lineViewportTop - focusLines * lh, 0, viewH));
+      const botY = Math.round(clampNum(lineViewportTop + (focusLines + 1) * lh, 0, viewH));
+      if (topEl.__nwH !== topH) {
+        topEl.style.height = topH + 'px';
+        topEl.__nwH = topH;
+      }
+      if (botEl.__nwY !== botY) {
+        botEl.style.top = botY + 'px';
+        botEl.__nwY = botY;
+      }
+      if (s.getAttribute('data-focus') !== '1') s.setAttribute('data-focus', '1');
+    }
+
+    /** Where the scrolling element starts inside `.nw-surface`, in px. */
+    function surfaceOrigin(view) {
+      const sc = view && view.el;
+      const s = surfaceRef.current;
+      if (!sc || !s) return 0;
+      return sc.getBoundingClientRect().top - s.getBoundingClientRect().top;
+    }
+
+    /**
+     * Repaints the band after a scroll, using only the cached line top. The
+     * rAF coalescing matters: a trackpad fling fires dozens of scroll events
+     * per frame and each one must not take a rect.
+     */
+    function repaintFocusSoon() {
+      if (!focusOn) return;
+      if (focusRafRef.current) return;
+      const run = () => {
+        focusRafRef.current = 0;
+        const view = resolveScroller(false);
+        paintFocus(view, surfaceOrigin(view));
+      };
+      if (typeof window.requestAnimationFrame === 'function') {
+        focusRafRef.current = window.requestAnimationFrame(run);
+      } else {
+        run();
+      }
+    }
+
+    /**
      * The single measure pass, split into a read phase and a write phase.
      *
      * Everything that needs layout geometry is read first (scroller, textarea
@@ -1631,10 +1767,22 @@
       };
       const scrollTarget = planCaretScroll(!!wantCenter, view, getM);
       const caretPlan = planCaretPaint(view, getM);
+      // R46: the fade needs the caret line's top in *scroller content*
+      // coordinates, which is exactly what measureCaret().top already is. The
+      // memo is shared with the two consumers above, so this costs nothing
+      // extra: the mirror was measured anyway.
+      const focusOrigin = focusOn ? surfaceOrigin(view) : 0;
+      if (focusOn) {
+        const fm = getM();
+        focusTopRef.current = fm ? fm.top : -1;
+      } else {
+        focusTopRef.current = -1;
+      }
       // ---------- write phase ----------
       autosizeWrite(height);
       if (scrollTarget != null) setScrollTop(scrollTarget, view);
       paintCaret(caretPlan);
+      paintFocus(view, focusOrigin);
       rebuildHighlights();
       emitSelection();
     }
@@ -2600,6 +2748,8 @@
       // Switching chapters is not typing here: the first peer edit in the new
       // chapter should still be able to show itself.
       typedAtRef.current = -1e9;
+      // R46: the cached caret line belonged to the old chapter's text.
+      focusTopRef.current = -1;
       composingRef.current = false;
 
       const f = findRef.current;
@@ -2668,6 +2818,15 @@
       }
     }, [notesLane]);
 
+    // R46: the fade only exists in immersive mode. Turning it on/off (or
+    // changing how many lines stay clear) must publish the attribute and
+    // re-place the band; the next measure pass alone would take a keystroke.
+    React.useEffect(() => {
+      const view = resolveScroller(false);
+      paintFocus(view, surfaceOrigin(view));
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [focusOn, focusLines]);
+
     // Adopt content the app pushed for the SAME chapter (version restore, AI
     // rewrite, LAN sync). Skipped when it merely echoes what we just saved,
     // which is what keeps the textarea effectively uncontrolled — no caret
@@ -2704,6 +2863,10 @@
       const onWheel = markManual;
       const onTouchMove = markManual;
       const onScroll = () => {
+        // R46: the fade is positioned in viewport pixels, so it has to follow
+        // the scroller even when the caret did not move. This uses the cached
+        // line top only — no rect, no mirror, no reflow.
+        repaintFocusSoon();
         const sc = scrollerRef.current;
         const at = sc ? sc.scrollTop || 0 : 0;
         if (Math.abs(at - expectedScrollTopRef.current) <= 2) return;
@@ -3100,6 +3263,11 @@
         style: surfaceStyle,
       },
       h('div', { className: 'nw-scroll', ref: scrollRef, tabIndex: -1 }, body),
+      // R46: the fade that keeps the current line in front of the eye. They sit
+      // outside .nw-scroll because a scrolling ancestor would drag them along;
+      // paintFocus() keeps them in viewport coordinates instead.
+      h('div', { className: 'nw-veil nw-veil-top', ref: veilTopRef, 'aria-hidden': 'true' }),
+      h('div', { className: 'nw-veil nw-veil-bot', ref: veilBotRef, 'aria-hidden': 'true' }),
       findBar,
       onHome || onLock
         ? h(
