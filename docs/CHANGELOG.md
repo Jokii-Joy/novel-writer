@@ -8,6 +8,35 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.2.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第四十五轮（R45）改造：**手机改过的字，电脑跟着看那个字**。
+  手机在局域网里改一段、电脑端自动同步之后，光标会跳到全章最后一行——作者本来在读第三段，
+  一抬头人在文末。原因不在同步本身，在「把新文字塞进编辑器」这一步：接内容的 effect 用
+  `setEditorText(incomingContent, len, len)`，选区被显式设到**文本末尾**；而 `setEditorText`
+  内部又照常 `scheduleMeasure(true)`，`refresh(true)` 用打字机的 center 模式把那一行拖到视口正中。
+  两处叠加：光标去了末尾，视口紧随其后——于是「跳到最后一行」。它原来还对**后台来的**文字做了
+  两件不该做的事：标脏（状态栏显示「未保存」，并排一次写回，可能把同一段文字在两端来回倒）
+  和重排居中。
+  ① **新增 `adoptExternalText(next)`**（`client/src/60-editor.js`）。它只负责「换成对端的文字」，
+  不标脏、不居中：先 `cancelSave()`（排队中的保存会把对端改动覆盖掉），写 `valueRef`，
+  把 `lastSavedRef` 记成这段文字（**对端已存过盘，回声不算编辑**），然后清 `pendingCenterRef`，
+  避免先前排队的居中请求在这次之后又放一枪。
+  ② **光标跟着字走，不是跟着末尾走**（`diffEnds` + `shiftOffsetForEdit`）。先算两个版本的
+  公共前缀 `head` 与公共后缀 `tail`，得到被替换的中间段；光标在原编辑点之前就原地不动，
+  在之后就整体平移 `newMid - oldMid`，落在被替换区域里面则收在改动末尾。这样「手机在第 5 段
+  改了三个字」不会把电脑上的光标从第 3 段赶走。整章两万字只扫一遍，`charCodeAt` 直接比。
+  ③ **视口只在必要时动**（`revealPeerEdit`）。先问 `caretScrollTop('nearest')`：光标那一行
+  真的出了屏幕就跟过去；还在屏幕上就什么都不做。**「同步修改的位置」这个要求的另一半**是
+  让作者看见手机改了什么，所以还要判一次：最近 `PEER_FOLLOW_IDLE_MS`（3 秒）内本窗格有没有
+  在打字（`typedAtRef`，`afterEdit`/`handleInput` 各盖一次时间戳，切章重置）。刚打完字就
+  不抢视口——正在写的人不该被移动；停下来了才把改动那一段露出来（`measureCaret(d.head)`
+  定位到改动起点，落在视口外才滚，且滚到上方 1/4 处留出上下文）。
+  用「最近是否打字」而不是 `activeElement`，是因为点「读一遍」、点工具栏都会让焦点离开
+  textarea，那些点击没有一个是「把光标交给手机」的意思。
+  ④ **不再主动居中**。`adoptExternalText` 末尾走 `scheduleMeasure(false)`；`revealPeerEdit`
+  调整过视口时还会把 `pendingCenterRef.current` 清掉——否则紧随其后的居中会把视口拽回去，
+  等于白滚。
+  `client.js` 重建为 21 段 **933412 字节**，`verify-client-load` 仍报
+  `inject=["slots","layout","locale"]`，`verify-host` 219 项全过。
 - 第四十四轮（R44）改造：**「读一遍」——把稿子当书看**。
   写的时候人是贴着字看的，眼里全是句子：这一句是不是太长、那个词重复了没有。
   要判断「这是一篇小说吗」，得把距离拉开——一次性看到整篇的呼吸。原先这件事只能靠

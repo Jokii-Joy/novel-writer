@@ -8208,6 +8208,11 @@ window.__ModuleLoader__.load({
    */
   const NOTES_CLEAR_PX = 212;
   const TYPEWRITER_RESUME_MS = 800; // manual scroll keeps typewriter off this long
+  // How long after the last keystroke a peer's edit may still take the caret
+  // with it. Long enough to cover a pause for thought in the middle of a
+  // sentence, short enough that someone watching the screen (typing on the
+  // phone instead) gets taken to the change instead of being left behind.
+  const PEER_FOLLOW_IDLE_MS = 3000;
   const MEASURE_MS = 60; // caret measurement / autosize throttle
   const TAB_TEXT = '\u3000\u3000'; // two full-width spaces
   const MAX_MATCHES = 5000;
@@ -8269,6 +8274,53 @@ window.__ModuleLoader__.load({
     if (!text) return true;
     if (PLACEHOLDER_TITLES[text]) return true;
     return PLACEHOLDER_RE.test(text);
+  }
+
+  /**
+   * The single region that differs between two versions of the buffer.
+   *
+   * Returns the common head, the common tail, and the two middle lengths, so
+   * callers can either shift a caret through the edit (`shiftOffsetForEdit`)
+   * or scroll to it (`adoptExternalText`). Both need the same answer, and
+   * computing it twice would mean two full scans of a 200k-character chapter.
+   */
+  function diffEnds(before, after) {
+    const a = typeof before === 'string' ? before : '';
+    const b = typeof after === 'string' ? after : '';
+    const max = Math.min(a.length, b.length);
+    let head = 0;
+    while (head < max && a.charCodeAt(head) === b.charCodeAt(head)) head += 1;
+    const tailMax = max - head;
+    let tail = 0;
+    while (
+      tail < tailMax &&
+      a.charCodeAt(a.length - 1 - tail) === b.charCodeAt(b.length - 1 - tail)
+    ) {
+      tail += 1;
+    }
+    return { head, tail, oldMid: a.length - head - tail, newMid: b.length - head - tail };
+  }
+
+  /**
+   * Maps a buffer offset through a wholesale text replacement.
+   *
+   * When a peer rewrites the chapter we still have to put the caret somewhere.
+   * Dropping it at the end — the obvious choice — sends the writer to the last
+   * line of a chapter they were reading in the middle: the phone's edit looked
+   * like it "jumped to the end". Keeping the raw offset is also wrong whenever
+   * the edit landed above the caret, because the caret would then point at a
+   * different character. Shifting it by the size of the replaced middle region
+   * keeps it on the character the writer was sitting on.
+   */
+  function shiftOffsetForEdit(before, after, offset) {
+    const a = typeof before === 'string' ? before : '';
+    const b = typeof after === 'string' ? after : '';
+    const at = clampNum(Math.round(numOf(offset, 0)), 0, a.length);
+    if (a === b) return clampNum(at, 0, b.length);
+    const d = diffEnds(a, b);
+    if (at <= d.head) return at;
+    if (at >= d.head + d.oldMid) return clampNum(at + (d.newMid - d.oldMid), 0, b.length);
+    return clampNum(d.head + d.newMid, 0, b.length);
   }
 
   function fontStackOf(value) {
@@ -8872,6 +8924,9 @@ window.__ModuleLoader__.load({
     const measureQueuedRef = React.useRef(false);
     const noticeTimerRef = React.useRef(0);
     const manualAtRef = React.useRef(-1e9);
+    // Last time the caret moved because this writer typed here. Distinguishes
+    // "someone is writing in this pane" from "this pane is just being watched".
+    const typedAtRef = React.useRef(-1e9);
     const expectedScrollTopRef = React.useRef(-1);
     // Cached result of resolveScroller(): the element that really scrolls.
     const scrollerRef = React.useRef(null);
@@ -9875,6 +9930,7 @@ window.__ModuleLoader__.load({
       if (!ta) return;
       valueRef.current = ta.value;
       dirtyRef.current = true;
+      typedAtRef.current = nowMs();
       // R26: tell the app the buffer is dirty *now*. The debounce is 1200ms and
       // without this the status bar keeps claiming 已保存 for the whole second
       // after a keystroke — the "dirty" branch in the app was unreachable.
@@ -9958,6 +10014,101 @@ window.__ModuleLoader__.load({
       if (findRef.current.open) refreshMatches();
       scheduleMeasure(true);
       rebuildHighlights();
+    }
+
+    /**
+     * R45: adopt text that arrived from a peer (LAN sync, another device).
+     *
+     * This is `setEditorText` minus the two things a *background* rewrite must
+     * never do:
+     * - It does not mark the buffer dirty. Nothing was typed here; the text
+     *   arrived because the other device already saved it. Announcing a dirty
+     *   buffer made the status bar claim 未保存 and armed a write-back that
+     *   could ping-pong the same text between the two machines.
+     * - It does not centre the caret. The old path passed `text.length` as the
+     *   selection, so the caret landed on the very last character and
+     *   typewriter mode dutifully scrolled there — which is exactly the
+     *   reported 「手机编辑时，电脑同步后会跳到最后一行」. The caret now stays on
+     *   the character the writer was sitting on, and the viewport is only
+     *   nudged when that line actually left the screen.
+     */
+    function adoptExternalText(next) {
+      const ta = taRef.current;
+      if (!ta) return;
+      const text = typeof next === 'string' ? next : '';
+      const before = ta.value;
+      const d = diffEnds(before, text);
+      const caret = shiftOffsetForEdit(before, text, ta.selectionStart || 0);
+      // A save queued by earlier typing must not fire afterwards: the buffer no
+      // longer holds that text, and writing it would undo the peer's edit.
+      cancelSave();
+      if (before !== text) ta.value = text;
+      valueRef.current = text;
+      // The adopted text *is* what is on disk, so the debounced save has
+      // nothing to do; recording it also keeps an echo from counting as an edit.
+      lastSavedRef.current = text;
+      dirtyRef.current = false;
+      // A centre request queued before the pull must not fire after it.
+      pendingCenterRef.current = false;
+      const notify = propsRef.current.onDirty;
+      if (typeof notify === 'function') {
+        try {
+          notify(false);
+        } catch (err) {
+          /* ignore */
+        }
+      }
+      try {
+        ta.setSelectionRange(caret, caret);
+      } catch (err) {
+        /* ignore */
+      }
+      invalidateAutosize();
+      autosize();
+      if (findRef.current.open) refreshMatches();
+      rebuildHighlights();
+      revealPeerEdit(d.head);
+      scheduleMeasure(false);
+    }
+
+    /**
+     * Keeps the viewport on what matters after a peer's edit.
+     *
+     * The caret was shifted along with the text, so the line the writer was
+     * reading is still the line they want: as long as that line left the screen
+     * the viewport follows it and nothing else happens.
+     *
+     * When the caret is fine, the remaining question is whether to jump to the
+     * actual change — which is what 「同步修改的位置」 asks for. Following the
+     * change unconditionally is wrong in the other direction: it interrupts
+     * whoever is writing in this pane. So the caret stays put while the
+     * keyboard has been live in this pane recently (`PEER_FOLLOW_IDLE_MS`), and
+     * otherwise the change is revealed.
+     *
+     * Membership is decided by recent typing rather than by `activeElement`:
+     * clicking 「读一遍」 or the toolbar leaves focus elsewhere while the writer
+     * is still sitting in this chapter, and none of those clicks mean "hand
+     * the caret to the phone".
+     */
+    function revealPeerEdit(changedAt) {
+      const v = resolveScroller(false);
+      const sc = v && v.el;
+      if (!sc) return;
+      const target = caretScrollTop('nearest', v);
+      if (target != null) {
+        setScrollTop(target, v);
+        return;
+      }
+      if (nowMs() - typedAtRef.current < PEER_FOLLOW_IDLE_MS) return;
+      const viewH = sc.clientHeight || 0;
+      const m = measureCaret(changedAt, v);
+      if (!m) return;
+      const scroll = sc.scrollTop || 0;
+      if (m.top >= scroll - 8 && m.top + m.height <= scroll + viewH + 8) return;
+      setScrollTop(m.top - Math.max(24, viewH * 0.25), v);
+      // The line the caret sits on is now off-screen on purpose; a centred
+      // typewriter pass would immediately drag it back and undo this.
+      pendingCenterRef.current = false;
     }
 
     function replaceRange(start, end, text) {
@@ -10193,6 +10344,7 @@ window.__ModuleLoader__.load({
       if (!ta) return;
       valueRef.current = ta.value;
       dirtyRef.current = true;
+      typedAtRef.current = nowMs();
       // R26: same as afterEdit — the status bar must say 未保存 from the first
       // keystroke, not 1.2s later when the debounce finally fires.
       const notify = propsRef.current.onDirty;
@@ -10465,6 +10617,8 @@ window.__ModuleLoader__.load({
       if (!ta) return;
       valueRef.current = ta.value;
       dirtyRef.current = true;
+      // IME text commits the same way a keystroke does: the writer is here.
+      typedAtRef.current = nowMs();
       scheduleSave();
       if (findRef.current.open) refreshMatches();
       scheduleMeasure(true);
@@ -10610,6 +10764,9 @@ window.__ModuleLoader__.load({
       dirtyRef.current = false;
       highlightsRef.current = [];
       manualAtRef.current = -1e9;
+      // Switching chapters is not typing here: the first peer edit in the new
+      // chapter should still be able to show itself.
+      typedAtRef.current = -1e9;
       composingRef.current = false;
 
       const f = findRef.current;
@@ -10679,8 +10836,14 @@ window.__ModuleLoader__.load({
     }, [notesLane]);
 
     // Adopt content the app pushed for the SAME chapter (version restore, AI
-    // rewrite). Skipped when it merely echoes what we just saved, which is what
-    // keeps the textarea effectively uncontrolled — no caret jumping on save.
+    // rewrite, LAN sync). Skipped when it merely echoes what we just saved,
+    // which is what keeps the textarea effectively uncontrolled — no caret
+    // jumping on save.
+    //
+    // R45: `adoptExternalText` keeps the caret where it was and does not dirty
+    // the buffer. The previous one-liner reset the selection to the end of the
+    // text, so every background rewrite — most visibly a phone edit arriving
+    // over LAN — yanked the writer to the last line of the chapter.
     const incomingContent =
       chapter && typeof chapter.content === 'string' ? chapter.content : null;
     React.useEffect(() => {
@@ -10689,7 +10852,7 @@ window.__ModuleLoader__.load({
       if (!ta) return;
       if (incomingContent === ta.value) return;
       if (incomingContent === lastSavedRef.current) return;
-      setEditorText(incomingContent, incomingContent.length, incomingContent.length);
+      adoptExternalText(incomingContent);
     }, [incomingContent]);
 
     // Listeners are attached once; every callback reads refs for freshness.
