@@ -616,6 +616,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     /** Bottom-right action dock: collapsed to a single round button by default. */
     const [dockOpen, setDockOpen] = useState(false);
     /**
+     * R44: 读一遍 — the whole book laid out as pages, over the writing surface.
+     * It is an overlay rather than a route on purpose: the editor stays mounted
+     * underneath, so the caret, the scroll position and any unsaved buffer are
+     * exactly where the writer left them when they close it.
+     */
+    const [readOpen, setReadOpen] = useState(false);
+    /**
      * 灵感便签 (R10): notes for the open book, plus whether the card is up.
      * R13 turned it into a floating card anchored to the corner of the paper
      * (see the Notes component): it never reserves a lane, never covers the
@@ -2214,6 +2221,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // too — listen to fullscreenchange so the two stay in sync).
     useEffect(() => {
       if (!immersive) return undefined;
+      // R44: the reading view is stacked above the writing surface and owns
+      // Escape while it is open — Esc should close the pages, not the room.
+      if (readOpen) return undefined;
       const onKey = (ev) => {
         if (ev.key !== 'Escape' || ev.defaultPrevented) return;
         // A dialog on top owns Escape; only leave immersive when nothing is
@@ -2245,7 +2255,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         document.removeEventListener('fullscreenchange', onFsChange);
         document.removeEventListener('webkitfullscreenchange', onFsChange);
       };
-    }, [immersive, dialog, modalReq, exitImmersive]);
+    }, [immersive, dialog, modalReq, exitImmersive, readOpen]);
+
+    // R44: the pages only make sense for a book. If the active book goes away
+    // (deleted, restored snapshot), drop the overlay instead of leaving it up
+    // over an empty workspace.
+    useEffect(() => {
+      if (!activeNovelId && readOpen) setReadOpen(false);
+    }, [activeNovelId, readOpen]);
 
     // R43 ②: a keyboard way into and out of immersive mode.
     //
@@ -2532,6 +2549,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [novels, activeNovelId],
     );
 
+    // R44: the reading view takes the whole book, and its body is memoised on
+    // this array — a fresh `filter()` on every App render would defeat that and
+    // re-split every paragraph of the manuscript on every keystroke.
+    const readChapters = useMemo(
+      () => chapters.filter((row) => row && String(row.novelId) === String(activeNovelId)),
+      [chapters, activeNovelId],
+    );
+
     const wordCounts = useMemo(() => {
       let book = 0;
       let novelWords = 0;
@@ -2675,6 +2700,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 ? { step: 3, novelId: activeNovelId }
                 : { step: 1 },
             );
+          },
+          // R44: 读一遍 — the same manuscript, at arm's length.
+          onRead: () => {
+            setDockOpen(false);
+            setReadOpen(true);
           },
         });
 
@@ -2925,6 +2955,39 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           dock,
         ),
       ),
+      // R44: 读一遍 — the book laid out as pages, covering the whole panel.
+      //
+      // It is an overlay, not a route: the editor stays mounted underneath, so
+      // the caret, the scroll position and any unsaved buffer are exactly where
+      // the writer left them when the pages close. Nothing of the workspace
+      // shows through — a book has no file tree and no save indicator.
+      readOpen && activeNovelId
+        ? h(NW.ReadView, {
+            novel: activeNovel,
+            chapters: readChapters,
+            currentId: chapter ? chapter.id : null,
+            // The editor buffer can be ahead of the last autosave, so the open
+            // chapter is read from the live text, not from the stored row.
+            currentText: getEditorText(),
+            settings: settings,
+            // Closing puts the writer back in the sentence they were in: the
+            // textarea never unmounted, so focusing it restores the very caret
+            // they left, with the scroll position the pages covered up.
+            onClose: () => {
+              setReadOpen(false);
+              window.requestAnimationFrame(() => {
+                const api = editorRef.current;
+                if (api && typeof api.focus === 'function') {
+                  try {
+                    api.focus();
+                  } catch (err) {
+                    /* the editor may be gone; nothing to restore */
+                  }
+                }
+              });
+            },
+          })
+        : null,
       // Immersive is a pure canvas: no toolbar, no shelf, no status bar. The only
       // exit is Esc (registered below), so nothing steals vertical space.
       immersive
@@ -3159,6 +3222,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             item('proofread', NW.t('AI 校对'), p.onProofread, true),
             item('typeset', NW.t('一键排版'), p.onTypeset, true),
             item('sparkle', NW.t('修改建议'), p.onAdvice, true),
+            // Reading the manuscript back is how a writer sees the story rather
+            // than the sentence, so it sits with the other finishing actions.
+            item('book', NW.t('读一遍'), p.onRead, true),
             item('send', NW.t('投稿'), p.onSubmit, true),
           )
         : null,

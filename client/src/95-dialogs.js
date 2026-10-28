@@ -2940,6 +2940,9 @@
               ['Alt + N', NW.t('新章节')],
               ['Alt + A', NW.t('修改建议')],
               ['Tab', '插入两个全角空格'],
+              // R44: the reading view pages with the arrows, so say so where the
+              // rest of the keys are listed rather than only in the footer hint.
+              ['← → / PgUp PgDn / 空格', NW.t('读一遍时翻页')],
             ].map((row) => h('div', { key: row[0], className: 'nw-kbd-row' }, h('kbd', null, row[0]), h('span', null, row[1]))),
           ),
         ),
