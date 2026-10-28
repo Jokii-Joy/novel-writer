@@ -17,8 +17,8 @@
   // ---------------------------------------------------------------------------
 
   const DB_NAME = 'novel-writer';
-  const DB_VERSION = 2;
-  const STORES = ['novels', 'chapters', 'versions', 'trash', 'settings', 'notes'];
+  const DB_VERSION = 3;
+  const STORES = ['novels', 'chapters', 'versions', 'trash', 'settings', 'notes', 'marks'];
   const VERSION_LIMIT = 50;
   const SETTINGS_KEY = 'app';
   const ENC_PREFIX = 'enc:v1:';
@@ -200,6 +200,16 @@
           // place without touching existing rows.
           if (!db.objectStoreNames.contains('notes')) {
             const store = db.createObjectStore('notes', { keyPath: 'id' });
+            store.createIndex('byNovelId', 'novelId', { unique: false });
+          }
+          // R47: annotations (下划线 / 删除线 / 批注) are marks over a chapter's
+          // text, not edits to it — the manuscript itself must stay byte for
+          // byte what the writer typed. So they get their own store keyed by
+          // chapter, the same shape `notes` uses, and an old database upgrades
+          // in place without touching existing rows.
+          if (!db.objectStoreNames.contains('marks')) {
+            const store = db.createObjectStore('marks', { keyPath: 'id' });
+            store.createIndex('byChapterId', 'chapterId', { unique: false });
             store.createIndex('byNovelId', 'novelId', { unique: false });
           }
         } catch (err) {
@@ -575,6 +585,18 @@
     for (let i = 0; i < versions.length; i += 1) {
       ops.push({ store: 'versions', type: 'delete', key: versions[i].id });
     }
+    // R47: same contract as deleteChapter — the book's annotations travel with
+    // it into the trash payload so restoring brings them back.
+    const allMarks = await readAll('marks');
+    const marks = allMarks.filter(function (row) {
+      return row && chapterIds[row.chapterId];
+    });
+    if (marks.length) {
+      trashItem.payload.marks = marks;
+      for (let i = 0; i < marks.length; i += 1) {
+        ops.push({ store: 'marks', type: 'delete', key: marks[i].id });
+      }
+    }
     await writeBatch(ops);
     notify();
     // R22: same contract as deleteChapter — the id lets the caller offer 撤销.
@@ -844,6 +866,20 @@
     for (let i = 0; i < versions.length; i += 1) {
       ops.push({ store: 'versions', type: 'delete', key: versions[i].id });
     }
+    // R47: annotations live on character offsets inside these chapters, so they
+    // go with them. Parked in the trash payload rather than deleted outright:
+    // 撤销 puts the text back, and an underline that reappears with it costs
+    // nothing while a silently lost one is a small betrayal of the writer.
+    const allMarks = await readAll('marks');
+    const marks = allMarks.filter(function (row) {
+      return row && idSet[row.chapterId];
+    });
+    if (marks.length) {
+      trashItem.payload.marks = marks;
+      for (let i = 0; i < marks.length; i += 1) {
+        ops.push({ store: 'marks', type: 'delete', key: marks[i].id });
+      }
+    }
     await writeBatch(ops);
     if (root.novelId) await touchNovel(root.novelId);
     notify();
@@ -1015,6 +1051,14 @@
     }
 
     ops.push({ store: 'trash', type: 'delete', key: id });
+    // R47: annotations ride along with the text they were drawn on. Older trash
+    // rows simply have no `marks` array, which restores exactly as before.
+    const restoredMarks = Array.isArray(payload.marks) ? payload.marks : [];
+    for (let i = 0; i < restoredMarks.length; i += 1) {
+      const row = restoredMarks[i];
+      if (!row || !row.id) continue;
+      ops.push({ store: 'marks', type: 'put', value: row });
+    }
     await writeBatch(ops);
     notify();
   }
@@ -1178,6 +1222,160 @@
     return true;
   }
 
+  // --------------------------------- marks ---------------------------------
+
+  /**
+   * R47: annotations.
+   *
+   * A mark is a range inside one chapter's text — `{start, end}` measured in
+   * characters of `chapter.content` — plus a `kind` and, for 批注, a `note`.
+   * Marks are deliberately *not* edits: the manuscript keeps the words the
+   * writer typed, and a mark is only an overlay drawn behind them. That way
+   * annotating can never reflow the sentence, and deleting a mark always
+   * restores the page exactly.
+   *
+   *   kind: 'underline' | 'strike' | 'todo' | 'comment'
+   *
+   * `todo` is the "改这里" flag: a wavy underline plus a checklist entry, so a
+   * writer can mark a place to come back to without stopping to fix it now.
+   * `strike` is 删除线 — "this paragraph goes" — and is the reason the mark has
+   * to be drawn by the editor rather than carried in the text: a struck line
+   * still has to count for the word total until the writer deletes it.
+   */
+  const MARK_KINDS = { underline: 1, strike: 1, todo: 1, comment: 1 };
+
+  function cleanMark(input) {
+    const data = input || {};
+    const chapterId = String(data.chapterId || '');
+    if (!chapterId) return null;
+    const kind = MARK_KINDS[String(data.kind || '')] ? String(data.kind) : 'underline';
+    const start = Math.max(0, Math.round(Number(data.start) || 0));
+    const end = Math.max(start, Math.round(Number(data.end) || 0));
+    if (end <= start) return null;
+    return {
+      chapterId: chapterId,
+      novelId: data.novelId ? String(data.novelId) : '',
+      kind: kind,
+      start: start,
+      end: end,
+      // The quoted words are stored alongside the offsets so a mark still says
+      // something useful after the paragraph around it is rewritten — the
+      // offsets drift, the quote does not.
+      quote: String(data.quote == null ? '' : data.quote).slice(0, 240),
+      note: String(data.note == null ? '' : data.note).slice(0, 400),
+    };
+  }
+
+  async function listMarks(novelId, chapterId) {
+    let rows;
+    if (chapterId != null && String(chapterId)) {
+      rows = await readIndex('marks', 'byChapterId', String(chapterId));
+    } else if (novelId != null && String(novelId)) {
+      rows = await readIndex('marks', 'byNovelId', String(novelId));
+    } else {
+      rows = await readAll('marks');
+    }
+    return (rows || [])
+      .filter(function (row) {
+        return row && row.id;
+      })
+      .sort(function (a, b) {
+        return (Number(a.start) || 0) - (Number(b.start) || 0) || (Number(a.end) || 0) - (Number(b.end) || 0);
+      });
+  }
+
+  async function createMark(input) {
+    const clean = cleanMark(input);
+    if (!clean) return undefined;
+    const stamp = now();
+    const row = Object.assign({ id: uid('mark'), createdAt: stamp, updatedAt: stamp }, clean);
+    const ok = await writeBatch([{ store: 'marks', type: 'put', value: row }]);
+    if (!ok) throw new Error('保存标注失败');
+    notify();
+    return row;
+  }
+
+  async function updateMark(id, patch) {
+    if (!id || !patch) return undefined;
+    const current = await readOne('marks', id);
+    if (!current) return undefined;
+    const next = Object.assign({}, current);
+    if (Object.prototype.hasOwnProperty.call(patch, 'note')) {
+      next.note = String(patch.note == null ? '' : patch.note).slice(0, 400);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'kind') && MARK_KINDS[String(patch.kind)]) {
+      next.kind = String(patch.kind);
+    }
+    next.updatedAt = now();
+    const ok = await writeBatch([{ store: 'marks', type: 'put', value: next }]);
+    if (!ok) return undefined;
+    notify();
+    return next;
+  }
+
+  async function deleteMark(id) {
+    if (!id) return false;
+    const ok = await writeBatch([{ store: 'marks', type: 'delete', key: id }]);
+    if (!ok) return false;
+    notify();
+    return true;
+  }
+
+  /**
+   * Keeps marks pinned to the words they were drawn on across an edit.
+   *
+   * `diff` is `{head, oldMid, newMid}`: everything before `head` is untouched,
+   * the middle was replaced, everything after it moved by `newMid - oldMid`.
+   *
+   * A mark that lay wholly inside the replaced middle is deleted — the words it
+   * pointed at are gone, and leaving it behind would underline whatever happens
+   * to occupy those offsets now.
+   */
+  async function shiftMarksForEdit(chapterId, diff) {
+    const id = String(chapterId || '');
+    const d = diff || {};
+    if (!id) return 0;
+    const head = Math.max(0, Number(d.head) || 0);
+    const oldMid = Math.max(0, Number(d.oldMid) || 0);
+    const newMid = Math.max(0, Number(d.newMid) || 0);
+    if (!oldMid && !newMid) return 0;
+    const delta = newMid - oldMid;
+    const rows = await listMarks(null, id);
+    const ops = [];
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i];
+      const start = Number(row.start) || 0;
+      const end = Number(row.end) || 0;
+      if (end <= head) continue; // wholly before the edit
+      if (start >= head + oldMid) {
+        if (delta) {
+          ops.push({
+            store: 'marks',
+            type: 'put',
+            value: Object.assign({}, row, { start: start + delta, end: end + delta, updatedAt: now() }),
+          });
+        }
+        continue;
+      }
+      // Overlaps the replaced middle: keep whatever survived on the edges.
+      const nextStart = start <= head ? start : head + newMid;
+      const nextEnd = end >= head + oldMid ? end + delta : head + newMid;
+      if (nextEnd <= nextStart) {
+        ops.push({ store: 'marks', type: 'delete', key: row.id });
+      } else {
+        ops.push({
+          store: 'marks',
+          type: 'put',
+          value: Object.assign({}, row, { start: nextStart, end: nextEnd, updatedAt: now() }),
+        });
+      }
+    }
+    if (!ops.length) return 0;
+    await writeBatch(ops);
+    notify();
+    return ops.length;
+  }
+
   // --------------------------------- public ----------------------------------
 
   function subscribe(fn) {
@@ -1230,6 +1428,7 @@
         ? settingsRow.value
         : await getSettings();
     const notes = await readAll('notes');
+    const marks = await readAll('marks');
     return {
       novels: novels || [],
       chapters: chapters || [],
@@ -1237,6 +1436,7 @@
       trash: trash || [],
       settings: settings || {},
       notes: notes || [],
+      marks: marks || [],
     };
   }
 
@@ -1298,6 +1498,11 @@
     const existingNovels = (await readAll('novels')) || [];
     const existingChapters = (await readAll('chapters')) || [];
     const existingVersions = (await readAll('versions')) || [];
+    // R47: annotations are chapter-scoped character offsets, so when the peer
+    // removes a chapter they cannot survive. Read once and drop with the text
+    // they were pinned to — an annotation on a chapter nobody has is unreachable
+    // and would be restored into a hole, exactly like orphaned versions below.
+    const existingMarks = (await readAll('marks')) || [];
     const byNovel = new Map();
     const localById = new Map();
     for (let i = 0; i < existingChapters.length; i += 1) {
@@ -1320,6 +1525,23 @@
       if (!versionsByChapter.has(key)) versionsByChapter.set(key, []);
       versionsByChapter.get(key).push(row);
     }
+    const marksByChapter = new Map();
+    for (let i = 0; i < existingMarks.length; i += 1) {
+      const row = existingMarks[i];
+      if (!row || !row.id || row.chapterId == null) continue;
+      const key = String(row.chapterId);
+      if (!marksByChapter.has(key)) marksByChapter.set(key, []);
+      marksByChapter.get(key).push(row);
+    }
+    // Annotations of one chapter, as delete ops — shared by the two places a
+    // chapter can disappear (a tombstone for the whole book, or a chapter the
+    // peer no longer has).
+    const markOpsOf = function (chapterId) {
+      const rows = marksByChapter.get(String(chapterId)) || [];
+      const out = [];
+      for (let i = 0; i < rows.length; i += 1) out.push({ store: 'marks', type: 'delete', key: rows[i].id });
+      return out;
+    };
 
     const ops = [];
     let touched = 0;
@@ -1332,6 +1554,11 @@
 
       if (incoming.deleted === true) {
         if (!existing) continue;
+        const doomedMarks = [];
+        for (let c = 0; c < currentChapters.length; c += 1) {
+          const rows = marksByChapter.get(String(currentChapters[c].id)) || [];
+          for (let mi = 0; mi < rows.length; mi += 1) doomedMarks.push(rows[mi]);
+        }
         ops.push({
           store: 'trash',
           type: 'put',
@@ -1340,12 +1567,14 @@
             kind: 'novel',
             title: existing.title || '未命名小说',
             deletedAt: now(),
-            payload: { novel: existing, chapters: currentChapters, versions: [] },
+            payload: { novel: existing, chapters: currentChapters, versions: [], marks: doomedMarks },
           },
         });
         ops.push({ store: 'novels', type: 'delete', key: id });
         for (let c = 0; c < currentChapters.length; c += 1) {
           ops.push({ store: 'chapters', type: 'delete', key: currentChapters[c].id });
+          const mops = markOpsOf(currentChapters[c].id);
+          for (let mo = 0; mo < mops.length; mo += 1) ops.push(mops[mo]);
         }
         touched += 1;
         continue;
@@ -1405,6 +1634,10 @@
         for (let v = 0; v < orphans.length; v += 1) {
           ops.push({ store: 'versions', type: 'delete', key: orphans[v].id });
         }
+        // R47: same reasoning for annotations — the offsets they point at are
+        // gone, so the marks under them are not worth keeping.
+        const orphanMarks = markOpsOf(row.id);
+        for (let mo = 0; mo < orphanMarks.length; mo += 1) ops.push(orphanMarks[mo]);
       }
       touched += 1;
     }
@@ -1450,6 +1683,11 @@
     createNote: createNote,
     updateNote: updateNote,
     deleteNote: deleteNote,
+    listMarks: listMarks,
+    createMark: createMark,
+    updateMark: updateMark,
+    deleteMark: deleteMark,
+    shiftMarksForEdit: shiftMarksForEdit,
     dump: dump,
     replaceAll: replaceAll,
     encryptAll: encryptAll,

@@ -264,6 +264,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock:hover,.nw-dock:focus-within,.nw-dock[data-open="1"]{opacity:1;}
+/* R47: in immersive mode the dock is the only handle left, so it stays but
+   steps back — low enough not to sit on the prose, high enough to be found.
+   Hover / focus / an open menu bring it all the way back. */
+.nw-dock[data-immersive="1"]{bottom:20px;right:16px;opacity:.3;}
+.nw-dock[data-immersive="1"]:hover,
+.nw-dock[data-immersive="1"]:focus-within,
+.nw-dock[data-immersive="1"][data-open="1"]{opacity:1;}
+@media (prefers-reduced-motion: reduce){.nw-dock{transition:none;}}
 .nw-dock-fab{
   width:44px;height:44px;border-radius:var(--nw-r-pill);
   display:inline-flex;align-items:center;justify-content:center;
@@ -561,6 +569,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [bootError, setBootError] = useState('');
     const [novels, setNovels] = useState([]);
     const [chapters, setChapters] = useState([]);
+    // R47: the writer's annotations for the whole library. Marks belong to a
+    // chapter, and the reading view shows a whole book at a time, so the shell
+    // keeps them all and lets the view pick the ones it needs — one store read
+    // instead of one per chapter.
+    const [marks, setMarks] = useState([]);
     const [settings, setSettings] = useState(() => NW.db.DEFAULT_SETTINGS || {});
     const [activeNovelId, setActiveNovelId] = useState(null);
     const [activeChapterId, setActiveChapterId] = useState(null);
@@ -755,10 +768,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // ------------------------------------------------------- data loading ----
     const loadAll = useCallback(async () => {
       await NW.db.init();
-      const [novelRows, chapterRows, stored] = await Promise.all([
+      const [novelRows, chapterRows, stored, markRows] = await Promise.all([
         NW.db.listNovels(),
         NW.db.listChapters(),
         NW.db.getSettings(),
+        NW.db.listMarks ? NW.db.listMarks() : [],
       ]);
       if (!aliveRef.current) return null;
       const nextSettings = Object.assign({}, NW.db.DEFAULT_SETTINGS || {}, stored || {});
@@ -772,6 +786,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       }
       setNovels(Array.isArray(novelRows) ? novelRows : []);
       setChapters(Array.isArray(chapterRows) ? chapterRows : []);
+      setMarks(Array.isArray(markRows) ? markRows : []);
       setSettings(nextSettings);
       return { novels: novelRows || [], chapters: chapterRows || [], settings: nextSettings };
     }, []);
@@ -1615,6 +1630,84 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       return list;
     }, []);
 
+    const refreshMarks = useCallback(async () => {
+      if (typeof NW.db.listMarks !== 'function') return [];
+      const list = await NW.db.listMarks();
+      if (!aliveRef.current) return [];
+      setMarks(Array.isArray(list) ? list : []);
+      return list;
+    }, []);
+
+    // ---- 标注：新增 / 删除 / 改批注 -----------------------------------------
+    const addMark = useCallback(
+      async (draft) => {
+        if (!draft || typeof NW.db.createMark !== 'function') return null;
+        const current = chapterRef.current;
+        const novelId = current && String(current.id) === String(draft.chapterId)
+          ? current.novelId
+          : (chapters.filter((row) => row && String(row.id) === String(draft.chapterId))[0] || {}).novelId;
+        try {
+          const created = await NW.db.createMark(Object.assign({}, draft, { novelId: novelId || '' }));
+          if (!aliveRef.current) return null;
+          await refreshMarks();
+          return created || null;
+        } catch (err) {
+          pushToast(errText(err, '保存标注失败'), 'error');
+          return null;
+        }
+      },
+      [chapters, refreshMarks, pushToast],
+    );
+
+    const removeMark = useCallback(
+      async (id) => {
+        if (!id || typeof NW.db.deleteMark !== 'function') return;
+        try {
+          await NW.db.deleteMark(id);
+          if (!aliveRef.current) return;
+          await refreshMarks();
+        } catch (err) {
+          pushToast(errText(err, '删除标注失败'), 'error');
+        }
+      },
+      [refreshMarks, pushToast],
+    );
+
+    const noteMark = useCallback(
+      async (id, note) => {
+        if (!id || typeof NW.db.updateMark !== 'function') return;
+        try {
+          await NW.db.updateMark(id, { note: note });
+          if (!aliveRef.current) return;
+          await refreshMarks();
+        } catch (err) {
+          pushToast(errText(err, '保存批注失败'), 'error');
+        }
+      },
+      [refreshMarks, pushToast],
+    );
+
+    /**
+     * R47: the buffer was saved and its text moved — drag this chapter's
+     * annotations along with it, so an underline stays under the words it was
+     * drawn on instead of under whatever happens to sit at those offsets now.
+     */
+    const shiftMarks = useCallback(
+      async (diff) => {
+        const current = chapterRef.current;
+        if (!current || current.id == null) return;
+        if (!diff || typeof NW.db.shiftMarksForEdit !== 'function') return;
+        try {
+          const changed = await NW.db.shiftMarksForEdit(current.id, diff);
+          if (!aliveRef.current || !changed) return;
+          await refreshMarks();
+        } catch (err) {
+          /* annotations are a convenience; never let one break a save */
+        }
+      },
+      [refreshMarks],
+    );
+
     /**
      * R43 ④: after a pull, bring the *open* chapter up to date as well.
      *
@@ -1727,6 +1820,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         if (!touched) return 0;
         await refreshNovels();
         await refreshChapters();
+        // R47: a pull can also remove chapters, and their annotations go with
+        // them. Without this the underlines of a chapter the phone deleted would
+        // keep being drawn until the panel was reloaded.
+        await refreshMarks();
         // R43 ④: applyBooks only rewrites IndexedDB. The open chapter lives in
         // React state, and the editor adopts new text only when its `chapter`
         // prop changes — so a phone edit to the chapter you are *looking at*
@@ -1739,7 +1836,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       } catch (err) {
         return 0;
       }
-    }, [refreshNovels, refreshChapters, adoptRemoteChapter]);
+    }, [refreshNovels, refreshChapters, adoptRemoteChapter, refreshMarks]);
 
     /**
      * Poll for the phone's side.
@@ -2557,6 +2654,23 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [chapters, activeNovelId],
     );
 
+    // R47: annotations of the open book. Books are the unit here because the
+    // reading view shows a whole book and the editor only the open chapter —
+    // one array serves both, and it stays stable across App renders so the
+    // reading view's paragraph memo does not thrash.
+    const readMarks = useMemo(
+      () => marks.filter((row) => {
+        if (!row) return false;
+        if (!activeNovelId) return false;
+        if (row.novelId) return String(row.novelId) === String(activeNovelId);
+        // Rows written before the novel id was recorded fall back to "is this
+        // chapter one of ours", which is exact and needs no migration.
+        const owner = chapters.filter((c) => c && String(c.id) === String(row.chapterId))[0];
+        return !!owner && String(owner.novelId) === String(activeNovelId);
+      }),
+      [marks, chapters, activeNovelId],
+    );
+
     const wordCounts = useMemo(() => {
       let book = 0;
       let novelWords = 0;
@@ -2667,9 +2781,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     // Floating action dock: bottom-right, collapsed to one round button so it
     // never covers the writing column (the editor reserves right padding).
-    const dock = immersive
-      ? null
-      : h(Dock, {
+    //
+    // R47: it stays in immersive mode too. Immersive used to drop every piece of
+    // chrome including this one, which left the writer with no way back to the
+    // tools short of pressing Esc — the one button that should always be there
+    // was the one that vanished. It is dimmed down to a hint instead.
+    const dock = h(Dock, {
+          immersive: immersive,
           open: dockOpen,
           onToggle: () => setDockOpen((v) => !v),
           chapter: chapter,
@@ -2915,6 +3033,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                         });
                       },
                       onSelectionChange: onSelectionChange,
+                      // R47: annotations on the open chapter, and the hook that
+                      // keeps them pinned while the writer edits the text.
+                      marks: readMarks,
+                      onMarksShift: shiftMarks,
                       registerApi: registerEditor,
                     }),
                     // R13: 灵感便签 floats over the paper itself, not over the
@@ -2970,6 +3092,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // chapter is read from the live text, not from the stored row.
             currentText: getEditorText(),
             settings: settings,
+            // R47: reading is also when a writer notices — so this is where an
+            // annotation can be drawn. The marks are the shell's, not the view's:
+            // the same array feeds the editor underneath, so a line underlined
+            // while reading is still underlined when writing resumes.
+            marks: readMarks,
+            onMark: addMark,
+            onUnmark: removeMark,
+            onNote: noteMark,
             // Closing puts the writer back in the sentence they were in: the
             // textarea never unmounted, so focusing it restores the very caret
             // they left, with the scroll position the pages covered up.
@@ -3214,7 +3344,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // of the writing column.
     return h(
       'div',
-      { className: 'nw-dock', 'data-open': open ? '1' : '0' },
+      { className: 'nw-dock', 'data-open': open ? '1' : '0', 'data-immersive': p.immersive ? '1' : '0' },
       open
         ? h(
             'div',

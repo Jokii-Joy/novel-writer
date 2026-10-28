@@ -50,22 +50,73 @@
    * 空行不当段落（段距由段落 margin 负责，留着空行会把段距翻倍），但也不能
    * 直接丢掉：中文长篇里空行常常就是「场景换了」的唯一标记，抹掉它整章会塌成
    * 一片。所以空行只转成下一段的 `gap`，由 CSS 加一份额外段距。
+   *
+   * 每段还带 `start`：这段第一个字在章节全文里的字符下标。标注是按全文
+   * 下标存的，所以读视图要知道每段从哪儿开始，才能把标注画到对的地方。
    */
   function paragraphsOf(text) {
     const out = [];
-    const lines = String(text == null ? '' : text).split(/\r\n|\r|\n/);
+    const raw = String(text == null ? '' : text);
+    const lines = raw.split(/\r\n|\r|\n/);
     let blank = 0;
+    let pos = 0;
     for (let i = 0; i < lines.length; i += 1) {
-      const line = lines[i].trim();
-      if (!line) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      const after = pos + line.length + 1;
+      if (!trimmed) {
         blank += 1;
+        pos = after;
         continue;
       }
       // 第一段前面的空行没有意义（正文开头本来就留白）。
-      out.push({ text: line, gap: out.length > 0 && blank > 0 });
+      out.push({
+        text: trimmed,
+        gap: out.length > 0 && blank > 0,
+        start: pos + (line.length - line.trimStart().length),
+      });
       blank = 0;
+      pos = after;
     }
     return out;
+  }
+
+  /**
+   * 把一段文字按标注切开。
+   *
+   * 标注只能画在字的下面，不能改字，所以这里只负责把段落拆成「普通文本 +
+   * 带 class 的 span」，段落的文字内容一个字都不少。
+   */
+  function splitByMarks(para, marks) {
+    const start = para.start;
+    const end = start + para.text.length;
+    const hits = [];
+    for (let i = 0; i < marks.length; i += 1) {
+      const m = marks[i];
+      const s = Math.max(start, Number(m.start) || 0);
+      const e = Math.min(end, Number(m.end) || 0);
+      if (e > s) hits.push({ s: s - start, e: e - start, kind: m.kind, id: m.id });
+    }
+    if (!hits.length) return para.text;
+    hits.sort((a, b) => a.s - b.s || a.e - b.e);
+    const out = [];
+    let pos = 0;
+    for (let i = 0; i < hits.length; i += 1) {
+      const m = hits[i];
+      const s = Math.max(pos, m.s);
+      if (m.e <= s) continue;
+      if (s > pos) out.push(para.text.slice(pos, s));
+      out.push(
+        h(
+          'span',
+          { className: 'nw-mark nw-mark-' + String(m.kind || 'underline'), key: 'm' + i + '-' + String(m.id), 'data-mark': String(m.id) },
+          para.text.slice(s, m.e),
+        ),
+      );
+      pos = m.e;
+    }
+    if (pos < para.text.length) out.push(para.text.slice(pos));
+    return out.length === 1 ? out[0] : out;
   }
 
   NW.CSS_PARTS.push(`
@@ -139,6 +190,36 @@
    extra line of air instead of being flattened into the paragraph wall. */
 .nw-read-p[data-gap="1"]{margin-top:1.1em;}
 .nw-read-p:last-child{margin-bottom:0;}
+/* ---- 标注（读视图）------------------------------------------------------
+   Marks are drawn under the words, never over them: an underline sits below the
+   glyphs, a strike-through is a line through the middle of the em box, and a
+   comment is a wash of colour plus a rule. The manuscript text itself is
+   untouched, so annotating can never change the words or the pagination. */
+.nw-mark{border-radius:var(--nw-r-hair);}
+.nw-mark-underline{box-shadow:inset 0 -2px 0 var(--nw-mark-underline, var(--nw-brand));}
+.nw-mark-strike{
+  text-decoration:line-through;text-decoration-thickness:1.5px;
+  text-decoration-color:var(--nw-mark-strike, var(--nw-danger));
+}
+.nw-mark-todo{
+  background-image:linear-gradient(to right,var(--nw-mark-todo, var(--nw-warn)) 0 4px,transparent 4px 8px);
+  background-repeat:repeat-x;background-position:0 100%;background-size:8px 2px;
+  box-shadow:inset 0 -1px 0 transparent;
+  padding-bottom:1px;
+}
+.nw-mark-comment{
+  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 16%, transparent);
+  box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
+}
+.nw-mark[data-active="1"]{background-color:color-mix(in srgb, var(--nw-brand) 22%, transparent);}
+/* 选中的标注：用外描边而不是换色，正文颜色始终是作者的字色。 */
+.nw-mark[data-selected="1"]{outline:1px solid color-mix(in srgb, var(--nw-brand) 55%, transparent);outline-offset:1px;}
+/* 批注角标：一个几乎不占位的圆点，说明这里挂了一条批注。 */
+.nw-mark-comment::after{
+  content:'';display:inline-block;width:4px;height:4px;margin-left:2px;
+  border-radius:var(--nw-r-pill);background:var(--nw-mark-comment, var(--nw-brand));
+  vertical-align:super;
+}
 .nw-read-empty{
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:var(--nw-sp-2);height:100%;
@@ -153,6 +234,52 @@
 .nw-read-hint{transition:opacity .7s var(--nw-ease, ease);}
 .nw-read-hint[data-fade="1"]{opacity:0;}
 .nw-read-count{font-variant-numeric:tabular-nums;letter-spacing:.06em;}
+/* ---- 标注工具条 / 标注详情 ----------------------------------------------
+   Both float inside .nw-read-stage, so they travel with the page column
+   instead of the window — a toolbar anchored to the viewport would drift away
+   from the sentence as soon as the writer turns a page. */
+.nw-mark-bar{
+  position:fixed;z-index:34;
+  display:inline-flex;align-items:center;gap:2px;
+  padding:3px;border-radius:var(--nw-r-pill);
+  border:1px solid var(--nw-line-strong);
+  background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);
+  transform:translateX(-50%);
+}
+.nw-mark-bar-btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  height:28px;padding:0 10px;border:0;border-radius:var(--nw-r-pill);
+  background:transparent;color:var(--nw-fg);cursor:pointer;white-space:nowrap;
+}
+.nw-mark-bar-btn:hover{background:var(--nw-btn-hover);}
+.nw-mark-pop{
+  position:absolute;left:50%;bottom:24px;transform:translateX(-50%);
+  z-index:35;width:min(420px,calc(100% - 32px));
+  display:flex;flex-direction:column;gap:var(--nw-sp-2);
+  padding:var(--nw-sp-3);border-radius:var(--nw-r-card);
+  border:1px solid var(--nw-line);background:var(--nw-panel);box-shadow:var(--nw-shadow-3);
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-micro);
+  animation:nw-fade-in var(--nw-dur, .18s) var(--nw-ease, ease) both;
+}
+.nw-mark-pop-quote{
+  padding-left:var(--nw-sp-2);border-left:2px solid var(--nw-brand);
+  color:var(--nw-soft);line-height:1.5;
+}
+.nw-mark-pop-note{color:var(--nw-fg);line-height:1.6;white-space:pre-wrap;}
+.nw-mark-pop-acts{display:flex;justify-content:space-between;gap:var(--nw-sp-2);}
+.nw-mark-pop-btn{
+  height:var(--nw-h-btn);padding:0 var(--nw-sp-3);
+  border-radius:var(--nw-r-control);border:1px solid var(--nw-line-strong);
+  background:var(--nw-btn-bg);color:var(--nw-fg);cursor:pointer;
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-micro);
+}
+.nw-mark-pop-btn:hover{background:var(--nw-btn-hover);}
+.nw-mark-pop-btn[data-danger="1"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 45%, var(--nw-line-strong));}
+@media (max-width: 560px){
+  .nw-mark-bar-btn{padding:0 8px;}
+  .nw-mark-pop{left:8px;right:8px;width:auto;transform:none;}
+}
 @media (prefers-reduced-motion: reduce){
   .nw-read{animation:none;}
   .nw-read-flow{scroll-behavior:auto;}
@@ -173,6 +300,10 @@
    *   currentId   — 打开时想停在哪一章
    *   currentText — 当前章节编辑器里的**实时**文本（含尚未保存的字）
    *   settings    — 用来沿用字号/行高/主题
+   *   marks       — 整本书的标注（`{id, chapterId, kind, start, end, note}`）
+   *   onMark      — `(draft) => void`，把新标注交给上层去存
+   *   onUnmark    — `(id) => void`，删掉一条标注
+   *   onNote      — `(id, note) => void`，改批注正文
    *   onClose     — 退出
    */
   NW.ReadView = function ReadView(props) {
@@ -186,6 +317,7 @@
     const currentId = p.currentId == null ? null : String(p.currentId);
     const currentText = typeof p.currentText === 'string' ? p.currentText : null;
     const chapters = (Array.isArray(p.chapters) ? p.chapters : []).filter(Boolean);
+    const marks = (Array.isArray(p.marks) ? p.marks : []).filter(Boolean);
 
     const stageRef = React.useRef(null);
     const flowRef = React.useRef(null);
@@ -253,6 +385,132 @@
       setPage(next);
       scrollToPage(next, true);
     }, [maxPage, scrollToPage]);
+
+    // ---- 选字 → 标注 --------------------------------------------------------
+    //
+    // 每一段都带着自己在章节全文里的起点（`data-start`），所以一次选区可以翻
+    // 译成「哪一章、第几个字到第几个字」——标注就是用这组下标存的，跟界面上
+    // 怎么分段、怎么分页都无关。
+    const [sel, setSel] = React.useState(null);
+    const [activeMark, setActiveMark] = React.useState(null);
+
+    function locateNode(node) {
+      let el = node;
+      if (el && el.nodeType === 3) el = el.parentNode;
+      if (!el || typeof el.closest !== 'function') return null;
+      const para = el.closest('p[data-start]');
+      if (!para) return null;
+      const section = para.closest('[data-chapter-id]');
+      if (!section) return null;
+      return {
+        para: para,
+        chapterId: String(section.getAttribute('data-chapter-id') || ''),
+        base: Number(para.getAttribute('data-start')) || 0,
+      };
+    }
+
+    function offsetIn(node, offset) {
+      const hit = locateNode(node);
+      if (!hit) return null;
+      try {
+        const r = document.createRange();
+        r.setStart(hit.para, 0);
+        r.setEnd(node, offset);
+        return {
+          chapterId: hit.chapterId,
+          at: hit.base + String(r.toString() || '').length,
+        };
+      } catch (err) {
+        return null;
+      }
+    }
+
+    // Selection 变化时算出「原文区间」。跨章、跨段的选区都支持：两端各翻译一次。
+    const readSelection = React.useCallback(() => {
+      const sel0 = typeof window.getSelection === 'function' ? window.getSelection() : null;
+      if (!sel0 || !sel0.rangeCount) return null;
+      const text = String(sel0.toString() || '');
+      if (!text.trim()) return null;
+      const range = sel0.getRangeAt(0);
+      const a = offsetIn(range.startContainer, range.startOffset);
+      const b = offsetIn(range.endContainer, range.endOffset);
+      if (!a || !b) return null;
+      if (a.chapterId !== b.chapterId) return null;
+      const start = Math.min(a.at, b.at);
+      const end = Math.max(a.at, b.at);
+      if (end <= start) return null;
+      let rect = null;
+      try {
+        rect = range.getBoundingClientRect();
+      } catch (err) {
+        rect = null;
+      }
+      return {
+        chapterId: a.chapterId,
+        start: start,
+        end: end,
+        text: text.replace(/\s+\n/g, '\n'),
+        x: rect ? rect.left + rect.width / 2 : 0,
+        y: rect ? rect.top : 0,
+      };
+    }, []);
+
+    const addMark = React.useCallback((kind) => {
+      const cur = sel;
+      if (!cur) return;
+      if (typeof p.onMark === 'function') {
+        p.onMark({
+          chapterId: cur.chapterId,
+          kind: kind,
+          start: cur.start,
+          end: cur.end,
+          quote: cur.text.slice(0, 240),
+          note: '',
+        });
+      }
+      setSel(null);
+      const s = typeof window.getSelection === 'function' ? window.getSelection() : null;
+      if (s) s.removeAllRanges();
+    }, [sel, p.onMark]);
+
+    const addNote = React.useCallback(() => {
+      const cur = sel;
+      if (!cur) return;
+      const ask = NW.ui && typeof NW.ui.promptAsync === 'function'
+        ? NW.ui.promptAsync({
+          title: NW.t('写一条批注'),
+          label: NW.t('批注'),
+          multiline: true,
+          placeholder: NW.t('这条批注写给自己看'),
+        })
+        : Promise.resolve('');
+      Promise.resolve(ask).then((note) => {
+        if (note == null) return;
+        const body = String(note).trim();
+        if (!body) return;
+        if (typeof p.onMark === 'function') {
+          p.onMark({
+            chapterId: cur.chapterId,
+            kind: 'comment',
+            start: cur.start,
+            end: cur.end,
+            quote: cur.text.slice(0, 240),
+            note: body,
+          });
+        }
+        setSel(null);
+        const s = typeof window.getSelection === 'function' ? window.getSelection() : null;
+        if (s) s.removeAllRanges();
+      });
+    }, [sel, p.onMark]);
+
+    // 讲清楚「点一下标注会发生什么」：删掉它，或者改批注正文。
+    const openMark = React.useCallback((id) => {
+      const list = marks.filter((m) => String(m.id) === String(id));
+      const mark = list[0];
+      if (!mark) return;
+      setActiveMark(mark);
+    }, [marks]);
 
     // ---- 量一次版面：定栏宽 → 读 scrollWidth → 得到页数 ----------------------
     const measure = React.useCallback(() => {
@@ -437,9 +695,15 @@
       const down = pointerRef.current;
       pointerRef.current = null;
       if (!down) return;
-      if (Math.abs(ev.clientX - down.x) > 8 || Math.abs(ev.clientY - down.y) > 8) return;
-      const sel = typeof window.getSelection === 'function' ? window.getSelection() : null;
-      if (sel && String(sel.toString() || '').length > 0) return;
+      if (Math.abs(ev.clientX - down.x) > 8 || Math.abs(ev.clientY - down.y) > 8) {
+        // 拖了一下 = 想标注这段字，不是想翻页。
+        const hit = readSelection();
+        if (hit) setSel(hit);
+        return;
+      }
+      const s0 = typeof window.getSelection === 'function' ? window.getSelection() : null;
+      if (s0 && String(s0.toString() || '').length > 0) return;
+      setSel(null);
       const flow = flowRef.current;
       if (!flow) return;
       const rect = flow.getBoundingClientRect();
@@ -454,15 +718,25 @@
       if (!chapters.length) {
         return h('div', { className: 'nw-read-empty' }, h('span', null, NW.t('这本书还没有正文')));
       }
-      return chapters.map((row, index) =>
-        h(
+      const byChapter = {};
+      for (let i = 0; i < marks.length; i += 1) {
+        const m = marks[i];
+        const key = String(m.chapterId || '');
+        if (!key) continue;
+        if (!byChapter[key]) byChapter[key] = [];
+        byChapter[key].push(m);
+      }
+      return chapters.map((row, index) => {
+        const key = String(row.id);
+        const own = byChapter[key] || [];
+        return h(
           'section',
           {
             className: 'nw-read-chapter',
-            key: String(row.id),
+            key: key,
+            'data-chapter-id': key,
             'data-first': index === 0 ? '1' : '0',
             ref: (el) => {
-              const key = String(row.id);
               if (el) marksRef.current[key] = el;
               else delete marksRef.current[key];
             },
@@ -471,7 +745,7 @@
             ? null
             : h('h2', { className: 'nw-read-title' }, String(row.title)),
           paragraphsOf(
-            currentId != null && String(row.id) === currentId && currentText != null
+            currentId != null && key === currentId && currentText != null
               ? currentText
               : row.content,
           ).map((para, i) =>
@@ -483,18 +757,116 @@
                 // 原文里的空行在这里变成「这段之前空了一行」，读起来才是作者
                 // 写作时划分的场景，而不是被压平的段落墙。
                 'data-gap': para.gap ? '1' : '0',
+                // 这段第一个字在章节全文里的下标：选区要靠它反推成标注区间。
+                'data-start': String(para.start),
               },
-              para.text,
+              own.length ? splitByMarks(para, own) : para.text,
             ),
           ),
-        ),
-      );
-    }, [chapters, currentId, currentText]);
+        );
+      });
+    }, [chapters, currentId, currentText, marks]);
 
     const flowStyle = {
       fontSize: fontSize + 'px',
       lineHeight: String(lineHeight),
     };
+
+    // 选中一段字之后浮出来的小工具条：就四个动作，不下拉、不弹窗。
+    const toolbar = sel
+      ? h(
+        'div',
+        {
+          className: 'nw-mark-bar',
+          role: 'toolbar',
+          'aria-label': NW.t('标注'),
+          style: {
+            left: Math.round(Math.max(12, sel.x)) + 'px',
+            top: Math.round(Math.max(8, sel.y - 44)) + 'px',
+          },
+        },
+        h('button', {
+          type: 'button',
+          className: 'nw-mark-bar-btn',
+          onClick: () => addMark('underline'),
+          title: NW.t('下划线'),
+        }, NW.t('下划线')),
+        h('button', {
+          type: 'button',
+          className: 'nw-mark-bar-btn',
+          onClick: () => addMark('strike'),
+          title: NW.t('删除线'),
+        }, h('span', { style: { textDecoration: 'line-through' } }, NW.t('删除线'))),
+        h('button', {
+          type: 'button',
+          className: 'nw-mark-bar-btn',
+          onClick: () => addMark('todo'),
+          title: NW.t('待改'),
+        }, NW.t('待改')),
+        h('button', {
+          type: 'button',
+          className: 'nw-mark-bar-btn',
+          onClick: addNote,
+          title: NW.t('批注'),
+        }, NW.t('批注')),
+      )
+      : null;
+
+    const activePanel = activeMark
+      ? h(
+        'div',
+        { className: 'nw-mark-pop', role: 'dialog', 'aria-label': NW.t('这条标注') },
+        h('div', { className: 'nw-mark-pop-quote' }, String(activeMark.quote || '').slice(0, 90)),
+        activeMark.kind === 'comment'
+          ? h('div', { className: 'nw-mark-pop-note' }, String(activeMark.note || NW.t('（没有正文）')))
+          : null,
+        h(
+          'div',
+          { className: 'nw-mark-pop-acts' },
+          // A comment is the one kind worth editing after the fact: the words it
+          // quotes never change, but the thought about them often does.
+          activeMark.kind === 'comment'
+            ? h('button', {
+              type: 'button',
+              className: 'nw-mark-pop-btn',
+              onClick: () => {
+                const id = activeMark.id;
+                const now = String(activeMark.note || '');
+                const ask = NW.ui && typeof NW.ui.promptAsync === 'function'
+                  ? NW.ui.promptAsync({
+                    title: NW.t('改这条批注'),
+                    label: NW.t('批注'),
+                    value: now,
+                    multiline: true,
+                    placeholder: NW.t('这条批注写给自己看'),
+                  })
+                  : Promise.resolve(null);
+                Promise.resolve(ask).then((next) => {
+                  if (next == null) return;
+                  const body = String(next).trim();
+                  if (typeof p.onNote === 'function') p.onNote(id, body);
+                  setActiveMark(null);
+                });
+              },
+            }, NW.t('改批注'))
+            : null,
+          h('button', {
+            type: 'button',
+            className: 'nw-mark-pop-btn',
+            onClick: () => { setActiveMark(null); },
+          }, NW.t('知道了')),
+          h('button', {
+            type: 'button',
+            className: 'nw-mark-pop-btn',
+            'data-danger': '1',
+            onClick: () => {
+              if (typeof p.onUnmark === 'function') p.onUnmark(activeMark.id);
+              setActiveMark(null);
+            },
+          }, NW.t('删掉这条标注')),
+        ),
+      )
+      : null;
 
     return h(
       'div',
@@ -534,9 +906,25 @@
             tabIndex: -1,
             onPointerDown,
             onPointerUp,
+            onClick: (ev) => {
+              const node = ev.target;
+              if (node && typeof node.closest === 'function') {
+                const span = node.closest('.nw-mark[data-mark]');
+                if (span) {
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                  openMark(span.getAttribute('data-mark'));
+                  return;
+                }
+              }
+              // 点空白处收起面板。
+              if (activeMark) setActiveMark(null);
+            },
           },
           body,
         ),
+        toolbar,
+        activePanel,
       ),
       h(
         'div',
@@ -544,7 +932,7 @@
         h(
           'span',
           { className: 'nw-read-hint', 'data-fade': hintOn ? '0' : '1' },
-          '← → 翻页 · Esc 回到写作',
+          '← → 翻页 · 选字可以标注 · Esc 回到写作',
         ),
         h('span', { className: 'nw-read-count' }, String(page + 1) + ' / ' + String(Math.max(1, layout.total))),
       ),

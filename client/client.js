@@ -455,8 +455,8 @@ window.__ModuleLoader__.load({
   // ---------------------------------------------------------------------------
 
   const DB_NAME = 'novel-writer';
-  const DB_VERSION = 2;
-  const STORES = ['novels', 'chapters', 'versions', 'trash', 'settings', 'notes'];
+  const DB_VERSION = 3;
+  const STORES = ['novels', 'chapters', 'versions', 'trash', 'settings', 'notes', 'marks'];
   const VERSION_LIMIT = 50;
   const SETTINGS_KEY = 'app';
   const ENC_PREFIX = 'enc:v1:';
@@ -638,6 +638,16 @@ window.__ModuleLoader__.load({
           // place without touching existing rows.
           if (!db.objectStoreNames.contains('notes')) {
             const store = db.createObjectStore('notes', { keyPath: 'id' });
+            store.createIndex('byNovelId', 'novelId', { unique: false });
+          }
+          // R47: annotations (下划线 / 删除线 / 批注) are marks over a chapter's
+          // text, not edits to it — the manuscript itself must stay byte for
+          // byte what the writer typed. So they get their own store keyed by
+          // chapter, the same shape `notes` uses, and an old database upgrades
+          // in place without touching existing rows.
+          if (!db.objectStoreNames.contains('marks')) {
+            const store = db.createObjectStore('marks', { keyPath: 'id' });
+            store.createIndex('byChapterId', 'chapterId', { unique: false });
             store.createIndex('byNovelId', 'novelId', { unique: false });
           }
         } catch (err) {
@@ -1013,6 +1023,18 @@ window.__ModuleLoader__.load({
     for (let i = 0; i < versions.length; i += 1) {
       ops.push({ store: 'versions', type: 'delete', key: versions[i].id });
     }
+    // R47: same contract as deleteChapter — the book's annotations travel with
+    // it into the trash payload so restoring brings them back.
+    const allMarks = await readAll('marks');
+    const marks = allMarks.filter(function (row) {
+      return row && chapterIds[row.chapterId];
+    });
+    if (marks.length) {
+      trashItem.payload.marks = marks;
+      for (let i = 0; i < marks.length; i += 1) {
+        ops.push({ store: 'marks', type: 'delete', key: marks[i].id });
+      }
+    }
     await writeBatch(ops);
     notify();
     // R22: same contract as deleteChapter — the id lets the caller offer 撤销.
@@ -1282,6 +1304,20 @@ window.__ModuleLoader__.load({
     for (let i = 0; i < versions.length; i += 1) {
       ops.push({ store: 'versions', type: 'delete', key: versions[i].id });
     }
+    // R47: annotations live on character offsets inside these chapters, so they
+    // go with them. Parked in the trash payload rather than deleted outright:
+    // 撤销 puts the text back, and an underline that reappears with it costs
+    // nothing while a silently lost one is a small betrayal of the writer.
+    const allMarks = await readAll('marks');
+    const marks = allMarks.filter(function (row) {
+      return row && idSet[row.chapterId];
+    });
+    if (marks.length) {
+      trashItem.payload.marks = marks;
+      for (let i = 0; i < marks.length; i += 1) {
+        ops.push({ store: 'marks', type: 'delete', key: marks[i].id });
+      }
+    }
     await writeBatch(ops);
     if (root.novelId) await touchNovel(root.novelId);
     notify();
@@ -1453,6 +1489,14 @@ window.__ModuleLoader__.load({
     }
 
     ops.push({ store: 'trash', type: 'delete', key: id });
+    // R47: annotations ride along with the text they were drawn on. Older trash
+    // rows simply have no `marks` array, which restores exactly as before.
+    const restoredMarks = Array.isArray(payload.marks) ? payload.marks : [];
+    for (let i = 0; i < restoredMarks.length; i += 1) {
+      const row = restoredMarks[i];
+      if (!row || !row.id) continue;
+      ops.push({ store: 'marks', type: 'put', value: row });
+    }
     await writeBatch(ops);
     notify();
   }
@@ -1616,6 +1660,160 @@ window.__ModuleLoader__.load({
     return true;
   }
 
+  // --------------------------------- marks ---------------------------------
+
+  /**
+   * R47: annotations.
+   *
+   * A mark is a range inside one chapter's text — `{start, end}` measured in
+   * characters of `chapter.content` — plus a `kind` and, for 批注, a `note`.
+   * Marks are deliberately *not* edits: the manuscript keeps the words the
+   * writer typed, and a mark is only an overlay drawn behind them. That way
+   * annotating can never reflow the sentence, and deleting a mark always
+   * restores the page exactly.
+   *
+   *   kind: 'underline' | 'strike' | 'todo' | 'comment'
+   *
+   * `todo` is the "改这里" flag: a wavy underline plus a checklist entry, so a
+   * writer can mark a place to come back to without stopping to fix it now.
+   * `strike` is 删除线 — "this paragraph goes" — and is the reason the mark has
+   * to be drawn by the editor rather than carried in the text: a struck line
+   * still has to count for the word total until the writer deletes it.
+   */
+  const MARK_KINDS = { underline: 1, strike: 1, todo: 1, comment: 1 };
+
+  function cleanMark(input) {
+    const data = input || {};
+    const chapterId = String(data.chapterId || '');
+    if (!chapterId) return null;
+    const kind = MARK_KINDS[String(data.kind || '')] ? String(data.kind) : 'underline';
+    const start = Math.max(0, Math.round(Number(data.start) || 0));
+    const end = Math.max(start, Math.round(Number(data.end) || 0));
+    if (end <= start) return null;
+    return {
+      chapterId: chapterId,
+      novelId: data.novelId ? String(data.novelId) : '',
+      kind: kind,
+      start: start,
+      end: end,
+      // The quoted words are stored alongside the offsets so a mark still says
+      // something useful after the paragraph around it is rewritten — the
+      // offsets drift, the quote does not.
+      quote: String(data.quote == null ? '' : data.quote).slice(0, 240),
+      note: String(data.note == null ? '' : data.note).slice(0, 400),
+    };
+  }
+
+  async function listMarks(novelId, chapterId) {
+    let rows;
+    if (chapterId != null && String(chapterId)) {
+      rows = await readIndex('marks', 'byChapterId', String(chapterId));
+    } else if (novelId != null && String(novelId)) {
+      rows = await readIndex('marks', 'byNovelId', String(novelId));
+    } else {
+      rows = await readAll('marks');
+    }
+    return (rows || [])
+      .filter(function (row) {
+        return row && row.id;
+      })
+      .sort(function (a, b) {
+        return (Number(a.start) || 0) - (Number(b.start) || 0) || (Number(a.end) || 0) - (Number(b.end) || 0);
+      });
+  }
+
+  async function createMark(input) {
+    const clean = cleanMark(input);
+    if (!clean) return undefined;
+    const stamp = now();
+    const row = Object.assign({ id: uid('mark'), createdAt: stamp, updatedAt: stamp }, clean);
+    const ok = await writeBatch([{ store: 'marks', type: 'put', value: row }]);
+    if (!ok) throw new Error('保存标注失败');
+    notify();
+    return row;
+  }
+
+  async function updateMark(id, patch) {
+    if (!id || !patch) return undefined;
+    const current = await readOne('marks', id);
+    if (!current) return undefined;
+    const next = Object.assign({}, current);
+    if (Object.prototype.hasOwnProperty.call(patch, 'note')) {
+      next.note = String(patch.note == null ? '' : patch.note).slice(0, 400);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'kind') && MARK_KINDS[String(patch.kind)]) {
+      next.kind = String(patch.kind);
+    }
+    next.updatedAt = now();
+    const ok = await writeBatch([{ store: 'marks', type: 'put', value: next }]);
+    if (!ok) return undefined;
+    notify();
+    return next;
+  }
+
+  async function deleteMark(id) {
+    if (!id) return false;
+    const ok = await writeBatch([{ store: 'marks', type: 'delete', key: id }]);
+    if (!ok) return false;
+    notify();
+    return true;
+  }
+
+  /**
+   * Keeps marks pinned to the words they were drawn on across an edit.
+   *
+   * `diff` is `{head, oldMid, newMid}`: everything before `head` is untouched,
+   * the middle was replaced, everything after it moved by `newMid - oldMid`.
+   *
+   * A mark that lay wholly inside the replaced middle is deleted — the words it
+   * pointed at are gone, and leaving it behind would underline whatever happens
+   * to occupy those offsets now.
+   */
+  async function shiftMarksForEdit(chapterId, diff) {
+    const id = String(chapterId || '');
+    const d = diff || {};
+    if (!id) return 0;
+    const head = Math.max(0, Number(d.head) || 0);
+    const oldMid = Math.max(0, Number(d.oldMid) || 0);
+    const newMid = Math.max(0, Number(d.newMid) || 0);
+    if (!oldMid && !newMid) return 0;
+    const delta = newMid - oldMid;
+    const rows = await listMarks(null, id);
+    const ops = [];
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i];
+      const start = Number(row.start) || 0;
+      const end = Number(row.end) || 0;
+      if (end <= head) continue; // wholly before the edit
+      if (start >= head + oldMid) {
+        if (delta) {
+          ops.push({
+            store: 'marks',
+            type: 'put',
+            value: Object.assign({}, row, { start: start + delta, end: end + delta, updatedAt: now() }),
+          });
+        }
+        continue;
+      }
+      // Overlaps the replaced middle: keep whatever survived on the edges.
+      const nextStart = start <= head ? start : head + newMid;
+      const nextEnd = end >= head + oldMid ? end + delta : head + newMid;
+      if (nextEnd <= nextStart) {
+        ops.push({ store: 'marks', type: 'delete', key: row.id });
+      } else {
+        ops.push({
+          store: 'marks',
+          type: 'put',
+          value: Object.assign({}, row, { start: nextStart, end: nextEnd, updatedAt: now() }),
+        });
+      }
+    }
+    if (!ops.length) return 0;
+    await writeBatch(ops);
+    notify();
+    return ops.length;
+  }
+
   // --------------------------------- public ----------------------------------
 
   function subscribe(fn) {
@@ -1668,6 +1866,7 @@ window.__ModuleLoader__.load({
         ? settingsRow.value
         : await getSettings();
     const notes = await readAll('notes');
+    const marks = await readAll('marks');
     return {
       novels: novels || [],
       chapters: chapters || [],
@@ -1675,6 +1874,7 @@ window.__ModuleLoader__.load({
       trash: trash || [],
       settings: settings || {},
       notes: notes || [],
+      marks: marks || [],
     };
   }
 
@@ -1736,6 +1936,11 @@ window.__ModuleLoader__.load({
     const existingNovels = (await readAll('novels')) || [];
     const existingChapters = (await readAll('chapters')) || [];
     const existingVersions = (await readAll('versions')) || [];
+    // R47: annotations are chapter-scoped character offsets, so when the peer
+    // removes a chapter they cannot survive. Read once and drop with the text
+    // they were pinned to — an annotation on a chapter nobody has is unreachable
+    // and would be restored into a hole, exactly like orphaned versions below.
+    const existingMarks = (await readAll('marks')) || [];
     const byNovel = new Map();
     const localById = new Map();
     for (let i = 0; i < existingChapters.length; i += 1) {
@@ -1758,6 +1963,23 @@ window.__ModuleLoader__.load({
       if (!versionsByChapter.has(key)) versionsByChapter.set(key, []);
       versionsByChapter.get(key).push(row);
     }
+    const marksByChapter = new Map();
+    for (let i = 0; i < existingMarks.length; i += 1) {
+      const row = existingMarks[i];
+      if (!row || !row.id || row.chapterId == null) continue;
+      const key = String(row.chapterId);
+      if (!marksByChapter.has(key)) marksByChapter.set(key, []);
+      marksByChapter.get(key).push(row);
+    }
+    // Annotations of one chapter, as delete ops — shared by the two places a
+    // chapter can disappear (a tombstone for the whole book, or a chapter the
+    // peer no longer has).
+    const markOpsOf = function (chapterId) {
+      const rows = marksByChapter.get(String(chapterId)) || [];
+      const out = [];
+      for (let i = 0; i < rows.length; i += 1) out.push({ store: 'marks', type: 'delete', key: rows[i].id });
+      return out;
+    };
 
     const ops = [];
     let touched = 0;
@@ -1770,6 +1992,11 @@ window.__ModuleLoader__.load({
 
       if (incoming.deleted === true) {
         if (!existing) continue;
+        const doomedMarks = [];
+        for (let c = 0; c < currentChapters.length; c += 1) {
+          const rows = marksByChapter.get(String(currentChapters[c].id)) || [];
+          for (let mi = 0; mi < rows.length; mi += 1) doomedMarks.push(rows[mi]);
+        }
         ops.push({
           store: 'trash',
           type: 'put',
@@ -1778,12 +2005,14 @@ window.__ModuleLoader__.load({
             kind: 'novel',
             title: existing.title || '未命名小说',
             deletedAt: now(),
-            payload: { novel: existing, chapters: currentChapters, versions: [] },
+            payload: { novel: existing, chapters: currentChapters, versions: [], marks: doomedMarks },
           },
         });
         ops.push({ store: 'novels', type: 'delete', key: id });
         for (let c = 0; c < currentChapters.length; c += 1) {
           ops.push({ store: 'chapters', type: 'delete', key: currentChapters[c].id });
+          const mops = markOpsOf(currentChapters[c].id);
+          for (let mo = 0; mo < mops.length; mo += 1) ops.push(mops[mo]);
         }
         touched += 1;
         continue;
@@ -1843,6 +2072,10 @@ window.__ModuleLoader__.load({
         for (let v = 0; v < orphans.length; v += 1) {
           ops.push({ store: 'versions', type: 'delete', key: orphans[v].id });
         }
+        // R47: same reasoning for annotations — the offsets they point at are
+        // gone, so the marks under them are not worth keeping.
+        const orphanMarks = markOpsOf(row.id);
+        for (let mo = 0; mo < orphanMarks.length; mo += 1) ops.push(orphanMarks[mo]);
       }
       touched += 1;
     }
@@ -1888,6 +2121,11 @@ window.__ModuleLoader__.load({
     createNote: createNote,
     updateNote: updateNote,
     deleteNote: deleteNote,
+    listMarks: listMarks,
+    createMark: createMark,
+    updateMark: updateMark,
+    deleteMark: deleteMark,
+    shiftMarksForEdit: shiftMarksForEdit,
     dump: dump,
     replaceAll: replaceAll,
     encryptAll: encryptAll,
@@ -8224,6 +8462,10 @@ window.__ModuleLoader__.load({
   const MEASURE_MS = 60; // caret measurement / autosize throttle
   const TAB_TEXT = '\u3000\u3000'; // two full-width spaces
   const MAX_MATCHES = 5000;
+  // R47: the annotation kinds the editor knows how to draw. Each one becomes a
+  // `nw-mark-<kind>` class on the mirror `<mark>`, so the look of a mark lives
+  // in CSS next to the highlight mirror rather than in this function.
+  const MARK_CLASS = { underline: 1, strike: 1, todo: 1, comment: 1 };
   // Reading palettes owned by the editor. The five ids are shared with the
   // shell (client/src/98-shell-theme.js) and with settings.theme. R19 dropped
   // harness / ink / card / guofeng — see the palette comment further down.
@@ -8320,8 +8562,7 @@ window.__ModuleLoader__.load({
    * different character. Shifting it by the size of the replaced middle region
    * keeps it on the character the writer was sitting on.
    */
-  function shiftOffsetForEdit(before, after, offset) {
-    const a = typeof before === 'string' ? before : '';
+  function shiftOffsetForEdit(before, after, offset) {    const a = typeof before === 'string' ? before : '';
     const b = typeof after === 'string' ? after : '';
     const at = clampNum(Math.round(numOf(offset, 0)), 0, a.length);
     if (a === b) return clampNum(at, 0, b.length);
@@ -8726,6 +8967,45 @@ window.__ModuleLoader__.load({
 }
 .nw-hl .nw-find-hit{background-color:var(--nw-find-bg);border-radius:var(--nw-r-hair);}
 .nw-hl .nw-find-hit[data-active="1"]{background-color:var(--nw-find-active);box-shadow:inset 0 0 0 1px var(--nw-find-ring);}
+/* R47: annotations. They are drawn by the same mirror as the advice highlight —
+   the textarea above stays perfectly transparent, so a mark never changes the
+   colour of the words or the flow of the line, only the paper under it. */
+.nw-hl .nw-mark-underline{
+  background-color:transparent;
+  box-shadow:inset 0 -2px 0 var(--nw-mark-underline, var(--nw-brand));
+}
+.nw-hl .nw-mark-strike{
+  background-color:transparent;
+  text-decoration:line-through;
+  text-decoration-color:var(--nw-mark-strike, var(--nw-danger));
+  text-decoration-thickness:1.5px;
+}
+/* The words of a struck line are still the manuscript's words: they stay fully
+   legible (no faded filler) until the writer actually deletes them. The mirror
+   paints every glyph transparent, so the strike is drawn with text-decoration
+   on the transparent run — which is why the mark keeps its own colour clear. */
+.nw-hl .nw-mark-todo{
+  background-color:transparent;
+  box-shadow:inset 0 -2px 0 var(--nw-mark-todo, var(--nw-warn));
+  background-image:linear-gradient(
+    to right,
+    var(--nw-mark-todo, var(--nw-warn)) 0 4px,
+    transparent 4px 8px
+  );
+  background-repeat:repeat-x;
+  background-position:0 100%;
+  background-size:8px 2px;
+}
+.nw-hl .nw-mark-comment{
+  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 16%, transparent);
+  box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
+}
+.nw-hl .nw-mark-comment[data-active="1"],
+.nw-hl .nw-mark-underline[data-active="1"],
+.nw-hl .nw-mark-todo[data-active="1"],
+.nw-hl .nw-mark-strike[data-active="1"]{
+  background-color:color-mix(in srgb, var(--nw-brand) 18%, transparent);
+}
 
 /* caret measuring mirror: same box, never painted */
 .nw-caret{
@@ -8979,6 +9259,10 @@ window.__ModuleLoader__.load({
     cfgRef.current = { autoSaveMs, typewriterOn, fontSize, lineHeight, focusOn, focusLines };
 
     const highlightsRef = React.useRef([]);
+    // R47: persistent annotations, kept apart from `highlightsRef` on purpose —
+    // the advice panel owns that one and clears it whenever the writer moves on,
+    // and it must not be able to wipe the writer's own underlines.
+    const marksRef = React.useRef([]);
     const saveTimerRef = React.useRef(0);
     // rAF handle for the coalesced measure pass (0 = none queued).
     const measureRafRef = React.useRef(0);
@@ -9680,7 +9964,19 @@ window.__ModuleLoader__.load({
         if (!r) continue;
         const s = clampNum(numOf(r.start, 0), 0, text.length);
         const e = clampNum(numOf(r.end, s), s, text.length);
-        if (e > s) ranges.push({ start: s, end: e, id: r.id, active: !!r.active, kind: 'hl' });
+        if (e > s) {
+          ranges.push({
+            start: s,
+            end: e,
+            id: r.id,
+            active: !!r.active,
+            kind: 'hl',
+            // R47: the mark's type decides how it is drawn (underline / strike /
+            // todo / comment). Unknown or missing types fall back to the plain
+            // highlight the advice panel has always used.
+            mark: MARK_CLASS[r.mark] ? r.mark : '',
+          });
+        }
       }
       const f = findRef.current;
       if (f.open && f.matches && f.matches.length) {
@@ -9689,6 +9985,23 @@ window.__ModuleLoader__.load({
           if (m.end > m.start) {
             ranges.push({ start: m.start, end: m.end, active: i === f.index, kind: 'find' });
           }
+        }
+      }
+      const own = marksRef.current || [];
+      for (let i = 0; i < own.length; i += 1) {
+        const r = own[i];
+        if (!r) continue;
+        const s = clampNum(numOf(r.start, 0), 0, text.length);
+        const e = clampNum(numOf(r.end, s), s, text.length);
+        if (e > s) {
+          ranges.push({
+            start: s,
+            end: e,
+            id: r.id,
+            active: !!r.active,
+            kind: 'hl',
+            mark: MARK_CLASS[r.kind] ? r.kind : 'underline',
+          });
         }
       }
       if (!ranges.length) {
@@ -9705,6 +10018,7 @@ window.__ModuleLoader__.load({
         if (s > pos) frag.appendChild(document.createTextNode(text.slice(pos, s)));
         const el = document.createElement('mark');
         el.className = r.kind === 'find' ? 'nw-find-hit' : 'nw-hl-mark';
+        if (r.mark) el.className += ' nw-mark-' + r.mark;
         if (r.active) el.setAttribute('data-active', '1');
         if (r.id !== undefined && r.id !== null) el.setAttribute('data-id', String(r.id));
         el.textContent = text.slice(s, r.end);
@@ -10044,6 +10358,23 @@ window.__ModuleLoader__.load({
         }
         return;
       }
+      // R47: annotations are pinned to characters, so a save is also the moment
+      // to tell the app how the text moved. Doing it here rather than per
+      // keystroke keeps it to one diff per save, and it covers every way the
+      // buffer can change (typing, paste, replace-all, IME commit) without
+      // hooking each of them. `lastSavedRef` still holds the text of the
+      // previous save at this point, which is exactly what the diff needs.
+      const previous = lastSavedRef.current;
+      if (typeof previous === 'string' && previous !== text && typeof propsRef.current.onMarksShift === 'function') {
+        const d = diffEnds(previous, text);
+        if (d.oldMid || d.newMid) {
+          try {
+            propsRef.current.onMarksShift(d);
+          } catch (err) {
+            /* a broken listener must not lose the save */
+          }
+        }
+      }
       lastSavedRef.current = text;
       dirtyRef.current = false;
       valueRef.current = text;
@@ -10222,6 +10553,18 @@ window.__ModuleLoader__.load({
       invalidateAutosize();
       autosize();
       if (findRef.current.open) refreshMatches();
+      // R47: the peer moved the text, so this chapter's annotations move with
+      // it exactly as they would after local typing. `commitSave` cannot do it
+      // here — adoption deliberately leaves the buffer clean, so no save ever
+      // runs for this change and without this line every underline in the
+      // chapter would slide onto whatever now sits at those offsets.
+      if ((d.oldMid || d.newMid) && typeof propsRef.current.onMarksShift === 'function') {
+        try {
+          propsRef.current.onMarksShift(d);
+        } catch (err) {
+          /* an annotation must never break an incoming edit */
+        }
+      }
       rebuildHighlights();
       revealPeerEdit(d.head);
       scheduleMeasure(false);
@@ -10282,6 +10625,37 @@ window.__ModuleLoader__.load({
     function setHighlights(list) {
       highlightsRef.current = Array.isArray(list) ? list.slice() : [];
       rebuildHighlights();
+    }
+
+    /**
+     * R47: the writer's own annotations.
+     *
+     * Kept separate from `setHighlights()` because that one is transient — the
+     * advice panel uses it to point at a sentence and clears it as soon as the
+     * writer moves on. Marks outlive all of that.
+     */
+    function setMarks(list) {
+      marksRef.current = Array.isArray(list) ? list.slice() : [];
+      rebuildHighlights();
+    }
+
+    /** Which mark sits under `offset`, if any — newest (longest) wins. */
+    function markAt(offset, opts) {
+      const want = opts || {};
+      const own = marksRef.current || [];
+      const at = numOf(offset, -1);
+      if (at < 0) return null;
+      let best = null;
+      for (let i = 0; i < own.length; i += 1) {
+        const r = own[i];
+        if (!r) continue;
+        if (!(at >= (Number(r.start) || 0) && at < (Number(r.end) || 0))) continue;
+        if (want.kind && r.kind !== want.kind) continue;
+        if (!best || (Number(r.end) - Number(r.start)) <= (Number(best.end) - Number(best.start))) {
+          best = r;
+        }
+      }
+      return best;
     }
 
     // -------------------------------------------------------- find & replace --
@@ -11022,6 +11396,19 @@ window.__ModuleLoader__.load({
       adoptExternalText(incomingContent);
     }, [incomingContent]);
 
+    // R47: annotations for the open chapter. The app owns the whole book's list
+    // (the reading view shows all of it); this instance only draws its own
+    // chapter, because a mark's offsets mean nothing in another chapter's text.
+    const marksIn = p.marks;
+    const marksChapterId = chapter && chapter.id != null ? String(chapter.id) : '';
+    React.useEffect(() => {
+      if (!marksChapterId) return;
+      const list = (Array.isArray(marksIn) ? marksIn : []).filter(
+        (row) => row && String(row.chapterId) === marksChapterId,
+      );
+      setMarks(list);
+    }, [marksIn, marksChapterId]);
+
     // Listeners are attached once; every callback reads refs for freshness.
     React.useEffect(() => {
       // Manual-viewport detection. Wheel/touch and keyboard paging are
@@ -11551,22 +11938,73 @@ window.__ModuleLoader__.load({
    * 空行不当段落（段距由段落 margin 负责，留着空行会把段距翻倍），但也不能
    * 直接丢掉：中文长篇里空行常常就是「场景换了」的唯一标记，抹掉它整章会塌成
    * 一片。所以空行只转成下一段的 `gap`，由 CSS 加一份额外段距。
+   *
+   * 每段还带 `start`：这段第一个字在章节全文里的字符下标。标注是按全文
+   * 下标存的，所以读视图要知道每段从哪儿开始，才能把标注画到对的地方。
    */
   function paragraphsOf(text) {
     const out = [];
-    const lines = String(text == null ? '' : text).split(/\r\n|\r|\n/);
+    const raw = String(text == null ? '' : text);
+    const lines = raw.split(/\r\n|\r|\n/);
     let blank = 0;
+    let pos = 0;
     for (let i = 0; i < lines.length; i += 1) {
-      const line = lines[i].trim();
-      if (!line) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      const after = pos + line.length + 1;
+      if (!trimmed) {
         blank += 1;
+        pos = after;
         continue;
       }
       // 第一段前面的空行没有意义（正文开头本来就留白）。
-      out.push({ text: line, gap: out.length > 0 && blank > 0 });
+      out.push({
+        text: trimmed,
+        gap: out.length > 0 && blank > 0,
+        start: pos + (line.length - line.trimStart().length),
+      });
       blank = 0;
+      pos = after;
     }
     return out;
+  }
+
+  /**
+   * 把一段文字按标注切开。
+   *
+   * 标注只能画在字的下面，不能改字，所以这里只负责把段落拆成「普通文本 +
+   * 带 class 的 span」，段落的文字内容一个字都不少。
+   */
+  function splitByMarks(para, marks) {
+    const start = para.start;
+    const end = start + para.text.length;
+    const hits = [];
+    for (let i = 0; i < marks.length; i += 1) {
+      const m = marks[i];
+      const s = Math.max(start, Number(m.start) || 0);
+      const e = Math.min(end, Number(m.end) || 0);
+      if (e > s) hits.push({ s: s - start, e: e - start, kind: m.kind, id: m.id });
+    }
+    if (!hits.length) return para.text;
+    hits.sort((a, b) => a.s - b.s || a.e - b.e);
+    const out = [];
+    let pos = 0;
+    for (let i = 0; i < hits.length; i += 1) {
+      const m = hits[i];
+      const s = Math.max(pos, m.s);
+      if (m.e <= s) continue;
+      if (s > pos) out.push(para.text.slice(pos, s));
+      out.push(
+        h(
+          'span',
+          { className: 'nw-mark nw-mark-' + String(m.kind || 'underline'), key: 'm' + i + '-' + String(m.id), 'data-mark': String(m.id) },
+          para.text.slice(s, m.e),
+        ),
+      );
+      pos = m.e;
+    }
+    if (pos < para.text.length) out.push(para.text.slice(pos));
+    return out.length === 1 ? out[0] : out;
   }
 
   NW.CSS_PARTS.push(`
@@ -11640,6 +12078,36 @@ window.__ModuleLoader__.load({
    extra line of air instead of being flattened into the paragraph wall. */
 .nw-read-p[data-gap="1"]{margin-top:1.1em;}
 .nw-read-p:last-child{margin-bottom:0;}
+/* ---- 标注（读视图）------------------------------------------------------
+   Marks are drawn under the words, never over them: an underline sits below the
+   glyphs, a strike-through is a line through the middle of the em box, and a
+   comment is a wash of colour plus a rule. The manuscript text itself is
+   untouched, so annotating can never change the words or the pagination. */
+.nw-mark{border-radius:var(--nw-r-hair);}
+.nw-mark-underline{box-shadow:inset 0 -2px 0 var(--nw-mark-underline, var(--nw-brand));}
+.nw-mark-strike{
+  text-decoration:line-through;text-decoration-thickness:1.5px;
+  text-decoration-color:var(--nw-mark-strike, var(--nw-danger));
+}
+.nw-mark-todo{
+  background-image:linear-gradient(to right,var(--nw-mark-todo, var(--nw-warn)) 0 4px,transparent 4px 8px);
+  background-repeat:repeat-x;background-position:0 100%;background-size:8px 2px;
+  box-shadow:inset 0 -1px 0 transparent;
+  padding-bottom:1px;
+}
+.nw-mark-comment{
+  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 16%, transparent);
+  box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
+}
+.nw-mark[data-active="1"]{background-color:color-mix(in srgb, var(--nw-brand) 22%, transparent);}
+/* 选中的标注：用外描边而不是换色，正文颜色始终是作者的字色。 */
+.nw-mark[data-selected="1"]{outline:1px solid color-mix(in srgb, var(--nw-brand) 55%, transparent);outline-offset:1px;}
+/* 批注角标：一个几乎不占位的圆点，说明这里挂了一条批注。 */
+.nw-mark-comment::after{
+  content:'';display:inline-block;width:4px;height:4px;margin-left:2px;
+  border-radius:var(--nw-r-pill);background:var(--nw-mark-comment, var(--nw-brand));
+  vertical-align:super;
+}
 .nw-read-empty{
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:var(--nw-sp-2);height:100%;
@@ -11654,6 +12122,52 @@ window.__ModuleLoader__.load({
 .nw-read-hint{transition:opacity .7s var(--nw-ease, ease);}
 .nw-read-hint[data-fade="1"]{opacity:0;}
 .nw-read-count{font-variant-numeric:tabular-nums;letter-spacing:.06em;}
+/* ---- 标注工具条 / 标注详情 ----------------------------------------------
+   Both float inside .nw-read-stage, so they travel with the page column
+   instead of the window — a toolbar anchored to the viewport would drift away
+   from the sentence as soon as the writer turns a page. */
+.nw-mark-bar{
+  position:fixed;z-index:34;
+  display:inline-flex;align-items:center;gap:2px;
+  padding:3px;border-radius:var(--nw-r-pill);
+  border:1px solid var(--nw-line-strong);
+  background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);
+  transform:translateX(-50%);
+}
+.nw-mark-bar-btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  height:28px;padding:0 10px;border:0;border-radius:var(--nw-r-pill);
+  background:transparent;color:var(--nw-fg);cursor:pointer;white-space:nowrap;
+}
+.nw-mark-bar-btn:hover{background:var(--nw-btn-hover);}
+.nw-mark-pop{
+  position:absolute;left:50%;bottom:24px;transform:translateX(-50%);
+  z-index:35;width:min(420px,calc(100% - 32px));
+  display:flex;flex-direction:column;gap:var(--nw-sp-2);
+  padding:var(--nw-sp-3);border-radius:var(--nw-r-card);
+  border:1px solid var(--nw-line);background:var(--nw-panel);box-shadow:var(--nw-shadow-3);
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-micro);
+  animation:nw-fade-in var(--nw-dur, .18s) var(--nw-ease, ease) both;
+}
+.nw-mark-pop-quote{
+  padding-left:var(--nw-sp-2);border-left:2px solid var(--nw-brand);
+  color:var(--nw-soft);line-height:1.5;
+}
+.nw-mark-pop-note{color:var(--nw-fg);line-height:1.6;white-space:pre-wrap;}
+.nw-mark-pop-acts{display:flex;justify-content:space-between;gap:var(--nw-sp-2);}
+.nw-mark-pop-btn{
+  height:var(--nw-h-btn);padding:0 var(--nw-sp-3);
+  border-radius:var(--nw-r-control);border:1px solid var(--nw-line-strong);
+  background:var(--nw-btn-bg);color:var(--nw-fg);cursor:pointer;
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-micro);
+}
+.nw-mark-pop-btn:hover{background:var(--nw-btn-hover);}
+.nw-mark-pop-btn[data-danger="1"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 45%, var(--nw-line-strong));}
+@media (max-width: 560px){
+  .nw-mark-bar-btn{padding:0 8px;}
+  .nw-mark-pop{left:8px;right:8px;width:auto;transform:none;}
+}
 @media (prefers-reduced-motion: reduce){
   .nw-read{animation:none;}
   .nw-read-flow{scroll-behavior:auto;}
@@ -11674,6 +12188,10 @@ window.__ModuleLoader__.load({
    *   currentId   — 打开时想停在哪一章
    *   currentText — 当前章节编辑器里的**实时**文本（含尚未保存的字）
    *   settings    — 用来沿用字号/行高/主题
+   *   marks       — 整本书的标注（`{id, chapterId, kind, start, end, note}`）
+   *   onMark      — `(draft) => void`，把新标注交给上层去存
+   *   onUnmark    — `(id) => void`，删掉一条标注
+   *   onNote      — `(id, note) => void`，改批注正文
    *   onClose     — 退出
    */
   NW.ReadView = function ReadView(props) {
@@ -11687,6 +12205,7 @@ window.__ModuleLoader__.load({
     const currentId = p.currentId == null ? null : String(p.currentId);
     const currentText = typeof p.currentText === 'string' ? p.currentText : null;
     const chapters = (Array.isArray(p.chapters) ? p.chapters : []).filter(Boolean);
+    const marks = (Array.isArray(p.marks) ? p.marks : []).filter(Boolean);
 
     const stageRef = React.useRef(null);
     const flowRef = React.useRef(null);
@@ -11754,6 +12273,132 @@ window.__ModuleLoader__.load({
       setPage(next);
       scrollToPage(next, true);
     }, [maxPage, scrollToPage]);
+
+    // ---- 选字 → 标注 --------------------------------------------------------
+    //
+    // 每一段都带着自己在章节全文里的起点（`data-start`），所以一次选区可以翻
+    // 译成「哪一章、第几个字到第几个字」——标注就是用这组下标存的，跟界面上
+    // 怎么分段、怎么分页都无关。
+    const [sel, setSel] = React.useState(null);
+    const [activeMark, setActiveMark] = React.useState(null);
+
+    function locateNode(node) {
+      let el = node;
+      if (el && el.nodeType === 3) el = el.parentNode;
+      if (!el || typeof el.closest !== 'function') return null;
+      const para = el.closest('p[data-start]');
+      if (!para) return null;
+      const section = para.closest('[data-chapter-id]');
+      if (!section) return null;
+      return {
+        para: para,
+        chapterId: String(section.getAttribute('data-chapter-id') || ''),
+        base: Number(para.getAttribute('data-start')) || 0,
+      };
+    }
+
+    function offsetIn(node, offset) {
+      const hit = locateNode(node);
+      if (!hit) return null;
+      try {
+        const r = document.createRange();
+        r.setStart(hit.para, 0);
+        r.setEnd(node, offset);
+        return {
+          chapterId: hit.chapterId,
+          at: hit.base + String(r.toString() || '').length,
+        };
+      } catch (err) {
+        return null;
+      }
+    }
+
+    // Selection 变化时算出「原文区间」。跨章、跨段的选区都支持：两端各翻译一次。
+    const readSelection = React.useCallback(() => {
+      const sel0 = typeof window.getSelection === 'function' ? window.getSelection() : null;
+      if (!sel0 || !sel0.rangeCount) return null;
+      const text = String(sel0.toString() || '');
+      if (!text.trim()) return null;
+      const range = sel0.getRangeAt(0);
+      const a = offsetIn(range.startContainer, range.startOffset);
+      const b = offsetIn(range.endContainer, range.endOffset);
+      if (!a || !b) return null;
+      if (a.chapterId !== b.chapterId) return null;
+      const start = Math.min(a.at, b.at);
+      const end = Math.max(a.at, b.at);
+      if (end <= start) return null;
+      let rect = null;
+      try {
+        rect = range.getBoundingClientRect();
+      } catch (err) {
+        rect = null;
+      }
+      return {
+        chapterId: a.chapterId,
+        start: start,
+        end: end,
+        text: text.replace(/\s+\n/g, '\n'),
+        x: rect ? rect.left + rect.width / 2 : 0,
+        y: rect ? rect.top : 0,
+      };
+    }, []);
+
+    const addMark = React.useCallback((kind) => {
+      const cur = sel;
+      if (!cur) return;
+      if (typeof p.onMark === 'function') {
+        p.onMark({
+          chapterId: cur.chapterId,
+          kind: kind,
+          start: cur.start,
+          end: cur.end,
+          quote: cur.text.slice(0, 240),
+          note: '',
+        });
+      }
+      setSel(null);
+      const s = typeof window.getSelection === 'function' ? window.getSelection() : null;
+      if (s) s.removeAllRanges();
+    }, [sel, p.onMark]);
+
+    const addNote = React.useCallback(() => {
+      const cur = sel;
+      if (!cur) return;
+      const ask = NW.ui && typeof NW.ui.promptAsync === 'function'
+        ? NW.ui.promptAsync({
+          title: NW.t('写一条批注'),
+          label: NW.t('批注'),
+          multiline: true,
+          placeholder: NW.t('这条批注写给自己看'),
+        })
+        : Promise.resolve('');
+      Promise.resolve(ask).then((note) => {
+        if (note == null) return;
+        const body = String(note).trim();
+        if (!body) return;
+        if (typeof p.onMark === 'function') {
+          p.onMark({
+            chapterId: cur.chapterId,
+            kind: 'comment',
+            start: cur.start,
+            end: cur.end,
+            quote: cur.text.slice(0, 240),
+            note: body,
+          });
+        }
+        setSel(null);
+        const s = typeof window.getSelection === 'function' ? window.getSelection() : null;
+        if (s) s.removeAllRanges();
+      });
+    }, [sel, p.onMark]);
+
+    // 讲清楚「点一下标注会发生什么」：删掉它，或者改批注正文。
+    const openMark = React.useCallback((id) => {
+      const list = marks.filter((m) => String(m.id) === String(id));
+      const mark = list[0];
+      if (!mark) return;
+      setActiveMark(mark);
+    }, [marks]);
 
     // ---- 量一次版面：定栏宽 → 读 scrollWidth → 得到页数 ----------------------
     const measure = React.useCallback(() => {
@@ -11938,9 +12583,15 @@ window.__ModuleLoader__.load({
       const down = pointerRef.current;
       pointerRef.current = null;
       if (!down) return;
-      if (Math.abs(ev.clientX - down.x) > 8 || Math.abs(ev.clientY - down.y) > 8) return;
-      const sel = typeof window.getSelection === 'function' ? window.getSelection() : null;
-      if (sel && String(sel.toString() || '').length > 0) return;
+      if (Math.abs(ev.clientX - down.x) > 8 || Math.abs(ev.clientY - down.y) > 8) {
+        // 拖了一下 = 想标注这段字，不是想翻页。
+        const hit = readSelection();
+        if (hit) setSel(hit);
+        return;
+      }
+      const s0 = typeof window.getSelection === 'function' ? window.getSelection() : null;
+      if (s0 && String(s0.toString() || '').length > 0) return;
+      setSel(null);
       const flow = flowRef.current;
       if (!flow) return;
       const rect = flow.getBoundingClientRect();
@@ -11955,15 +12606,25 @@ window.__ModuleLoader__.load({
       if (!chapters.length) {
         return h('div', { className: 'nw-read-empty' }, h('span', null, NW.t('这本书还没有正文')));
       }
-      return chapters.map((row, index) =>
-        h(
+      const byChapter = {};
+      for (let i = 0; i < marks.length; i += 1) {
+        const m = marks[i];
+        const key = String(m.chapterId || '');
+        if (!key) continue;
+        if (!byChapter[key]) byChapter[key] = [];
+        byChapter[key].push(m);
+      }
+      return chapters.map((row, index) => {
+        const key = String(row.id);
+        const own = byChapter[key] || [];
+        return h(
           'section',
           {
             className: 'nw-read-chapter',
-            key: String(row.id),
+            key: key,
+            'data-chapter-id': key,
             'data-first': index === 0 ? '1' : '0',
             ref: (el) => {
-              const key = String(row.id);
               if (el) marksRef.current[key] = el;
               else delete marksRef.current[key];
             },
@@ -11972,7 +12633,7 @@ window.__ModuleLoader__.load({
             ? null
             : h('h2', { className: 'nw-read-title' }, String(row.title)),
           paragraphsOf(
-            currentId != null && String(row.id) === currentId && currentText != null
+            currentId != null && key === currentId && currentText != null
               ? currentText
               : row.content,
           ).map((para, i) =>
@@ -11984,18 +12645,116 @@ window.__ModuleLoader__.load({
                 // 原文里的空行在这里变成「这段之前空了一行」，读起来才是作者
                 // 写作时划分的场景，而不是被压平的段落墙。
                 'data-gap': para.gap ? '1' : '0',
+                // 这段第一个字在章节全文里的下标：选区要靠它反推成标注区间。
+                'data-start': String(para.start),
               },
-              para.text,
+              own.length ? splitByMarks(para, own) : para.text,
             ),
           ),
-        ),
-      );
-    }, [chapters, currentId, currentText]);
+        );
+      });
+    }, [chapters, currentId, currentText, marks]);
 
     const flowStyle = {
       fontSize: fontSize + 'px',
       lineHeight: String(lineHeight),
     };
+
+    // 选中一段字之后浮出来的小工具条：就四个动作，不下拉、不弹窗。
+    const toolbar = sel
+      ? h(
+        'div',
+        {
+          className: 'nw-mark-bar',
+          role: 'toolbar',
+          'aria-label': NW.t('标注'),
+          style: {
+            left: Math.round(Math.max(12, sel.x)) + 'px',
+            top: Math.round(Math.max(8, sel.y - 44)) + 'px',
+          },
+        },
+        h('button', {
+          type: 'button',
+          className: 'nw-mark-bar-btn',
+          onClick: () => addMark('underline'),
+          title: NW.t('下划线'),
+        }, NW.t('下划线')),
+        h('button', {
+          type: 'button',
+          className: 'nw-mark-bar-btn',
+          onClick: () => addMark('strike'),
+          title: NW.t('删除线'),
+        }, h('span', { style: { textDecoration: 'line-through' } }, NW.t('删除线'))),
+        h('button', {
+          type: 'button',
+          className: 'nw-mark-bar-btn',
+          onClick: () => addMark('todo'),
+          title: NW.t('待改'),
+        }, NW.t('待改')),
+        h('button', {
+          type: 'button',
+          className: 'nw-mark-bar-btn',
+          onClick: addNote,
+          title: NW.t('批注'),
+        }, NW.t('批注')),
+      )
+      : null;
+
+    const activePanel = activeMark
+      ? h(
+        'div',
+        { className: 'nw-mark-pop', role: 'dialog', 'aria-label': NW.t('这条标注') },
+        h('div', { className: 'nw-mark-pop-quote' }, String(activeMark.quote || '').slice(0, 90)),
+        activeMark.kind === 'comment'
+          ? h('div', { className: 'nw-mark-pop-note' }, String(activeMark.note || NW.t('（没有正文）')))
+          : null,
+        h(
+          'div',
+          { className: 'nw-mark-pop-acts' },
+          // A comment is the one kind worth editing after the fact: the words it
+          // quotes never change, but the thought about them often does.
+          activeMark.kind === 'comment'
+            ? h('button', {
+              type: 'button',
+              className: 'nw-mark-pop-btn',
+              onClick: () => {
+                const id = activeMark.id;
+                const now = String(activeMark.note || '');
+                const ask = NW.ui && typeof NW.ui.promptAsync === 'function'
+                  ? NW.ui.promptAsync({
+                    title: NW.t('改这条批注'),
+                    label: NW.t('批注'),
+                    value: now,
+                    multiline: true,
+                    placeholder: NW.t('这条批注写给自己看'),
+                  })
+                  : Promise.resolve(null);
+                Promise.resolve(ask).then((next) => {
+                  if (next == null) return;
+                  const body = String(next).trim();
+                  if (typeof p.onNote === 'function') p.onNote(id, body);
+                  setActiveMark(null);
+                });
+              },
+            }, NW.t('改批注'))
+            : null,
+          h('button', {
+            type: 'button',
+            className: 'nw-mark-pop-btn',
+            onClick: () => { setActiveMark(null); },
+          }, NW.t('知道了')),
+          h('button', {
+            type: 'button',
+            className: 'nw-mark-pop-btn',
+            'data-danger': '1',
+            onClick: () => {
+              if (typeof p.onUnmark === 'function') p.onUnmark(activeMark.id);
+              setActiveMark(null);
+            },
+          }, NW.t('删掉这条标注')),
+        ),
+      )
+      : null;
 
     return h(
       'div',
@@ -12035,9 +12794,25 @@ window.__ModuleLoader__.load({
             tabIndex: -1,
             onPointerDown,
             onPointerUp,
+            onClick: (ev) => {
+              const node = ev.target;
+              if (node && typeof node.closest === 'function') {
+                const span = node.closest('.nw-mark[data-mark]');
+                if (span) {
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                  openMark(span.getAttribute('data-mark'));
+                  return;
+                }
+              }
+              // 点空白处收起面板。
+              if (activeMark) setActiveMark(null);
+            },
           },
           body,
         ),
+        toolbar,
+        activePanel,
       ),
       h(
         'div',
@@ -12045,7 +12820,7 @@ window.__ModuleLoader__.load({
         h(
           'span',
           { className: 'nw-read-hint', 'data-fade': hintOn ? '0' : '1' },
-          '← → 翻页 · Esc 回到写作',
+          '← → 翻页 · 选字可以标注 · Esc 回到写作',
         ),
         h('span', { className: 'nw-read-count' }, String(page + 1) + ' / ' + String(Math.max(1, layout.total))),
       ),
@@ -12320,6 +13095,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-dock:hover,.nw-dock:focus-within,.nw-dock[data-open="1"]{opacity:1;}
+/* R47: in immersive mode the dock is the only handle left, so it stays but
+   steps back — low enough not to sit on the prose, high enough to be found.
+   Hover / focus / an open menu bring it all the way back. */
+.nw-dock[data-immersive="1"]{bottom:20px;right:16px;opacity:.3;}
+.nw-dock[data-immersive="1"]:hover,
+.nw-dock[data-immersive="1"]:focus-within,
+.nw-dock[data-immersive="1"][data-open="1"]{opacity:1;}
+@media (prefers-reduced-motion: reduce){.nw-dock{transition:none;}}
 .nw-dock-fab{
   width:44px;height:44px;border-radius:var(--nw-r-pill);
   display:inline-flex;align-items:center;justify-content:center;
@@ -12617,6 +13400,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [bootError, setBootError] = useState('');
     const [novels, setNovels] = useState([]);
     const [chapters, setChapters] = useState([]);
+    // R47: the writer's annotations for the whole library. Marks belong to a
+    // chapter, and the reading view shows a whole book at a time, so the shell
+    // keeps them all and lets the view pick the ones it needs — one store read
+    // instead of one per chapter.
+    const [marks, setMarks] = useState([]);
     const [settings, setSettings] = useState(() => NW.db.DEFAULT_SETTINGS || {});
     const [activeNovelId, setActiveNovelId] = useState(null);
     const [activeChapterId, setActiveChapterId] = useState(null);
@@ -12811,10 +13599,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // ------------------------------------------------------- data loading ----
     const loadAll = useCallback(async () => {
       await NW.db.init();
-      const [novelRows, chapterRows, stored] = await Promise.all([
+      const [novelRows, chapterRows, stored, markRows] = await Promise.all([
         NW.db.listNovels(),
         NW.db.listChapters(),
         NW.db.getSettings(),
+        NW.db.listMarks ? NW.db.listMarks() : [],
       ]);
       if (!aliveRef.current) return null;
       const nextSettings = Object.assign({}, NW.db.DEFAULT_SETTINGS || {}, stored || {});
@@ -12828,6 +13617,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       }
       setNovels(Array.isArray(novelRows) ? novelRows : []);
       setChapters(Array.isArray(chapterRows) ? chapterRows : []);
+      setMarks(Array.isArray(markRows) ? markRows : []);
       setSettings(nextSettings);
       return { novels: novelRows || [], chapters: chapterRows || [], settings: nextSettings };
     }, []);
@@ -13671,6 +14461,84 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       return list;
     }, []);
 
+    const refreshMarks = useCallback(async () => {
+      if (typeof NW.db.listMarks !== 'function') return [];
+      const list = await NW.db.listMarks();
+      if (!aliveRef.current) return [];
+      setMarks(Array.isArray(list) ? list : []);
+      return list;
+    }, []);
+
+    // ---- 标注：新增 / 删除 / 改批注 -----------------------------------------
+    const addMark = useCallback(
+      async (draft) => {
+        if (!draft || typeof NW.db.createMark !== 'function') return null;
+        const current = chapterRef.current;
+        const novelId = current && String(current.id) === String(draft.chapterId)
+          ? current.novelId
+          : (chapters.filter((row) => row && String(row.id) === String(draft.chapterId))[0] || {}).novelId;
+        try {
+          const created = await NW.db.createMark(Object.assign({}, draft, { novelId: novelId || '' }));
+          if (!aliveRef.current) return null;
+          await refreshMarks();
+          return created || null;
+        } catch (err) {
+          pushToast(errText(err, '保存标注失败'), 'error');
+          return null;
+        }
+      },
+      [chapters, refreshMarks, pushToast],
+    );
+
+    const removeMark = useCallback(
+      async (id) => {
+        if (!id || typeof NW.db.deleteMark !== 'function') return;
+        try {
+          await NW.db.deleteMark(id);
+          if (!aliveRef.current) return;
+          await refreshMarks();
+        } catch (err) {
+          pushToast(errText(err, '删除标注失败'), 'error');
+        }
+      },
+      [refreshMarks, pushToast],
+    );
+
+    const noteMark = useCallback(
+      async (id, note) => {
+        if (!id || typeof NW.db.updateMark !== 'function') return;
+        try {
+          await NW.db.updateMark(id, { note: note });
+          if (!aliveRef.current) return;
+          await refreshMarks();
+        } catch (err) {
+          pushToast(errText(err, '保存批注失败'), 'error');
+        }
+      },
+      [refreshMarks, pushToast],
+    );
+
+    /**
+     * R47: the buffer was saved and its text moved — drag this chapter's
+     * annotations along with it, so an underline stays under the words it was
+     * drawn on instead of under whatever happens to sit at those offsets now.
+     */
+    const shiftMarks = useCallback(
+      async (diff) => {
+        const current = chapterRef.current;
+        if (!current || current.id == null) return;
+        if (!diff || typeof NW.db.shiftMarksForEdit !== 'function') return;
+        try {
+          const changed = await NW.db.shiftMarksForEdit(current.id, diff);
+          if (!aliveRef.current || !changed) return;
+          await refreshMarks();
+        } catch (err) {
+          /* annotations are a convenience; never let one break a save */
+        }
+      },
+      [refreshMarks],
+    );
+
     /**
      * R43 ④: after a pull, bring the *open* chapter up to date as well.
      *
@@ -13783,6 +14651,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         if (!touched) return 0;
         await refreshNovels();
         await refreshChapters();
+        // R47: a pull can also remove chapters, and their annotations go with
+        // them. Without this the underlines of a chapter the phone deleted would
+        // keep being drawn until the panel was reloaded.
+        await refreshMarks();
         // R43 ④: applyBooks only rewrites IndexedDB. The open chapter lives in
         // React state, and the editor adopts new text only when its `chapter`
         // prop changes — so a phone edit to the chapter you are *looking at*
@@ -13795,7 +14667,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       } catch (err) {
         return 0;
       }
-    }, [refreshNovels, refreshChapters, adoptRemoteChapter]);
+    }, [refreshNovels, refreshChapters, adoptRemoteChapter, refreshMarks]);
 
     /**
      * Poll for the phone's side.
@@ -14613,6 +15485,23 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [chapters, activeNovelId],
     );
 
+    // R47: annotations of the open book. Books are the unit here because the
+    // reading view shows a whole book and the editor only the open chapter —
+    // one array serves both, and it stays stable across App renders so the
+    // reading view's paragraph memo does not thrash.
+    const readMarks = useMemo(
+      () => marks.filter((row) => {
+        if (!row) return false;
+        if (!activeNovelId) return false;
+        if (row.novelId) return String(row.novelId) === String(activeNovelId);
+        // Rows written before the novel id was recorded fall back to "is this
+        // chapter one of ours", which is exact and needs no migration.
+        const owner = chapters.filter((c) => c && String(c.id) === String(row.chapterId))[0];
+        return !!owner && String(owner.novelId) === String(activeNovelId);
+      }),
+      [marks, chapters, activeNovelId],
+    );
+
     const wordCounts = useMemo(() => {
       let book = 0;
       let novelWords = 0;
@@ -14723,9 +15612,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     // Floating action dock: bottom-right, collapsed to one round button so it
     // never covers the writing column (the editor reserves right padding).
-    const dock = immersive
-      ? null
-      : h(Dock, {
+    //
+    // R47: it stays in immersive mode too. Immersive used to drop every piece of
+    // chrome including this one, which left the writer with no way back to the
+    // tools short of pressing Esc — the one button that should always be there
+    // was the one that vanished. It is dimmed down to a hint instead.
+    const dock = h(Dock, {
+          immersive: immersive,
           open: dockOpen,
           onToggle: () => setDockOpen((v) => !v),
           chapter: chapter,
@@ -14971,6 +15864,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                         });
                       },
                       onSelectionChange: onSelectionChange,
+                      // R47: annotations on the open chapter, and the hook that
+                      // keeps them pinned while the writer edits the text.
+                      marks: readMarks,
+                      onMarksShift: shiftMarks,
                       registerApi: registerEditor,
                     }),
                     // R13: 灵感便签 floats over the paper itself, not over the
@@ -15026,6 +15923,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // chapter is read from the live text, not from the stored row.
             currentText: getEditorText(),
             settings: settings,
+            // R47: reading is also when a writer notices — so this is where an
+            // annotation can be drawn. The marks are the shell's, not the view's:
+            // the same array feeds the editor underneath, so a line underlined
+            // while reading is still underlined when writing resumes.
+            marks: readMarks,
+            onMark: addMark,
+            onUnmark: removeMark,
+            onNote: noteMark,
             // Closing puts the writer back in the sentence they were in: the
             // textarea never unmounted, so focusing it restores the very caret
             // they left, with the scroll position the pages covered up.
@@ -15270,7 +16175,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // of the writing column.
     return h(
       'div',
-      { className: 'nw-dock', 'data-open': open ? '1' : '0' },
+      { className: 'nw-dock', 'data-open': open ? '1' : '0', 'data-immersive': p.immersive ? '1' : '0' },
       open
         ? h(
             'div',

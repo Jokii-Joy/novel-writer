@@ -49,6 +49,10 @@
   const MEASURE_MS = 60; // caret measurement / autosize throttle
   const TAB_TEXT = '\u3000\u3000'; // two full-width spaces
   const MAX_MATCHES = 5000;
+  // R47: the annotation kinds the editor knows how to draw. Each one becomes a
+  // `nw-mark-<kind>` class on the mirror `<mark>`, so the look of a mark lives
+  // in CSS next to the highlight mirror rather than in this function.
+  const MARK_CLASS = { underline: 1, strike: 1, todo: 1, comment: 1 };
   // Reading palettes owned by the editor. The five ids are shared with the
   // shell (client/src/98-shell-theme.js) and with settings.theme. R19 dropped
   // harness / ink / card / guofeng — see the palette comment further down.
@@ -145,8 +149,7 @@
    * different character. Shifting it by the size of the replaced middle region
    * keeps it on the character the writer was sitting on.
    */
-  function shiftOffsetForEdit(before, after, offset) {
-    const a = typeof before === 'string' ? before : '';
+  function shiftOffsetForEdit(before, after, offset) {    const a = typeof before === 'string' ? before : '';
     const b = typeof after === 'string' ? after : '';
     const at = clampNum(Math.round(numOf(offset, 0)), 0, a.length);
     if (a === b) return clampNum(at, 0, b.length);
@@ -551,6 +554,45 @@
 }
 .nw-hl .nw-find-hit{background-color:var(--nw-find-bg);border-radius:var(--nw-r-hair);}
 .nw-hl .nw-find-hit[data-active="1"]{background-color:var(--nw-find-active);box-shadow:inset 0 0 0 1px var(--nw-find-ring);}
+/* R47: annotations. They are drawn by the same mirror as the advice highlight —
+   the textarea above stays perfectly transparent, so a mark never changes the
+   colour of the words or the flow of the line, only the paper under it. */
+.nw-hl .nw-mark-underline{
+  background-color:transparent;
+  box-shadow:inset 0 -2px 0 var(--nw-mark-underline, var(--nw-brand));
+}
+.nw-hl .nw-mark-strike{
+  background-color:transparent;
+  text-decoration:line-through;
+  text-decoration-color:var(--nw-mark-strike, var(--nw-danger));
+  text-decoration-thickness:1.5px;
+}
+/* The words of a struck line are still the manuscript's words: they stay fully
+   legible (no faded filler) until the writer actually deletes them. The mirror
+   paints every glyph transparent, so the strike is drawn with text-decoration
+   on the transparent run — which is why the mark keeps its own colour clear. */
+.nw-hl .nw-mark-todo{
+  background-color:transparent;
+  box-shadow:inset 0 -2px 0 var(--nw-mark-todo, var(--nw-warn));
+  background-image:linear-gradient(
+    to right,
+    var(--nw-mark-todo, var(--nw-warn)) 0 4px,
+    transparent 4px 8px
+  );
+  background-repeat:repeat-x;
+  background-position:0 100%;
+  background-size:8px 2px;
+}
+.nw-hl .nw-mark-comment{
+  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 16%, transparent);
+  box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
+}
+.nw-hl .nw-mark-comment[data-active="1"],
+.nw-hl .nw-mark-underline[data-active="1"],
+.nw-hl .nw-mark-todo[data-active="1"],
+.nw-hl .nw-mark-strike[data-active="1"]{
+  background-color:color-mix(in srgb, var(--nw-brand) 18%, transparent);
+}
 
 /* caret measuring mirror: same box, never painted */
 .nw-caret{
@@ -804,6 +846,10 @@
     cfgRef.current = { autoSaveMs, typewriterOn, fontSize, lineHeight, focusOn, focusLines };
 
     const highlightsRef = React.useRef([]);
+    // R47: persistent annotations, kept apart from `highlightsRef` on purpose —
+    // the advice panel owns that one and clears it whenever the writer moves on,
+    // and it must not be able to wipe the writer's own underlines.
+    const marksRef = React.useRef([]);
     const saveTimerRef = React.useRef(0);
     // rAF handle for the coalesced measure pass (0 = none queued).
     const measureRafRef = React.useRef(0);
@@ -1505,7 +1551,19 @@
         if (!r) continue;
         const s = clampNum(numOf(r.start, 0), 0, text.length);
         const e = clampNum(numOf(r.end, s), s, text.length);
-        if (e > s) ranges.push({ start: s, end: e, id: r.id, active: !!r.active, kind: 'hl' });
+        if (e > s) {
+          ranges.push({
+            start: s,
+            end: e,
+            id: r.id,
+            active: !!r.active,
+            kind: 'hl',
+            // R47: the mark's type decides how it is drawn (underline / strike /
+            // todo / comment). Unknown or missing types fall back to the plain
+            // highlight the advice panel has always used.
+            mark: MARK_CLASS[r.mark] ? r.mark : '',
+          });
+        }
       }
       const f = findRef.current;
       if (f.open && f.matches && f.matches.length) {
@@ -1514,6 +1572,23 @@
           if (m.end > m.start) {
             ranges.push({ start: m.start, end: m.end, active: i === f.index, kind: 'find' });
           }
+        }
+      }
+      const own = marksRef.current || [];
+      for (let i = 0; i < own.length; i += 1) {
+        const r = own[i];
+        if (!r) continue;
+        const s = clampNum(numOf(r.start, 0), 0, text.length);
+        const e = clampNum(numOf(r.end, s), s, text.length);
+        if (e > s) {
+          ranges.push({
+            start: s,
+            end: e,
+            id: r.id,
+            active: !!r.active,
+            kind: 'hl',
+            mark: MARK_CLASS[r.kind] ? r.kind : 'underline',
+          });
         }
       }
       if (!ranges.length) {
@@ -1530,6 +1605,7 @@
         if (s > pos) frag.appendChild(document.createTextNode(text.slice(pos, s)));
         const el = document.createElement('mark');
         el.className = r.kind === 'find' ? 'nw-find-hit' : 'nw-hl-mark';
+        if (r.mark) el.className += ' nw-mark-' + r.mark;
         if (r.active) el.setAttribute('data-active', '1');
         if (r.id !== undefined && r.id !== null) el.setAttribute('data-id', String(r.id));
         el.textContent = text.slice(s, r.end);
@@ -1869,6 +1945,23 @@
         }
         return;
       }
+      // R47: annotations are pinned to characters, so a save is also the moment
+      // to tell the app how the text moved. Doing it here rather than per
+      // keystroke keeps it to one diff per save, and it covers every way the
+      // buffer can change (typing, paste, replace-all, IME commit) without
+      // hooking each of them. `lastSavedRef` still holds the text of the
+      // previous save at this point, which is exactly what the diff needs.
+      const previous = lastSavedRef.current;
+      if (typeof previous === 'string' && previous !== text && typeof propsRef.current.onMarksShift === 'function') {
+        const d = diffEnds(previous, text);
+        if (d.oldMid || d.newMid) {
+          try {
+            propsRef.current.onMarksShift(d);
+          } catch (err) {
+            /* a broken listener must not lose the save */
+          }
+        }
+      }
       lastSavedRef.current = text;
       dirtyRef.current = false;
       valueRef.current = text;
@@ -2047,6 +2140,18 @@
       invalidateAutosize();
       autosize();
       if (findRef.current.open) refreshMatches();
+      // R47: the peer moved the text, so this chapter's annotations move with
+      // it exactly as they would after local typing. `commitSave` cannot do it
+      // here — adoption deliberately leaves the buffer clean, so no save ever
+      // runs for this change and without this line every underline in the
+      // chapter would slide onto whatever now sits at those offsets.
+      if ((d.oldMid || d.newMid) && typeof propsRef.current.onMarksShift === 'function') {
+        try {
+          propsRef.current.onMarksShift(d);
+        } catch (err) {
+          /* an annotation must never break an incoming edit */
+        }
+      }
       rebuildHighlights();
       revealPeerEdit(d.head);
       scheduleMeasure(false);
@@ -2107,6 +2212,37 @@
     function setHighlights(list) {
       highlightsRef.current = Array.isArray(list) ? list.slice() : [];
       rebuildHighlights();
+    }
+
+    /**
+     * R47: the writer's own annotations.
+     *
+     * Kept separate from `setHighlights()` because that one is transient — the
+     * advice panel uses it to point at a sentence and clears it as soon as the
+     * writer moves on. Marks outlive all of that.
+     */
+    function setMarks(list) {
+      marksRef.current = Array.isArray(list) ? list.slice() : [];
+      rebuildHighlights();
+    }
+
+    /** Which mark sits under `offset`, if any — newest (longest) wins. */
+    function markAt(offset, opts) {
+      const want = opts || {};
+      const own = marksRef.current || [];
+      const at = numOf(offset, -1);
+      if (at < 0) return null;
+      let best = null;
+      for (let i = 0; i < own.length; i += 1) {
+        const r = own[i];
+        if (!r) continue;
+        if (!(at >= (Number(r.start) || 0) && at < (Number(r.end) || 0))) continue;
+        if (want.kind && r.kind !== want.kind) continue;
+        if (!best || (Number(r.end) - Number(r.start)) <= (Number(best.end) - Number(best.start))) {
+          best = r;
+        }
+      }
+      return best;
     }
 
     // -------------------------------------------------------- find & replace --
@@ -2846,6 +2982,19 @@
       if (incomingContent === lastSavedRef.current) return;
       adoptExternalText(incomingContent);
     }, [incomingContent]);
+
+    // R47: annotations for the open chapter. The app owns the whole book's list
+    // (the reading view shows all of it); this instance only draws its own
+    // chapter, because a mark's offsets mean nothing in another chapter's text.
+    const marksIn = p.marks;
+    const marksChapterId = chapter && chapter.id != null ? String(chapter.id) : '';
+    React.useEffect(() => {
+      if (!marksChapterId) return;
+      const list = (Array.isArray(marksIn) ? marksIn : []).filter(
+        (row) => row && String(row.chapterId) === marksChapterId,
+      );
+      setMarks(list);
+    }, [marksIn, marksChapterId]);
 
     // Listeners are attached once; every callback reads refs for freshness.
     React.useEffect(() => {
