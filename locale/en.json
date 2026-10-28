@@ -1,8 +1,8 @@
 {
   "meta": {
-    "title": "Mindspace",
-    "description": "Mindspace — a novel writing workspace: nine reading themes, adjustable caret, immersive mode, chapter tree, inspiration notes, AI proofreading, typesetting, journal submission and encrypted local auto-save."
+    "title": "精神空间",
+    "description": "精神空间：九套主题、可调光标、沉浸模式、章节树、灵感便签、AI 校对、一键排版、期刊投稿与本地加密自动保存。"
   },
-  "nav": "Mindspace",
-  "panelTitle": "Mindspace"
+  "nav": "精神空间",
+  "panelTitle": "精神空间"
 }

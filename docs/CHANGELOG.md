@@ -8,6 +8,51 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.2.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第四十三轮（R43）改造：**中英混排、全屏没有键、便签压正文、手机改的到不了电脑、手机上打不出引号** ——
+  五件事各修各的，其中两件是真的 bug：
+  ① **界面中英混排 → 全中文**。`07-locale.js` 里一直挂着一张 331 条的 `EN` 表（中文键 → 英文值），
+  注册给宿主 locale 时 `DICT` 是 `{ zh: {}, en: EN }`：宿主按 fallback 链查 key，`zh` 字典是空的、
+  `lookup` 只认 `value !== undefined`，于是命中的永远是 `en` 那一侧 —— 有英文行的文案变英文、
+  没有的回落成 key 本身（中文），这就是「一会儿中文一会儿英文」的确切成因，跟浏览器语言无关。
+  现在 `EN` 整张表删掉，`DICT` 变成 `{ zh: {}, en: {} }`：两个空字典意味着链上从不命中，
+  `translate` 一律返回 key，而 key 本来就是中文。`locale/en.json` 的 `meta.title/description/nav`
+  同步改成中文，免得宿主语言切到 en 时插件名又变回 Mindspace。`NW.t` 的 `{0}` 占位替换、
+  `NW.bindLocale` 全部保留，`07-locale.js` 从 423 行缩到 77 行。
+  ② **全屏加一个简单快捷键**。沉浸模式原先只能点工具栏、退出只能按 Esc，没有任何键盘入口。
+  新增一个 capture 阶段的监听：`F11`（不带修饰键）或 `Ctrl/Cmd+Shift+F` → `toggleImmersive()`，
+  与已有的 `Ctrl+Shift+L`（锁屏）、`Ctrl+\`（书架）并列。两种写法是有意的：F11 是浏览器保留键，
+  页面 `preventDefault` 无效，只有在宿主先吞掉按键时才到得了这里；`Ctrl/Cmd+Shift+F` 是保证送达的那一个。
+  **离开不要求当前有打开的章节**，否则没开章节时会卡在一个没有工具栏的房间里出不来。
+  进入沉浸的提示同步改成「已进入沉浸模式 · Esc 或 Ctrl+Shift+F 退出」，设置页与「快捷键」面板
+  也各补了一行，不然这个键只有进过一次沉浸的人才知道。
+  ③ **全屏时灵感便签压进正文**。便签的宽度是「居中页两侧空白的一半减 22px」
+  （`.nw-notes{width:clamp(0px, calc((100% - min(var(--nw-page,760px),100%)) / 2 - 22px), 340px)}`），
+  而 `--nw-page` 一直写的是用户设置（默认 760）。但编辑器在沉浸时会把自己的页宽抬到
+  `Math.max(pageWidth, 880)`（`60-editor.js:640`）——设置里写的 760 与屏幕上的 880 对不上，
+  算出来的「空白」比真实空白大，卡片就长进了正文。现在写作台的 `--nw-page` 用**同一个公式**算
+  （`Math.max(clampNum(pageWidth,360,1400), immersive ? 880 : 0)`），并给 `.nw-bench` 加了
+  `data-immersive` 钩子备用。窄容器下本来就有 `@container nw (max-width:560px)` 的宽度释放，
+  不需要再加分支。
+  ④ **手机上改的同步不到电脑**。两条独立的成因：其一，`pullSync` 闭包捕获了 `novels`，
+  而每敲一个字 `saveChapter` 都会 `setNovels` → `useCallback` 换引用 → 轮询 effect 重建 →
+  **6 秒计时被无限重置**，用户一直打字就一直不拉取；改成 `novelsRef.current`，依赖数组收窄到
+  `[refreshNovels, refreshChapters, adoptRemoteChapter]`。其二，`applyBooks` 只写 IndexedDB，
+  而当前打开的那一章活在 React state 的 `chapter` 里，`60-editor.js` 的 `incomingContent` effect
+  只在 `chapter.content` 变化时才灌进 textarea —— 手机改的正好是「你正开着的那一章」时，
+  改动落了库但界面纹丝不动。新增 `adoptRemoteChapter(books)`：`applyBooks` 之后按
+  `chapterRef.current.novelId` 找回刚同步的书，`NW.db.getChapter` 重读并解密，与编辑器当前文本
+  不同才 `setChapter(record)`。四道守卫避免吞掉用户输入：没有打开章节、书是墓碑、
+  `saveState` 处于 `dirty`/`saving`、内容相同（相等就不 set，光标不跳）。
+  ⑤ **手机打字加常用符号条**。`EditActivity` 的写作页在正文下方新增一条可横滑的符号条
+  （`symbolBar()`）：`⇥`（插入两个全角空格，与桌面 `60-editor.js:45` 的 `TAB_TEXT` 完全一致）、
+  成对引号 `“” ‘ ’ 《》（）`、顿号/逗号/句号、破折号、省略号、问号叹号冒号分号。
+  点击走 `insertAtCaret()` → `editable.replace(start, end, text)`，**替换选区并留住输入法的撤销栈**，
+  再把光标移到插入之后；因为走的是 `Editable`，`TextWatcher` 照常触发 1.2 秒自动保存与
+  `SyncEngine.pushSoon`，不需要额外的保存路径。按钮复用 `nw_bar/nw_ink` 主题 token，
+  夜间皮肤自动跟随。
+  `client.js` 重建为 20 段 **903018 字节**（比 R42 少 8198 字节，删掉的那张英文表就在里面），
+  `verify-client-load` 报 `inject=["slots","layout","locale"]`；`dist/精神空间.apk` 重新打包
+  （`553769` 字节，符号条随包出去，签名同上一版）。
 - 第四十二轮（R42）改造：**手机连电脑要按好几次、投稿记录那条名字没变** —— 前一个不是网络问题，
   后一个不是渲染问题，两边的根因都在「谁该带什么信息」上：
   ① **局域网同步「有时候链接不上、有时候试很多次才行」**。桌面端发现层原先只会**广播**：

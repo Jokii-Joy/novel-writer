@@ -12,6 +12,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -401,6 +402,87 @@ public final class EditActivity extends Activity {
         editorScroll.addView(bodyField, new ScrollView.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         root.addView(editorScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        root.addView(symbolBar());
+    }
+
+    /**
+     * A row of characters a phone keyboard makes hard to reach.
+     *
+     * Chinese prose needs 、「」《》——…… far more often than it needs the
+     * letters a 26-key IME offers first, and each of those is three taps deep in
+     * a symbol page. The strip is one tap instead, and it inserts at the caret
+     * rather than appending, so it never moves the text the author is looking at.
+     *
+     * Tab is spelled as two ideographic spaces to match the desktop editor
+     * (60-editor.js: `TAB_TEXT = '\u3000\u3000'`) — a real tab character has no
+     * meaning in Chinese prose and renders as a variable gap.
+     */
+    private View symbolBar() {
+        HorizontalScrollView strip = new HorizontalScrollView(this);
+        strip.setHorizontalScrollBarEnabled(false);
+        strip.setFillViewport(true);
+        strip.setBackgroundColor(color(R.color.nw_bar));
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(dp(6), dp(4), dp(6), dp(4));
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        String[] tokens = {
+            "Tab", "“”", "‘’", "《》", "、", "，", "。",
+            "——", "……", "！", "？", "：", "；", "（", "）",
+        };
+        for (String token : tokens) {
+            row.addView(symbolButton("Tab".equals(token) ? "⇥" : token,
+                "Tab".equals(token) ? "\u3000\u3000" : token));
+        }
+
+        strip.addView(row, new HorizontalScrollView.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        strip.setLayoutParams(params);
+        return strip;
+    }
+
+    /** One symbol key: label on the face, `text` into the buffer. */
+    private Button symbolButton(String label, String text) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setTextSize(15);
+        button.setMinimumWidth(0);
+        button.setMinWidth(0);
+        button.setMinHeight(0);
+        button.setMinimumHeight(0);
+        button.setPadding(dp(10), dp(2), dp(10), dp(2));
+        button.setTextColor(getResources().getColor(R.color.nw_ink));
+        button.setBackgroundColor(0);
+        button.setAllCaps(false);
+        button.setContentDescription(label);
+        button.setOnClickListener(v -> insertAtCaret(text));
+        return button;
+    }
+
+    /**
+     * Inserts at the selection, replacing it, and leaves the caret after the
+     * inserted text. Going through the Editable keeps the field's own undo
+     * behaviour and fires the TextWatcher, so the word count and the 1.2 s
+     * autosave both follow without extra plumbing.
+     */
+    private void insertAtCaret(String text) {
+        if (bodyField == null || text == null) return;
+        Editable editable = bodyField.getText();
+        if (editable == null) return;
+        int start = Math.max(0, bodyField.getSelectionStart());
+        int end = Math.max(start, bodyField.getSelectionEnd());
+        int safeStart = Math.min(start, editable.length());
+        int safeEnd = Math.min(end, editable.length());
+        editable.replace(safeStart, safeEnd, text);
+        int caret = Math.min(safeStart + text.length(), editable.length());
+        bodyField.setSelection(caret);
+        bodyField.requestFocus();
+        saver.removeCallbacks(caretTick);
+        saver.post(caretTick);
     }
 
     /**

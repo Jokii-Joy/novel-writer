@@ -2315,7 +2315,7 @@
             ),
             rowToggle('光标闪烁', draft.caretBlink !== false, (v) => set('caretBlink', v)),
             rowToggle('打字机模式', draft.typewriter, (v) => set('typewriter', v)),
-            rowToggle('沉浸模式（隐藏所有面板，Esc 退出）', draft.immersive, (v) => set('immersive', v)),
+            rowToggle('沉浸模式（隐藏所有面板，Esc 或 Ctrl+Shift+F 退出）', draft.immersive, (v) => set('immersive', v)),
           ),
         ),
         // ---------------------------------------------------------- 2 写作 ----
@@ -2933,6 +2933,9 @@
               ['Ctrl / ⌘ + I', '斜体'],
               ['Ctrl / ⌘ + F', NW.t('查找替换')],
               ['Ctrl / ⌘ + Shift + L', NW.t('锁定')],
+              // R43 ②: the immersive toggle, so it is discoverable without a toast.
+              ['Ctrl / ⌘ + Shift + F', NW.t('沉浸模式')],
+              ['Esc', '退出沉浸模式'],
               // R22: the two new in-editor shortcuts.
               ['Alt + N', NW.t('新章节')],
               ['Alt + A', NW.t('修改建议')],

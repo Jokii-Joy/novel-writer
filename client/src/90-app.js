@@ -667,6 +667,17 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     chapterRef.current = chapter;
     const immersiveRef = useRef(false);
     immersiveRef.current = immersive;
+    // R43 ④: `pullSync` must not close over `novels`. Every keystroke that lands
+    // in the library calls setNovels, which used to invalidate the callback and
+    // rebuild the 6s interval — the timer restarted before it ever fired, so a
+    // phone edit could sit in the mirror for as long as the user kept typing.
+    // Read the list through a ref instead and keep the dependency list empty.
+    const novelsRef = useRef([]);
+    novelsRef.current = novels;
+    // Same reason: adopting a remote chapter is only safe when the buffer has
+    // nothing unsaved in it.
+    const saveStateRef = useRef('saved');
+    saveStateRef.current = saveState;
 
     // ------------------------------------------------------------- toasts ----
     /**
@@ -1598,6 +1609,53 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     }, []);
 
     /**
+     * R43 ④: after a pull, bring the *open* chapter up to date as well.
+     *
+     * `NW.db.applyBooks` only rewrites IndexedDB. The chapter being edited lives
+     * in React state, and the editor adopts new text only when its `chapter`
+     * prop changes (`60-editor.js` keys that effect on `chapter.content`), so an
+     * edit the phone made to the chapter you are staring at was written to the
+     * database and nowhere else — it only appeared after switching chapters or
+     * reloading. That read as "手机上的改动同步不到电脑".
+     *
+     * Two guards, both deliberate:
+     * - unsaved keystrokes win; adopting over them would throw them away;
+     * - the text is compared before `setChapter`, because re-rendering the
+     *   editor on every tick would move the caret while the author types.
+     */
+    const adoptRemoteChapter = useCallback(async (books) => {
+      const current = chapterRef.current;
+      if (!current || current.id == null) return false;
+      if (!Array.isArray(books) || !books.length) return false;
+      const mine = books.find(
+        (book) => book && book.id != null && String(book.id) === String(current.novelId),
+      );
+      // A deleted book is the shelf's business, not the editor's.
+      if (!mine || mine.deleted === true) return false;
+      if (saveStateRef.current === 'dirty' || saveStateRef.current === 'saving') return false;
+      let record = null;
+      try {
+        record = await NW.db.getChapter(current.id);
+      } catch (err) {
+        return false;
+      }
+      if (!record || record.id == null) return false;
+      const next = typeof record.content === 'string' ? record.content : '';
+      const api = editorRef.current;
+      let shown = '';
+      try {
+        shown = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+      } catch (err) {
+        shown = '';
+      }
+      if (!shown) shown = String(current.content || '');
+      if (next === shown) return false;
+      if (!aliveRef.current) return false;
+      setChapter(record);
+      return true;
+    }, []);
+
+    /**
      * R34 ④: pull the host mirror and apply whatever actually moved.
      *
      * Declared after refreshNovels/refreshChapters on purpose — a useCallback that
@@ -1638,7 +1696,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const remote = data && data.library && Array.isArray(data.library.books) ? data.library.books : [];
         if (!remote.length) return 0;
         const local = new Map();
-        for (const row of novels) if (row && row.id != null) local.set(String(row.id), row);
+        for (const row of novelsRef.current) if (row && row.id != null) local.set(String(row.id), row);
         const wanted = [];
         for (const book of remote) {
           if (!book || book.id == null) continue;
@@ -1662,13 +1720,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         if (!touched) return 0;
         await refreshNovels();
         await refreshChapters();
+        // R43 ④: applyBooks only rewrites IndexedDB. The open chapter lives in
+        // React state, and the editor adopts new text only when its `chapter`
+        // prop changes — so a phone edit to the chapter you are *looking at*
+        // landed in the database and nowhere else until you switched chapters.
+        // Re-read the buffer below, but never over unsaved keystrokes.
+        await adoptRemoteChapter(wanted);
         if (!aliveRef.current) return touched;
         setLanSync((prev) => Object.assign({}, prev, { pulledAt: Date.now(), pulled: touched }));
         return touched;
       } catch (err) {
         return 0;
       }
-    }, [novels, refreshNovels, refreshChapters]);
+    }, [refreshNovels, refreshChapters, adoptRemoteChapter]);
 
     /**
      * Poll for the phone's side.
@@ -2132,7 +2196,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       if (!settings.typewriter) applySettings({ typewriter: true });
       // Immersive has no visible chrome by design, so the way out is announced
       // once through the existing toast channel instead of a permanent bar.
-      pushToast('已进入沉浸模式 · 按 Esc 退出', 'info');
+      // R43 ②: name the new chord too — Esc was the only way out before.
+      pushToast('已进入沉浸模式 · Esc 或 Ctrl+Shift+F 退出', 'info');
     }, [applySettings, enterFullscreen, pushToast, settings.typewriter]);
 
     const exitImmersive = useCallback(() => {
@@ -2181,6 +2246,30 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         document.removeEventListener('webkitfullscreenchange', onFsChange);
       };
     }, [immersive, dialog, modalReq, exitImmersive]);
+
+    // R43 ②: a keyboard way into and out of immersive mode.
+    //
+    // Two spellings on purpose. F11 is what every fullscreen thing uses, but a
+    // browser owns that key and never lets a page cancel it, so it only works
+    // when the host swallows the press first; Ctrl/Cmd+Shift+F sits next to the
+    // existing Ctrl+Shift+L (lock) and Ctrl+\ (shelf) and is the one that is
+    // guaranteed to arrive. Leaving is never blocked on a chapter being open —
+    // otherwise a closed chapter would strand the user in a chrome-less room.
+    useEffect(() => {
+      const onKey = (ev) => {
+        const chord = (ev.ctrlKey || ev.metaKey) && ev.shiftKey && !ev.altKey
+          && String(ev.key || '').toLowerCase() === 'f';
+        const plain = ev.key === 'F11' && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && !ev.altKey;
+        if (!chord && !plain) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (locked) return;
+        if (!immersiveRef.current && chapterRef.current == null) return;
+        toggleImmersive();
+      };
+      window.addEventListener('keydown', onKey, true);
+      return () => window.removeEventListener('keydown', onKey, true);
+    }, [locked, toggleImmersive]);
 
     // ------------------------------------------------- host sidebar auto-hide --
     /**
@@ -2726,7 +2815,20 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     // --nw-width is set on .nw-surface (inside the paper), so it
                     // cannot be read from here.
                     'data-advice': adviceOpen && !immersive ? '1' : '0',
-                    style: { '--nw-page': clampNum(Number(settings.pageWidth) || 760, 360, 1400) + 'px' },
+                    // R43 ③: the bench's idea of the page measure has to match
+                    // what the editor actually lays out. Immersive mode raises
+                    // --nw-width to at least 880px (60-editor.js:640), so feeding
+                    // the raw setting here made .nw-notes compute its width from
+                    // a margin that no longer existed — the card grew into the
+                    // text column instead of sitting beside it. Same formula the
+                    // editor uses, one source of truth.
+                    'data-immersive': immersive ? '1' : '0',
+                    style: {
+                      '--nw-page': Math.max(
+                        clampNum(Number(settings.pageWidth) || 760, 360, 1400),
+                        immersive ? 880 : 0
+                      ) + 'px',
+                    },
                   },
                   h(
                     'div',
