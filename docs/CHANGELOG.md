@@ -17,7 +17,9 @@
   现在 `EN` 整张表删掉，`DICT` 变成 `{ zh: {}, en: {} }`：两个空字典意味着链上从不命中，
   `translate` 一律返回 key，而 key 本来就是中文。`locale/en.json` 的 `meta.title/description/nav`
   同步改成中文，免得宿主语言切到 en 时插件名又变回 Mindspace。`NW.t` 的 `{0}` 占位替换、
-  `NW.bindLocale` 全部保留，`07-locale.js` 从 423 行缩到 77 行。
+  `NW.bindLocale` 全部保留，`07-locale.js` 从 423 行缩到 77 行；`bindLocale` 顺手给
+  `locale.register` 包了一层 try/catch —— 同一命名空间重复注册在宿主热重载时会抛错，而空字典
+  本来就不影响结果，不该因此把整个面板带崩。
   ② **全屏加一个简单快捷键**。沉浸模式原先只能点工具栏、退出只能按 Esc，没有任何键盘入口。
   新增一个 capture 阶段的监听：`F11`（不带修饰键）或 `Ctrl/Cmd+Shift+F` → `toggleImmersive()`，
   与已有的 `Ctrl+Shift+L`（锁屏）、`Ctrl+\`（书架）并列。两种写法是有意的：F11 是浏览器保留键，
@@ -50,7 +52,7 @@
   再把光标移到插入之后；因为走的是 `Editable`，`TextWatcher` 照常触发 1.2 秒自动保存与
   `SyncEngine.pushSoon`，不需要额外的保存路径。按钮复用 `nw_bar/nw_ink` 主题 token，
   夜间皮肤自动跟随。
-  `client.js` 重建为 20 段 **903018 字节**（比 R42 少 8198 字节，删掉的那张英文表就在里面），
+  `client.js` 重建为 20 段 **903544 字节**（比 R42 少 7672 字节，删掉的那张英文表就在里面），
   `verify-client-load` 报 `inject=["slots","layout","locale"]`；`dist/精神空间.apk` 重新打包
   （`553769` 字节，符号条随包出去，签名同上一版）。
 - 第四十二轮（R42）改造：**手机连电脑要按好几次、投稿记录那条名字没变** —— 前一个不是网络问题，

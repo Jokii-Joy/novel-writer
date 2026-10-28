@@ -40,8 +40,22 @@
     const NS = 'novel-writer';
     const locale = ctx.get('locale');
     if (!locale) return () => {};
-    const off = locale.register(NS, DICT);
-    translate = locale.bind(NS);
+    // R43 ①: `register` throws when the same namespace+locale is registered
+    // twice, which happens when the host re-activates the client without a full
+    // page reload. A throw here used to take the whole panel down with it, and
+    // the dictionary no longer matters (it is empty), so swallow it and keep the
+    // binding — worst case the translator stays whatever it was.
+    let off = () => {};
+    try {
+      off = locale.register(NS, DICT);
+    } catch (err) {
+      off = () => {};
+    }
+    try {
+      translate = locale.bind(NS);
+    } catch (err) {
+      translate = null;
+    }
     NW.locale = locale;
     NW.localeNs = NS;
     return typeof off === 'function' ? off : () => {};
