@@ -98,8 +98,12 @@
       // A mark may cross a paragraph break; each paragraph then gets its own
       // piece. Only the piece that holds the mark's real end may carry the
       // little comment dot, otherwise a two-paragraph comment would sprout two.
+      // R49: only a comment gets a dot at all — a strike or an underline ends
+      // quietly. `tail` used to be a plain "this piece holds the end" flag that
+      // the stylesheet gated on the comment class; now the dot is its own span,
+      // so the kind has to be checked here or every mark grows one.
       if (e > s) {
-        hits.push({ s: s - start, e: e - start, kind: m.kind, id: m.id, tail: e >= (Number(m.end) || 0) });
+        hits.push({ s: s - start, e: e - start, kind: m.kind, id: m.id, tail: String(m.kind) === 'comment' && e >= (Number(m.end) || 0) });
       }
     }
     if (!hits.length) return para.text;
@@ -118,11 +122,15 @@
             className: 'nw-mark nw-mark-' + String(m.kind || 'underline'),
             key: 'm' + i + '-' + String(m.id),
             'data-mark': String(m.id),
-            'data-tail': m.tail ? '1' : '0',
           },
           para.text.slice(s, m.e),
         ),
       );
+      // R49：角标挂在**字尾**，不是行尾。这个零宽零高的锚点紧跟在最后那个字
+      // 后面，所以它落在文字结束处；它不占排版空间，分页一个像素都不变。
+      if (m.tail) {
+        out.push(h('span', { className: 'nw-mark-dot', key: 'd' + i + '-' + String(m.id), 'aria-hidden': 'true' }));
+      }
       pos = m.e;
     }
     if (pos < para.text.length) out.push(para.text.slice(pos));
@@ -207,9 +215,13 @@
    untouched, so annotating can never change the words or the pagination. */
 .nw-mark{border-radius:var(--nw-r-hair);}
 .nw-mark-underline{box-shadow:inset 0 -2px 0 var(--nw-mark-underline, var(--nw-brand));}
+/* R49: 1.5px 在大字号下细得像根头发，读者以为是渲染毛刺而不是自己划的线。
+   给一个随字号走的厚度：小字两像素，大字更粗。先写固定值兜底，再写 max()。 */
 .nw-mark-strike{
-  text-decoration:line-through;text-decoration-thickness:1.5px;
+  text-decoration:line-through;
   text-decoration-color:var(--nw-mark-strike, var(--nw-danger));
+  text-decoration-thickness:2px;
+  text-decoration-thickness:max(2px, .09em);
 }
 .nw-mark-comment{
   background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 16%, transparent);
@@ -219,14 +231,17 @@
 /* 选中的标注：用外描边而不是换色，正文颜色始终是作者的字色。 */
 .nw-mark[data-selected="1"]{outline:1px solid color-mix(in srgb, var(--nw-brand) 55%, transparent);outline-offset:1px;}
 /* 批注角标：浮在划线末尾的一个小标识，说明这里挂了一条批注。
-   它必须「悬浮」——绝对定位、零占用，一个像素的排版都不占。行内真实的 5px
-   圆点会把后半行挤走，甚至把字挤到下一栏；那样标注就改变了分页，而这是整个
-   标注功能的前提：标注只画在字下面，永远不动字。
+   R49 修位置：原来把它挂在片段自身的 left:100%，而片段的 100% 是**行盒**的
+   末尾而不是文字的末尾 —— 批注一跨行，点就跑到上一行行尾去了，跨栏时还会被
+   栏边界裁掉，看起来像是「没浮在所划线的末尾」。
+   现在改成在片段的最后一个字后面插一个零宽零高的 inline-block 当锚点：它不占
+   任何排版空间（所以分页、字距、换行一个像素都不变，这是整个标注功能的前提），
+   位置却正好是文字的末尾，角标以它为基准绝对定位，就是「浮在字尾」。
    只有真正到达批注终点的那个片段才画（一条批注跨段时，段段都画就成了三个点）。 */
-.nw-mark-comment[data-tail="1"]{position:relative;}
-.nw-mark-comment[data-tail="1"]::after{
-  content:'';position:absolute;left:100%;top:0;
-  width:5px;height:5px;margin-left:2px;
+.nw-mark-dot{display:inline-block;width:0;height:0;position:relative;vertical-align:baseline;}
+.nw-mark-dot::after{
+  content:'';position:absolute;left:2px;bottom:.5em;
+  width:5px;height:5px;
   border-radius:50%;background:var(--nw-mark-comment, var(--nw-brand));
   pointer-events:none;
 }
@@ -486,8 +501,11 @@
     const addNote = React.useCallback(() => {
       const cur = sel;
       if (!cur) return;
-      const ask = NW.ui && typeof NW.ui.promptAsync === 'function'
-        ? NW.ui.promptAsync({
+      // R49: the UI layer exports this as `prompt`; asking for `promptAsync`
+      // silently fell through to an empty string, so every new comment came
+      // back empty and was dropped without a word.
+      const ask = NW.ui && typeof NW.ui.prompt === 'function'
+        ? NW.ui.prompt({
           title: NW.t('写一条批注'),
           label: NW.t('批注'),
           multiline: true,
@@ -857,8 +875,8 @@
               onClick: () => {
                 const id = activeMark.id;
                 const now = String(activeMark.note || '');
-                const ask = NW.ui && typeof NW.ui.promptAsync === 'function'
-                  ? NW.ui.promptAsync({
+                const ask = NW.ui && typeof NW.ui.prompt === 'function'
+                  ? NW.ui.prompt({
                     title: NW.t('改这条批注'),
                     label: NW.t('批注'),
                     value: now,

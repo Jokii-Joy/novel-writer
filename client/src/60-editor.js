@@ -567,7 +567,8 @@
   background-color:transparent;
   text-decoration:line-through;
   text-decoration-color:var(--nw-mark-strike, var(--nw-danger));
-  text-decoration-thickness:1.5px;
+  text-decoration-thickness:2px;
+  text-decoration-thickness:max(2px, .09em);
 }
 /* The words of a struck line are still the manuscript's words: they stay fully
    legible (no faded filler) until the writer actually deletes them. The mirror
@@ -580,10 +581,12 @@
 }
 /* 批注角标：一个贴在划线末尾的小点。这里必须绝对定位——镜像的每一个字符都要
    和底下的 textarea 落在同一个位置，任何占位的行内元素都会把后半行推歪。
-   读视图自己排版，那里用的是行内版本（见 62-read.js）。 */
-.nw-hl .nw-mark-comment::after{
-  content:'';position:absolute;left:100%;top:-.1em;
-  width:5px;height:5px;margin-left:2px;
+   R49：角标挂在一个零宽零高的锚点上（.nw-mark-dot，插在 mark 的最后），
+   而不是 left:100%——100% 指的是行盒末尾，批注一跨行点就跑到上一行去了。 */
+.nw-hl .nw-mark-dot{display:inline-block;width:0;height:0;position:relative;vertical-align:baseline;}
+.nw-hl .nw-mark-dot::after{
+  content:'';position:absolute;left:2px;bottom:.5em;
+  width:5px;height:5px;
   border-radius:var(--nw-r-pill);
   background:var(--nw-mark-comment, var(--nw-brand));
   box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 26%, transparent);
@@ -1608,16 +1611,20 @@
         el.className = r.kind === 'find' ? 'nw-find-hit' : 'nw-hl-mark';
         if (r.mark) {
           el.className += ' nw-mark-' + r.mark;
-          // The mirror holds one `<mark>` per range (it never splits at a line
-          // break the way the reading view splits at a paragraph), so the end of
-          // that range *is* the end of the mark: the little comment dot belongs
-          // here, once.
-          if (r.mark === 'comment') el.setAttribute('data-tail', '1');
         }
         if (r.active) el.setAttribute('data-active', '1');
         if (r.id !== undefined && r.id !== null) el.setAttribute('data-id', String(r.id));
         el.textContent = text.slice(s, r.end);
         frag.appendChild(el);
+        // R49：批注角标挂在**字尾**。镜像里一个 range 就是一个 `<mark>`，所以
+        // 紧跟其后的零宽零高锚点正好落在最后一个字后面；`left:100%` 那个写法
+        // 挂的是行盒末尾，批注一跨行点就跑到上一行去了。
+        if (r.mark === 'comment') {
+          const dot = document.createElement('span');
+          dot.className = 'nw-mark-dot';
+          dot.setAttribute('aria-hidden', 'true');
+          frag.appendChild(dot);
+        }
         pos = r.end;
       }
       if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
