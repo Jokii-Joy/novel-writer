@@ -9031,6 +9031,31 @@ window.__ModuleLoader__.load({
 .nw-hl .nw-mark-strike[data-active="1"]{
   background-color:color-mix(in srgb, var(--nw-brand) 18%, transparent);
 }
+/* R51：写作时点一条线，浮出这张小卡：引文、批注原文、一个删除。这里是**看**的地方，
+   所以没有输入框——批注在写作区只读，要改它回「读一遍」里改。卡片的坐标由
+   openMarkView() 按点击处算好，夹在纸面之内。 */
+.nw-mark-view{
+  position:absolute;z-index:var(--nw-z-panel);
+  width:min(200px,calc(100% - 24px));
+  display:flex;flex-direction:column;gap:4px;
+  padding:6px;border-radius:var(--nw-r-control);
+  border:1px solid var(--nw-line);background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);line-height:1.45;
+}
+.nw-mark-view-quote{
+  color:var(--nw-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.nw-mark-view-note{color:var(--nw-fg);white-space:pre-wrap;overflow-wrap:break-word;max-height:96px;overflow-y:auto;}
+.nw-mark-view-note[data-empty="1"]{color:var(--nw-soft);}
+.nw-mark-view-acts{display:flex;gap:4px;}
+.nw-mark-view-btn{
+  flex:1 1 auto;height:22px;padding:0 8px;
+  border-radius:var(--nw-r-control);border:1px solid var(--nw-line-strong);
+  background:var(--nw-btn-bg);color:var(--nw-fg);cursor:pointer;
+  font-family:inherit;font-size:var(--nw-fs-tiny);white-space:nowrap;
+}
+.nw-mark-view-btn:hover{background:var(--nw-btn-hover);}
+.nw-mark-view-btn[data-danger="1"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 45%, var(--nw-line-strong));}
 
 /* caret measuring mirror: same box, never painted */
 .nw-caret{
@@ -9344,6 +9369,12 @@ window.__ModuleLoader__.load({
     // 'document'. Mirrored into `data-scroller` for diagnosis; only changes
     // when the host layout changes, so it never re-renders while typing.
     const [scrollerKind, setScrollerKind] = React.useState('self');
+    // R51: the little card that shows what a line says when the writer clicks
+    // it. Reading happens in the writing surface too — that is where the line
+    // is, after all — but it is read-only here: 读一遍 is where a note is written.
+    const [markView, setMarkView] = React.useState(null);
+    const markViewRef = React.useRef(null);
+    markViewRef.current = markView;
     /** Right-hand blank currently reserved for the floating dock, in px. */
     const dockLaneRef = React.useRef(-1);
 
@@ -10697,6 +10728,60 @@ window.__ModuleLoader__.load({
       return best;
     }
 
+    /**
+     * R51: put a read-only card next to the line the writer just clicked.
+     *
+     * The card is positioned inside `.nw-stack` (not the viewport) so it moves
+     * with the paper instead of hanging over the chrome, and its `top` is the
+     * clicked line's own line box — measured through the same mirror the caret
+     * uses, so a wrapped line puts the card under the right line rather than
+     * under the paragraph's first line.
+     */
+    function openMarkView(mark, ev) {
+      const stack = stackRef.current;
+      const view = resolveScroller(false);
+      const sc = view && view.el;
+      if (!stack || !sc) return;
+      // The browser has already moved the caret to the click by the time `click`
+      // fires, so the selection start is exactly the character that was clicked
+      // — better than the mark's own start, which can be a paragraph away on a
+      // long line.
+      const ta = taRef.current;
+      const at = ta && typeof ta.selectionStart === 'number' ? ta.selectionStart : Number(mark.start) || 0;
+      const m = measureCaret(at, view);
+      const cardW = 200;
+      const stackW = stack.getBoundingClientRect().width || 0;
+      const left = clampNum(m ? m.left : 0, 8, Math.max(8, stackW - cardW - 8));
+      const top = (m ? m.lineTop : 0) + (m ? m.height : 0) + 6;
+      setMarkView({ mark: mark, left: Math.round(left), top: Math.round(top) });
+    }
+
+    function closeMarkView() {
+      setMarkView((cur) => (cur ? null : cur));
+    }
+
+    /**
+     * R51: a click inside the textarea lands on a character, and that character
+     * may be inside a mark. There is no DOM element per mark here — the textarea
+     * is one big node — so the mark is found by offset, not by `closest()`.
+     */
+    function handleMarkClick() {
+      const ta = taRef.current;
+      if (!ta) return;
+      const at = ta.selectionStart;
+      if (typeof at !== 'number' || ta.selectionEnd !== at) {
+        // A drag-selection is about to become a new mark; do not open a card.
+        closeMarkView();
+        return;
+      }
+      const hit = markAt(at);
+      if (!hit) {
+        closeMarkView();
+        return;
+      }
+      openMarkView(hit, null);
+    }
+
     // -------------------------------------------------------- find & replace --
     function openFind(open) {
       const f = findRef.current;
@@ -10981,6 +11066,13 @@ window.__ModuleLoader__.load({
         return;
       }
       if (ev.key === 'Escape') {
+        // R51: the card is the topmost thing on the paper, so Escape closes it
+        // before it reaches the find bar or the immersive exit.
+        if (markViewRef.current) {
+          ev.preventDefault();
+          closeMarkView();
+          return;
+        }
         if (findRef.current.open) {
           ev.preventDefault();
           closeFind();
@@ -11338,6 +11430,8 @@ window.__ModuleLoader__.load({
       typedAtRef.current = -1e9;
       // R46: the cached caret line belonged to the old chapter's text.
       focusTopRef.current = -1;
+      // R51: so did the card's mark and its offsets.
+      setMarkView(null);
       composingRef.current = false;
 
       const f = findRef.current;
@@ -11446,6 +11540,12 @@ window.__ModuleLoader__.load({
         (row) => row && String(row.chapterId) === marksChapterId,
       );
       setMarks(list);
+      // R51: if the card was describing a mark that has just been deleted (here
+      // or on the phone), it has nothing left to describe.
+      const open = markViewRef.current;
+      if (open && open.mark && !list.some((row) => String(row.id) === String(open.mark.id))) {
+        setMarkView(null);
+      }
     }, [marksIn, marksChapterId]);
 
     // Listeners are attached once; every callback reads refs for freshness.
@@ -11663,6 +11763,57 @@ window.__ModuleLoader__.load({
     const matchPos = matchTotal ? Math.min(find.index + 1, matchTotal) : 0;
     const countText = find.notice || (find.query ? matchPos + '/' + matchTotal : '');
 
+    // R51: the read-only mark card. Deliberately no <textarea> in it: the
+    // writing surface is where the line is, so it is where you find out what the
+    // line says; writing the note happens in 读一遍, where the whole page is
+    // yours and there is room to think. 删除 is here because deleting is a
+    // reading-time decision — you see the line is wrong and it is gone.
+    const markCard =
+      markView && markView.mark
+        ? h(
+            'div',
+            {
+              className: 'nw-mark-view',
+              role: 'dialog',
+              'aria-label': NW.t('标注'),
+              style: { left: markView.left + 'px', top: markView.top + 'px' },
+              onMouseDown: (ev) => {
+                // Do not let the card steal the caret from the textarea: that
+                // would fire onSelect → scheduleMeasure and move the viewport.
+                if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+              },
+            },
+            h('div', { className: 'nw-mark-view-quote' }, String(markView.mark.quote || '').slice(0, 40) || NW.t('这条线')),
+            h(
+              'div',
+              {
+                className: 'nw-mark-view-note',
+                'data-empty': String(markView.mark.note || '').trim() ? '0' : '1',
+              },
+              String(markView.mark.note || '').trim() || NW.t('没有批注'),
+            ),
+            h(
+              'div',
+              { className: 'nw-mark-view-acts' },
+              h('button', {
+                type: 'button',
+                className: 'nw-mark-view-btn',
+                onClick: closeMarkView,
+              }, NW.t('知道了')),
+              h('button', {
+                type: 'button',
+                className: 'nw-mark-view-btn',
+                'data-danger': '1',
+                onClick: () => {
+                  const id = markView.mark.id;
+                  closeMarkView();
+                  if (typeof p.onMarkRemove === 'function') p.onMarkRemove(id);
+                },
+              }, NW.t('删除')),
+            ),
+          )
+        : null;
+
     const findBar =
       chapter && find.open
         ? h(
@@ -11824,11 +11975,18 @@ window.__ModuleLoader__.load({
               },
               onBlur: handleBlur,
               onFocus: () => scheduleMeasure(false),
-              onClick: () => scheduleMeasure(true),
+              onClick: () => {
+                scheduleMeasure(true);
+                handleMarkClick();
+              },
               onCompositionStart: handleCompositionStart,
               onCompositionEnd: handleCompositionEnd,
               onSelect: () => scheduleMeasure(true),
             }),
+            // R51: the read-only card. It sits inside `.nw-stack` so it scrolls
+            // with the paper, and after the textarea so it is never buried under
+            // the text it is describing.
+            markCard,
           ),
         )
       : h(
@@ -12253,13 +12411,15 @@ window.__ModuleLoader__.load({
 .nw-mark-pop-btn[data-primary="1"]{background:var(--nw-brand);border-color:var(--nw-brand);color:var(--nw-panel);}
 /* 两个按钮那一版只是个小条，不该占满正文宽度。 */
 .nw-mark-pop.nw-mark-pick{width:auto;padding:4px;}
+/* R51：写批注那一版再窄一点、再矮一点——它是一张便条，不是一块面板。 */
+.nw-mark-pop.nw-mark-edit{width:min(200px,calc(100vw - 24px));}
 .nw-mark-pop-note{
-  box-sizing:border-box;width:100%;min-height:44px;max-height:120px;
-  padding:4px 6px;
+  box-sizing:border-box;width:100%;min-height:32px;max-height:88px;
+  padding:3px 5px;
   border-radius:var(--nw-r-hair);border:1px solid var(--nw-line);
   background:var(--nw-bg);color:var(--nw-fg);
-  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);line-height:1.5;
-  resize:vertical;
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);line-height:1.45;
+  resize:none;
 }
 .nw-mark-pop-note:focus{outline:none;border-color:var(--nw-brand);}
 .nw-mark-pop-btn[data-danger="1"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 45%, var(--nw-line-strong));}
@@ -12929,6 +13089,19 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'nw-mark-pop-acts' },
+          // R51：批注窗里也能删。原先只有「取消/保存」，想扔掉一条批注得先关掉窗
+          // 再点那条线，而线在窗下面，点不到——于是那条批注永远删不掉。
+          h('button', {
+            type: 'button',
+            className: 'nw-mark-pop-btn',
+            'data-danger': '1',
+            title: NW.t('删掉这条标注'),
+            onClick: () => {
+              const id = editing.mark.id;
+              closeMark();
+              if (typeof p.onUnmark === 'function') p.onUnmark(id);
+            },
+          }, NW.t('删除')),
           h('button', {
             type: 'button',
             className: 'nw-mark-pop-btn',
@@ -16062,6 +16235,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       // keeps them pinned while the writer edits the text.
                       marks: readMarks,
                       onMarksShift: shiftMarks,
+                      // R51: the card that opens when a line is clicked can
+                      // delete the mark — deleting is a reading-time decision.
+                      onMarkRemove: removeMark,
                       registerApi: registerEditor,
                     }),
                     // R13: 灵感便签 floats over the paper itself, not over the

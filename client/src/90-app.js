@@ -3037,6 +3037,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       // keeps them pinned while the writer edits the text.
                       marks: readMarks,
                       onMarksShift: shiftMarks,
+                      // R51: the card that opens when a line is clicked can
+                      // delete the mark — deleting is a reading-time decision.
+                      onMarkRemove: removeMark,
                       registerApi: registerEditor,
                     }),
                     // R13: 灵感便签 floats over the paper itself, not over the

@@ -326,13 +326,15 @@
 .nw-mark-pop-btn[data-primary="1"]{background:var(--nw-brand);border-color:var(--nw-brand);color:var(--nw-panel);}
 /* 两个按钮那一版只是个小条，不该占满正文宽度。 */
 .nw-mark-pop.nw-mark-pick{width:auto;padding:4px;}
+/* R51：写批注那一版再窄一点、再矮一点——它是一张便条，不是一块面板。 */
+.nw-mark-pop.nw-mark-edit{width:min(200px,calc(100vw - 24px));}
 .nw-mark-pop-note{
-  box-sizing:border-box;width:100%;min-height:44px;max-height:120px;
-  padding:4px 6px;
+  box-sizing:border-box;width:100%;min-height:32px;max-height:88px;
+  padding:3px 5px;
   border-radius:var(--nw-r-hair);border:1px solid var(--nw-line);
   background:var(--nw-bg);color:var(--nw-fg);
-  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);line-height:1.5;
-  resize:vertical;
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);line-height:1.45;
+  resize:none;
 }
 .nw-mark-pop-note:focus{outline:none;border-color:var(--nw-brand);}
 .nw-mark-pop-btn[data-danger="1"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 45%, var(--nw-line-strong));}
@@ -1002,6 +1004,19 @@
         h(
           'div',
           { className: 'nw-mark-pop-acts' },
+          // R51：批注窗里也能删。原先只有「取消/保存」，想扔掉一条批注得先关掉窗
+          // 再点那条线，而线在窗下面，点不到——于是那条批注永远删不掉。
+          h('button', {
+            type: 'button',
+            className: 'nw-mark-pop-btn',
+            'data-danger': '1',
+            title: NW.t('删掉这条标注'),
+            onClick: () => {
+              const id = editing.mark.id;
+              closeMark();
+              if (typeof p.onUnmark === 'function') p.onUnmark(id);
+            },
+          }, NW.t('删除')),
           h('button', {
             type: 'button',
             className: 'nw-mark-pop-btn',
