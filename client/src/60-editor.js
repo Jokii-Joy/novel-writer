@@ -579,17 +579,24 @@
   background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 16%, transparent);
   box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
 }
-/* 批注角标：一个贴在划线末尾的小点。这里必须绝对定位——镜像的每一个字符都要
-   和底下的 textarea 落在同一个位置，任何占位的行内元素都会把后半行推歪。
+/* 批注角标：一个贴在划线末尾的小方框，里面三个点。这里必须绝对定位——镜像的
+   每一个字符都要和底下的 textarea 落在同一个位置，任何占位的行内元素都会把后半行推歪。
    R49：角标挂在一个零宽零高的锚点上（.nw-mark-dot，插在 mark 的最后），
-   而不是 left:100%——100% 指的是行盒末尾，批注一跨行点就跑到上一行去了。 */
+   而不是 left:100%——100% 指的是行盒末尾，批注一跨行点就跑到上一行去了。
+   R50：从圆点改成「小方框里三个点」，和读视图一致：圆点只说明这里有东西，
+   方框里三个点说明这里有一句话。三个点是三枚径向渐变，不引入图标。 */
 .nw-hl .nw-mark-dot{display:inline-block;width:0;height:0;position:relative;vertical-align:baseline;}
 .nw-hl .nw-mark-dot::after{
-  content:'';position:absolute;left:2px;bottom:.5em;
-  width:5px;height:5px;
-  border-radius:var(--nw-r-pill);
-  background:var(--nw-mark-comment, var(--nw-brand));
-  box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 26%, transparent);
+  content:'';position:absolute;left:3px;bottom:.28em;
+  box-sizing:border-box;width:12px;height:9px;
+  border-radius:2px;
+  background-color:var(--nw-mark-comment, var(--nw-brand));
+  background-image:
+    radial-gradient(circle at 3px 50%, var(--nw-panel) .8px, transparent 1px),
+    radial-gradient(circle at 6px 50%, var(--nw-panel) .8px, transparent 1px),
+    radial-gradient(circle at 9px 50%, var(--nw-panel) .8px, transparent 1px);
+  background-repeat:no-repeat;
+  box-shadow:0 0 0 1px color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 26%, transparent);
   pointer-events:none;
 }
 .nw-hl .nw-mark-comment[data-active="1"],
@@ -1592,6 +1599,9 @@
             active: !!r.active,
             kind: 'hl',
             mark: MARK_CLASS[r.kind] ? r.kind : 'underline',
+            // R50：小方框标的是「这条线上挂着一句话」，不是「这条线的类型是批注」——
+            // 下划线和删除线现在也能带一句批注。
+            badge: !!String(r.note || '').trim() || String(r.kind) === 'comment',
           });
         }
       }
@@ -1619,7 +1629,7 @@
         // R49：批注角标挂在**字尾**。镜像里一个 range 就是一个 `<mark>`，所以
         // 紧跟其后的零宽零高锚点正好落在最后一个字后面；`left:100%` 那个写法
         // 挂的是行盒末尾，批注一跨行点就跑到上一行去了。
-        if (r.mark === 'comment') {
+        if (r.badge) {
           const dot = document.createElement('span');
           dot.className = 'nw-mark-dot';
           dot.setAttribute('aria-hidden', 'true');

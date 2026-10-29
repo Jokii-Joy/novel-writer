@@ -97,13 +97,18 @@
       const e = Math.min(end, Number(m.end) || 0);
       // A mark may cross a paragraph break; each paragraph then gets its own
       // piece. Only the piece that holds the mark's real end may carry the
-      // little comment dot, otherwise a two-paragraph comment would sprout two.
-      // R49: only a comment gets a dot at all — a strike or an underline ends
-      // quietly. `tail` used to be a plain "this piece holds the end" flag that
-      // the stylesheet gated on the comment class; now the dot is its own span,
-      // so the kind has to be checked here or every mark grows one.
+      // little comment badge, otherwise a two-paragraph comment would sprout two.
+      // R50: a note is no longer its own kind — any underline or strike can carry
+      // one, so the badge follows `note`, not `kind`.
       if (e > s) {
-        hits.push({ s: s - start, e: e - start, kind: m.kind, id: m.id, tail: String(m.kind) === 'comment' && e >= (Number(m.end) || 0) });
+        hits.push({
+          s: s - start,
+          e: e - start,
+          kind: m.kind,
+          id: m.id,
+          tail: e >= (Number(m.end) || 0),
+          badge: !!String(m.note || '').trim() || String(m.kind) === 'comment',
+        });
       }
     }
     if (!hits.length) return para.text;
@@ -128,8 +133,16 @@
       );
       // R49：角标挂在**字尾**，不是行尾。这个零宽零高的锚点紧跟在最后那个字
       // 后面，所以它落在文字结束处；它不占排版空间，分页一个像素都不变。
-      if (m.tail) {
-        out.push(h('span', { className: 'nw-mark-dot', key: 'd' + i + '-' + String(m.id), 'aria-hidden': 'true' }));
+      // R50：角标自己带着 `data-mark`，点它等于点那条标注。
+      if (m.badge && m.tail) {
+        out.push(h('span', {
+          className: 'nw-mark nw-mark-dot',
+          key: 'd' + i + '-' + String(m.id),
+          'data-mark': String(m.id),
+          role: 'button',
+          tabIndex: -1,
+          'aria-label': NW.t('批注'),
+        }));
       }
       pos = m.e;
     }
@@ -239,11 +252,21 @@
    位置却正好是文字的末尾，角标以它为基准绝对定位，就是「浮在字尾」。
    只有真正到达批注终点的那个片段才画（一条批注跨段时，段段都画就成了三个点）。 */
 .nw-mark-dot{display:inline-block;width:0;height:0;position:relative;vertical-align:baseline;}
+/* R50：标识改成一个「小方框里三个点」——像一张便条，而不是一个墨点。圆点只能
+   说「这里有东西」，方框里三个点说的是一句话，而且和别处的批注图标是一个意思。
+   框里的三个点是拿三枚径向渐变画的，不引入图标、不多一个 DOM 节点。 */
 .nw-mark-dot::after{
-  content:'';position:absolute;left:2px;bottom:.5em;
-  width:5px;height:5px;
-  border-radius:50%;background:var(--nw-mark-comment, var(--nw-brand));
-  pointer-events:none;
+  content:'';position:absolute;left:3px;bottom:.28em;
+  box-sizing:border-box;width:12px;height:9px;
+  border-radius:2px;
+  background-color:var(--nw-mark-comment, var(--nw-brand));
+  background-image:
+    radial-gradient(circle at 3px 50%, var(--nw-panel) .8px, transparent 1px),
+    radial-gradient(circle at 6px 50%, var(--nw-panel) .8px, transparent 1px),
+    radial-gradient(circle at 9px 50%, var(--nw-panel) .8px, transparent 1px);
+  background-repeat:no-repeat;
+  box-shadow:0 0 0 1px color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 26%, transparent);
+  pointer-events:auto;cursor:pointer;
 }
 .nw-read-empty{
   display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -278,36 +301,49 @@
   background:transparent;color:var(--nw-fg);cursor:pointer;white-space:nowrap;
 }
 .nw-mark-bar-btn:hover{background:var(--nw-btn-hover);}
+/* R50：点开一条标注后浮出来的小窗。位置由组件按点击处算好写进 style，所以这里
+   只负责「长什么样」：一小片面板，刚好放得下一句批注——不是屏幕底下那块大白板。 */
 .nw-mark-pop{
-  position:absolute;left:50%;bottom:24px;transform:translateX(-50%);
-  z-index:35;width:min(420px,calc(100% - 32px));
-  display:flex;flex-direction:column;gap:var(--nw-sp-2);
-  padding:var(--nw-sp-3);border-radius:var(--nw-r-card);
+  position:fixed;left:0;top:0;transform:translateX(-50%);
+  z-index:35;width:min(220px,calc(100vw - 24px));
+  display:flex;flex-direction:column;gap:4px;
+  padding:6px;border-radius:var(--nw-r-control);
   border:1px solid var(--nw-line);background:var(--nw-panel);box-shadow:var(--nw-shadow-3);
-  font-family:var(--nw-ui-font);font-size:var(--nw-fs-micro);
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);
   animation:nw-fade-in var(--nw-dur, .18s) var(--nw-ease, ease) both;
 }
-.nw-mark-pop-quote{
-  padding-left:var(--nw-sp-2);border-left:2px solid var(--nw-brand);
-  color:var(--nw-soft);line-height:1.5;
-}
-.nw-mark-pop-note{color:var(--nw-fg);line-height:1.6;white-space:pre-wrap;}
-.nw-mark-pop-acts{display:flex;justify-content:space-between;gap:var(--nw-sp-2);}
+/* 两个并列的小按钮：删除 / 批注。一行放得下，不用点开第二层。 */
+.nw-mark-pop-acts{display:flex;gap:4px;}
 .nw-mark-pop-btn{
-  height:var(--nw-h-btn);padding:0 var(--nw-sp-3);
+  flex:1 1 auto;
+  height:24px;padding:0 8px;
   border-radius:var(--nw-r-control);border:1px solid var(--nw-line-strong);
   background:var(--nw-btn-bg);color:var(--nw-fg);cursor:pointer;
-  font-family:var(--nw-ui-font);font-size:var(--nw-fs-micro);
+  font-family:inherit;font-size:var(--nw-fs-tiny);white-space:nowrap;
 }
 .nw-mark-pop-btn:hover{background:var(--nw-btn-hover);}
+.nw-mark-pop-btn[data-danger="1"]{color:var(--nw-danger);}
+.nw-mark-pop-btn[data-primary="1"]{background:var(--nw-brand);border-color:var(--nw-brand);color:var(--nw-panel);}
+/* 两个按钮那一版只是个小条，不该占满正文宽度。 */
+.nw-mark-pop.nw-mark-pick{width:auto;padding:4px;}
+.nw-mark-pop-note{
+  box-sizing:border-box;width:100%;min-height:44px;max-height:120px;
+  padding:4px 6px;
+  border-radius:var(--nw-r-hair);border:1px solid var(--nw-line);
+  background:var(--nw-bg);color:var(--nw-fg);
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);line-height:1.5;
+  resize:vertical;
+}
+.nw-mark-pop-note:focus{outline:none;border-color:var(--nw-brand);}
 .nw-mark-pop-btn[data-danger="1"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 45%, var(--nw-line-strong));}
 @media (max-width: 560px){
   .nw-mark-bar-btn{padding:0 8px;}
-  .nw-mark-pop{left:8px;right:8px;width:auto;transform:none;}
+  .nw-mark-pop{width:min(240px,calc(100vw - 16px));}
 }
 @media (prefers-reduced-motion: reduce){
   .nw-read{animation:none;}
   .nw-read-flow{scroll-behavior:auto;}
+  .nw-mark-pop{animation:none;}
 }
 @media (max-width: 560px){
   .nw-read-bar{padding-top:var(--nw-sp-2);}
@@ -370,7 +406,14 @@
 
     // Esc 走弹层自己的栈（40-ui 的 useEscapeOwner）：一次 Esc 只关一层，
     // 也不会被沉浸模式的 Esc 抢先退出全屏。
-    NW.useModalEscape(true, close);
+    // R50：批注小窗开着时，Esc 先收小窗，再按一次才离开「读一遍」。
+    NW.useModalEscape(true, () => {
+      if (editing || picked) {
+        closeMark();
+        return;
+      }
+      close();
+    });
 
     // 焦点必须离开 textarea，否则翻页的方向键会直接打进正文里。焦点落在
     // 分页容器上（tabIndex=-1），滚动容器自己也能收到方向键。
@@ -417,7 +460,11 @@
     // 译成「哪一章、第几个字到第几个字」——标注就是用这组下标存的，跟界面上
     // 怎么分段、怎么分页都无关。
     const [sel, setSel] = React.useState(null);
-    const [activeMark, setActiveMark] = React.useState(null);
+    // R50: 点一条标注之后先浮出一个两个按钮的小菜单（删除 / 批注）；批注正文则在
+    // 一个贴着点击处的小编辑框里改，不再占用屏幕底下那块大白板。
+    const [picked, setPicked] = React.useState(null);
+    const [editing, setEditing] = React.useState(null);
+    const [noteDraft, setNoteDraft] = React.useState('');
 
     function locateNode(node) {
       let el = node;
@@ -532,14 +579,16 @@
       });
     }, [sel, p.onMark]);
 
-    // 讲清楚「点一下标注会发生什么」：删掉它，或者改批注正文。
-    // 点亮那几个 `<span>` 用 DOM 直接改属性，不把 activeMark 塞进正文的 useMemo
+    // 讲清楚「点一下标注会发生什么」：就在点的位置浮出两个小按钮——删除 / 批注。
+    // 点亮那几个 `<span>` 用 DOM 直接改属性，不把 picked 塞进正文的 useMemo
     // 依赖——否则每点一次标注就要把全书重新拆一遍段（正是 R44 修掉的卡顿）。
-    const openMark = React.useCallback((id) => {
+    const openMark = React.useCallback((id, ev) => {
       const list = marks.filter((m) => String(m.id) === String(id));
       const mark = list[0];
       if (!mark) return;
-      setActiveMark(mark);
+      // 菜单贴着鼠标走：点在字的哪里，菜单就在哪里张开，而不是固定挂在屏幕底边。
+      const x = ev && typeof ev.clientX === 'number' ? ev.clientX : window.innerWidth / 2;
+      const y = ev && typeof ev.clientY === 'number' ? ev.clientY : window.innerHeight / 2;
       const flow = flowRef.current;
       if (flow) {
         const spans = flow.querySelectorAll('.nw-mark[data-mark]');
@@ -548,7 +597,28 @@
           spans[i].setAttribute('data-active', on ? '1' : '0');
         }
       }
+      // 点一条「批注」就是看/改那句话——它存在的意义就是那句话，不必再选一次。
+      // 下划线和删除线则先问「删了它，还是给它写一句」，因为这两件事对一条线
+      // 都说得通，而线本身并不暗示哪一个。
+      if (String(mark.kind) === 'comment') {
+        setPicked(null);
+        setNoteDraft(String(mark.note || ''));
+        setEditing({ mark: mark, x: x, y: y });
+        return;
+      }
+      setEditing(null);
+      setPicked({ mark: mark, x: x, y: y });
     }, [marks]);
+
+    const closeMark = React.useCallback(() => {
+      setPicked(null);
+      setEditing(null);
+      const flow = flowRef.current;
+      if (flow) {
+        const spans = flow.querySelectorAll('.nw-mark[data-mark]');
+        for (let i = 0; i < spans.length; i += 1) spans[i].setAttribute('data-active', '0');
+      }
+    }, []);
 
     // ---- 量一次版面：定栏宽 → 读 scrollWidth → 得到页数 ----------------------
     const measure = React.useCallback(() => {
@@ -855,58 +925,99 @@
       )
       : null;
 
-    const activePanel = activeMark
+    // R50：点一条标注 → 就在点的位置浮出两个并列的小按钮（删除 / 批注）。
+    // 点「删除」这条线立刻没了；点「批注」就在同一个位置张开一个贴着字的小编辑框。
+    // 位置一律夹在视口里，贴着底边或右边点时菜单不会跑到屏幕外面去。
+    const anchorOf = (at, w, h) => {
+      const vw = (typeof window !== 'undefined' && window.innerWidth) || 1024;
+      const vh = (typeof window !== 'undefined' && window.innerHeight) || 768;
+      const left = Math.min(Math.max(at.x, w / 2 + 8), vw - w / 2 - 8);
+      // 优先张在点击处的下方；下面放不下就翻到上方。
+      const below = at.y + 14;
+      const top = below + h > vh - 8 ? Math.max(8, at.y - h - 14) : below;
+      return { left: Math.round(left) + 'px', top: Math.round(top) + 'px' };
+    };
+
+    const picker = picked
       ? h(
         'div',
-        { className: 'nw-mark-pop', role: 'dialog', 'aria-label': NW.t('这条标注') },
-        h('div', { className: 'nw-mark-pop-quote' }, String(activeMark.quote || '').slice(0, 90)),
-        activeMark.kind === 'comment'
-          ? h('div', { className: 'nw-mark-pop-note' }, String(activeMark.note || NW.t('（没有正文）')))
-          : null,
+        {
+          className: 'nw-mark-pop nw-mark-pick',
+          role: 'toolbar',
+          'aria-label': NW.t('这条标注'),
+          style: anchorOf(picked, 140, 34),
+        },
         h(
           'div',
           { className: 'nw-mark-pop-acts' },
-          // A comment is the one kind worth editing after the fact: the words it
-          // quotes never change, but the thought about them often does.
-          activeMark.kind === 'comment'
-            ? h('button', {
-              type: 'button',
-              className: 'nw-mark-pop-btn',
-              onClick: () => {
-                const id = activeMark.id;
-                const now = String(activeMark.note || '');
-                const ask = NW.ui && typeof NW.ui.prompt === 'function'
-                  ? NW.ui.prompt({
-                    title: NW.t('改这条批注'),
-                    label: NW.t('批注'),
-                    value: now,
-                    multiline: true,
-                    placeholder: NW.t('这条批注写给自己看'),
-                  })
-                  : Promise.resolve(null);
-                Promise.resolve(ask).then((next) => {
-                  if (next == null) return;
-                  const body = String(next).trim();
-                  if (typeof p.onNote === 'function') p.onNote(id, body);
-                  setActiveMark(null);
-                });
-              },
-            }, NW.t('改批注'))
-            : null,
-          h('button', {
-            type: 'button',
-            className: 'nw-mark-pop-btn',
-            onClick: () => { setActiveMark(null); },
-          }, NW.t('知道了')),
           h('button', {
             type: 'button',
             className: 'nw-mark-pop-btn',
             'data-danger': '1',
             onClick: () => {
-              if (typeof p.onUnmark === 'function') p.onUnmark(activeMark.id);
-              setActiveMark(null);
+              const id = picked.mark.id;
+              closeMark();
+              if (typeof p.onUnmark === 'function') p.onUnmark(id);
             },
-          }, NW.t('删掉这条标注')),
+          }, NW.t('删除')),
+          h('button', {
+            type: 'button',
+            className: 'nw-mark-pop-btn',
+            onClick: () => {
+              // 不调 closeMark()：那会顺手把刚刚点亮的标注也熄灭，而编辑框还开着，
+              // 亮着才对得上「我在改这一条」。
+              const at = picked;
+              setPicked(null);
+              setNoteDraft(String(at.mark.note || ''));
+              setEditing({ mark: at.mark, x: at.x, y: at.y });
+            },
+          }, NW.t('批注')),
+        ),
+      )
+      : null;
+
+    const editor = editing
+      ? h(
+        'div',
+        {
+          className: 'nw-mark-pop nw-mark-edit',
+          role: 'dialog',
+          'aria-label': NW.t('批注'),
+          style: anchorOf(editing, 220, 130),
+        },
+        h('textarea', {
+          className: 'nw-mark-pop-note',
+          value: noteDraft,
+          placeholder: NW.t('这条批注写给自己看'),
+          'aria-label': NW.t('批注'),
+          autoFocus: true,
+          onChange: (ev) => setNoteDraft(ev.target.value),
+          onKeyDown: (ev) => {
+            if (ev.key === 'Escape') {
+              ev.stopPropagation();
+              closeMark();
+            }
+          },
+        }),
+        h(
+          'div',
+          { className: 'nw-mark-pop-acts' },
+          h('button', {
+            type: 'button',
+            className: 'nw-mark-pop-btn',
+            onClick: closeMark,
+          }, NW.t('取消')),
+          h('button', {
+            type: 'button',
+            className: 'nw-mark-pop-btn',
+            'data-primary': '1',
+            onClick: () => {
+              const id = editing.mark.id;
+              const body = String(noteDraft || '').trim();
+              closeMark();
+              if (typeof p.onNote === 'function') p.onNote(id, body);
+            },
+          }, NW.t('保存')),
         ),
       )
       : null;
@@ -956,25 +1067,19 @@
                 if (span) {
                   ev.preventDefault();
                   ev.stopPropagation();
-                  openMark(span.getAttribute('data-mark'));
+                  openMark(span.getAttribute('data-mark'), ev);
                   return;
                 }
               }
               // 点空白处收起面板。
-              if (activeMark) {
-                setActiveMark(null);
-                const flow2 = flowRef.current;
-                if (flow2) {
-                  const spans = flow2.querySelectorAll('.nw-mark[data-mark]');
-                  for (let i = 0; i < spans.length; i += 1) spans[i].setAttribute('data-active', '0');
-                }
-              }
+              if (picked || editing) closeMark();
             },
           },
           body,
         ),
         toolbar,
-        activePanel,
+        picker,
+        editor,
       ),
       h(
         'div',
