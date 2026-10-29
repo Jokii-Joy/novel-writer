@@ -1740,7 +1740,12 @@ window.__ModuleLoader__.load({
     const clean = cleanMark(input);
     if (!clean) return undefined;
     const stamp = now();
-    const row = Object.assign({ id: uid('mark'), createdAt: stamp, updatedAt: stamp }, clean);
+    // R52: honour an id the caller already painted with. The editor draws the
+    // line the instant it is asked for and then tells the app to persist it; if
+    // the row came back under a different id, the card that was just opened
+    // would point at a mark that does not exist and 删除 would do nothing.
+    const wanted = input && input.id ? String(input.id) : '';
+    const row = Object.assign({ id: wanted || uid('mark'), createdAt: stamp, updatedAt: stamp }, clean);
     const ok = await writeBatch([{ store: 'marks', type: 'put', value: row }]);
     if (!ok) throw new Error('保存标注失败');
     notify();
@@ -9014,7 +9019,8 @@ window.__ModuleLoader__.load({
    方框里三个点说明这里有一句话。三个点是三枚径向渐变，不引入图标。 */
 .nw-hl .nw-mark-dot{display:inline-block;width:0;height:0;position:relative;vertical-align:baseline;}
 .nw-hl .nw-mark-dot::after{
-  content:'';position:absolute;left:3px;bottom:.28em;
+  /* R52：和读视图一致，角标挂到字尾右上角——贴字腰会压住下一行开头的字。 */
+  content:'';position:absolute;left:3px;top:-.86em;
   box-sizing:border-box;width:12px;height:9px;
   border-radius:2px;
   background-color:var(--nw-mark-comment, var(--nw-brand));
@@ -9056,6 +9062,22 @@ window.__ModuleLoader__.load({
 }
 .nw-mark-view-btn:hover{background:var(--nw-btn-hover);}
 .nw-mark-view-btn[data-danger="1"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 45%, var(--nw-line-strong));}
+/* R52：选中一段字之后浮出来的「标一下」小条——写作区里也能划线，不用先开读一遍。 */
+.nw-mark-pick{
+  position:absolute;z-index:var(--nw-z-float);
+  display:inline-flex;align-items:center;gap:2px;
+  padding:3px;border-radius:var(--nw-r-pill);
+  border:1px solid var(--nw-line-strong);
+  background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);
+}
+.nw-mark-pick-btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  height:24px;padding:0 8px;border:0;border-radius:var(--nw-r-pill);
+  background:transparent;color:var(--nw-fg);cursor:pointer;white-space:nowrap;
+  font-family:inherit;font-size:var(--nw-fs-tiny);
+}
+.nw-mark-pick-btn:hover{background:var(--nw-btn-hover);}
 
 /* caret measuring mirror: same box, never painted */
 .nw-caret{
@@ -9349,6 +9371,8 @@ window.__ModuleLoader__.load({
     const dirtyRef = React.useRef(false);
     const composingRef = React.useRef(false);
     const draggingRef = React.useRef(false);
+    /** R52: where the current press started, so a click can be told from a drag. */
+    const pointerDownRef = React.useRef(null);
     const valueRef = React.useRef(
       chapter && typeof chapter.content === 'string' ? chapter.content : '',
     );
@@ -9375,6 +9399,13 @@ window.__ModuleLoader__.load({
     const [markView, setMarkView] = React.useState(null);
     const markViewRef = React.useRef(null);
     markViewRef.current = markView;
+    // R52: the "mark this" bar that appears when a range is selected. The
+    // writing surface is where the words are, so it is where you should be able
+    // to underline one — having to open 读一遍 first made marking feel like a
+    // separate mode rather than something you do while working.
+    const [markPick, setMarkPick] = React.useState(null);
+    const markPickRef = React.useRef(null);
+    markPickRef.current = markPick;
     /** Right-hand blank currently reserved for the floating dock, in px. */
     const dockLaneRef = React.useRef(-1);
 
@@ -10709,23 +10740,40 @@ window.__ModuleLoader__.load({
       rebuildHighlights();
     }
 
-    /** Which mark sits under `offset`, if any — newest (longest) wins. */
+    /**
+     * Which mark sits under `offset`, if any — newest (longest) wins.
+     *
+     * R52: `opts.edge` also accepts a caret that landed exactly on a mark's end.
+     * Clicking the right half of the last underlined character puts the caret
+     * *after* it, so a strict `offset < end` test made the card feel like it
+     * only opened on a lucky pixel — reported as "双击才可以".
+     */
     function markAt(offset, opts) {
       const want = opts || {};
       const own = marksRef.current || [];
       const at = numOf(offset, -1);
       if (at < 0) return null;
       let best = null;
+      let edge = null;
       for (let i = 0; i < own.length; i += 1) {
         const r = own[i];
         if (!r) continue;
-        if (!(at >= (Number(r.start) || 0) && at < (Number(r.end) || 0))) continue;
+        const start = Number(r.start) || 0;
+        const end = Number(r.end) || 0;
         if (want.kind && r.kind !== want.kind) continue;
-        if (!best || (Number(r.end) - Number(r.start)) <= (Number(best.end) - Number(best.start))) {
+        const inside = at >= start && at < end;
+        if (!inside) {
+          if (want.edge && at === end && end > start) {
+            // Only a fallback: a mark that really contains the caret wins.
+            if (!edge) edge = r;
+          }
+          continue;
+        }
+        if (!best || (end - start) <= (Number(best.end) - Number(best.start))) {
           best = r;
         }
       }
-      return best;
+      return best || edge;
     }
 
     /**
@@ -10761,25 +10809,177 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * R52: the "mark this" bar for a selected range.
+     *
+     * Positioned under the end of the selection, clamped to the paper. It is a
+     * separate state from the card so a drag-select never opens a card and a
+     * click on a line never leaves the bar hanging around.
+     */
+    function openMarkPick(sel) {
+      const stack = stackRef.current;
+      const view = resolveScroller(false);
+      if (!stack || !view) return;
+      const m = measureCaret(sel.end, view);
+      const stackW = stack.getBoundingClientRect().width || 0;
+      const barW = 150;
+      const left = clampNum(m ? m.left : 0, 8, Math.max(8, stackW - barW - 8));
+      const top = (m ? m.lineTop : 0) + (m ? m.height : 0) + 6;
+      setMarkView(null);
+      setMarkPick({ start: sel.start, end: sel.end, left: Math.round(left), top: Math.round(top) });
+    }
+
+    function closeMarkPick() {
+      setMarkPick((cur) => (cur ? null : cur));
+    }
+
+    /**
+     * Create a mark over the current selection, then put the card on it.
+     *
+     * The card is where the note gets read and, for a comment, written — so a
+     * freshly drawn line lands on it rather than making the writer hunt for the
+     * line again just to say why it is there.
+     */
+    function createMarkOf(kind) {
+      const pick = markPickRef.current;
+      const ta = taRef.current;
+      if (!pick || !ta) return;
+      const text = ta.value.slice(pick.start, pick.end);
+      const id = 'mk-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36);
+      const draft = {
+        id: id,
+        kind: kind,
+        start: pick.start,
+        end: pick.end,
+        quote: String(text || '').slice(0, 240),
+        note: '',
+      };
+      // Paint it at once: the app round-trips through IndexedDB before the list
+      // comes back, and a line that appears a beat late reads as "it didn't work".
+      marksRef.current = (marksRef.current || []).concat([draft]);
+      rebuildHighlights();
+      closeMarkPick();
+      if (typeof p.onMarkCreate === 'function') {
+        const created = p.onMarkCreate(draft);
+        if (created && typeof created.catch === 'function') created.catch(() => {});
+      }
+      const view = resolveScroller(false);
+      const m = view ? measureCaret(draft.end, view) : null;
+      const stackW = (stackRef.current && stackRef.current.getBoundingClientRect().width) || 0;
+      const left = clampNum(m ? m.left : 0, 8, Math.max(8, stackW - 208));
+      const top = (m ? m.lineTop : 0) + (m ? m.height : 0) + 6;
+      setMarkView({ mark: draft, left: Math.round(left), top: Math.round(top) });
+    }
+
+    /** Delete a mark from the card, painting the change immediately. */
+    function removeMarkOf(id) {
+      if (id == null) return;
+      marksRef.current = (marksRef.current || []).filter((row) => String(row.id) !== String(id));
+      rebuildHighlights();
+      closeMarkView();
+      if (typeof p.onMarkRemove === 'function') {
+        const done = p.onMarkRemove(id);
+        if (done && typeof done.catch === 'function') done.catch(() => {});
+      }
+    }
+
+    /**
      * R51: a click inside the textarea lands on a character, and that character
      * may be inside a mark. There is no DOM element per mark here — the textarea
      * is one big node — so the mark is found by offset, not by `closest()`.
      */
-    function handleMarkClick() {
+    /**
+     * R52: which mark is under the pointer, found by hit-testing the painted
+     * mirror instead of the caret.
+     *
+     * The first version asked `ta.selectionStart` where the click landed, which
+     * made the card depend on a caret that the click had not always placed yet —
+     * the user experienced it as "单击没用，双击才可以". The mirror already has one
+     * `<mark>` element per mark, laid out exactly where the line is drawn, so its
+     * client rects are the ground truth. It also handles marks that wrap across
+     * lines, where the caret can only be at one of several positions.
+     */
+    function markAtPoint(ev) {
+      const hl = hlRef.current;
+      if (!hl || !ev) return null;
+      const x = Number(ev.clientX);
+      const y = Number(ev.clientY);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      const nodes = hl.querySelectorAll('mark[data-id]');
+      for (let i = 0; i < nodes.length; i += 1) {
+        const node = nodes[i];
+        const rects = node.getClientRects ? node.getClientRects() : [];
+        for (let r = 0; r < rects.length; r += 1) {
+          const box = rects[r];
+          // One pixel of slack: sub-pixel layout means the exact edge is not
+          // reproducible, and a click on the last pixel of the line is still a
+          // click on that line.
+          if (x >= box.left - 1 && x <= box.right + 1 && y >= box.top - 1 && y <= box.bottom + 1) {
+            const id = node.getAttribute('data-id');
+            const rows = marksRef.current || [];
+            for (let k = 0; k < rows.length; k += 1) {
+              if (rows[k] && String(rows[k].id) === String(id)) return rows[k];
+            }
+          }
+        }
+      }
+      return null;
+    }
+
+    function handleMarkClick(ev) {
       const ta = taRef.current;
       if (!ta) return;
-      const at = ta.selectionStart;
-      if (typeof at !== 'number' || ta.selectionEnd !== at) {
-        // A drag-selection is about to become a new mark; do not open a card.
+      // R52: a click that ended a drag is the writer selecting words, not
+      // asking about a line — the selection is about to become a new mark.
+      // Anything else (including the second click of a double-click, which
+      // leaves a word selected) is a real click on a line.
+      const down = pointerDownRef.current;
+      const moved = down && ev
+        ? Math.abs(Number(ev.clientX) - down.x) + Math.abs(Number(ev.clientY) - down.y)
+        : 0;
+      if (moved > 6) {
         closeMarkView();
         return;
       }
-      const hit = markAt(at);
+      const at = ta.selectionStart;
+      // Point first (exact, independent of the caret), offset as a fallback for
+      // keyboard-driven clicks and for the tail of the last character.
+      const hit = markAtPoint(ev)
+        || (typeof at === 'number' && ta.selectionEnd === at ? (markAt(at, { edge: true }) || markAt(at - 1, { edge: true })) : null);
       if (!hit) {
         closeMarkView();
         return;
       }
-      openMarkView(hit, null);
+      openMarkView(hit, ev);
+    }
+
+    /**
+     * R52: after a drag-selection, offer to mark it.
+     *
+     * The bar only appears for a real range (more than one character) and only
+     * while the textarea has focus — clicking a toolbar or the shelf must not
+     * pop it back up. It is dismissed by Escape, by collapsing the selection,
+     * and by scrolling away (its coordinates are paper-relative, so a scroll
+     * would leave it floating over the wrong line).
+     */
+    function syncMarkPick() {
+      const ta = taRef.current;
+      if (!ta) return;
+      const focused = document.activeElement === ta;
+      const start = ta.selectionStart || 0;
+      const end = ta.selectionEnd || 0;
+      if (!focused || end - start < 2) {
+        closeMarkPick();
+        return;
+      }
+      // Selecting across a whole chapter is not "mark this sentence"; capping it
+      // keeps the bar from being mistaken for a formatting toolbar.
+      if (end - start > 4000) {
+        closeMarkPick();
+        return;
+      }
+      const cur = markPickRef.current;
+      if (cur && cur.start === start && cur.end === end) return;
+      openMarkPick({ start: start, end: end });
     }
 
     // -------------------------------------------------------- find & replace --
@@ -11571,6 +11771,11 @@ window.__ModuleLoader__.load({
         const sc = scrollerRef.current;
         const at = sc ? sc.scrollTop || 0 : 0;
         if (Math.abs(at - expectedScrollTopRef.current) <= 2) return;
+        // R52: the "mark this" bar is placed against a line, so once the paper
+        // is moved by hand it is pointing at nothing. A scroll the editor asked
+        // for itself (re-centring after a selection) must not count, or the bar
+        // would vanish in the same frame it appeared.
+        if (markPickRef.current) closeMarkPick();
         markManual();
       };
       scrollHooksRef.current = { wheel: onWheel, touchmove: onTouchMove, scroll: onScroll };
@@ -11585,8 +11790,14 @@ window.__ModuleLoader__.load({
 
       const onSelectionChange = () => {
         const ta = taRef.current;
-        if (!ta || document.activeElement !== ta) return;
+        if (!ta || document.activeElement !== ta) {
+          // R52: focus left the paper (a toolbar, the shelf) — the "mark this"
+          // bar belongs to a selection made here and must not linger.
+          if (markPickRef.current) closeMarkPick();
+          return;
+        }
         scheduleMeasure(true);
+        syncMarkPick();
       };
       // Window blur/focus also matter: the painted caret must disappear when
       // the whole app loses focus (Alt+Tab) even though the textarea keeps
@@ -11604,6 +11815,9 @@ window.__ModuleLoader__.load({
         draggingRef.current = false;
         // A drag-selection ended: re-centre once, now that it is safe to move.
         scheduleMeasure(true);
+        // R52: the selection now exists, so the "mark this" bar can be placed
+        // against the final caret position rather than mid-drag.
+        syncMarkPick();
       };
       const onBeforeUnload = () => {
         flushNow();
@@ -11763,6 +11977,41 @@ window.__ModuleLoader__.load({
     const matchPos = matchTotal ? Math.min(find.index + 1, matchTotal) : 0;
     const countText = find.notice || (find.query ? matchPos + '/' + matchTotal : '');
 
+    // R52: "mark this" — a three-button bar that appears under a selection.
+    // Without it the writing surface could show marks but never make one, which
+    // is why the user kept reporting "编辑页面不能删除线和批注": the only way to
+    // create a line was to open 读一遍 first. Positioned in paper coordinates so
+    // it sits under the selected text and scrolls away with it.
+    const markPickBar = markPick
+      ? h(
+          'div',
+          {
+            className: 'nw-mark-pick',
+            role: 'toolbar',
+            'aria-label': NW.t('标一下'),
+            style: { left: markPick.left + 'px', top: markPick.top + 'px' },
+            onMouseDown: (ev) => {
+              if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+            },
+          },
+          h('button', {
+            type: 'button',
+            className: 'nw-mark-pick-btn',
+            onClick: () => createMarkOf('underline'),
+          }, NW.t('下划线')),
+          h('button', {
+            type: 'button',
+            className: 'nw-mark-pick-btn',
+            onClick: () => createMarkOf('strike'),
+          }, NW.t('删除线')),
+          h('button', {
+            type: 'button',
+            className: 'nw-mark-pick-btn',
+            onClick: () => createMarkOf('comment'),
+          }, NW.t('批注')),
+        )
+      : null;
+
     // R51: the read-only mark card. Deliberately no <textarea> in it: the
     // writing surface is where the line is, so it is where you find out what the
     // line says; writing the note happens in 读一遍, where the whole page is
@@ -11805,9 +12054,10 @@ window.__ModuleLoader__.load({
                 className: 'nw-mark-view-btn',
                 'data-danger': '1',
                 onClick: () => {
-                  const id = markView.mark.id;
-                  closeMarkView();
-                  if (typeof p.onMarkRemove === 'function') p.onMarkRemove(id);
+                  // R52: go through removeMarkOf so the line disappears in this
+                  // frame instead of waiting for the list to come back from
+                  // IndexedDB — otherwise 删除 looks like it did nothing.
+                  removeMarkOf(markView.mark.id);
                 },
               }, NW.t('删除')),
             ),
@@ -11968,16 +12218,22 @@ window.__ModuleLoader__.load({
               onInput: handleInput,
               onKeyDown: handleKeyDown,
               onKeyUp: () => scheduleMeasure(true),
-              onMouseDown: () => {
+              onMouseDown: (ev) => {
                 // Suppress re-centring until mouseup so a drag-selection is not
                 // fought by the script while the pointer is still down.
                 draggingRef.current = true;
+                // R52: remember where the press started — a click and a drag
+                // both end in `click`, and only one of them means "what is this
+                // line?".
+                pointerDownRef.current = ev
+                  ? { x: Number(ev.clientX) || 0, y: Number(ev.clientY) || 0 }
+                  : null;
               },
               onBlur: handleBlur,
               onFocus: () => scheduleMeasure(false),
-              onClick: () => {
+              onClick: (ev) => {
                 scheduleMeasure(true);
-                handleMarkClick();
+                handleMarkClick(ev);
               },
               onCompositionStart: handleCompositionStart,
               onCompositionEnd: handleCompositionEnd,
@@ -11986,6 +12242,7 @@ window.__ModuleLoader__.load({
             // R51: the read-only card. It sits inside `.nw-stack` so it scrolls
             // with the paper, and after the textarea so it is never buried under
             // the text it is describing.
+            markPickBar,
             markCard,
           ),
         )
@@ -12341,7 +12598,10 @@ window.__ModuleLoader__.load({
    说「这里有东西」，方框里三个点说的是一句话，而且和别处的批注图标是一个意思。
    框里的三个点是拿三枚径向渐变画的，不引入图标、不多一个 DOM 节点。 */
 .nw-mark-dot::after{
-  content:'';position:absolute;left:3px;bottom:.28em;
+  /* R52：角标挂在字尾的**右上角**。原来贴着字腰右侧，行高紧的时候正好压住
+     下一行开头的几个字——用户说「有点遮挡文字」。右上角落在一行的上沿之外，
+     行距里本来就有空白，字本身一个像素也不动。 */
+  content:'';position:absolute;left:3px;top:-.86em;
   box-sizing:border-box;width:12px;height:9px;
   border-radius:2px;
   background-color:var(--nw-mark-comment, var(--nw-brand));
@@ -12411,10 +12671,11 @@ window.__ModuleLoader__.load({
 .nw-mark-pop-btn[data-primary="1"]{background:var(--nw-brand);border-color:var(--nw-brand);color:var(--nw-panel);}
 /* 两个按钮那一版只是个小条，不该占满正文宽度。 */
 .nw-mark-pop.nw-mark-pick{width:auto;padding:4px;}
-/* R51：写批注那一版再窄一点、再矮一点——它是一张便条，不是一块面板。 */
-.nw-mark-pop.nw-mark-edit{width:min(200px,calc(100vw - 24px));}
+/* R52：写批注那一版再窄一点、再矮一点——它是一张便条，不是一块面板。
+   用户说「编辑框太大」，所以宽度收到 176px、留白也收，让它真的像贴在字边上的便签。 */
+.nw-mark-pop.nw-mark-edit{width:min(176px,calc(100vw - 24px));padding:5px;gap:3px;}
 .nw-mark-pop-note{
-  box-sizing:border-box;width:100%;min-height:32px;max-height:88px;
+  box-sizing:border-box;width:100%;min-height:28px;max-height:76px;
   padding:3px 5px;
   border-radius:var(--nw-r-hair);border:1px solid var(--nw-line);
   background:var(--nw-bg);color:var(--nw-fg);
@@ -12673,10 +12934,34 @@ window.__ModuleLoader__.load({
       const list = marks.filter((m) => String(m.id) === String(id));
       const mark = list[0];
       if (!mark) return;
-      // 菜单贴着鼠标走：点在字的哪里，菜单就在哪里张开，而不是固定挂在屏幕底边。
-      const x = ev && typeof ev.clientX === 'number' ? ev.clientX : window.innerWidth / 2;
-      const y = ev && typeof ev.clientY === 'number' ? ev.clientY : window.innerHeight / 2;
+      // 菜单贴着**那段字**走，不是贴着鼠标走：用户说的是「在所选文字旁边显示小框」，
+      // 点在字的哪一处都该张在同一行的同一侧。一条标注在分栏/跨段时会拆成好几个
+      // 片段，所以取所有片段的所有行盒，挑离点击点最近的那个——用并集会把框甩到
+      // 相邻的栏上去。
       const flow = flowRef.current;
+      let x = ev && typeof ev.clientX === 'number' ? ev.clientX : window.innerWidth / 2;
+      let y = ev && typeof ev.clientY === 'number' ? ev.clientY : window.innerHeight / 2;
+      if (flow) {
+        const spans = flow.querySelectorAll('.nw-mark[data-mark="' + String(id) + '"]');
+        let best = null;
+        let bestDist = Infinity;
+        for (let i = 0; i < spans.length; i += 1) {
+          const rects = spans[i].getClientRects ? spans[i].getClientRects() : [];
+          for (let k = 0; k < rects.length; k += 1) {
+            const r = rects[k];
+            if (!r || (!r.width && !r.height)) continue;
+            const cx = r.left + r.width / 2;
+            const cy = r.top + r.height / 2;
+            const dist = Math.abs(cx - x) + Math.abs(cy - y);
+            if (dist < bestDist) { bestDist = dist; best = r; }
+          }
+        }
+        if (best) {
+          const width = Math.min(best.width, 160);
+          x = best.left + width / 2;
+          y = best.bottom;
+        }
+      }
       if (flow) {
         const spans = flow.querySelectorAll('.nw-mark[data-mark]');
         for (let i = 0; i < spans.length; i += 1) {
@@ -13019,9 +13304,9 @@ window.__ModuleLoader__.load({
       const vw = (typeof window !== 'undefined' && window.innerWidth) || 1024;
       const vh = (typeof window !== 'undefined' && window.innerHeight) || 768;
       const left = Math.min(Math.max(at.x, w / 2 + 8), vw - w / 2 - 8);
-      // 优先张在点击处的下方；下面放不下就翻到上方。
-      const below = at.y + 14;
-      const top = below + h > vh - 8 ? Math.max(8, at.y - h - 14) : below;
+      // 优先张在字的下方（贴着那一行）；下面放不下就翻到上方。
+      const below = at.y + 8;
+      const top = below + h > vh - 8 ? Math.max(8, at.y - h - 20) : below;
       return { left: Math.round(left) + 'px', top: Math.round(top) + 'px' };
     };
 
@@ -13070,7 +13355,7 @@ window.__ModuleLoader__.load({
           className: 'nw-mark-pop nw-mark-edit',
           role: 'dialog',
           'aria-label': NW.t('批注'),
-          style: anchorOf(editing, 220, 130),
+          style: anchorOf(editing, 176, 116),
         },
         h('textarea', {
           className: 'nw-mark-pop-note',
@@ -16238,6 +16523,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       // R51: the card that opens when a line is clicked can
                       // delete the mark — deleting is a reading-time decision.
                       onMarkRemove: removeMark,
+                      // R52: and a selection in the paper can create one, so the
+                      // writing surface is not the one place where you can see
+                      // your marks but never make one.
+                      onMarkCreate: addMark,
                       registerApi: registerEditor,
                     }),
                     // R13: 灵感便签 floats over the paper itself, not over the

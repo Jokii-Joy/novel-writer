@@ -3040,6 +3040,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       // R51: the card that opens when a line is clicked can
                       // delete the mark — deleting is a reading-time decision.
                       onMarkRemove: removeMark,
+                      // R52: and a selection in the paper can create one, so the
+                      // writing surface is not the one place where you can see
+                      // your marks but never make one.
+                      onMarkCreate: addMark,
                       registerApi: registerEditor,
                     }),
                     // R13: 灵感便签 floats over the paper itself, not over the

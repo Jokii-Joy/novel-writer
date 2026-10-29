@@ -587,7 +587,8 @@
    方框里三个点说明这里有一句话。三个点是三枚径向渐变，不引入图标。 */
 .nw-hl .nw-mark-dot{display:inline-block;width:0;height:0;position:relative;vertical-align:baseline;}
 .nw-hl .nw-mark-dot::after{
-  content:'';position:absolute;left:3px;bottom:.28em;
+  /* R52：和读视图一致，角标挂到字尾右上角——贴字腰会压住下一行开头的字。 */
+  content:'';position:absolute;left:3px;top:-.86em;
   box-sizing:border-box;width:12px;height:9px;
   border-radius:2px;
   background-color:var(--nw-mark-comment, var(--nw-brand));
@@ -629,6 +630,22 @@
 }
 .nw-mark-view-btn:hover{background:var(--nw-btn-hover);}
 .nw-mark-view-btn[data-danger="1"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 45%, var(--nw-line-strong));}
+/* R52：选中一段字之后浮出来的「标一下」小条——写作区里也能划线，不用先开读一遍。 */
+.nw-mark-pick{
+  position:absolute;z-index:var(--nw-z-float);
+  display:inline-flex;align-items:center;gap:2px;
+  padding:3px;border-radius:var(--nw-r-pill);
+  border:1px solid var(--nw-line-strong);
+  background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);
+}
+.nw-mark-pick-btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  height:24px;padding:0 8px;border:0;border-radius:var(--nw-r-pill);
+  background:transparent;color:var(--nw-fg);cursor:pointer;white-space:nowrap;
+  font-family:inherit;font-size:var(--nw-fs-tiny);
+}
+.nw-mark-pick-btn:hover{background:var(--nw-btn-hover);}
 
 /* caret measuring mirror: same box, never painted */
 .nw-caret{
@@ -922,6 +939,8 @@
     const dirtyRef = React.useRef(false);
     const composingRef = React.useRef(false);
     const draggingRef = React.useRef(false);
+    /** R52: where the current press started, so a click can be told from a drag. */
+    const pointerDownRef = React.useRef(null);
     const valueRef = React.useRef(
       chapter && typeof chapter.content === 'string' ? chapter.content : '',
     );
@@ -948,6 +967,13 @@
     const [markView, setMarkView] = React.useState(null);
     const markViewRef = React.useRef(null);
     markViewRef.current = markView;
+    // R52: the "mark this" bar that appears when a range is selected. The
+    // writing surface is where the words are, so it is where you should be able
+    // to underline one — having to open 读一遍 first made marking feel like a
+    // separate mode rather than something you do while working.
+    const [markPick, setMarkPick] = React.useState(null);
+    const markPickRef = React.useRef(null);
+    markPickRef.current = markPick;
     /** Right-hand blank currently reserved for the floating dock, in px. */
     const dockLaneRef = React.useRef(-1);
 
@@ -2282,23 +2308,40 @@
       rebuildHighlights();
     }
 
-    /** Which mark sits under `offset`, if any — newest (longest) wins. */
+    /**
+     * Which mark sits under `offset`, if any — newest (longest) wins.
+     *
+     * R52: `opts.edge` also accepts a caret that landed exactly on a mark's end.
+     * Clicking the right half of the last underlined character puts the caret
+     * *after* it, so a strict `offset < end` test made the card feel like it
+     * only opened on a lucky pixel — reported as "双击才可以".
+     */
     function markAt(offset, opts) {
       const want = opts || {};
       const own = marksRef.current || [];
       const at = numOf(offset, -1);
       if (at < 0) return null;
       let best = null;
+      let edge = null;
       for (let i = 0; i < own.length; i += 1) {
         const r = own[i];
         if (!r) continue;
-        if (!(at >= (Number(r.start) || 0) && at < (Number(r.end) || 0))) continue;
+        const start = Number(r.start) || 0;
+        const end = Number(r.end) || 0;
         if (want.kind && r.kind !== want.kind) continue;
-        if (!best || (Number(r.end) - Number(r.start)) <= (Number(best.end) - Number(best.start))) {
+        const inside = at >= start && at < end;
+        if (!inside) {
+          if (want.edge && at === end && end > start) {
+            // Only a fallback: a mark that really contains the caret wins.
+            if (!edge) edge = r;
+          }
+          continue;
+        }
+        if (!best || (end - start) <= (Number(best.end) - Number(best.start))) {
           best = r;
         }
       }
-      return best;
+      return best || edge;
     }
 
     /**
@@ -2334,25 +2377,177 @@
     }
 
     /**
+     * R52: the "mark this" bar for a selected range.
+     *
+     * Positioned under the end of the selection, clamped to the paper. It is a
+     * separate state from the card so a drag-select never opens a card and a
+     * click on a line never leaves the bar hanging around.
+     */
+    function openMarkPick(sel) {
+      const stack = stackRef.current;
+      const view = resolveScroller(false);
+      if (!stack || !view) return;
+      const m = measureCaret(sel.end, view);
+      const stackW = stack.getBoundingClientRect().width || 0;
+      const barW = 150;
+      const left = clampNum(m ? m.left : 0, 8, Math.max(8, stackW - barW - 8));
+      const top = (m ? m.lineTop : 0) + (m ? m.height : 0) + 6;
+      setMarkView(null);
+      setMarkPick({ start: sel.start, end: sel.end, left: Math.round(left), top: Math.round(top) });
+    }
+
+    function closeMarkPick() {
+      setMarkPick((cur) => (cur ? null : cur));
+    }
+
+    /**
+     * Create a mark over the current selection, then put the card on it.
+     *
+     * The card is where the note gets read and, for a comment, written — so a
+     * freshly drawn line lands on it rather than making the writer hunt for the
+     * line again just to say why it is there.
+     */
+    function createMarkOf(kind) {
+      const pick = markPickRef.current;
+      const ta = taRef.current;
+      if (!pick || !ta) return;
+      const text = ta.value.slice(pick.start, pick.end);
+      const id = 'mk-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36);
+      const draft = {
+        id: id,
+        kind: kind,
+        start: pick.start,
+        end: pick.end,
+        quote: String(text || '').slice(0, 240),
+        note: '',
+      };
+      // Paint it at once: the app round-trips through IndexedDB before the list
+      // comes back, and a line that appears a beat late reads as "it didn't work".
+      marksRef.current = (marksRef.current || []).concat([draft]);
+      rebuildHighlights();
+      closeMarkPick();
+      if (typeof p.onMarkCreate === 'function') {
+        const created = p.onMarkCreate(draft);
+        if (created && typeof created.catch === 'function') created.catch(() => {});
+      }
+      const view = resolveScroller(false);
+      const m = view ? measureCaret(draft.end, view) : null;
+      const stackW = (stackRef.current && stackRef.current.getBoundingClientRect().width) || 0;
+      const left = clampNum(m ? m.left : 0, 8, Math.max(8, stackW - 208));
+      const top = (m ? m.lineTop : 0) + (m ? m.height : 0) + 6;
+      setMarkView({ mark: draft, left: Math.round(left), top: Math.round(top) });
+    }
+
+    /** Delete a mark from the card, painting the change immediately. */
+    function removeMarkOf(id) {
+      if (id == null) return;
+      marksRef.current = (marksRef.current || []).filter((row) => String(row.id) !== String(id));
+      rebuildHighlights();
+      closeMarkView();
+      if (typeof p.onMarkRemove === 'function') {
+        const done = p.onMarkRemove(id);
+        if (done && typeof done.catch === 'function') done.catch(() => {});
+      }
+    }
+
+    /**
      * R51: a click inside the textarea lands on a character, and that character
      * may be inside a mark. There is no DOM element per mark here — the textarea
      * is one big node — so the mark is found by offset, not by `closest()`.
      */
-    function handleMarkClick() {
+    /**
+     * R52: which mark is under the pointer, found by hit-testing the painted
+     * mirror instead of the caret.
+     *
+     * The first version asked `ta.selectionStart` where the click landed, which
+     * made the card depend on a caret that the click had not always placed yet —
+     * the user experienced it as "单击没用，双击才可以". The mirror already has one
+     * `<mark>` element per mark, laid out exactly where the line is drawn, so its
+     * client rects are the ground truth. It also handles marks that wrap across
+     * lines, where the caret can only be at one of several positions.
+     */
+    function markAtPoint(ev) {
+      const hl = hlRef.current;
+      if (!hl || !ev) return null;
+      const x = Number(ev.clientX);
+      const y = Number(ev.clientY);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      const nodes = hl.querySelectorAll('mark[data-id]');
+      for (let i = 0; i < nodes.length; i += 1) {
+        const node = nodes[i];
+        const rects = node.getClientRects ? node.getClientRects() : [];
+        for (let r = 0; r < rects.length; r += 1) {
+          const box = rects[r];
+          // One pixel of slack: sub-pixel layout means the exact edge is not
+          // reproducible, and a click on the last pixel of the line is still a
+          // click on that line.
+          if (x >= box.left - 1 && x <= box.right + 1 && y >= box.top - 1 && y <= box.bottom + 1) {
+            const id = node.getAttribute('data-id');
+            const rows = marksRef.current || [];
+            for (let k = 0; k < rows.length; k += 1) {
+              if (rows[k] && String(rows[k].id) === String(id)) return rows[k];
+            }
+          }
+        }
+      }
+      return null;
+    }
+
+    function handleMarkClick(ev) {
       const ta = taRef.current;
       if (!ta) return;
-      const at = ta.selectionStart;
-      if (typeof at !== 'number' || ta.selectionEnd !== at) {
-        // A drag-selection is about to become a new mark; do not open a card.
+      // R52: a click that ended a drag is the writer selecting words, not
+      // asking about a line — the selection is about to become a new mark.
+      // Anything else (including the second click of a double-click, which
+      // leaves a word selected) is a real click on a line.
+      const down = pointerDownRef.current;
+      const moved = down && ev
+        ? Math.abs(Number(ev.clientX) - down.x) + Math.abs(Number(ev.clientY) - down.y)
+        : 0;
+      if (moved > 6) {
         closeMarkView();
         return;
       }
-      const hit = markAt(at);
+      const at = ta.selectionStart;
+      // Point first (exact, independent of the caret), offset as a fallback for
+      // keyboard-driven clicks and for the tail of the last character.
+      const hit = markAtPoint(ev)
+        || (typeof at === 'number' && ta.selectionEnd === at ? (markAt(at, { edge: true }) || markAt(at - 1, { edge: true })) : null);
       if (!hit) {
         closeMarkView();
         return;
       }
-      openMarkView(hit, null);
+      openMarkView(hit, ev);
+    }
+
+    /**
+     * R52: after a drag-selection, offer to mark it.
+     *
+     * The bar only appears for a real range (more than one character) and only
+     * while the textarea has focus — clicking a toolbar or the shelf must not
+     * pop it back up. It is dismissed by Escape, by collapsing the selection,
+     * and by scrolling away (its coordinates are paper-relative, so a scroll
+     * would leave it floating over the wrong line).
+     */
+    function syncMarkPick() {
+      const ta = taRef.current;
+      if (!ta) return;
+      const focused = document.activeElement === ta;
+      const start = ta.selectionStart || 0;
+      const end = ta.selectionEnd || 0;
+      if (!focused || end - start < 2) {
+        closeMarkPick();
+        return;
+      }
+      // Selecting across a whole chapter is not "mark this sentence"; capping it
+      // keeps the bar from being mistaken for a formatting toolbar.
+      if (end - start > 4000) {
+        closeMarkPick();
+        return;
+      }
+      const cur = markPickRef.current;
+      if (cur && cur.start === start && cur.end === end) return;
+      openMarkPick({ start: start, end: end });
     }
 
     // -------------------------------------------------------- find & replace --
@@ -3144,6 +3339,11 @@
         const sc = scrollerRef.current;
         const at = sc ? sc.scrollTop || 0 : 0;
         if (Math.abs(at - expectedScrollTopRef.current) <= 2) return;
+        // R52: the "mark this" bar is placed against a line, so once the paper
+        // is moved by hand it is pointing at nothing. A scroll the editor asked
+        // for itself (re-centring after a selection) must not count, or the bar
+        // would vanish in the same frame it appeared.
+        if (markPickRef.current) closeMarkPick();
         markManual();
       };
       scrollHooksRef.current = { wheel: onWheel, touchmove: onTouchMove, scroll: onScroll };
@@ -3158,8 +3358,14 @@
 
       const onSelectionChange = () => {
         const ta = taRef.current;
-        if (!ta || document.activeElement !== ta) return;
+        if (!ta || document.activeElement !== ta) {
+          // R52: focus left the paper (a toolbar, the shelf) — the "mark this"
+          // bar belongs to a selection made here and must not linger.
+          if (markPickRef.current) closeMarkPick();
+          return;
+        }
         scheduleMeasure(true);
+        syncMarkPick();
       };
       // Window blur/focus also matter: the painted caret must disappear when
       // the whole app loses focus (Alt+Tab) even though the textarea keeps
@@ -3177,6 +3383,9 @@
         draggingRef.current = false;
         // A drag-selection ended: re-centre once, now that it is safe to move.
         scheduleMeasure(true);
+        // R52: the selection now exists, so the "mark this" bar can be placed
+        // against the final caret position rather than mid-drag.
+        syncMarkPick();
       };
       const onBeforeUnload = () => {
         flushNow();
@@ -3336,6 +3545,41 @@
     const matchPos = matchTotal ? Math.min(find.index + 1, matchTotal) : 0;
     const countText = find.notice || (find.query ? matchPos + '/' + matchTotal : '');
 
+    // R52: "mark this" — a three-button bar that appears under a selection.
+    // Without it the writing surface could show marks but never make one, which
+    // is why the user kept reporting "编辑页面不能删除线和批注": the only way to
+    // create a line was to open 读一遍 first. Positioned in paper coordinates so
+    // it sits under the selected text and scrolls away with it.
+    const markPickBar = markPick
+      ? h(
+          'div',
+          {
+            className: 'nw-mark-pick',
+            role: 'toolbar',
+            'aria-label': NW.t('标一下'),
+            style: { left: markPick.left + 'px', top: markPick.top + 'px' },
+            onMouseDown: (ev) => {
+              if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+            },
+          },
+          h('button', {
+            type: 'button',
+            className: 'nw-mark-pick-btn',
+            onClick: () => createMarkOf('underline'),
+          }, NW.t('下划线')),
+          h('button', {
+            type: 'button',
+            className: 'nw-mark-pick-btn',
+            onClick: () => createMarkOf('strike'),
+          }, NW.t('删除线')),
+          h('button', {
+            type: 'button',
+            className: 'nw-mark-pick-btn',
+            onClick: () => createMarkOf('comment'),
+          }, NW.t('批注')),
+        )
+      : null;
+
     // R51: the read-only mark card. Deliberately no <textarea> in it: the
     // writing surface is where the line is, so it is where you find out what the
     // line says; writing the note happens in 读一遍, where the whole page is
@@ -3378,9 +3622,10 @@
                 className: 'nw-mark-view-btn',
                 'data-danger': '1',
                 onClick: () => {
-                  const id = markView.mark.id;
-                  closeMarkView();
-                  if (typeof p.onMarkRemove === 'function') p.onMarkRemove(id);
+                  // R52: go through removeMarkOf so the line disappears in this
+                  // frame instead of waiting for the list to come back from
+                  // IndexedDB — otherwise 删除 looks like it did nothing.
+                  removeMarkOf(markView.mark.id);
                 },
               }, NW.t('删除')),
             ),
@@ -3541,16 +3786,22 @@
               onInput: handleInput,
               onKeyDown: handleKeyDown,
               onKeyUp: () => scheduleMeasure(true),
-              onMouseDown: () => {
+              onMouseDown: (ev) => {
                 // Suppress re-centring until mouseup so a drag-selection is not
                 // fought by the script while the pointer is still down.
                 draggingRef.current = true;
+                // R52: remember where the press started — a click and a drag
+                // both end in `click`, and only one of them means "what is this
+                // line?".
+                pointerDownRef.current = ev
+                  ? { x: Number(ev.clientX) || 0, y: Number(ev.clientY) || 0 }
+                  : null;
               },
               onBlur: handleBlur,
               onFocus: () => scheduleMeasure(false),
-              onClick: () => {
+              onClick: (ev) => {
                 scheduleMeasure(true);
-                handleMarkClick();
+                handleMarkClick(ev);
               },
               onCompositionStart: handleCompositionStart,
               onCompositionEnd: handleCompositionEnd,
@@ -3559,6 +3810,7 @@
             // R51: the read-only card. It sits inside `.nw-stack` so it scrolls
             // with the paper, and after the textarea so it is never buried under
             // the text it is describing.
+            markPickBar,
             markCard,
           ),
         )

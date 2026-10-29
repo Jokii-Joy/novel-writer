@@ -256,7 +256,10 @@
    说「这里有东西」，方框里三个点说的是一句话，而且和别处的批注图标是一个意思。
    框里的三个点是拿三枚径向渐变画的，不引入图标、不多一个 DOM 节点。 */
 .nw-mark-dot::after{
-  content:'';position:absolute;left:3px;bottom:.28em;
+  /* R52：角标挂在字尾的**右上角**。原来贴着字腰右侧，行高紧的时候正好压住
+     下一行开头的几个字——用户说「有点遮挡文字」。右上角落在一行的上沿之外，
+     行距里本来就有空白，字本身一个像素也不动。 */
+  content:'';position:absolute;left:3px;top:-.86em;
   box-sizing:border-box;width:12px;height:9px;
   border-radius:2px;
   background-color:var(--nw-mark-comment, var(--nw-brand));
@@ -326,10 +329,11 @@
 .nw-mark-pop-btn[data-primary="1"]{background:var(--nw-brand);border-color:var(--nw-brand);color:var(--nw-panel);}
 /* 两个按钮那一版只是个小条，不该占满正文宽度。 */
 .nw-mark-pop.nw-mark-pick{width:auto;padding:4px;}
-/* R51：写批注那一版再窄一点、再矮一点——它是一张便条，不是一块面板。 */
-.nw-mark-pop.nw-mark-edit{width:min(200px,calc(100vw - 24px));}
+/* R52：写批注那一版再窄一点、再矮一点——它是一张便条，不是一块面板。
+   用户说「编辑框太大」，所以宽度收到 176px、留白也收，让它真的像贴在字边上的便签。 */
+.nw-mark-pop.nw-mark-edit{width:min(176px,calc(100vw - 24px));padding:5px;gap:3px;}
 .nw-mark-pop-note{
-  box-sizing:border-box;width:100%;min-height:32px;max-height:88px;
+  box-sizing:border-box;width:100%;min-height:28px;max-height:76px;
   padding:3px 5px;
   border-radius:var(--nw-r-hair);border:1px solid var(--nw-line);
   background:var(--nw-bg);color:var(--nw-fg);
@@ -588,10 +592,34 @@
       const list = marks.filter((m) => String(m.id) === String(id));
       const mark = list[0];
       if (!mark) return;
-      // 菜单贴着鼠标走：点在字的哪里，菜单就在哪里张开，而不是固定挂在屏幕底边。
-      const x = ev && typeof ev.clientX === 'number' ? ev.clientX : window.innerWidth / 2;
-      const y = ev && typeof ev.clientY === 'number' ? ev.clientY : window.innerHeight / 2;
+      // 菜单贴着**那段字**走，不是贴着鼠标走：用户说的是「在所选文字旁边显示小框」，
+      // 点在字的哪一处都该张在同一行的同一侧。一条标注在分栏/跨段时会拆成好几个
+      // 片段，所以取所有片段的所有行盒，挑离点击点最近的那个——用并集会把框甩到
+      // 相邻的栏上去。
       const flow = flowRef.current;
+      let x = ev && typeof ev.clientX === 'number' ? ev.clientX : window.innerWidth / 2;
+      let y = ev && typeof ev.clientY === 'number' ? ev.clientY : window.innerHeight / 2;
+      if (flow) {
+        const spans = flow.querySelectorAll('.nw-mark[data-mark="' + String(id) + '"]');
+        let best = null;
+        let bestDist = Infinity;
+        for (let i = 0; i < spans.length; i += 1) {
+          const rects = spans[i].getClientRects ? spans[i].getClientRects() : [];
+          for (let k = 0; k < rects.length; k += 1) {
+            const r = rects[k];
+            if (!r || (!r.width && !r.height)) continue;
+            const cx = r.left + r.width / 2;
+            const cy = r.top + r.height / 2;
+            const dist = Math.abs(cx - x) + Math.abs(cy - y);
+            if (dist < bestDist) { bestDist = dist; best = r; }
+          }
+        }
+        if (best) {
+          const width = Math.min(best.width, 160);
+          x = best.left + width / 2;
+          y = best.bottom;
+        }
+      }
       if (flow) {
         const spans = flow.querySelectorAll('.nw-mark[data-mark]');
         for (let i = 0; i < spans.length; i += 1) {
@@ -934,9 +962,9 @@
       const vw = (typeof window !== 'undefined' && window.innerWidth) || 1024;
       const vh = (typeof window !== 'undefined' && window.innerHeight) || 768;
       const left = Math.min(Math.max(at.x, w / 2 + 8), vw - w / 2 - 8);
-      // 优先张在点击处的下方；下面放不下就翻到上方。
-      const below = at.y + 14;
-      const top = below + h > vh - 8 ? Math.max(8, at.y - h - 14) : below;
+      // 优先张在字的下方（贴着那一行）；下面放不下就翻到上方。
+      const below = at.y + 8;
+      const top = below + h > vh - 8 ? Math.max(8, at.y - h - 20) : below;
       return { left: Math.round(left) + 'px', top: Math.round(top) + 'px' };
     };
 
@@ -985,7 +1013,7 @@
           className: 'nw-mark-pop nw-mark-edit',
           role: 'dialog',
           'aria-label': NW.t('批注'),
-          style: anchorOf(editing, 220, 130),
+          style: anchorOf(editing, 176, 116),
         },
         h('textarea', {
           className: 'nw-mark-pop-note',

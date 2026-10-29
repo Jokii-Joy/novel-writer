@@ -1302,7 +1302,12 @@
     const clean = cleanMark(input);
     if (!clean) return undefined;
     const stamp = now();
-    const row = Object.assign({ id: uid('mark'), createdAt: stamp, updatedAt: stamp }, clean);
+    // R52: honour an id the caller already painted with. The editor draws the
+    // line the instant it is asked for and then tells the app to persist it; if
+    // the row came back under a different id, the card that was just opened
+    // would point at a mark that does not exist and 删除 would do nothing.
+    const wanted = input && input.id ? String(input.id) : '';
+    const row = Object.assign({ id: wanted || uid('mark'), createdAt: stamp, updatedAt: stamp }, clean);
     const ok = await writeBatch([{ store: 'marks', type: 'put', value: row }]);
     if (!ok) throw new Error('保存标注失败');
     notify();
