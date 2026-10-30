@@ -33,7 +33,32 @@ const STAMP = path.join(TOOLS, 'last-push');
 const IP_CACHE = path.join(TOOLS, 'github-ip');
 
 const args = new Set(process.argv.slice(2));
-const GIT = process.env.NW_GIT || 'git';
+
+/**
+ * Find a git to run.
+ *
+ * The commit itself is made by whatever git the user has, but the hook runs
+ * this script from a shell whose PATH is not guaranteed to contain git — the
+ * project ships PortableGit in .tools/git and nothing puts it on PATH. When
+ * that shell cannot find git, `git remote` answers nothing, this script
+ * concludes the repo has no origin, and the only thing written to the log is
+ * "fail: git remote add: undefined" — which says nothing about the real
+ * problem, and looks exactly like "自动上传又没生效" (R63b).
+ *
+ * So: honour NW_GIT, then the bundled PortableGit, then PATH.
+ */
+function resolveGit() {
+  if (process.env.NW_GIT) return process.env.NW_GIT;
+  try {
+    const bundled = path.join(ROOT, '.tools', 'git', 'cmd', 'git.exe');
+    if (fs.existsSync(bundled)) return bundled;
+  } catch {
+    /* fall through to PATH */
+  }
+  return 'git';
+}
+
+const GIT = resolveGit();
 
 function log(line) {
   try {
@@ -78,12 +103,20 @@ function readConfig() {
 }
 
 function git(argv, options = {}) {
-  return spawnSync(GIT, argv, {
+  const out = spawnSync(GIT, argv, {
     cwd: ROOT,
     encoding: 'utf8',
     timeout: options.timeout || 120000,
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...(options.env || {}) },
   });
+  // spawnSync reports "could not start the process" through `error` and leaves
+  // stdout/stderr undefined. Without this the callers below log "…: undefined",
+  // which is the least useful sentence a push log can contain.
+  if (out.error) {
+    const why = 'cannot run git (' + GIT + '): ' + (out.error.message || out.error.code || 'unknown error');
+    out.stderr = out.stderr ? out.stderr + ' | ' + why : why;
+  }
+  return out;
 }
 
 /** One push attempt. Returns { ok, detail }. */
