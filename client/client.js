@@ -15017,9 +15017,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   display:flex;flex-direction:column;align-items:flex-end;
   padding:0;gap:0;
   border:0;background:none;box-shadow:none;
-  --nw-dock-pad-l:12px;
+  --nw-dock-pad-l:10px;
   --nw-dock-tile:26px;
-  --nw-dock-gap:12px;
+  --nw-dock-gap:10px;
   /* R65：现在只剩按钮自己需要材料，所以只留一个值。
      浅色主题里它是「纸色 + 4% 墨」（比纸深一档）；夜盘反而要往上提——深色页面
      上的浮层靠更亮表示抬起，7% 那条覆盖写在 98-shell-theme.js 里。 */
@@ -15031,11 +15031,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    尖角，展开时看到的就是五个独立的按钮，收起来时它们一起消失，只剩圆钮。 */
 .nw-dock-menu{
   position:relative;isolation:isolate;
-  display:flex;flex-direction:column;align-items:stretch;
+  /* R66：不再给柱子定宽，也不再让按钮把它撑满。每枚按钮只长得像它自己的
+     字——五个名字长短不同，宽度就该不同；右缘对齐圆钮，左缘随字走。
+     stretch 会让五枚一样长，正是用户说的「为啥要一样长」。 */
+  display:flex;flex-direction:column;align-items:flex-end;
   /* margin 不是死区：它不属于任何盒子，指针在那条缝里落到的是正文。 */
   margin:0 0 8px;
   padding:0;gap:0;
-  min-width:152px;
   transform-origin:100% 100%;
   animation:nw-dock-rise .22s var(--nw-ease-pop, cubic-bezier(.22,1.16,.36,1)) both;
 }
@@ -15068,8 +15070,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-dock-btn{
   position:relative;isolation:isolate;
   display:flex;align-items:center;gap:var(--nw-dock-gap);
-  width:100%;
-  height:42px;padding:0 16px 0 var(--nw-dock-pad-l);
+  width:auto;max-width:100%;
+  height:42px;padding:0 13px 0 var(--nw-dock-pad-l);
   border-radius:0;border:0;background:transparent;
   color:color-mix(in srgb, var(--nw-fg) 82%, var(--nw-bg));
   font-size:var(--nw-fs-second);line-height:1;white-space:nowrap;
