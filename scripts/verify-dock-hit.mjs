@@ -322,7 +322,7 @@ if (appFiles.length) {
     );
   }
   problems.push(...local);
-  if (!local.length) notes.push('.nw-dock-menu — five rows and nothing else inside the card');
+  if (!local.length) notes.push('.nw-dock-menu — five rows and nothing else in the menu');
 }
 
 {
@@ -339,17 +339,18 @@ if (appFiles.length) {
       '(the R59 symptom, one level in): the gap looks like padding but resolves the cursor to the page',
     );
   } else if (margin == null) {
-    notes.push('.nw-dock-btn — no margin, so the rows are edge to edge inside the card');
+    notes.push('.nw-dock-btn — no margin, so the row boxes stay edge to edge (the air between buttons is painted, not laid out)');
   } else {
-    notes.push('.nw-dock-btn — margin is 0, so the rows are edge to edge inside the card');
+    notes.push('.nw-dock-btn — margin is 0, so the row boxes stay edge to edge');
   }
 }
 
-// ---- 7. R63: every painted layer in the dock is inert ---------------------
-// The 6th painted layer (the FAB's inner ring and the card's notch) is new in
-// R63, so the old per-selector checks no longer cover the dock: this one walks
-// every ::before/::after under a dock class and requires it to be
-// pointer-events:none, with nothing setting it back.
+// ---- 7. R63/R65: every painted layer in the dock is inert -----------------
+// R63 added painted layers (the card, its notch, the arrow, the FAB's ring);
+// R65 removed all but one per button. The rule that survives is the one that
+// matters: any ::before/::after under a dock class must be pointer-events:none,
+// with nothing setting it back — otherwise a painted box sits over a button and
+// answers the cursor instead of the button box.
 {
   const painted = all.filter((r) => /\.nw-dock-(?:menu|btn|fab)[^,]*?::(?:before|after)/.test(r.sel));
   const layers = new Map();
@@ -365,14 +366,7 @@ if (appFiles.length) {
     }
     layers.set(key, entry);
   }
-  const wanted = [
-    'nw-dock-menu::before',
-    'nw-dock-menu::after',
-    'nw-dock-btn::before',
-    'nw-dock-btn::after',
-    'nw-dock-fab::before',
-    'nw-dock-fab::after',
-  ];
+  const wanted = ['nw-dock-btn::before', 'nw-dock-fab::before'];
   const local = [];
   for (const key of wanted) {
     const entry = layers.get(key);
@@ -381,12 +375,57 @@ if (appFiles.length) {
         '.' + key + ' — not pointer-events:none; every painted layer in the dock must be inert so ' +
         'the cursor is only ever resolved from a button box',
       );
-    } else if (entry.offender) {
-      local.push('.' + key + ' — "' + entry.offender + '" sets pointer-events back to something answerable');
+    }
+  }
+  for (const [key, entry] of layers) {
+    if (entry.offender) local.push('.' + key + ' — "' + entry.offender + '" sets pointer-events back to something answerable');
+  }
+  // R65: the menu is a column, not a card. Every visible surface in the dock
+  // belongs to a button; if the menu grows a surface again the rows stop being
+  // five separate buttons and the gap between them becomes card, not paper.
+  const menuSurface = painted.filter((r) => /\.nw-dock-menu\s*::(?:before|after)/.test(r.sel)
+    && /(^|;)\s*(background|inset)\s*:/.test(r.body));
+  if (menuSurface.length) {
+    local.push(
+      '.nw-dock-menu — paints its own surface (' + menuSurface[0].sel + '); after R65 the menu is a bare column ' +
+      'and the five rows paint themselves',
+    );
+  }
+  problems.push(...local);
+  if (!local.length) notes.push('every painted layer (' + layers.size + ') is inert, and the menu paints nothing itself');
+}
+
+// ---- 8. R65: each row is its own button, with real air between them -------
+// The user asked for "每一个都是独立的按钮，按钮间有点间隔". The gap is made by
+// insetting each row's painted shape vertically, NOT by a container gap: a gap
+// belongs to the container, and the pointer that lands in it hits a div that
+// paints nothing — R59's dead band wearing a different hat. So the assertions
+// are (i) the row really paints a surface (not a transparent hover-only layer),
+// and (ii) that surface is inset and smaller than the row box, which is where
+// the visual gap comes from while the hit boxes stay edge to edge.
+{
+  const local = [];
+  // Comment bodies are not stripped by rules(), so match on word boundaries
+  // rather than on a leading `;` — a comment between two declarations would
+  // otherwise hide the declaration that follows it.
+  const base = declsFor((s) => s === '.nw-dock-btn::before');
+  const inset = base.map((r) => /\binset\s*:\s*([^;]+)/.exec(r.body)).find(Boolean);
+  const bg = base.map((r) => /\bbackground\s*:\s*([^;]+)/.exec(r.body)).find(Boolean);
+  if (!bg || /^(none|transparent)(\s|$)/.test(bg[1].trim())) {
+    local.push('.nw-dock-btn::before — no resting surface; the rows would read as bare text, not five buttons');
+  }
+  if (!inset) {
+    local.push('.nw-dock-btn::before — no inset; the five buttons would touch edge to edge');
+  } else {
+    const top = /^(\d+(?:\.\d+)?)px/.exec(inset[1].trim());
+    if (!top || Number(top[1]) <= 0) {
+      local.push('.nw-dock-btn::before — inset ' + inset[1].trim() + ' leaves no vertical air; the buttons would touch');
+    } else {
+      notes.push('.nw-dock-btn::before — paints a chip inset ' + top[1] + 'px top, so the buttons are ' +
+        (2 * Number(top[1])) + 'px apart while their hit boxes stay edge to edge');
     }
   }
   problems.push(...local);
-  if (!local.length) notes.push('all six painted layers (' + wanted.length + ') are inert to the pointer');
 }
 
 console.log('verify-dock-hit: dock hit-area audit');

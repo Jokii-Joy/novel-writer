@@ -86,23 +86,13 @@
    otherwise the sheet would read as a hole rather than a page. */
 .nw-root[data-theme="night"] .nw-modal{background:#232220;}
 .nw-root[data-theme="night"] .nw-toast{background:#2b2a26;}
-/* R21/R63/R64: the rows are transparent now, so nothing needs lifting at night —
-   the menu card is the paper colour plus a little ink, which already sits on the
-   page. The FAB does need one override: its "seal" colour mixes brand toward ink,
-   and at night the ink is light, which would wash it into pale peach. Mix toward
-   the page instead and it stays a deep terracotta. R64 deepened it from 80% to
-   72% so the seal reads as ink on a dark page rather than a lit button. */
-.nw-root[data-theme="night"] .nw-dock-fab{
-  --nw-dock-ink:color-mix(in srgb, var(--nw-brand) 72%, var(--nw-bg));
-}
-/* R64: in daylight the card is the page plus a breath of ink, and a 14% white
-   sheen reads as paper catching light. On a dark page both signs flip — the card
-   has to be *lighter* than the page to look raised, and the same white sheen
-   would smear into grey fog. So night gets its own two numbers: a slightly
-   stronger card, a much weaker sheen. */
+/* R21/R63/R64/R65: the rows are transparent boxes and each one paints its own
+   paper chip through ::before, so at night the chip has to be *lighter* than the
+   page to look raised — hence the 7% override instead of the daylight 4%. The
+   FAB needs nothing here any more: R65 made it one flat brand-red circle, and
+   the night palette's brand is already tuned for a dark page. */
 .nw-root[data-theme="night"] .nw-dock{
   --nw-dock-card:color-mix(in srgb, var(--nw-fg) 7%, var(--nw-bg));
-  --nw-dock-sheen:color-mix(in srgb, #ffffff 6%, transparent);
 }
 
 /* ============================================================== card ====== */

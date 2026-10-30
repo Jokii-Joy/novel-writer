@@ -266,9 +266,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    留下的是那次排查真正属于本插件的那条结论，钉在这里别再丢：**坞的容器不许
    拥有可命中面积**——没有 padding、没有 gap、不画背景、不画边框，所有看得见
    的东西都由按钮或伪元素画。 */
-/* R63：五行的度量收到容器上的三个变量里——分隔线的起点、图标格宽、行内间距
-   都由它们算出来，窄屏断点只改这三个数，线就永远对着图标，不会再出现
-   「分隔线从行中间起笔」这种一眼就看得出不整齐的地方。
+/* R63：五行的度量收到容器上的三个变量里——图标格宽、行内间距、行首内边距
+   都由它们算出来，窄屏断点只改这三个数，行的左边界就永远是一条线。
+   R65：用户要「每一个都是独立的按钮，按钮间有点间隔」，于是整张卡片撤掉，五行
+   自己就是五个按钮。间隔是用**每行自己的内缩**做出来的（上下各缩 4px，两行之间
+   自然空出 8px），不是给容器加 gap——gap 属于容器，指针落进那条缝时命中的是一个
+   不画东西的 div，正好是 R59 那个死区的另一副面孔。
    上面 R59 那三条硬规矩没有变：容器不 padding、不 gap、不画底不画框。 */
 .nw-dock{
   position:absolute;z-index:var(--nw-z-panel);
@@ -279,24 +282,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   --nw-dock-pad-l:12px;
   --nw-dock-tile:26px;
   --nw-dock-gap:12px;
-  /* R64：卡片的两样材料由容器给出，主题可以各自改：
-     --nw-dock-card  纸色里掺多少墨（浅色主题往下压一点，夜盘反而要往上提，
-                     深色页面上的浮层靠"更亮"表示抬起）；
-     --nw-dock-sheen 顶部那道光。浅纸上是白反光，白值给大了就成了磨砂膜；
-                     夜盘必须压到很低，否则 26% 的白会在深底上糊成一层灰雾。 */
+  /* R65：现在只剩按钮自己需要材料，所以只留一个值。
+     浅色主题里它是「纸色 + 4% 墨」（比纸深一档）；夜盘反而要往上提——深色页面
+     上的浮层靠更亮表示抬起，7% 那条覆盖写在 98-shell-theme.js 里。 */
   --nw-dock-card:color-mix(in srgb, var(--nw-fg) 4%, var(--nw-bg));
-  --nw-dock-sheen:color-mix(in srgb, #ffffff 14%, transparent);
 }
 .nw-dock[data-immersive="1"]{bottom:22px;right:18px;}
 
-/* 菜单：从圆钮上方长出来的一张卡。行与行之间不留缝——留缝就是 R59 的死区。
-   R63：整张卡仍然由菜单自己的 ::before 一次画出，但材料换了一层：
-   ① 底不是平涂的 surface-2，顶部叠一道 5% 品牌色的暖光，往下 46% 化开——
-      卡片上沿因此比下沿亮一点点，纸面从「一块板」变成「一张有光的纸」；
-   ② 描边换成 l2 兑 38% 透明，比 l1 的发丝线略深，卡片边界在浅纸上才立得住；
-   ③ 阴影分两层：一层大而散（把卡托离纸面），一层小而紧（给下沿定边），
-      再补一条 1px 的内高光当「纸的切边」。
-   ::after 是底边探出的圆角小尖角，指着下面的圆钮。 */
+/* 菜单：五行按钮的柱子。它自己不画任何东西——R65 之后这里既没有卡片也没有
+   尖角，展开时看到的就是五个独立的按钮，收起来时它们一起消失，只剩圆钮。 */
 .nw-dock-menu{
   position:relative;isolation:isolate;
   display:flex;flex-direction:column;align-items:stretch;
@@ -306,37 +300,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   min-width:152px;
   transform-origin:100% 100%;
   animation:nw-dock-rise .22s var(--nw-ease-pop, cubic-bezier(.22,1.16,.36,1)) both;
-}
-.nw-dock-menu::before{
-  content:'';position:absolute;inset:0;z-index:-1;
-  border-radius:calc(var(--nw-r-control) + 6px);
-  /* R64：用户说「显得突兀，与背景融入得不太好」。上一版把卡片做成了
-     surface-2（纸色 + 7% 墨）+ 78% 的 l2 描边 + 30% 的大阴影 + 一道品牌色
-     暖光——四样东西叠起来，卡片在纸面上读成「贴上去的一块板」。这一版只
-     留一份材料：纸色只掺 4% 墨，几乎就是纸本身；顶部那道光是白纸反光，
-     不是品牌色；描边退到 l1 的 55%，让边界由影子而不是线条来定。 */
-  background:
-    linear-gradient(180deg, var(--nw-dock-sheen), transparent 42%),
-    var(--nw-dock-card);
-  border:1px solid color-mix(in srgb, var(--nw-line-soft) 55%, transparent);
-  box-shadow:
-    0 16px 34px -22px color-mix(in srgb, var(--nw-fg) 34%, transparent),
-    0 2px 6px -2px color-mix(in srgb, var(--nw-fg) 10%, transparent);
-  pointer-events:none;
-}
-.nw-dock-menu::after{
-  content:'';position:absolute;right:19px;bottom:-6px;
-  width:12px;height:12px;
-  /* z -1：小尖角只盖住卡片，不许盖最后一行的高亮——它在树里排在行之后，
-     不压下去就会把「投稿」右下角切掉一小块。 */
-  z-index:-1;
-  border-radius:2px;
-  transform:rotate(45deg);
-  /* R64：尖角跟着卡片一起退回纸色，描边也跟卡片同一条 l1 线。 */
-  background:var(--nw-dock-card);
-  border-right:1px solid color-mix(in srgb, var(--nw-line-soft) 55%, transparent);
-  border-bottom:1px solid color-mix(in srgb, var(--nw-line-soft) 55%, transparent);
-  pointer-events:none;
 }
 .nw-dock-menu[data-open="0"]{display:none;}
 @keyframes nw-dock-rise{
@@ -357,12 +320,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(4){animation-delay:.09s;}
 .nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(5){animation-delay:.12s;}
 
-/* 一行动作：矩形盒子应答指针，高亮由 ::before 画。
+/* 一行就是一个按钮：矩形盒子应答指针，形状由 ::before 画。
    盒子无圆角、无边框、无背景、无子元素应答指针——浏览器只有一个盒子要测。
    R63：行高 44 → 42，图标格 24 → 26 并加一圈发丝内描边（读起来像一枚
-   压出来的工具格，而不是一块灰色补丁）；行首文字 13 → 14 并加 500 字重，
-   中文在浅纸上 400 太细；行尾多一枚只在悬停时浮现的箭嘴，把「这一行
-   通向别处」说清楚，也把卡片右侧的空白收住。 */
+   压出来的工具格，而不是一块灰色补丁）；行首文字 13 → 14 并加 500 字重。
+   R65：卡片撤掉之后，五个按钮各自长出自己的皮——纸色底、发丝边、一点浮影；
+   上下各内缩 4px 让按钮之间空出 8px，而**行盒子仍是连续的**：指针落到那条
+   视觉缝里时命中的是相邻按钮的盒子，不会掉进一个不画东西的空档。 */
 .nw-dock-btn{
   position:relative;isolation:isolate;
   display:flex;align-items:center;gap:var(--nw-dock-gap);
@@ -378,39 +342,28 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 }
 .nw-dock-btn:hover:not([data-blocked="1"]),
 .nw-dock-btn:focus-visible{color:var(--nw-fg);}
-/* 分隔线只出现在「行与行之间」，而且从图标格的右缘起笔、到右侧内边距收笔，
-   末端渐隐——它对齐的是文字，不是行盒子；这样五行的左边界读起来是一条线。 */
-.nw-dock-btn + .nw-dock-btn::after{
-  content:'';position:absolute;top:0;height:1px;
-  left:calc(var(--nw-dock-pad-l) + var(--nw-dock-tile) + var(--nw-dock-gap));
-  right:16px;
-  background:linear-gradient(90deg,
-    color-mix(in srgb, var(--nw-line-soft) 78%, transparent),
-    color-mix(in srgb, var(--nw-line-soft) 22%, transparent) 70%,
-    transparent);
-  pointer-events:none;
-}
 .nw-dock-btn::before{
-  content:'';position:absolute;inset:3px 6px;z-index:-1;
-  border-radius:calc(var(--nw-r-control) - 1px);
+  content:'';position:absolute;inset:4px 0;z-index:-1;
+  border-radius:calc(var(--nw-r-control) + 2px);
   pointer-events:none;
-  background:transparent;
-  border:1px solid transparent;
-  box-shadow:none;
+  /* R65：这张皮就是按钮的「实体」。纸色 + 4% 墨、一条 55% 的发丝边、贴地一点
+     浮影——三个信号刚好够说「我是一个按钮」，又不至于在纸面上立成一排色块。 */
+  background:var(--nw-dock-card);
+  border:1px solid color-mix(in srgb, var(--nw-line-soft) 55%, transparent);
+  box-shadow:0 1px 2px color-mix(in srgb, var(--nw-fg) 6%, transparent);
   transition:background .16s var(--nw-ease, ease),
     border-color .16s var(--nw-ease, ease),
     box-shadow .16s var(--nw-ease, ease);
 }
-/* 悬停高亮：一条 100° 的品牌色斜光，左边略重、右边化开；描边只收 20%，
-   够看出边界又不至于读成一枚输入框；再压一道 1px 内高光当纸面反光。 */
-.nw-dock-btn:hover::before,
+/* 悬停：皮上铺一层品牌色薄雾，边界加深一点，浮影抬起来。
+   不再画分隔线——按钮是分开的，线是同一块板上的东西。 */
+.nw-dock-btn:hover:not([data-blocked="1"])::before,
 .nw-dock-btn:focus-visible::before{
   background:linear-gradient(100deg,
-    color-mix(in srgb, var(--nw-brand) 10%, transparent),
-    color-mix(in srgb, var(--nw-brand) 4%, transparent));
-  border-color:color-mix(in srgb, var(--nw-brand) 16%, transparent);
-  box-shadow:0 1px 2px color-mix(in srgb, var(--nw-brand) 10%, transparent),
-    inset 0 1px 0 color-mix(in srgb, #ffffff 30%, transparent);
+    color-mix(in srgb, var(--nw-brand) 12%, var(--nw-dock-card)),
+    color-mix(in srgb, var(--nw-brand) 5%, var(--nw-dock-card)));
+  border-color:color-mix(in srgb, var(--nw-brand) 22%, transparent);
+  box-shadow:0 2px 6px -1px color-mix(in srgb, var(--nw-brand) 18%, transparent);
 }
 .nw-dock-btn:active:not([data-blocked="1"])::before{filter:brightness(.97);}
 .nw-dock-btn > *{pointer-events:none;}
@@ -423,7 +376,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 /* R58：没开章时不再是 disabled。禁用按钮一声不响，那和坏掉长得一样。 */
 .nw-dock-btn[data-blocked="1"]{color:var(--nw-fg-soft);}
 .nw-dock-btn[data-blocked="1"] .nw-dock-icon{opacity:.5;}
-.nw-dock-btn[data-blocked="1"] .nw-dock-go{display:none;}
 .nw-dock-btn[disabled]{cursor:default;}
 
 /* 图标格：五个动作各有一枚自己的印记。静止时是浅墨底 + 发丝内描边，
@@ -449,68 +401,43 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   color:var(--nw-brand);
 }
 .nw-dock-name{letter-spacing:.01em;font-weight:500;}
-/* 行尾箭嘴：静止透明、悬停浮现。它不说话，只说「这里通向下一屏」。 */
-.nw-dock-go{
-  display:inline-flex;align-items:center;justify-content:center;
-  margin-left:auto;flex:0 0 auto;
-  color:var(--nw-brand);opacity:0;
-  transition:opacity .16s var(--nw-ease, ease);
-}
-.nw-dock-btn:hover:not([data-blocked="1"]) .nw-dock-go,
-.nw-dock-btn:focus-visible .nw-dock-go{opacity:.7;}
 
 /* 圆钮（FAB）：盒子是方形、透明、无圆角；形状由 ::before 画。
-   R63：从「一枚品牌色圆贴纸」改成「一枚压进纸里的墨印」。
-   R64：上一版把这枚印调成了品牌 80% + 墨 20% 的砖红，在奶油纸上仍然是
-   全屏最饱和的一块——用户说「突兀」。这一版把印色往墨里退到品牌 55%，
-   读起来是印泥落下的一枚旧印，不是一枚红色按钮；阴影从三层收到两层、
-   去掉品牌色染色，径向渐变的高光也压掉一半，它落在纸上的重量随之变轻。
-   ⑤ ::after 是一圈内收 5px 的发丝环，像印面边缘，悬停时提亮。
-   静止 82%（旧值 62% 太淡，深色墨印在浅纸上会读成脏点），悬停与展开到 1。 */
+   R65：用户要「单红色圆形」——于是这枚钮从印泥方钮退回成一枚**纯色正圆**：
+   一种红（--nw-brand 原色，不掺墨也不做径向渐变）、一条 50% 的圆边、一条
+   中性浮影。上一版的墨色、内圈发丝环、品牌色染影全部去掉，只留「一个圆」。
+   盒子仍 52×52、border-radius:0、形状由 ::before 画——R56 起的不变式，碰
+   外观不碰命中区。静止 .9，悬停与展开到 1。 */
 .nw-dock-fab{
   position:relative;isolation:isolate;
   display:flex;align-items:center;justify-content:center;
   width:52px;height:52px;padding:0;flex:0 0 auto;
   border-radius:0;border:0;background:transparent;
-  color:color-mix(in srgb, #ffffff 92%, var(--nw-bg));
+  color:color-mix(in srgb, #ffffff 94%, var(--nw-bg));
   cursor:pointer;
-  --nw-dock-ink:color-mix(in srgb, var(--nw-brand) 55%, var(--nw-fg));
-  --nw-dock-lift:
-    0 6px 16px -8px color-mix(in srgb, var(--nw-dock-ink) 55%, transparent),
-    0 2px 5px -1px color-mix(in srgb, var(--nw-fg) 18%, transparent);
 }
 .nw-dock-fab::before{
   content:'';position:absolute;inset:0;z-index:-1;
-  border-radius:16px;
+  border-radius:50%;
   pointer-events:none;
-  background:radial-gradient(120% 120% at 32% 18%,
-    color-mix(in srgb, var(--nw-dock-ink) 84%, #ffffff) 0%,
-    var(--nw-dock-ink) 52%,
-    color-mix(in srgb, var(--nw-dock-ink) 90%, #0e0b08) 100%);
-  border:1px solid color-mix(in srgb, var(--nw-dock-ink) 55%, var(--nw-fg));
-  box-shadow:var(--nw-dock-lift);
-  opacity:.82;
+  background:var(--nw-brand);
+  box-shadow:
+    0 8px 20px -8px color-mix(in srgb, var(--nw-brand) 60%, transparent),
+    0 2px 6px -1px color-mix(in srgb, var(--nw-fg) 16%, transparent);
+  opacity:.9;
   transition:opacity .2s var(--nw-ease, ease),
-    box-shadow .2s var(--nw-ease, ease);
-}
-.nw-dock-fab::after{
-  content:'';position:absolute;inset:5px;z-index:-1;
-  border-radius:12px;
-  border:1px solid color-mix(in srgb, #ffffff 16%, transparent);
-  pointer-events:none;
-  opacity:.45;
-  transition:opacity .2s var(--nw-ease, ease);
+    box-shadow .2s var(--nw-ease, ease),
+    filter .2s var(--nw-ease, ease);
 }
 .nw-dock-fab:hover::before,
-.nw-dock-fab:focus-visible::before{opacity:1;}
-.nw-dock-fab:hover::after,
-.nw-dock-fab:focus-visible::after{opacity:.85;}
+.nw-dock-fab:focus-visible::before,
 .nw-dock-fab[aria-expanded="true"]::before{opacity:1;}
-.nw-dock-fab[aria-expanded="true"]::after{opacity:.35;}
 .nw-dock-fab:active::before{filter:brightness(.95);}
 .nw-dock-fab:focus-visible{outline:none;}
 .nw-dock-fab:focus-visible::before{
-  box-shadow:var(--nw-dock-lift),
+  box-shadow:
+    0 8px 20px -8px color-mix(in srgb, var(--nw-brand) 60%, transparent),
+    0 2px 6px -1px color-mix(in srgb, var(--nw-fg) 16%, transparent),
     0 0 0 3px color-mix(in srgb, var(--nw-brand) 40%, transparent);
 }
 .nw-dock-fab > *{pointer-events:none;}
@@ -526,7 +453,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   .nw-dock-menu[data-open="1"] .nw-dock-btn{animation:none;}
   .nw-dock-fab::before,.nw-dock-fab::after{transition:none;}
   .nw-dock-fabicon{transition:none;}
-  .nw-dock-go{transition:none;}
 }
 
 /* 灵感便签 (R13). R11 把它做成一整页纸：一展开就把正文顶掉，用户说「不用分窗口
@@ -3599,11 +3525,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         },
         h('span', { className: 'nw-dock-icon', 'aria-hidden': 'true' }, NW.icon(iconName, { size: 16 })),
         h('span', { className: 'nw-dock-name' }, name),
-        // R63: a trailing arrow that only exists on hover. It is decoration —
-        // aria-hidden, inert, and it never becomes the only cue that a row does
-        // something. Blocked rows hide it in CSS, because there is no "next
-        // screen" behind them until a chapter is open.
-        h('span', { className: 'nw-dock-go', 'aria-hidden': 'true' }, NW.icon('chevright', { size: 12 })),
       );
     };
 
