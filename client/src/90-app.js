@@ -332,8 +332,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-dock-btn{
   position:relative;isolation:isolate;
   display:flex;align-items:center;gap:var(--nw-dock-gap);
-  width:auto;max-width:100%;
-  height:42px;padding:0 13px 0 var(--nw-dock-pad-l);
+  /* R67：宽度不进布局，进变量 —— 五枚按钮从下到上依次变长（阶梯），
+     右缘对齐圆钮，左缘一级一级退出去。min-width:max-content 是保险：
+     哪天某个名字长过它那一级，宁可破坏阶梯也不许把字裁掉。 */
+  width:var(--nw-dock-w, auto);min-width:max-content;max-width:100%;
+  /* R67：内容是两端对齐的 —— 图标贴着左端，名字贴着右端，多出来的宽度
+     全部留在中间。这样按钮可以长短不一而两侧都不留白边。 */
+  justify-content:space-between;
+  height:var(--nw-dock-h, 42px);padding:0 13px 0 var(--nw-dock-pad-l);
   border-radius:0;border:0;background:transparent;
   color:color-mix(in srgb, var(--nw-fg) 82%, var(--nw-bg));
   font-size:var(--nw-fs-second);line-height:1;white-space:nowrap;
@@ -344,6 +350,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 }
 .nw-dock-btn:hover:not([data-blocked="1"]),
 .nw-dock-btn:focus-visible{color:var(--nw-fg);}
+/* R67：从下往上的一级级台阶 —— 越靠上越长，也略高一点点；右缘齐着圆钮，
+   左缘一级一级退出去。宽度用 em，跟着字号一起缩；min-width:max-content
+   是保险：哪天某个名字长过它那一级，宁可把台阶踩平，也不许把字裁掉。
+   高度只给变量，窄屏那条 .nw-dock-btn{height:36px} 仍然能一把压平。
+   R67b：宽度不是随手排的等差数列，而是「这一行自己起码要多宽 + 一样多的余量」。
+   四字行 8.21em、'AI 校对' 7.5em、三字行 7.21em、两字行 6.21em（14px 字号下量出来的），
+   各加 0.5em 余量就成了下面五个数。上一版顶层给到 10.4em 而那一行只有四字，
+   左边空出一大块——用户说的「AI 校对按钮左边的空白太多了」就是这个。 */
+.nw-dock-menu .nw-dock-btn:nth-child(1){--nw-dock-w:8.7em;--nw-dock-h:46px;}
+.nw-dock-menu .nw-dock-btn:nth-child(2){--nw-dock-w:8.7em;--nw-dock-h:44px;}
+.nw-dock-menu .nw-dock-btn:nth-child(3){--nw-dock-w:8em;--nw-dock-h:42px;}
+.nw-dock-menu .nw-dock-btn:nth-child(4){--nw-dock-w:7.7em;--nw-dock-h:40px;}
+.nw-dock-menu .nw-dock-btn:nth-child(5){--nw-dock-w:6.7em;--nw-dock-h:38px;}
 .nw-dock-btn::before{
   content:'';position:absolute;inset:4px 0;z-index:-1;
   border-radius:calc(var(--nw-r-control) + 2px);
@@ -3540,11 +3559,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       h(
         'div',
         { className: 'nw-dock-menu', 'data-open': open ? '1' : '0', role: 'menu', 'aria-hidden': open ? 'false' : 'true' },
+        // R67b：顺序是按**名字的长短**排的，不是按重要性 —— 阶梯要从长到短，
+        // 名字也要从长到短，两个方向一致才不会出现「最上面那级最长、字却最短，
+        // 中间空出一大块」。所以「AI 校对」挪下来，紧挨在「读一遍」上面。
         // 修改建议 toggles the advice column beside the paper, so its row stays
         // lit while that column is open.
-        item('proofread', NW.t('AI 校对'), p.onProofread, true),
         item('typeset', NW.t('一键排版'), p.onTypeset, true),
         item('sparkle', NW.t('修改建议'), p.onAdvice, true),
+        item('proofread', NW.t('AI 校对'), p.onProofread, true),
         item('book', NW.t('读一遍'), p.onRead, true),
         item('send', NW.t('投稿'), p.onSubmit, true),
       ),
