@@ -26,7 +26,7 @@
   .nw-settings{grid-template-columns:132px minmax(0,1fr);gap:var(--nw-sp-3);}
   .nw-submit-grid{grid-template-columns:minmax(0,1fr);min-height:0;gap:var(--nw-sp-3);}
   .nw-journal-list{max-height:280px;}
-  .nw-dock{right:14px;bottom:52px;}
+  .nw-dock{right:14px;bottom:52px;--nw-dock-tile:24px;--nw-dock-gap:10px;}
   .nw-status{gap:var(--nw-sp-3);}
 }
 
@@ -77,7 +77,8 @@
   /* Tools: the dock shrinks to its FAB, the advice column narrows. R25: the
      column is auto-width now, so this tier only has to cap it — and it caps both
      the auto width and a dragged inline width. */
-  .nw-dock-btn{height:34px;padding:0 12px;font-size:13px;}
+  .nw-dock{--nw-dock-tile:22px;--nw-dock-gap:9px;}
+  .nw-dock-btn{height:36px;padding:0 12px 0 10px;font-size:var(--nw-fs-micro);}
   .nw-suggest{width:min(320px,42%) !important;max-width:42% !important;}
   .nw-suggest-body{padding:0 var(--nw-sp-2) var(--nw-sp-2);}
 }
@@ -122,20 +123,22 @@
      lifted out of the flow it must be able to cover the dock, otherwise its
      bottom buttons are unreachable on a phone-sized panel. */
   .nw-dock{right:10px;bottom:46px;z-index:var(--nw-z-panel);}
-  .nw-dock-fab{width:40px;height:40px;}
   .nw-notes-tabtxt{display:none;}
 
   .nw-status{padding:0 var(--nw-sp-2);font-size:12px;flex-wrap:wrap;row-gap:2px;height:auto;min-height:var(--nw-h-status);}
   .nw-status .nw-status-mid{gap:var(--nw-sp-1) !important;}
 }
 
-/* Touch and coarse pointers: no hover, so anything hidden behind :hover has to
-   be visible on its own. */
+/* Touch and coarse pointers: no hover, so anything that only appears on hover has
+   to be visible on its own. R60: the dock is a FAB again and its menu rows already
+   carry icon + name unconditionally, so all that is needed here is a readable
+   resting opacity for the FAB itself — otherwise the circle would sit at 62% with
+   nothing to reveal the rest. */
 @media (hover: none){
   .nw-row-actions{opacity:1;}
   .nw-notes-tab{opacity:.85;}
   .nw-homebtn{opacity:.85;}
-  .nw-dock{opacity:.85;}
+  .nw-dock-fab::before{opacity:1;}
 }
 `);
 })();

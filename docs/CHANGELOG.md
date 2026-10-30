@@ -8,6 +8,170 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.2.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第六十三轮（R63）改造：**坞做成一张纸卡加一枚印泥钮**。用户说「优化精神空间插件编辑页面右下角的悬浮坞，更美观和设计感。」
+  ① **先删掉一层，再谈美观**。同一个坞的属性原来在 `90-app.js` 与 `97-theme.js` 各写一遍，后者特异性更高、源码顺序在后，于是**真正生效的永远是主题层那一条**——R56 的数值改过又改回、R59 漏改一处，成因都在这里。这轮把主题层的坞段削成「定位 + 容器归零 + 沉浸淡出」三件事，所有**画**（底、边、影、尖角、行、图标格、圆钮）只在 `90-app.js` 声明一次。以后改观感只有一个地方要改，也只有一个地方会被审。
+  ② **卡片是一张纸，不是一块玻璃**。底色用 `--nw-surface-2`（纸色 + 7% 墨）而不是面板白——白底在暖纸主题上读作「贴上去的一张硬纸板」，纸色只深一档才像同一叠纸里抽出来的一张。上面压一道 5%、46% 处消失的品牌色薄光当作受光。圆角 `calc(var(--nw-r-control) + 6px)`（=16px），和按钮族同一个半径家族，不再随手写 12。描边是 `--nw-line` 兑到 78% 的发丝线——第一次写 62%，在 mock 里几乎看不见，整张卡只剩影子在定义边缘。影分三层：`0 20px 44px -16px fg/30` 给远端扩散、`0 3px 10px -3px fg/12` 贴地、`inset 0 1px 0 bg/45` 当纸口高光；一层影子画不出「有厚度」。
+  ③ **小尖角指回圆钮**。`::after` 12×12 转 45°（`right:19px;bottom:-6px`，圆角 2px，和卡片同色），`z-index:-1` 落在卡片之后——尖角的盒子和最后一行的悬停底色重叠，不压到后面去的话，展开时最后一行右侧会多出一块切角。`isolation:isolate` 把 `-1` 锁在坞自己的层叠上下文里。
+  ④ **行的信息层级靠留白和一根渐隐线，不靠分割框**。行高 42、图标格 26×26（圆角 8）、标签 `--nw-fs-second` / 500。分隔线从**文字左缘**起算（`calc(var(--nw-dock-pad-l) + var(--nw-dock-tile) + var(--nw-dock-gap))`，12+26+12=50px），向右到 16px 处渐隐：三段 `color-mix` 95% → 70% 处 30% → 透明。从图标左边起画会把图标格串成一列「抽屉」，从文字起画才读作「一条条动作」。悬停底色是 12%→5% 的品牌色斜向渐变（不是平涂），描边 20%——R58 那块板的 11% 平底 + 28% 描边在纸色上像输入框，这轮压低保描边、抬一点渐变。
+  ⑤ **右端那个箭头只在悬停时出现**。`.nw-dock-go`（`chevright`，12px，`aria-hidden`）静止 `opacity:0` 且 `translateX(-2px)`，悬停/键盘焦点滑到 `.7`。它不承担任何语义——行的名字、图标、`title` 都在，箭头只是把「这一行会打开什么」补上，同时把右半边的空补齐。`[data-blocked="1"]` 的行不显示（点下去是提示，不是跳转）。
+  ⑥ **圆钮从「圆」改成一枚圆角方钮，命中区一个字都没动**。盒子仍是 52×52 的矩形、`border-radius:0`、形状由 `::before` 画——R56 之后这条是不变式，改外观不能碰它。圆的直径等于高度时，四个角永远有一片「点了没反应」的外接区；16px 圆角方钮既接上卡片的半径家族，又比正圆更像一枚盖下去的印。填充色单独提成 `--nw-dock-ink`（品牌 80% + 前景 20%），这样黑夜主题能把它换成「品牌 80% + 背景 20%」——直接拿品牌色兑前景色在深底上会泛出一层粉，兑背景色才是那套主题里该有的暗赤陶。面上用 `radial-gradient(115% 115% at 30% 16%, …)` 提一块左上高光、右下压一角暗，读作印泥而不是贴纸；`--nw-dock-lift` 是三层影（近端 8px、远端 34px、纸口一道内高光），静止 `.82`、悬停与展开回 `1`。`::after` 是贴边 5px 的一圈 1px、白 22% 的内描边：静止 `.5`、悬停 `.85`、**展开时反而降到 `.35`**——展开后图标已经转成叉，这圈线再亮就是两道边在互相吵。
+  ⑦ **焦点环搬进画层**。盒子的 `outline` 落在 52×52 的透明矩形上，视觉上会框住一个不存在的东西；改成 `:focus-visible::before{box-shadow:…, 0 0 0 2px brand/55}`（圆钮 3px/40%），焦点圈正好贴住画出来的形状。
+  ⑧ **展开时逐行入场**。`.nw-dock-menu[data-open="1"] .nw-dock-btn` 挂 `nw-dock-row-in .2s`（4px 上移 + 淡入），再用 `:nth-child(2..5)` 各加 30ms 延迟，五行依次落定：卡片先出来，字随后跟上。延迟写在选择器上而不是给每行塞一个自定义属性——行是 `item()` 循环渲染的，为一段入场动画多传一个 index 不值。位移只作用在行的 `::before` 与文字上，行的**盒子不动**，所以不会重现 R54c 那种「命中区跟着动画跑」；`prefers-reduced-motion` 里整条关掉。
+  ⑨ **审计跟着长**。`verify-dock-hit.mjs` 新增三组：①菜单里**恰好五行**且没有多余元素（切片从 `className: 'nw-dock-menu'` 到 `className: 'nw-dock-fab'`，按 `\bitem\(` 切段数 `h(`——直接数会多出一个，因为切片末尾撞进圆钮自己的 `h('button',…)`，这个 bug 是写完当场撞出来的）；②行不许带 margin（行距属于 R59 那条「容器不许拥有自己的像素」的下一层）；③六个绘制层（菜单 `::before`/`::after`、行 `::before`/分隔 `::after`、圆钮 `::before`/`::after`）必须全部 `pointer-events:none` 且不许被后面改回来。
+  ⑩ **这轮没有真机截图**。沙箱里 Chrome 起不来（`platform_channel.cc` 的 mojo 命名管道被拒，crashpad `OpenProcess` 同样 0x5），CDP、悬停、截图全部不可用。替代物是 `scripts/.tmp/dock_final.py`：按上面这些 CSS 数字用 Pillow 1:1 重画三种状态（claude 展开悬停第三行 / claude 收起 82% / night 展开），逐版对照改数。它改对了两处——夜盘品牌色从 88% 降到 80%（88% 在深底上偏粉），卡片描边从 62% 提到 78%（原来只剩影子在定义边缘）。**但它是手画的，不是引擎**：真机上的字体度量、`color-mix` 的插值空间、阴影扩散都可能与它差一点，所以这轮的观感最终以用户在插件里看到的那一眼为准。
+  `client.js` 重建为 21 段 **1072158 字节**，`verify-client-load: ok`，`verify-host` 219 项全过，`verify-dock-hit`（14 条断言）、`probe-dock`、`verify-dialog-kinds`、`verify-read-spread` 全过。
+
+- 第五十四轮（R54）改造：**「只照亮正在写的几行」不再是沉浸模式专属**。用户说「不是沉浸模式，编辑页面也改成那种只凸显光标所在的上下几行，其他行变浅」。
+  ① **把它和沉浸模式拆开**。R46 的 `focusOn = immersive && settings.focusDim !== false` 里那个 `immersive &&` 是当时的判断：觉得书架和工具栏都在屏幕上时，淡化会「和外壳打架」。但淡化的对象是**纸面**，不是外壳——书架开着，纸上那一段照样该凸显。现在 `focusOn = settings.focusDim !== false`，开关本身（设置 → 写作，「只照亮正在写的几行」）就是唯一的出路，默认仍然开着。`focusLines`（上下各留几行，0–8，默认 2）不变。
+  ② **纱只盖纸，不盖书桌**。沉浸模式下纸面几乎等于整个面板，全宽的纱没人察觉；书架开着时 `.nw-surface` 比纸宽得多，全宽的纱会把纸四周的桌面也一起压暗，页面看起来像「灰纸板里挖了个洞」。所以新增一条 `[data-immersive="0"]` 的规则，把 `.nw-veil` 的左右边界收到纸栏（`left/right: calc(50% - min(var(--nw-width,760px),100%) / 2)`，与 `.nw-page` 同一个宽度变量），沉浸模式保留原来的全宽版本——那一版是用户已经认可的观感。上下仍由 `paintFocus()` 按视口像素写，浮动工具栏、页边签都不受影响。
+  ③ **淡化强度原样保留**（`--nw-veil-ink` 仍是 72% 纸色）。用户要的是「那种效果」，不是另一种，所以不跟着改浓度。
+  ④ **改版时要立刻重画**。原来的 effect 只依赖 `focusOn` / `focusLines`；纱的左右边界现在由 `--nw-width`（页面宽度）决定，所以把 `pageWidth` / `effPageWidth` 也放进依赖——拖宽页面、进出沉浸时纱不会停在上一次的位置。
+  ⑤ **设置项文案跟着改**。「沉浸时只照亮正在写的几行」→「只照亮正在写的几行」，提示补一句「沉浸与非沉浸都生效」。
+  ⑥ **（R54b，同一轮返工）亮带改成锚在屏幕中间，而不是跟着光标**。第一版把带子放在光标行上，逻辑上没错但用起来不对：打开一章时光标停在第一行，光就落在页面最顶上，整屏字都是暗的，一直要等点一下才「活」过来——用户原话是「我鼠标只要不点，就只凸显最上面的几行」。现在 `paintFocus()` 不再看 `focusTopRef`，直接算屏幕中线：`centerY = round((vzH/2 - bandLines*lh/2)/lh)*lh`（对齐到整行，边界落在行与行之间），`bandLines = focusLines*2+1`。带子不动，反过来让**光标进带**：新增 `bandContentTop()`（把视口里的带子换算成内容坐标）与 `planBandScroll()`（光标在带外就把视口挪到「光标行居中于带」，在带内则一个像素都不滚）。它接在 `planCaretScroll()` 的后面：打字机模式开着时居中本来就把光标放在带心，轮不到它；打字机模式关掉时（用户明确说过「别动我的视口」）只做「别让我在暗处打字」这一件事，靠 `cfg.focusFollows` 开关。顺带的好处是带子不再每次按键重画，打字路径少了一次 style 写入；打开章节时也不再需要先测一次光标才肯显形（原来的 `parked` 条件里有 `focusTopRef < 0`）。
+  ⑦ **（R54c）右下角浮动坞的按钮「点不到边」**。用户说「右下角那几个按钮，比如读一遍按钮，鼠标监听没有覆盖按钮整个框」。根因是 hover 位移：`.nw-dock-btn:hover{transform:translateY(-1px)}`、`.nw-dock-fab:hover{translateY(-2px)}`、`:active{scale(.97)}`。**transform 会带着命中区域一起走**——鼠标停在按钮下边缘时，hover 把按钮抬起来 1~2px，指针就落到按钮外面，hover 消失、按钮落回原位、指针又落回按钮上，如此循环。视觉上是轻微抖动，操作上是「下边缘那一圈点不动」。浮动坞正位于屏幕右下角，人是自上而下够它的，最容易压在底边上，所以这个抖动在它身上最明显。修法是把位移全部换成**不动盒子的反馈**：hover 只换底色/描边/阴影（`background`、`border-color`、`box-shadow`），`:active` 改用 `filter:brightness(.94/.96)`。命中区域与视觉边界因此一像素不差。`90-app.js` 的基础规则与 `97-theme.js` 的主题规则两处都改了（后者特异性更高，不改的话前者等于没改）。`prefers-reduced-motion` 里那句 `transform:none !important` 现在没有对象了，留着无害。
+  ⑧ **（R54d）「读一遍」压边点不动，还是同一个症状的另一个病因**。R54c 拿掉了 hover 位移，但用户说按钮**还是**框内有死区。这次的根因是 **`border-radius` 参与命中测试**：`.nw-dock-fab` 是 46×46 的圆形（`border-radius:var(--nw-r-pill)`），它的**外接矩形里有约五分之一（四个角）点不动**；`.nw-dock-btn` 是胶囊形，两端各有半圆死角。指针悬在角上时既不显示 hover 也不触发 click，正是「鼠标监听没覆盖整个按钮框」。修法是不动外观、只加一层**不圆角的透明命中层**：`.nw-dock-fab::before,.nw-dock-btn::before{content:'';position:absolute;inset:-1px;border-radius:0;background:transparent;pointer-events:auto;}`（宿主元素补 `position:relative`）。伪元素按宿主元素命中，所以点它等于点按钮；`inset:-1px` 连 1px 边框那一圈也一起覆盖。两处都要改（`90-app.js` 与特异性更高的 `97-theme.js`）。
+  ⑨ **（R54e）首页不该有浮动坞，首页两张卡之间不该有大片空白**。用户说两件事：①「首页不要出现右下角那个按钮」；②「首页的创作统计与投稿记录之间有一大段空白」。
+  ① **坞原本无条件挂在 `.nw-main` 里**，而首页也渲染在 `.nw-main` 中，于是「AI 校对 / 一键排版 / 修改建议 / 读一遍 / 投稿」浮在了首页右下角——这些动作在首页一个也用不了（`chapter` 为空时全部 disabled），只剩一枚关不掉的圆按钮压在快捷入口上。现在 `dock` 改成条件渲染：`view === 'write' || immersive ? dock : null`。
+  ② **空白是「两张等高」的错觉**。原布局是两个 `.nw-welcome-grid`，每行两张卡：第一行 正在创作 + 创作统计，第二行 收件箱 + 投稿记录。卡片是 `align-items:start`（各自按内容落座，R21 故意如此，避免单行卡被拉成半空面板）。于是**矮的创作统计右边空出一块**，第二行的投稿记录只能从那一块下面开始——读者看到的就是统计卡与投稿记录之间的一大段空白。修法是把「行」改成「列」：`.nw-welcome-cols` 两列，`.nw-welcome-col` 是 `flex-direction:column` 的栈。同一列里的卡**依次紧跟**，没有「和旁边那张对齐」这回事，也就没有洞。分组同时更顺：左列「我的书 + 来信」，右列「数字 + 投出去的稿」。窄屏走 `@container nw (max-width:620px)` 折成一列（注意是容器查询，不是窗口查询——插件是宿主里的一列，按窗口宽会判错）。
+  ③ **命中审计成了常设脚本**。沙箱不允许从这里启动 Chrome（`spawn EPERM`，crashpad 与 mojo 都被拒），所以没能做真实浏览器点测。改为 `scripts/verify-dock-hit.mjs`：把全部 `NW.CSS_PARTS` 抽出来做级联分析，断言两件会再次引发「框内死区」的事——(a) 坞的 hover/active 不许有 `transform`（会让命中区跟着元素走），(b) 两个按钮必须带**不圆角的透明命中层** `::before`，且宿主 `position:relative`。这是静态断言，不是浏览器点测，但它能保证同类回归被拦下。`::before` 另加了 `z-index:1`，确保它在按钮内容之上命中。
+  ⑩ **（R54f）十字光标的上半截是箭头——命中的是按钮「外面」那一圈**。用户说「'读一遍'按钮鼠标放上去上半部分显示箭头，不显示小手」。R54d 加的透明命中层用了 `inset:-1px`（本意是「连 1px 边框也覆盖」），但那一 1px 落在按钮**盒子外面**：光标落在那儿时，应答它的是按钮背后的页面，于是显示页面光标（箭头），而不是按钮的 `cursor:pointer`。上半部分最明显，因为那一侧没有别的元素挡着。修法：`inset:-1px` → `inset:0`（严格贴合 border box，不越界），并给伪元素自己声明 `cursor:inherit`，永不再靠继承赌运气。另外把 `.nw-dock-btn` 的 cursor 铺到子元素：`.nw-dock-btn:not([disabled]) *{cursor:pointer}`、`.nw-dock-btn[disabled] *{cursor:default}`——icon 包裹层和文字 span 若各自解析成 `auto`，会在可点的行中间画出一支箭头。
+  `scripts/verify-dock-hit.mjs` 同时补了两条断言：命中层**不许越出盒子**（`inset` 不许是负数）、命中层**必须自己声明 cursor**。并且做了变异测试确认它不是空转——把 `inset:0` 改回 `-1px` 时脚本当场报 2 处失败，改回来又通过。
+  `client.js` 重建为 21 段 **1063219 字节**，`verify-client-load: ok`，`verify-host` 219 项全过。
+  ⑪ **（R54g）第三次修「上半部分是箭头」——问题根本不在 inset**。R54f 把 `inset:-1px` 收回 `inset:0` 之后，用户重启仍然报同样的症状。这说明前两次都改错了地方。真正的原因：**`cursor` 是盒子的属性，而 `::before` 伪元素没有自己的盒子**。伪元素虽然能参与命中测试（点它等于点宿主），但引擎对它的 cursor 解析并不一致；这几行按钮的上半部分是纯 `padding`、painted 面积比 inline 文字内容大，光标落在那片空白上时就回落成了页面的箭头。修法是把伪元素换成**真元素** `.nw-dock-hit`：`position:absolute;inset:0;z-index:1;border-radius:0;background:transparent;pointer-events:auto;cursor:inherit;`，并让按钮真的渲染出它（`90-app.js` 的 `item()` 里在 `nw-dock-icon` 之前插 `h('span',{className:'nw-dock-hit','aria-hidden':'true'})`，FAB 同样）。真元素有自己的盒子，cursor 就有确定归属；点它仍等于点按钮（它是按钮的子元素）。
+  `verify-dock-hit.mjs` 的断言目标随之从 `::before` 改为 `.nw-dock-hit`，保留「不许负 inset / 必须自己声明 cursor / 不许保留 radius / 宿主 position:relative」四条，并新增第五条——**必须有组件真的渲染出 `.nw-dock-hit`**：纯 CSS 规则不会产生盒子，只写样式不插元素的话，这条修复等于没落地，而且前两条断言照样通过。这条规则来自这轮的教训：前两次修复都「静态检查全过、用户依然看得见」。
+  `client.js` 重建为 21 段 **1063583 字节**，`verify-client-load: ok`，`verify-host` 219 项全过，`verify-dock-hit` 全过。
+  ⑫ **（R55）阅读页宽屏时对开两页**。用户要求「阅读页面如果是全屏模式下，请分两页」。
+  ① **判据是宽度，不是某个「沉浸」标志**。读一遍本身就是全屏浮层（`.nw-read` 绝对定位铺满），没有单独的 immersive 开关可读；真正决定能不能并排放下两栏的是**可用宽度**。`measure()` 里 `avail >= 900 && (avail - gap) / 2 >= 300` 才开对开——一栏最多 34 个汉字，两栏加中间空档放得下才并排，否则退回单页。窄面板、手机、被侧栏挤出的半屏都自动是单页，不需要第二套逻辑。
+  ② **把「栏宽」和「页宽」拆成两个变量**。原来 `.nw-read-flow` 用 `--nw-read-w` 一个变量同时管 `width` 和 `column-width`，一栏一页时二者相等，所以看不出问题；一旦一页要装两栏，`width` 必须是两栏加空档、`column-width` 仍是一栏。现在拆成 `--nw-read-box`（页宽）与 `--nw-read-col`（栏宽）。
+  ③ **三个数字必须同时改对**。这是这块最容易出错的地方，而且错了不报错：`total`（页数）、`scrollToPage/slideToPage` 的步长 `s`、滚动监听换算页码的 `s`。三处原来都各自写 `layout.w + layout.gap`，只改一处的话单页模式看着完全正常，一对开就**翻半页**、页码和 `maxPage` 一起错。现在统一读 `layout.step`（单页 = 栏宽 + 栏距，对开 = 两栏 + 中间空档）。
+  ④ **顺手修了一个隐蔽的命名冲突**。`slideToPage()` 里的 rAF 回调原名也叫 `step`，与外层「一页有多宽」的 `step` 同名；`const s = step` 写在回调声明之前，会被推进 **TDZ**，运行时 `ReferenceError`。回调改名为 `frame()`。
+  ⑤ **页边签的「在不在这页上」也要按页宽判**。`paintGutter()` 原来用一栏宽 `w` 过滤片段，对开时右半页的批注会全部不出签；改用 `pageW = w * cols + gap * (cols - 1)`。
+  ⑥ **中间那道装订线**：`.nw-read-flow[data-spread="1"]{column-rule:1px solid var(--nw-rule)}`。`column-rule` 只出现在同一页内的栏与栏之间，所以正好画在书页正中，不会在页边多出线来；单页模式没有 `data-spread`，样式与之前一字不差。
+  ⑦ **几何审计成了常设脚本** `scripts/verify-read-spread.mjs`：把 `measure()` 的规则抄成模型，对 420 / 700 / 880 / 905 / 1100 / 1600 / 2400px 各算一遍，断言 ①切换点两侧行为对得上 ②页宽 == 翻页步长 ③对开时每栏 ≥300px 且 ≥11 个字 ④页数按页宽算时正好是栏数的一半 ⑤源码里自己拼 `layout.w + layout.gap` 的地方只剩兜底那一处、读 `step` 的地方 ≥3 处。写的时候它真的抓到了一条我自己写错的断言（`byPage*2-1 < byCol` 在页数正好是一半时误报），改成 `Math.abs(byPage*2 - byCol) > 1` 才是「成 2:1」的正确条件。
+  `client.js` 重建为 21 段 **1065593 字节**，`verify-client-load: ok`，`verify-host` 219 项全过，`verify-read-spread` 全过。
+  ⑬ **（R56）「上半部分是箭头」第四次——前三次都在治症状，这次换掉前提**。R54d 叠透明 `::before`、R54f 把 `inset:-1px` 收回 `0`、R54g 换成真元素 `.nw-dock-hit`，三次静态检查全过、用户每次都重启后复测仍报同样症状。共同前提一直没动：**按钮自己的盒子还是圆角**，所以命中测试始终跟着圆角走，叠上去的每一层又都是一个带圆角/裁切、需要单独回答 cursor 问题的盒子——加得越多，可疑的盒子越多。
+  修法是把前提反过来：**按钮盒子做成纯矩形**（`border-radius:0;border:0;background:transparent;box-shadow:none;`），胶囊改由一个 `::before` 画，且这个伪元素 `pointer-events:none` 并 `z-index:-1` 落在内容之后——它只负责画，永不应答指针，也就不可能贡献 cursor。子元素（icon 包裹层、文字 span）同样 `pointer-events:none`，所以指针只可能落在按钮自己的**矩形边框盒**上，而 cursor 在那里只声明一次。`isolation:isolate` 让 `z-index:-1` 的伪元素留在按钮层叠上下文内而不是跑到祖先背景后面；hover/active 的换色、阴影、`filter:brightness()` 全部挂到伪元素上。分类上，这一改让「有没有圆角命中死角」「伪元素 cursor 归属」「子元素继承 `auto`」「越出盒子那一圈」四种疑点同时不成立。
+  审计脚本跟着改了断言结构：不再找命中层元素，而是断言 ①**胜出的** `border-radius` 必须是 `0` ②盒子不带边框 ③`::before` 存在、`inset:0`、有圆角、`pointer-events:none`、`z-index:-1` ④子元素 `pointer-events:none` ⑤`position:relative` ⑥源码里不许再残留 `.nw-dock-hit`。其中第①条最初写成 `.some()`，被变异测试当场识破：`90-app.js` 与 `97-theme.js` 都声明这条属性、特异性相同，只要有一个文件还留着 `0` 就照样通过——而实际生效的是**源码顺序最后一个**。改成逐条按属性累加取最后一个值后，把主题层改回胶囊立即报错，改回来又通过。
+  ⑭ **（R56）对开时批注签分左右**。用户要求「阅读页双页时，批注左页的在左侧，右页在右侧，变回单页时再回到右侧」。对开是摊开的书，视线落在哪一页、那页的话就该在该页的**外缘**：两页的签全挤在书缝右边的话，左页的签会跑到右页正文旁边，指认关系是错的。`paintGutter()` 里改为按片段中心点算它落在哪一栏（`colAt = floor((cx - flowRect.left) / (w + gap))`，夹在 `0..cols-1`），左栏的签去 `leftOuter`、右栏的签去 `rightOuter`，并带 `data-side="left"` 便于样式区分；**单页时 `cols === 1`，`onLeft` 恒假，所有签仍在右侧**，与 R53 行为完全一致。左右两边各自排一条泳道（`used` / `usedL`），否则右边的签会因为左边的位置而无谓下移。`leftOuter` 夹了 `Math.max(0, …)`：stage 左右内边距最窄 20px，而签要占 16+3=19px，gutter 是 `overflow:hidden`，不够时会被整枚裁掉。
+  `client.js` 重建为 21 段 **1066376 字节**，`verify-client-load: ok`，`verify-host` 219 项全过，`verify-dock-hit` 与 `verify-read-spread` 全过。
+  ⑮ **（R57）收起坞拆掉，五个动作摊成一条常驻竖排**。用户说：「我倾向于把他们展开放在右下角的侧边，按钮不用要打，鼠标没有放在上面的时候，就淡化，与背景融为一体，鼠标放上去，再凸显出来，并且显示完整名字，其他时候只显示『读、校、建、排、投』。」
+  ① **为什么不再修那个箭头，而是改结构**。R54c→R54f→R54g→R56 四轮都在同一个前提上打补丁：一个**圆角/胶囊控件**要覆盖它的整个外接矩形。用户的复测始终是「上半部分是箭头」。R56 已经把盒子矩形化、把胶囊挪到 inert 的 `::before` 上，理论上无可再改——但**一个命中区需要反复论证的控件，本身就是不适合这个任务的形状**。改成五个普通矩形按钮之后，「有没有圆角死角」「伪元素 cursor 归属」「子元素继承 auto」「越出盒子那一圈」这四个疑点从构造上都不存在了：一个盒子、一次 `cursor:pointer`。
+  ② **静止态 = 一个字**。`.nw-dock` 常驻 `opacity:.34`（沉浸 `.22`），hover/focus-within 回到 `1`；每一行在静止时只渲染 `<span class="nw-dock-abbr">读</span>`，hover/focus 时缩写 `display:none`、换成 `<span class="nw-dock-icon">` + `<span class="nw-dock-name">读一遍</span>`。文字和图标的显隐用 CSS 而不是 React state：hover 是纯视觉反馈，走 state 会每帧重渲染整个写作面板。
+  ③ **向右对齐 + 向左生长**。坞是 `align-items:flex-end`，展开时行宽变大、左边缘外扩，**指针所在的那条右边缘不动**。这是 R54c 那条教训的延伸：会让命中区从指针下面跑掉的位移一律不要，包括「行变宽」这种隐性位移。
+  ④ **`data-on` 保留给「修改建议」**——它开的是论文旁边的常驻栏，栏开着时那一行即使没被 hover 也要显示全名，否则读者看不出是哪个动作把右栏调出来的。
+  ⑤ **触摸屏单独处理**：`@media (hover: none)` 下没有 hover，全名永远不会出现，所以在该分支里直接强制「缩写隐藏、图标与全名常显」，并把坞提到 `.85`。
+  ⑥ **审计脚本跟着换断言**：`verify-dock-hit.mjs` 现在只审 `.nw-dock-btn`（FAB 已删，审它是审一条不存在的规则），保留「胜出的 `border-radius` 必须是 0 / 盒子无边框 / `::before` 是 `inset:0` 的 inert 画层且 `z-index:-1` / 子元素 inert / 宿主 `position:relative`」，新增三条：源码里不许再渲染 `.nw-dock-fab`；hover 时缩写必须 `display:none`（否则会渲染成「读 读一遍」）；静止时全名必须 `display:none`（否则坞就不「安静」）。变异测试确认能抓到——删掉缩写隐藏那条规则后脚本当场报错。
+   `client.js` 重建为 21 段 **1063666 字节**，`verify-client-load: ok`，`verify-host` 219 项全过，`verify-dock-hit` 与 `verify-read-spread` 全过。
+  ⑯ **（R58）「校对没反应」是禁用，不是坏掉；坞从五个散字变成一块玻璃板**。用户说：「校对那个没反应。而且你设计美观一些，不要省 token。」
+  ① **根因不在对话框，而在 `disabled`**。先把整条分发链查了一遍：`90-app.js` 的 `DialogHost = NW.dialogs[cap(dialog.kind)]`、`cap()` 的首字母大写、`openDialog()` 的 `setDialog`、`95-dialogs.js` 里注册的 `NW.dialogs.Proofread`——全部对得上，`verify-dialog-kinds.mjs` 的 12 种 kind 也一一对应。问题出在 `Dock` 的 `item()`：`disabled: needsChapter ? !p.chapter : false`。没打开章节时五行**全部被禁用**，而 `disabled` 按钮不触发任何事件，点下去就是一声不响——用户当然判定「没反应」。更糟的是视觉上区分不出来：禁用态只靠 `::before` 的 `opacity:.45`，而 `::before` 静止时本来就是 `transparent`，45% 的透明还是透明。
+  ② **修法：不要禁用，要解释**。`item()` 去掉 `disabled`，改成 `data-blocked` + `aria-disabled`；点下去仍然走 `onClick`，在开头 `if (blocked) { p.onBlocked(name); return; }`，接线处弹一条 `先打开一章，再 AI 校对` 的提示。`title` 也改成带说明的版本。禁用是一种**沉默的拒绝**，而这里的正确行为是告诉用户「还差一步」。
+  ③ **新增 `verify-dialog-kinds.mjs`**：扫四个文件里所有 `openDialog('x')` / `setDialog({kind:'x'})`，对照 `95-dialogs.js` 的 `NW.dialogs.X` 注册表，断言一一对应（注册了但没人调的只记 note，调了但没注册的报错）。另加一条：`Dock` 不许再用 `disabled:`——「一个不响应的控件和一个坏掉的控件，用户分不出来」。
+  ④ **坞改成一块玻璃板**。R57 的结构是对的、材料是错的：五个单字漂在纸面上像污点，34% 透明度下没人看得出那里有东西可以悬停。现在整条坞是**一个对象**——`padding:5px`、发丝描边（`color-mix` 把 `--nw-line-soft` 兑到 60% 透明）、`backdrop-filter:blur(8px) saturate(1.05)` 让纸纹透上来、一层 `--nw-shadow-1`；静止 `opacity:.5`，悬停时玻璃**凝固**（底从 42% 提到 86%、描边变实、投影加深），而不是整块跳出来。行改成等宽格子（`align-items:stretch`），鼠标移到哪格，哪格才亮起 `color-mix(brand 11%, panel)` 的底和 28% 描边——**组的身份由板子给，格子的身份由悬停给**。
+  ⑤ **缩写的对齐**：`读/校/建/排/投` 都是单字，但字宽不等（读和排的结构不同），所以 `.nw-dock-abbr` 加了 `min-width` 与 `tabular-nums`，五枚才左右成一条线；悬停时缩写和图标一起转 `--nw-brand`。
+  ⑥ **审计脚本的一个真实盲点被这轮撞出来并修掉**：`rules()` 的正则从上一个 `}` 开始吞选择器，会把规则上方那段 CSS 注释一起并进 `sel`。于是所有 `s === '.nw-dock'` 这类**精确匹配**的断言实际上一直没命中最主要的那条规则，只匹配到响应式文件里的几行单行规则——`align-items:stretch` 就是这样从审计底下溜过去的。修法是解析前先剥掉注释再压空白。修好之后那条旧断言立刻报错，而它报得**有道理但没有更新**：R57 禁止 `stretch` 是因为「行会被拉得比胶囊宽」，R58 里行本来就该是格子，所以断言改成**条件式**——允许 `stretch`，但不许在没有水平内边距的板子上 `stretch`（否则格子会顶到发丝描边和圆角里，首尾两格被裁）。变异测试：把主题层的 `padding:5px` 改成 `0`，断言立即报错；改回来通过。
+  `client.js` 重建为 21 段 **1068015 字节**，`verify-client-load: ok`，`verify-host` 219 项全过，`verify-dock-hit`、`verify-dialog-kinds`、`verify-read-spread` 全过。
+
+- 第五十九轮（R59）改造：**死区从来不在按钮上，而在坞自己的内边距**。用户说「更有问题了。不美观，点击也没反应。」——这是同一句话的第四次。
+  ① **算一遍就看见了**。坞高 144px = `padding 5×2 + 五行×26 + 间隔 1×4`。最外圈那 5px 属于 `.nw-dock` **这个 div 自己**：它 `cursor:auto`、没有任何点击处理。鼠标瞄准第一行按钮的上沿，命中的是这圈内边距——光标显示箭头，点击被吞掉。「上半部分是箭头」和「点了没反应」是**同一个原因**，而且它从来不在按钮上。这也是前五轮（R54d 透明伪元素层 → R54f 收回 inset → R54g 换真元素 → R56 矩形盒子 → R58 玻璃板）全部无效的原因：每一次都在改那五个按钮，而病灶在外壳。教训写在这里：**一个给子元素画框的容器，不许在子元素之间拥有可被命中的面积。**
+  ② **修法是让坞不留任何「属于自己的」像素**。`padding:5px`→`0`、`gap:1px`→`0`；`.nw-dock-btn` 加 `flex:1 1 0` 并把 `padding` 从 `0 8px` 放宽到 `0 12px`，五行从条的上沿一直铺到下沿。原来内边距提供的视觉内缩，改由胶囊自己承担：`.nw-dock-btn::before` 的 `inset` 从 `0` 改成 `2px 3px`——**画出来分开，指针上无缝**。`97-theme.js` 同步（两处声明同一批属性，主题层在后面生效，不同步等于没改）。
+  ③ **顺手拆掉自己埋的两个雷**。`backdrop-filter:blur(8px)` 删掉：它强制独立合成层，而合成层正是「命中测试说不清」时最不该新增的变量；观感上它也不是玻璃，是纸上一团灰雾。`z-index` 从 `--nw-z-float`(10) 提到 `--nw-z-panel`(20)，和其它面板同一层。底色从 42% 提到 72%、静止透明度 `.5`→`.62`、hover 直接实色。
+  ④ **两条审计同时升级，并都做了变异测试**。`verify-dock-hit.mjs` 原来的「stretch 需要 padding」断言在 R59 之后是**反的**（现在要求 stretch 且要求零 padding/gap/flex 增长），已整段重写；`probe-dock.mjs` 原来断言抽屉有 `backdrop-filter`，现在断言它**没有**，另加「坞自身不得有 padding/gap」。变异测试：把 `padding:5px;gap:1px` 塞回主题层，两个脚本立刻各自报错，改回来复绿。
+  ⑤ **审计脚本自身的一个盲点也被 R59 修掉**。`rules()` 的正则从上一个 `}` 起算选择器，会把规则上方的 CSS 注释并进 `sel`，于是所有 `s === '.nw-dock'` 的精确匹配一直只命中了响应式文件里的单行规则，主体规则被漏检——`align-items:stretch` 多年来就这样溜过去。现在解析前先剥注释。`probe-dock.mjs` 也踩了同一类：注释里的散文（「there is no pixel of .nw-dock left between them」）被当成规则体，导致断言在**描写修复的那句话**上报错。修法是逐条判 `/\*\//` 而不是全局剥注释——全局剥会误伤 JS 字符串，实测直接把整个对话框注册表吃掉了。
+  ⑥ **模板字符串陷阱第八次**。CSS 注释里写反引号会截断模板（`90-app.js` 与 `97-theme.js` 各踩一次），`node scripts/tick-scan.mjs client/src/<file>` 定位后改掉。
+  `client.js` 重建为 21 段 **1069285 字节**，`verify-client-load: ok`，`verify-host` 219 项全过，`verify-dock-hit`、`verify-dialog-kinds`、`verify-read-spread`、`probe-dock` 全过。
+
+- 第六十轮（R60）改造：**形态改回收起式悬浮坞，R59 的结论原封不动带过来**。用户说「还是改回悬浮坞吧」。
+  ① **回到 FAB + 展开菜单**。R57 把五个动作摊成五枚常驻单字，用户用了几天之后要收回原样。`Dock` 重新有 `open` / `onToggle`，新增 `dockOpen` 状态（不持久化——重启就自己弹开会盖住段落），点圆钮从上方长出五行、选中任一行自动收起，`Esc` 之外的关闭方式是再点一次圆钮；圆钮图标在展开时旋 90° 并变成叉。
+  ② **R59 的病根在 FAB 形态下同样成立，所以结构不变**。`.nw-dock` 仍然 `padding:0;gap:0;border:0;background:none`——它不许拥有任何可被命中的面积。收起时坞就是圆钮那 52×52 的盒子，展开时就是菜单和圆钮严丝合缝叠起来的一列。如果菜单行之间留了缝、或者容器自己画了底色，那一圈就是下一个「上半部分是箭头」。
+  ③ **圆的形状照旧是画出来的，不是盒子自带的**。`.nw-dock-fab` 是 52×52 的方形透明盒子（`border-radius:0`），圆由 `::before` 画；`::before` 是 `pointer-events:none`，子元素 `.nw-dock-fab > *{pointer-events:none}`。行胶囊同理：盒子矩形，`::before` 画 `inset:1px 0` 的纸色胶囊。**淡也落在画出来的那一层**——收起时 `::before` 是 62%，悬停/展开时 100%；如果淡的是容器，整枚按钮会跟着一起变得点不着。
+  ④ **审计脚本按新形态重写，不保留过期断言**。`verify-dock-hit.mjs` 的 R57 那批「静止显示单字、悬停变全名」已经不再描述这个 UI，整段删掉而不是放宽；新不变式是：`.nw-dock` 与 `.nw-dock-menu` 不许有 padding/gap/border/background，`nw-dock-btn` 与 `nw-dock-fab` 两个可点盒子都必须是 `border-radius:0` 且形状由 `::before` 画、子元素 inert，FAB 必须真的被渲染出来，且 `::before` 有静止透明度并在悬停/展开时回到 1。变异测试：把 `padding:4px;gap:2px` 塞进主题层的 `.nw-dock`，立刻报 2 条 FAIL，改回复绿。
+  ⑤ **主题层同步**。`97-theme.js` 的坞段整段换成 FAB 版本（`right:24px;bottom:68px`、零内边距、圆钮 52px、菜单行 36px），并留了注释：「将来谁再给这个容器加一圈边框，下一轮就要重新查一次箭头」。
+  ⑥ **触摸屏**。`98b-responsive.js` 的 `@media (hover: none)` 分支删掉缩写相关规则（菜单行本来就带完整名字），只保留「圆钮常亮」——没有 hover 时 62% 的圆会让人以为它是禁用的。
+  `client.js` 重建为 21 段 **1066488 字节**，`verify-client-load: ok`，`verify-host` 219 项全过，`verify-dock-hit`、`verify-dialog-kinds`、`verify-read-spread`、`probe-dock` 全过。
+
+- 第六十二轮（R62）改造：**遮挡源拆除，坞回到原位**。用户把第三方悬浮球关掉了，并要求「悬浮坞回到
+  之前没改悬浮坞时候的样子」。
+  ① **位置全部撤回**。`90-app.js` `.nw-dock` 从 `bottom:104px` 回 `bottom:60px`（沉浸 `72px` → `22px`，
+  `right:20px` → `22px`）；`97-theme.js` 从 `bottom:110px` 回 `68px`；两个窄屏断点（`@container nw
+  (max-width:980px)` 与 `@supports not (container-type)` 里的 `96px`）回 `52px`；`98b-responsive.js`
+  两处（`96px` → `52px`、`92px` → `46px`）同样回退。R61 的视觉微调（菜单阴影与圆角、圆钮那圈柔光、
+  几个 `color-mix` 百分比）**保留**——那是观感改良，和避让无关。
+  ② **审计第 5 节改写而不是删除**。`SAFE_FLOOR = 80` 这条不变式的前提是「右下角有别人的球」，球没了，
+  它就会反过来禁止用户要的那个位置。新的不变式只守真正还成立的部分：每个定位 `.nw-dock` 的规则都必须
+  带一个**非零**的 `bottom`——`bottom:0` 等于把圆钮摁在窗口边缘的缩放手柄和托盘浮层底下，那种坏法和
+  「按钮又点不动了」在表面上没有区别。现在的输出是「every placement carries a real bottom offset
+  (46, 52, 52, 52, 60, 68px across breakpoints)」。
+  ③ **保留的是判断方法，不是那个数字**。README 里「离底边 104px」换成一段判据：如果哪天它又点不动，
+  先看屏幕右下角有没有别的程序的置顶悬浮球。CHANGELOG 里 R61 的五轮空转记录不删——那五轮的收获不是
+  某个 CSS 属性，而是「点击没反应」要先问「那个位置在桌面层面是什么」。
+  `client.js` 重建为 21 段 **1067693 字节**，`verify-client-load: ok`，`verify-host` 219 项全过，
+  `verify-dock-hit`（位置断言已改写）、`verify-dialog-kinds`、`verify-read-spread`、`probe-dock` 全过。
+
+- 第六十一轮（R61）改造：**「点了没反应」查到最后，病灶不在插件里；坞的位置因此上移**。
+  ① **五轮 CSS 都在追一个不属于自己的 bug**。用户报「读一遍按钮上半部分显示箭头」「点击没反应」，
+  R54c（去掉悬停位移）、R54d（加透明命中层）、R54f（收回越界的 1px）、R54g（伪元素换成真元素）、
+  R56（矩形盒子 + 伪元素画胶囊）依次落码，每一轮静态审计全过、用户复测照旧失败。最后用户截了一张
+  **桌面**上的图：在那个位置右键，弹出的是「打开桌面端 / 开始全部任务 / 暂停全部任务 / 查看传输列表 /
+  设置 / 隐藏悬浮球 / 取消置顶」——那是另一个程序的**置顶悬浮球**，浮在整个桌面上，正好压在应用窗口的
+  右下角。指针和点击都是它接走的。插件这边的 CSS 从头到尾没有问题，R59 找到的容器死区是真实的缺陷
+  （值得修），但它不是用户看到那个现象的原因。
+  ② **可迁移的结论：靠 CSS 赢不了一个置顶的窗口**。`z-index` 只在同一个文档里排序，管不到别的进程；
+  `cursor` 是谁的盒子谁说话。所以能做的只有**避开**——把一个第三方程序随时可能占据的区域当成禁区。
+  ③ **坞上移**。`90-app.js` `.nw-dock` 从 `bottom:60px` 抬到 `bottom:104px`，圆钮（52px）落在离窗口底边
+  104..156px 之间，让出脚下那条被托盘助手和下载工具占据的带子；沉浸模式 `bottom:72px`。`97-theme.js`
+  同步抬到 `110px`，两个窄屏断点（`@container nw (max-width:980px)` 与 `@supports not (container-type)`
+  里的 `bottom:52px`）改成 `96px`，`98b-responsive.js` 的两处（`52px` → `96px`、`46px` → `92px`）同样上移。
+  **窄屏断点是最容易漏的**：它们写着 `bottom:52px`，改动主题层之后看起来「主规则已经抬高了」，
+  但在小窗口里生效的偏偏是这些覆盖规则，坞会原地不动地回到被遮挡的位置。
+  ④ **审计加一条位置不变式**。`verify-dock-hit.mjs` 新增第 5 节：收集**所有**定位 `.nw-dock` 的规则
+  （含每一个断点）里的 `bottom`，取最小值，低于 `SAFE_FLOOR = 80` 就 FAIL，报错文字直接写明
+  「这一带是 always-on-top 悬浮球的地盘，插件这边再怎么改命中区都赢不了」。变异测试：把窄屏那处改回
+  `bottom:46px`，当场报 `bottom:46px puts the 52px circle inside the bottom 80px of the window ...`，改回复绿。
+  ⑤ **文档同步**。README 的坞段落补上「离窗口底边 104px 而不是贴着角」以及为什么；CHANGELOG 记下这一轮
+  真正的收获不是哪个 CSS 属性，而是**下次遇到「点击没反应」要先问一句「那个位置在桌面层面是什么」**。
+  `client.js` 重建为 21 段 **1067799 字节**，`verify-client-load: ok`，`verify-host` 219 项全过，
+  `verify-dock-hit`（新增位置断言）、`verify-dialog-kinds`、`verify-read-spread`、`probe-dock` 全过。
+
+- 第五十三轮（R53）改造：**标注不再「浮在字上」，而是搬进页边；输入框缩成便签；一条线只存在一次**。用户这一轮提了五件事，其中三件是同一个病的不同症状：标注的入口、出口、标识原本都长在正文里。
+  ① **阅读页点批注，输入框太大、而且不在点的地方**。原来按「离点击最近的那一行」的右下角定位，点在句子中间时框会飘到行尾十几厘米外；宽度 176px 里还塞着 28px 高的文本框。现在：`openMark()` 直接用 `ev.clientX / ev.clientY`，`placeNear(at,w,h)` 把便签贴在点击处右侧 16px（右侧放不下就翻到左边），top = `y - 12` 并夹在视口内；宽度收到 **196px**、内边距 5px、文本框 `rows=1` 且随字数自动长高（24→64px，三行半封顶），按钮收成「取消 / 保存」。**新建批注也不再弹 `NW.ui.prompt`**（那是屏幕正中一块大面板），改成同一张便签贴着选区开：`openComposer()` 只记选区，`saveComposer()` 才落库，取消不写。两条路径都支持 Ctrl/⌘+Enter 直接保存。
+  ② **写作区选字不该自己弹「下划线 / 删除线 / 批注」**。R52 那条浮在选区下方的 `.nw-mark-pick` 小条整套删掉（state / ref / openMarkPick / closeMarkPick / syncMarkPick / 三处调用 / 一段 CSS）。标注入口改成左上动作胶囊里的一支铅笔：点开一张 146px 宽的小菜单，三行各带一段「样本线」，选之前就能看见会画成什么样；菜单顶端一行显示将被标注的那十几个字，没有选区时写「先选中一段字」并禁用三行。菜单与菜单项一律 `onMouseDown` preventDefault，textarea 不失焦，选区就一直亮着。**看批注**则照旧点那一行字：`markAtPoint()` 用镜像层 `<mark>` 的 `getClientRects()` 做点命中，命中就开那张只读卡。
+  ③ **小标识还是挡字——这次不修位置，改结构**。只要标识和文字共处一行，行距一紧就会压到某个字；字数一多还认不出它指的是哪句。所以正文里**不再插入任何节点**：`splitByMarks()` 去掉了 `tail` / `badge` 与 `.nw-mark-dot`，编辑器 `rebuildHighlights()` 同样不再插零宽锚点。取而代之的是**页边批注签**：读视图在 `.nw-read-stage` 上叠一层 `.nw-read-gutter`，编辑器在 `.nw-stack` 里放一层 `.nw-mark-gutter`，`paintGutter()` 取每条带批注的标注在当前页 / 当前文档里的首个行盒，把一枚 14×10px 的「三点小签」摆在那一行**右侧的页边空白**里（读视图 x 固定在栏宽右缘 +6px，编辑器 x = `stackW - 22`，都落在 `--nw-pad-x` 之内，正文一个像素不占）。同一行两条批注的签自动下移避让。签是真按钮：阅读页点它等于点那条线，写作页点它直接开卡。正文里没有角标，遮挡从结构上消失。
+  ④ **划线能重复划，删除要删多次**。两个根因：一是 db 没有去重，同段可以存两行，第二行画在第一行上完全看不见却删不掉；二是编辑器 `createMarkOf` 造的 draft **没带 `chapterId`**，被 `db.cleanMark` 直接丢掉，所以写作区画的线其实一条都没存住。现在 db 层按「同章 + 同起止」合并：`createMark` 命中已有行就把新类型 / 新批注并进正主、删掉兄弟行，`updateMark` 同步刷新所有同段行，`deleteMark` 一次删净同段全部行；编辑器 `createMarkOfSelection()` 本地同段只留一条（同类型只把卡片重新开出来，不同类型就地改 kind），`removeMarkOf()` 也按段删，draft 补上 `chapterId`。
+  ⑤ **阅读页翻页像「隔着一个框在挪」**。原来 `scrollToPage(...,'smooth')` 把右边那一栏整块横向拖进视野，读者看到的是画面平移。现在 `go()` 改成 `data-turn="1"` → 110ms 淡出 → `scrollLeft` 瞬时换页（临时 `scrollBehavior:auto`，否则「瞬时」也会被浏览器补成 300ms 滑动）→ 淡入；键盘 ←/→、滚轮、点左右半屏、页码都走同一条路，`prefers-reduced-motion` 下时延归零。
+  `client.js` 重建为 21 段 **1031085 字节**，`verify-client-load` 仍报 `inject=["slots","layout","locale"]`，`verify-host` 219 项全过。手机端是独立原生 App，不受影响。
+- 第五十三轮补丁（R53b）：**同一行的批注签能分辨了；翻页从「换一张」改成「滑过去」**。用户对着 R53 的成品提了两点，都是「还能更好」而不是「坏了」。
+  ① **同一行挂两条批注，两枚签长得一样**。R53 的签是 14×10 的三点小方块，同一行有两条时第二枚下移 13px——下移之后就只剩两枚一模一样的方块，谁也认不出哪枚对哪句。现在三处一起改：**签上写序号**（按 `start` 排、章内唯一，字号 9px、等宽数字、品牌底色反白），看见「3」就知道是本章第 3 条；**被下推的签画引线**（`[data-shift="1"]::before`，从签左侧向上折回自己那一行，长度 = 下移量，55% 透明），序号说「第几条」、引线说「哪一行」；**悬停点亮所指句子**（`mouseenter` 给同 id 的 `.nw-mark` 加 `data-hover="1"`，底色 14% 品牌色），鼠标一扫就对上号。三处都同步到了写作区（`60-editor.js` 的 `.nw-mark-side` / `paintGutter()` / `.nw-hl .nw-mark-*[data-hover="1"]`）。顺手补了个小坑：`paintGutter()` 重画前先扫掉残留的 `data-hover`，否则改完字会有一句话一直亮着。
+  ② **翻页还是「隔着一个框在挪」**。R53 的 110ms 淡出淡入虽然不再平移，但换页那一下仍是「整块换掉」，读者看到的是一张纸被另一张纸盖住。现在改成**真的横向滑动**：`slideToPage(index)` 用 rAF 逐帧写 `flow.scrollLeft`，`dur = clamp(190, 150 + 距离×0.06, 320)`，缓动 `1-(1-t)⁴`（起步快、收尾慢，像翻书时手松开那一下）；滑动期间 `[data-turn="1"]` 只把正文压到 85% 透明度（字从纸面底色里浮出来，不再有白底方块），页边签淡出（它挂在某一行上，跟着跑会抖）。滚轮 / 键盘 ←→ / 点左右半屏 / 页码全走同一条路；`scroll-behavior` 从 `smooth` 改成 `auto`（CSS 的 300ms 匀速会和 rAF 打架），`clearTurns()` 负责在连续翻页时取消上一段 rAF 并还原 `scrollBehavior`；`prefers-reduced-motion` 下直接跳页。
+  `client.js` 重建为 21 段 **1040005 字节**，`verify-client-load: ok`，`verify-host` 219 项全过。
+- 第五十三轮补丁（R53c）：**铅笔按钮撤了，入口改右键；引线撤了，改句子自己变色；红框修掉；翻页放慢**。用户对着 R53b 提了四点。
+  ① **编辑页左上角那颗铅笔按钮去掉**。它常驻在纸面上方，为一件事关标注的低频动作占一格视觉重量，用户点名不要。现在标注入口改成**右键**：选中一段字按右键 → 在**指针旁边**弹出那张小菜单（`.nw-mark-menu` 的 `left/top` 由 `openMarkMenu(ev)` 按 `.nw-surface` 坐标算，先右后左、先下后上夹在纸面内，152×132 避让）；没选中就原样放行，浏览器自己的复制/粘贴菜单照旧；右键直接点在一条已有线上时按「看批注」处理，直接开卡。`toggleMarkMenu()` 与 `.nw-actbtn[data-on="1"]`、菜单开合 effect 里的 `.nw-actbtn[aria-haspopup]` 选择器一并删除。
+  ② **页边签不再画引线**。用户说那条细线在页边空白里看不出来，两条签上下错开时更像装饰。`.nw-mark-side[data-shift="1"]::before` 与 `paintGutter()` 里的 `baseY` / `data-shift` / `--nw-side-lead` 全部删除（阅读页与写作区同步）。替代方案是让**句子自己回答**：鼠标停在签上、或点开一条批注时，它指的那句明显变色——`[data-hover="1"]` 从 14% 提到 **26% 品牌色 + 2px 品牌底边**，`[data-active="1"]`（点开时）提到 **30% + 1px 底边**。签上的序号仍说「第几条」，句子亮起来说「哪一行」，两个信号配合。
+  ③ **方向键翻页闪红框**。焦点在 `.nw-read-flow` 上（`tabIndex:-1`，为的是让方向键不落进正文），而 `05-css.js` 的通用规则 `.nw-root :where(button,a,input,select,textarea,[tabindex]):focus-visible{outline:2px solid var(--nw-brand)}` 给它描了品牌色焦点环——翻页时那一圈红边就是它。修法是用更高特异度盖掉：`.nw-read-stage .nw-read-flow:focus, .nw-read-stage .nw-read-flow:focus-visible{outline:none;box-shadow:none;}`（`:where()` 那条特异性为 0，两层类足够）。翻页容器不是控件，键盘用户也不需要在这里看焦点环——方向键本身就会翻页。
+  ④ **翻页太快、没有动画**。R53b 的 `dur = clamp(190, 150 + 距离×0.06, 320)` 一眨眼就过去了，缓动 `1-(1-t)⁴` 起步太猛。现在整页翻 **560ms**，缓动换成 **easeInOutCubic**（`t<0.5 ? 4t³ : 1-(-2t+2)³/2`，两头慢、中间快，像纸页被手指推过去）；吸附（手指松开后那点回正）走同一个函数，时长按「这次要走多远 / 一页多宽」缩放——走满一页 560ms，走几像素仍约 190ms，不会让对齐也等半秒。`quietRef` 跟着 `dur + 140` 动态设，滑动期间不误判页码。
+  `client.js` 重建为 21 段 **1039901 字节**，`verify-client-load: ok`，`verify-host` 219 项全过。
+- 第五十三轮补丁（R53d）：**删除线底下那道多余的下划线修掉了**。用户报「编辑页面添加删除线会附带下划线」，同时问「下划线功能和批注功能重复不」。
+  ① **根因不是删除线画错了，是它没清干净继承来的阴影**。编辑器正文上面盖着一层镜像（`.nw-hl`），每个标注节点都同时带两个类：`.nw-hl-mark`（AI 建议高亮那套的通用类）和 `.nw-mark-<kind>`。通用类自带一条底边：`.nw-hl .nw-hl-mark{background-color:var(--nw-hl-bg);box-shadow:inset 0 -1.5px 0 var(--nw-hl-line);}`（`60-editor.js:546`）。下划线和批注各自重写了 `box-shadow`，删除线只写了 `background-color:transparent`，于是那条 1.5px 的底边原封不动留在了身上——中线之外又画一道线，看着就是「删除线附带下划线」。修法是给 `.nw-hl .nw-mark-strike` 补 `box-shadow:none;`，并在注释里写明根因，免得下次又被继承链坑。
+  ② **同一个病还有两个潜伏的触发态**。`[data-active="1"]`（点开这条线）与 `[data-hover="1"]`（鼠标停在页边签上）原来把三类标注写在同一个选择器组里，都补 `inset 0 -1px / -2px 0` 的底边——也就是说，删除线只要被点开或悬停，底下照样会冒出下划线。现在拆开：underline / comment 保留底边，strike 单独写一条只换底色、`box-shadow:none`。阅读页（`62-read.js` 的 `.nw-mark-strike[data-active="1"]` / `[data-hover="1"]`）与写作区（`60-editor.js`）同步。
+  `client.js` 重建为 21 段 **1040682 字节**，`verify-client-load: ok`，`verify-host` 219 项全过，`verify-docs` 41 过 3 失败（沙箱 `spawn EPERM` 的 python-docx 检查，与本轮无关）。
+- 第五十三轮补丁（R53e）：**文字只属于批注**。用户选了「批注独占文字」这个收法，回答「下划线和批注重复不」。
+  ① **重复的不是按钮，是模型**。三类的本意是三件事：下划线「这句好」（只指认）、删除线「这句要删」（一个决定）、批注「这里有话」（必须有内容）。但 `note` 和 `kind` 是两个独立字段，于是「下划线 + 批注」成了合法状态——划一条线、点它、选「批注」、写字，这句话就同时是一条下划线（线还在字下）和一条批注（`paintGutter` 的入选条件是 note 非空或 kind==='comment'，页边冒出一个签）；再点它，因为 kind 还是 underline，弹出的又是「删除/批注」，而不是直接给看刚写的那句。同一句话、两个身份、两套入口。
+  ② **规则钉在写入端**：`10-db.js` 的 `cleanMark()` 里，`note` 非空即 `kind='comment'`（`comment` 允许暂时没字，那是刚建出来还没写的那一下）；`listMarks()` 出库时把「有字但 kind 不是 comment」的老行读成 comment（老书架不用迁移，规则对 UI 永远成立）；`createMark()` 合并兄弟行后同样以文字定 kind；`updateMark()` 两个方向都成立——写进字就升成 comment，把字清空（且没同时指定 kind）就退回 underline。
+  ③ **界面跟着改**：阅读页点一条线，`kind==='comment' || note 非空` 就直接开编辑框（不再问一次）；下划线/删除线的 picker 按钮文案改成「写批注」；编辑框在「本来不是批注」时多一行灰字「保存后这句话就是一条批注」，说清楚这一步会让线本身变样。写作区 `createMarkOfSelection()` 遇到「有字的线」不再允许降级（只开卡片，线不动），避免存进去又被判回 comment 的闪一下。`markCard` 对下划线/删除线不再写「没有批注」，改显示「下划线 / 删除线」，并新增 `.nw-mark-view-kind`。页边签的入选条件统一收成「必须有字」（`62-read.js` 与 `60-editor.js` 的 `paintGutter()`），空批注不再留一枚什么都不指的签。
+  ④ 顺带把删除线那个 bug 的三个触发态（常态 / `[data-active]` / `[data-hover]`）全部补齐 `box-shadow:none`，见上一条。
+  `client.js` 重建为 21 段 **1044153 字节**，`verify-client-load: ok`，`verify-host` 219 项全过。
+- 第五十三轮补丁（R53f）：**点下划线 / 删除线只留一个「删除」**。用户说「"知道了"和重复划线内容就不要了」。
+  ① **引文是重复的**。那张卡的第一行 `markView.mark.quote` 就是刚点的那句字，而它此刻正亮在正文里、就在卡片旁边——同一句话抄两遍，其中一遍还只有 40 个字（`slice(0, 40)` 截断），长句会被切在中间。删掉。
+  ② **「知道了」是为一张不该挡路的卡而多出来的动作**。卡本身是点出来的，点别处就收（`handleMarkClick` 的 else 分支、滚动、Esc 都关），根本不需要一个专门的关闭按钮；它占着按钮行的左半边，把「删除」挤成两半。删掉。
+  ③ **批注那条路径不动**。批注卡上引文不是重复（正文里那一条是线不是字，用户看的就是这条线指向哪句）、note 是这卡存在的理由、「知道了」对一段可能很长的话是合理的收尾。所以用 `markIsLine`（`kind !== 'comment'`）分支：线类卡片引文 / note / 「知道了」全渲染 `null`，只剩「删除」；批注卡片保持引文 + 正文 + 「知道了 / 删除」。
+  ④ **卡片尺寸跟着收**。`.nw-mark-view[data-compact="1"]` 收成 `width:auto`、`padding:4px`、按钮 `flex:0 0 auto;padding:0 12px`——一个 22px 高的按钮摊在 200px 里，右边空出一大片，看着像没加载完。`openMarkView()` 的避让尺寸也分两种：线类按 **92×34**、批注按 200×150 算，否则只剩一个按钮的小卡会按 200×150 去躲，落在离点击处很远的地方，看着像点错了地方。`.nw-mark-view-kind` 这个只为「下划线 / 删除线」字样存在的规则一并删除。
+  `client.js` 重建为 21 段 **1044773 字节**，`verify-client-load: ok`，`verify-host` 219 项全过。
+- 第五十三轮补丁（R53g）：**批注也只剩它自己；没有保存键，点别处就收起（并已保存）**。用户说「批注也是不要再重复显示标注内容和知道了，阅读页面的批注编辑后自动保存，不用保存按钮和取消按钮，鼠标点击其他任何地方，批注输入框收起来」。
+  ① **写作区的批注卡也去掉了引文和「知道了」**。R53f 只收拾了下划线和删除线，批注那条路径还留着「引文 + 正文 + 知道了 / 删除」四件东西。可是批注卡的位置就是贴着那条线的，正文里那句话正亮着，引文仍是把同一句话说了两次；「知道了」在 R53f 里已经被论证为多余（点别处、滚动、Esc 都收）。现在 `markCard` 只剩 `nw-mark-view-note` 正文 + 「删除」——引文、`nw-mark-view-kind`、「知道了」全部渲染 `null`，`markIsLine` 变量保留但只用来决定要不要渲染 note（线类连正文也没有）。
+  ② **阅读页批注改成打字即存**。原来「取消 / 保存」两颗按钮，意味着一次「我改两个字」要走三下（选中、改、点保存），而且忘了点保存就等于没改。现在编辑框只剩一颗「删除」：`onChange` 里 `scheduleNote(id, body)` 做 700ms 防抖落库，`onBlur` / Esc / 收起前 `flushNote()` 补最后一次。**为什么不是每键都存**：`onNote` 背后是 `db.updateMark → notify → 应用层 refreshMarks → marks 换新 → 本组件 body 重新把整本书拆一遍段落`，二十万字的稿子两万行，每按一个字拆一次会当场卡住。700ms 合并既保住「不用点保存」，也不让打字变成重活。
+  ③ **新建批注也一样**（`composerBox`）。`openComposer()` 只记选区，`scheduleComposer()` 700ms 后 `commitComposer()`：第一次出现非空文字时才 `p.onMark` 建行，并把它返回的 id 回填进 `composerSaveRef`，之后就是普通的改批注；空着关掉当没写过，不留一条「有批注底色却没有签」的空行。卸载时 `flushNote()` + `commitComposer()`，关掉整个「读一遍」也不会丢最后一句。
+  ④ **点别处收起，而且是任何地方**。只在 flow 里监听不够——顶栏、页脚、页边签、窗口外都算「其他地方」。所以在 `document` 上做捕获监听（`pointerdown`，不是 `click`：点击顺序是 pointerdown → blur → click，等 click 的话 textarea 的 blur 会先保存一次、框还会在按下与松开之间闪一下）。命中 `.nw-mark-pop`（输入框自己）、`.nw-mark[data-mark]`（正在编辑的那条线的锚点）、`.nw-mark-side`（页边签）时不收，其余一律先 `flushNote()` / `commitComposer()` 再清 `picked` / `editing` / `composer` 与所有 `data-active`。**收起 = 保存**，不是放弃。顺带补了一个副作用：这一下按下既然是在「把框点掉」，`pointerup` 里就不再判翻页（`dismissedRef`），否则点一下空白会同时收框和翻页。
+  ⑤ **删除要先把待写的作废**。`dropNote()` 在 `onUnmark` 之前清掉 timer 和 dirty，否则「刚改完就删」会在删掉之后又把那一行写回来。
+  `client.js` 重建为 21 段 **1050495 字节**，`verify-client-load: ok`，`verify-host` 219 项全过。
 - 第五十二轮（R52）改造：**写作区也能划线了，点一下就能看，单击就开**。
   ① **写作区没有创建标注的入口**。R51 让写作区能「看」标注，却仍然只能在「读一遍」
   里「画」——所以用户的第一反应是「编辑页面还是不能删除线和批注」，因为手上根本没有

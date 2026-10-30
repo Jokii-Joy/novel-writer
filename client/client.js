@@ -482,10 +482,12 @@ window.__ModuleLoader__.load({
     caretColor: '',
     caretBlink: true,
     /**
-     * R46: immersive mode can fade every line except the one being written.
-     * `focusDim` is the switch, `focusLines` how many lines either side stay
-     * clear. On by default because a writer who goes immersive has already said
-     * "give me the page and nothing else"; the setting is the way out.
+     * R46/R54: fade every line except the one being written. `focusDim` is the
+     * switch, `focusLines` how many lines either side stay clear. On by default
+     * because it is the whole point of a writing surface — the sentence under
+     * the caret in front, the rest of the page quiet behind it. R54: it used to
+     * be immersive-only; it now applies in both modes, so the setting is the
+     * single way out and the value was already right for the writer who asked.
      */
     focusDim: true,
     focusLines: 2,
@@ -1683,6 +1685,13 @@ window.__ModuleLoader__.load({
    * "here is why" — and the extra kind only made the toolbar one button longer.
    * Rows written by R47 keep working: `todo` is normalised to `underline`
    * rather than rejected, so no annotation disappears from an older shelf.
+   *
+   * R53e: 文字只属于批注. `note` is not a free-floating extra that any kind may
+   * carry — it *is* what makes a mark a comment. A row with words in `note` is
+   * stored as `comment` whatever kind was asked for, so a range can no longer
+   * be an underline and a comment at the same time (that double identity is
+   * what made 下划线 and 批注 look like two names for one thing). Rows written
+   * before this keep their note and simply read back as comments.
    */
   const MARK_KINDS = { underline: 1, strike: 1, comment: 1 };
 
@@ -1691,10 +1700,18 @@ window.__ModuleLoader__.load({
     const chapterId = String(data.chapterId || '');
     if (!chapterId) return null;
     const raw = String(data.kind || '');
-    const kind = raw === 'todo' ? 'underline' : (MARK_KINDS[raw] ? raw : 'underline');
     const start = Math.max(0, Math.round(Number(data.start) || 0));
     const end = Math.max(start, Math.round(Number(data.end) || 0));
     if (end <= start) return null;
+    const note = String(data.note == null ? '' : data.note).slice(0, 400);
+    // R53e：文字只属于批注。下划线是「这句好」、删除线是「这句要删」，两者都是
+    // 指一下就走；批注是「这里有话」。一条线一旦带了文字，它就已经是批注了，
+    // kind 只决定它画成什么样子。把这条不变式钉在写入端，就不会再出现「一条
+    // 下划线底下带一条批注」那种两个身份叠在同一句话上的状态——用户说的「重复」
+    // 指的就是它。反过来，comment 允许暂时没有文字（刚建出来还没写的那一下）。
+    const kind = note.trim()
+      ? 'comment'
+      : (raw === 'todo' ? 'underline' : (MARK_KINDS[raw] ? raw : 'underline'));
     return {
       chapterId: chapterId,
       novelId: data.novelId ? String(data.novelId) : '',
@@ -1705,7 +1722,7 @@ window.__ModuleLoader__.load({
       // something useful after the paragraph around it is rewritten — the
       // offsets drift, the quote does not.
       quote: String(data.quote == null ? '' : data.quote).slice(0, 240),
-      note: String(data.note == null ? '' : data.note).slice(0, 400),
+      note: note,
     };
   }
 
@@ -1729,11 +1746,42 @@ window.__ModuleLoader__.load({
         if (String(row.kind) === 'todo') {
           return Object.assign({}, row, { kind: 'underline' });
         }
+        // R53e: a row written before 文字只属于批注 could be an underline that
+        // also carried words. It is a comment — it always was, the kind just
+        // did not say so. Normalising on read keeps the old shelf intact and
+        // makes the rule true for everything the UI ever sees.
+        if (String(row.note || '').trim() && String(row.kind) !== 'comment') {
+          return Object.assign({}, row, { kind: 'comment' });
+        }
         return row;
       })
       .sort(function (a, b) {
         return (Number(a.start) || 0) - (Number(b.start) || 0) || (Number(a.end) || 0) - (Number(b.end) || 0);
       });
+  }
+
+  /**
+   * R53: one range of words carries at most one annotation.
+   *
+   * Re-selecting the same sentence and drawing another line used to insert a
+   * second row: the two lines painted on top of each other, and deleting the
+   * visible one left the other behind — so the writer had to press 删除 once per
+   * accidental duplicate. A range is now the identity of a mark: re-drawing it
+   * rewrites the existing row (kind / note) instead of adding a sibling, and
+   * deleting it removes every duplicate that an older build left in the store.
+   */
+  function sameRange(a, b) {
+    if (!a || !b) return false;
+    if (String(a.chapterId || '') !== String(b.chapterId || '')) return false;
+    return (Math.round(Number(a.start) || 0) === Math.round(Number(b.start) || 0))
+      && (Math.round(Number(a.end) || 0) === Math.round(Number(b.end) || 0));
+  }
+
+  async function sameRangeRows(clean) {
+    const rows = await listMarks(null, clean.chapterId);
+    return (rows || []).filter(function (row) {
+      return sameRange(row, clean);
+    });
   }
 
   async function createMark(input) {
@@ -1745,6 +1793,38 @@ window.__ModuleLoader__.load({
     // the row came back under a different id, the card that was just opened
     // would point at a mark that does not exist and 删除 would do nothing.
     const wanted = input && input.id ? String(input.id) : '';
+    const siblings = await sameRangeRows(clean);
+    if (siblings.length) {
+      // Keep the oldest row as the one the UI has been pointing at; clean up any
+      // duplicates an older build wrote for the same range.
+      const keep = siblings[0];
+      const mergedNote = clean.note ? clean.note : String(keep.note || '');
+      const merged = Object.assign({}, keep, {
+        // R53e：文字说了算。合并后只要还有字，它就必须是批注——否则会出现
+        // 「kind=strike 但身上带 note」的行，刷新之后又变回一条批注，看着像
+        // 改了没生效。
+        kind: mergedNote.trim() ? 'comment' : clean.kind,
+        // An empty note on a re-draw must not wipe a note the writer already
+        // wrote — switching an underline to a strike should keep its comment.
+        note: mergedNote,
+        quote: clean.quote || String(keep.quote || ''),
+        novelId: clean.novelId || String(keep.novelId || ''),
+        updatedAt: stamp,
+      });
+      const ops = [{ store: 'marks', type: 'put', value: merged }];
+      for (let i = 1; i < siblings.length; i += 1) {
+        ops.push({ store: 'marks', type: 'delete', key: siblings[i].id });
+      }
+      if (wanted && siblings.every(function (row) { return String(row.id) !== wanted; })) {
+        // The caller painted with a fresh id; it never reached the store, but
+        // drop it anyway so a retry can not resurrect it.
+        ops.push({ store: 'marks', type: 'delete', key: wanted });
+      }
+      const ok = await writeBatch(ops);
+      if (!ok) throw new Error('保存标注失败');
+      notify();
+      return merged;
+    }
     const row = Object.assign({ id: wanted || uid('mark'), createdAt: stamp, updatedAt: stamp }, clean);
     const ok = await writeBatch([{ store: 'marks', type: 'put', value: row }]);
     if (!ok) throw new Error('保存标注失败');
@@ -1763,8 +1843,31 @@ window.__ModuleLoader__.load({
     if (Object.prototype.hasOwnProperty.call(patch, 'kind') && MARK_KINDS[String(patch.kind)]) {
       next.kind = String(patch.kind);
     }
+    // R53e：写完这一句它是不是批注，由文字说了算——两个方向都成立。写着字的线
+    // 一律是批注（把一条下划线写成批注，就是「批注」这个动作本身）；把批注的文字
+    // 清空，它就退回一条下划线（否则会留下一条「没有话的批注」：占着批注的底色，
+    // 页边却没有签，是三种状态里最说不清的一种）。显式指定 kind 的重画走 createMark，
+    // 不经过这里。
+    const patchTouchesNote = Object.prototype.hasOwnProperty.call(patch, 'note');
+    const patchSetsKind = Object.prototype.hasOwnProperty.call(patch, 'kind')
+      && MARK_KINDS[String(patch.kind)];
+    if (String(next.note || '').trim()) next.kind = 'comment';
+    else if (patchTouchesNote && !patchSetsKind) next.kind = 'underline';
     next.updatedAt = now();
-    const ok = await writeBatch([{ store: 'marks', type: 'put', value: next }]);
+    const ops = [{ store: 'marks', type: 'put', value: next }];
+    // Duplicates an older build left on this range must not keep a stale note:
+    // after a refresh the copy without the new note could win the paint.
+    const siblings = await sameRangeRows(current);
+    for (let i = 0; i < siblings.length; i += 1) {
+      const row = siblings[i];
+      if (String(row.id) === String(next.id)) continue;
+      ops.push({
+        store: 'marks',
+        type: 'put',
+        value: Object.assign({}, row, { kind: next.kind, note: next.note, updatedAt: next.updatedAt }),
+      });
+    }
+    const ok = await writeBatch(ops);
     if (!ok) return undefined;
     notify();
     return next;
@@ -1772,7 +1875,17 @@ window.__ModuleLoader__.load({
 
   async function deleteMark(id) {
     if (!id) return false;
-    const ok = await writeBatch([{ store: 'marks', type: 'delete', key: id }]);
+    const current = await readOne('marks', id);
+    if (!current) return false;
+    // R53: a range is one annotation, so 删除 clears every duplicate that sits on
+    // the same words — one press, no matter how many times it was drawn before.
+    const ops = [{ store: 'marks', type: 'delete', key: current.id }];
+    const siblings = await sameRangeRows(current);
+    for (let i = 0; i < siblings.length; i += 1) {
+      if (String(siblings[i].id) === String(current.id)) continue;
+      ops.push({ store: 'marks', type: 'delete', key: siblings[i].id });
+    }
+    const ok = await writeBatch(ops);
     if (!ok) return false;
     notify();
     return true;
@@ -8160,6 +8273,17 @@ window.__ModuleLoader__.load({
     // 设置 already has a permanent home in the sidebar — a card whose only job
     // was to repeat two links one scroll below their real home was pure height.
 
+    // R54e: 四张卡按「列」排，不再按「两行」排。
+    //
+    // 原来是两个独立的 .nw-welcome-grid，每行两张：第一行 正在创作 + 创作统计，
+    // 第二行 收件箱 + 投稿记录。问题出在 `align-items:start` —— 卡片各自按内容
+    // 高度落座，而「创作统计」只有 2×2 的数字、比「正在创作」矮得多，于是第一行
+    // 右侧在统计卡下面空出一大块，接着才是第二行的投稿记录。用户看到的就是
+    // 「创作统计与投稿记录之间有一大段空白」。
+    //
+    // 现在改成一列两卡的结构：左列 正在创作 → 收件箱，右列 创作统计 → 投稿记录。
+    // 同一列里的两张卡紧挨着（列内 flex，间距就是原本的 --nw-sp-4），空白消失，
+    // 而且信息分组也顺了：左列是「我的书和来信」，右列是「数字和投出去的稿」。
     return NW.h(
       'div',
       { className: 'nw-welcome' },
@@ -8167,8 +8291,12 @@ window.__ModuleLoader__.load({
         'div',
         { className: 'nw-welcome-inner' },
         header,
-        NW.h('div', { className: 'nw-welcome-grid' }, novelCard, statsCard),
-        NW.h('div', { className: 'nw-welcome-grid' }, inboxCard, subsCard),
+        NW.h(
+          'div',
+          { className: 'nw-welcome-cols' },
+          NW.h('div', { className: 'nw-welcome-col' }, novelCard, inboxCard),
+          NW.h('div', { className: 'nw-welcome-col' }, statsCard, subsCard),
+        ),
       ),
     );
   }
@@ -8226,6 +8354,16 @@ window.__ModuleLoader__.load({
    one-row card (正在创作 with a single novel) into a half-empty panel, which read
    worse than a shorter card. */
 .nw-welcome-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:var(--nw-sp-4);align-items:start;}
+/* R54e: two columns of cards, each column a plain stack. The old layout paired
+   cards across two grids, so a short card (创作统计) left a hole beside a tall
+   one and the next row started below the hole — the blank stretch the writer
+   reported between 创作统计 and 投稿记录. A column is a flex stack: its cards
+   simply follow one another, so there is nothing to leave a hole with.
+   Collapsed below 620px by the container tier at the end of this file (the
+   plugin is a column inside the host shell, so window width is the wrong axis
+   — .nw-welcome is measured against @container nw). */
+.nw-welcome-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--nw-sp-4);align-items:start;}
+.nw-welcome-col{display:flex;flex-direction:column;gap:var(--nw-sp-4);min-width:0;}
 .nw-welcome-card{
   min-width:0;padding:var(--nw-sp-4);
   border:1px solid var(--nw-line-soft);
@@ -8425,6 +8563,10 @@ window.__ModuleLoader__.load({
 @container nw (max-width: 620px){
   .nw-welcome{padding:20px 14px;}
   .nw-welcome-stats{grid-template-columns:minmax(0,1fr);}
+  /* R54e: one column of cards. The reading order stays my books → mail →
+     numbers → submissions, which is what the two-column layout already reads
+     as when you scan top-to-bottom in each column. */
+  .nw-welcome-cols{grid-template-columns:minmax(0,1fr);}
 }
 `);
 })();
@@ -8714,13 +8856,16 @@ window.__ModuleLoader__.load({
      blocks below still override the colour per theme (warm ink on paper,
      near-white on the night surface). */
   --nw-caret-width:3px;--nw-caret-color:#0f0f0e;
-  /* R46: what the rest of the page fades towards while writing full screen.
-     Mixing the paper colour keeps every theme consistent — moon/night themes
-     fade towards a dark ink instead of washing the text to white. */
+  /* R46: what the rest of the page fades towards while writing. Mixing the
+     paper colour keeps every theme consistent — moon/night themes fade towards
+     a dark ink instead of washing the text to white. R54: unchanged on purpose.
+     The writer asked for "that kind of effect" in normal mode too, so the wash
+     strength has to be the one they already liked in immersive mode. */
   --nw-veil-ink:color-mix(in srgb, var(--nw-bg) 72%, transparent);
-  /* One line of feather, derived from the letter size, so the band edge lands
-     on the line box instead of in the middle of one. */
+  /* R46: one line of feather, derived from the letter size, so the band edge lands
+   on the line box instead of in the middle of one. */
   --nw-focus-feather:calc(var(--nw-size) * var(--nw-line,2));
+}
 }
 /* Small panes: the gutter shrinks, the 88px rule does not (22 + 66 = 88).
    R13: keyed off the plugin's column (container "nw" in 05-css), not the
@@ -8997,6 +9142,11 @@ window.__ModuleLoader__.load({
 }
 .nw-hl .nw-mark-strike{
   background-color:transparent;
+  /* R53d：这一行是「删除线底下多出一道下划线」的根因。镜像里的每个标注都带
+     .nw-hl-mark，而 .nw-hl .nw-hl-mark 自带一条 inset 底边（那是给 AI 建议高亮
+     用的）。下划线和批注各自重写了 box-shadow，删除线只清了底色、没清阴影，于是
+     继承下来的底边就在中线之外又画了一道线。 */
+  box-shadow:none;
   text-decoration:line-through;
   text-decoration-color:var(--nw-mark-strike, var(--nw-danger));
   text-decoration-thickness:2px;
@@ -9011,31 +9161,62 @@ window.__ModuleLoader__.load({
   background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 16%, transparent);
   box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
 }
-/* 批注角标：一个贴在划线末尾的小方框，里面三个点。这里必须绝对定位——镜像的
-   每一个字符都要和底下的 textarea 落在同一个位置，任何占位的行内元素都会把后半行推歪。
-   R49：角标挂在一个零宽零高的锚点上（.nw-mark-dot，插在 mark 的最后），
-   而不是 left:100%——100% 指的是行盒末尾，批注一跨行点就跑到上一行去了。
-   R50：从圆点改成「小方框里三个点」，和读视图一致：圆点只说明这里有东西，
-   方框里三个点说明这里有一句话。三个点是三枚径向渐变，不引入图标。 */
-.nw-hl .nw-mark-dot{display:inline-block;width:0;height:0;position:relative;vertical-align:baseline;}
-.nw-hl .nw-mark-dot::after{
-  /* R52：和读视图一致，角标挂到字尾右上角——贴字腰会压住下一行开头的字。 */
-  content:'';position:absolute;left:3px;top:-.86em;
-  box-sizing:border-box;width:12px;height:9px;
-  border-radius:2px;
-  background-color:var(--nw-mark-comment, var(--nw-brand));
-  background-image:
-    radial-gradient(circle at 3px 50%, var(--nw-panel) .8px, transparent 1px),
-    radial-gradient(circle at 6px 50%, var(--nw-panel) .8px, transparent 1px),
-    radial-gradient(circle at 9px 50%, var(--nw-panel) .8px, transparent 1px);
-  background-repeat:no-repeat;
-  box-shadow:0 0 0 1px color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 26%, transparent);
-  pointer-events:none;
-}
+/* R53：写作区不再在字里插角标。原先那个小方框（.nw-mark-dot）虽然零宽，但
+   它画在字尾右上角，行距紧的时候仍然压住上一行的字脚；而且它跟着镜像走，一
+   重排就得重画。改成页边批注签（.nw-mark-gutter / .nw-mark-side）：签挂在纸
+   的右外侧，正文上只留下那条线本身，字一个也不动。 */
 .nw-hl .nw-mark-comment[data-active="1"],
-.nw-hl .nw-mark-underline[data-active="1"],
+.nw-hl .nw-mark-underline[data-active="1"]{
+  background-color:color-mix(in srgb, var(--nw-brand) 30%, transparent);
+  box-shadow:inset 0 -1px 0 var(--nw-brand);
+}
+/* 删除线的「点开」只加底色，不补底边——它身上已经有一条穿字而过的线，再加一道
+   底边就又成了「删除线附带下划线」，和正常状态那个 bug 是同一个。 */
 .nw-hl .nw-mark-strike[data-active="1"]{
-  background-color:color-mix(in srgb, var(--nw-brand) 18%, transparent);
+  background-color:color-mix(in srgb, var(--nw-brand) 30%, transparent);
+  box-shadow:none;
+}
+/* 页边批注签的容器：盖在纸面上、不接事件（只有签本身接），这样正文的点击、
+   选区、拖拽全都不受影响。overflow:hidden 是为了签从纸边滑出去时被裁掉，
+   而不是漂到纸外面挂着。 */
+.nw-mark-gutter{
+  position:absolute;left:0;top:0;right:0;bottom:0;
+  z-index:var(--nw-z-float);
+  overflow:hidden;pointer-events:none;
+}
+/* 一枚签 = 一条带批注的线。签上写**章内序号**（按 start 排序），同一行挂两条
+   批注、两枚签上下错开之后，序号是唯一能分辨谁是谁的线索；鼠标停上去再点亮
+   它指的那句，序号和句子就配上了。 */
+.nw-mark-side{
+  position:absolute;
+  box-sizing:border-box;width:16px;height:16px;padding:0;
+  display:flex;align-items:center;justify-content:center;
+  border:0;border-radius:4px;cursor:pointer;pointer-events:auto;
+  font-family:var(--nw-ui-font);font-size:9px;line-height:1;
+  font-variant-numeric:tabular-nums;
+  color:var(--nw-panel);
+  background:var(--nw-mark-comment, var(--nw-brand));
+  box-shadow:0 0 0 1px color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 24%, transparent);
+  transition:transform .12s, opacity .12s;
+  opacity:.9;
+}
+.nw-mark-side:hover{transform:scale(1.14);opacity:1;}
+.nw-mark-side[data-active="1"]{opacity:1;box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-brand) 40%, transparent);}
+.nw-mark-side:focus-visible{outline:2px solid var(--nw-brand);outline-offset:1px;opacity:1;}
+/* R53c：不再画引线。用户说那条细线在页边空白里看不出来，两条签错开时更像
+   装饰。改成让**句子自己**回答：鼠标停在签上、或点开一条批注时，它指的那句
+   明显变色（见下面的 [data-hover] 与 mark[data-active]）。 */
+/* 悬停时点亮签所指的那条线。R53c：14% 太轻，提到 26% 再加一道 2px 底边，
+   隔着一页也能一眼扫到是哪句。 */
+.nw-hl .nw-mark-comment[data-hover="1"],
+.nw-hl .nw-mark-underline[data-hover="1"]{
+  background-color:color-mix(in srgb, var(--nw-brand) 26%, transparent);
+  box-shadow:inset 0 -2px 0 var(--nw-brand);
+}
+/* R53d：删除线悬停时同样只加底色——补底边就又变成「删除线附带下划线」。 */
+.nw-hl .nw-mark-strike[data-hover="1"]{
+  background-color:color-mix(in srgb, var(--nw-brand) 26%, transparent);
+  box-shadow:none;
 }
 /* R51：写作时点一条线，浮出这张小卡：引文、批注原文、一个删除。这里是**看**的地方，
    所以没有输入框——批注在写作区只读，要改它回「读一遍」里改。卡片的坐标由
@@ -9048,11 +9229,19 @@ window.__ModuleLoader__.load({
   border:1px solid var(--nw-line);background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
   font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);line-height:1.45;
 }
-.nw-mark-view-quote{
-  color:var(--nw-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-}
+/* R53g：卡片上不再有引文（那句字就在正文里亮着），这条规则留着的唯一作用是
+   提醒别再把 quote 加回来；实际已无人使用，删掉。 */
 .nw-mark-view-note{color:var(--nw-fg);white-space:pre-wrap;overflow-wrap:break-word;max-height:96px;overflow-y:auto;}
 .nw-mark-view-note[data-empty="1"]{color:var(--nw-soft);}
+/* R53f：下划线 / 删除线点开只有「删除」，所以卡片不能再用 200px 的批注版宽度——
+   一个 22px 高的按钮摊在 200px 里，右边空出一大片，看着像没加载完。收成贴着按钮
+   的宽度，两个角跟按钮同圆角，像从那条线上长出来的一枚小标签。 */
+.nw-mark-view[data-compact="1"]{
+  width:auto;min-width:0;padding:4px;gap:0;
+  border-radius:var(--nw-r-control);
+}
+.nw-mark-view[data-compact="1"] .nw-mark-view-acts{gap:0;}
+.nw-mark-view[data-compact="1"] .nw-mark-view-btn{flex:0 0 auto;padding:0 12px;}
 .nw-mark-view-acts{display:flex;gap:4px;}
 .nw-mark-view-btn{
   flex:1 1 auto;height:22px;padding:0 8px;
@@ -9062,22 +9251,50 @@ window.__ModuleLoader__.load({
 }
 .nw-mark-view-btn:hover{background:var(--nw-btn-hover);}
 .nw-mark-view-btn[data-danger="1"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 45%, var(--nw-line-strong));}
-/* R52：选中一段字之后浮出来的「标一下」小条——写作区里也能划线，不用先开读一遍。 */
-.nw-mark-pick{
+/* R53c：写作区不再有「标记」按钮。左上角那颗铅笔被用户点名去掉了——它常驻在
+   纸面上方，占着一格视觉重量，而标注是低频动作。现在入口改成**右键**：选中一段
+   字，按右键才弹出这张小菜单（浏览器原生菜单被拦下），没选中就还是原生菜单，
+   复制粘贴照旧。看不见的入口，也就不会碍眼。 */
+.nw-mark-menu{
   position:absolute;z-index:var(--nw-z-float);
-  display:inline-flex;align-items:center;gap:2px;
-  padding:3px;border-radius:var(--nw-r-pill);
+  display:flex;flex-direction:column;gap:1px;
+  width:146px;padding:3px;
+  border-radius:var(--nw-r-control);
   border:1px solid var(--nw-line-strong);
   background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
   font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);
+  animation:nw-fade-in .1s var(--nw-ease, ease) both;
 }
-.nw-mark-pick-btn{
-  display:inline-flex;align-items:center;justify-content:center;
-  height:24px;padding:0 8px;border:0;border-radius:var(--nw-r-pill);
-  background:transparent;color:var(--nw-fg);cursor:pointer;white-space:nowrap;
-  font-family:inherit;font-size:var(--nw-fs-tiny);
+/* 菜单顶上那行小字：有选区就显示要标的那几个字，没选区就说清楚为什么按不动。 */
+.nw-mark-menu-quote{
+  max-width:100%;padding:0 4px 3px;
+  color:var(--nw-soft);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
-.nw-mark-pick-btn:hover{background:var(--nw-btn-hover);}
+.nw-mark-menu-btn{
+  display:flex;align-items:center;gap:7px;
+  height:26px;padding:0 7px;border:0;border-radius:var(--nw-r-hair);
+  background:transparent;color:var(--nw-fg);cursor:pointer;
+  font-family:inherit;font-size:var(--nw-fs-tiny);text-align:left;white-space:nowrap;
+}
+.nw-mark-menu-btn:hover{background:var(--nw-btn-hover);}
+.nw-mark-menu-btn:disabled{opacity:.42;cursor:default;background:transparent;}
+/* 菜单里的样本：一段 20px 宽的假字，用真实的那种线画出来，选之前就能看见结果。 */
+.nw-mark-menu-swatch{
+  flex:0 0 auto;width:20px;height:14px;
+  border-radius:2px;
+  background:color-mix(in srgb, var(--nw-fg) 12%, transparent);
+}
+.nw-mark-menu-swatch[data-kind="underline"]{
+  box-shadow:inset 0 -2px 0 var(--nw-mark-underline, var(--nw-brand));
+}
+.nw-mark-menu-swatch[data-kind="strike"]{
+  background-image:linear-gradient(to bottom, transparent calc(50% - 1px), var(--nw-mark-strike, var(--nw-danger)) calc(50% - 1px), var(--nw-mark-strike, var(--nw-danger)) calc(50% + 1px), transparent calc(50% + 1px));
+}
+.nw-mark-menu-swatch[data-kind="comment"]{
+  background:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 16%, transparent);
+  box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
+}
 
 /* caret measuring mirror: same box, never painted */
 .nw-caret{
@@ -9098,10 +9315,23 @@ window.__ModuleLoader__.load({
    line top minus scrollTop — scrolling therefore repaints the band without
    measuring anything.
    z-index 1 keeps them above the transparent textarea (base) and below the
-   thick caret (float), so the caret never sits under a veil. */
+   thick caret (float), so the caret never sits under a veil.
+
+   R54: in normal mode the surface is wider than the paper (shelf + desk
+   margins), so a full-bleed veil would dim the desk around the sheet too and
+   the page would look like a hole cut in a grey card. [data-immersive="0"]
+   therefore insets the wash to the page column; immersive mode keeps the
+   full-bleed version it has always had, because there the column nearly IS the
+   pane and the writer already approved that look. --nw-width is the same
+   value .nw-page is sized with (written by the component), so the two edges
+   agree to the pixel. */
 .nw-veil{
   position:absolute;left:0;right:0;pointer-events:none;user-select:none;
   z-index:1;display:none;
+}
+.nw-surface[data-immersive="0"] .nw-veil{
+  left:calc(50% - min(var(--nw-width,760px),100%) / 2);
+  right:calc(50% - min(var(--nw-width,760px),100%) / 2);
 }
 .nw-surface[data-focus="1"] .nw-veil{display:block;}
 .nw-veil-top{
@@ -9278,15 +9508,35 @@ window.__ModuleLoader__.load({
     const caretBlink = settings.caretBlink !== false;
 
     // ---- R46 line focus ------------------------------------------------------
-    // Immersive mode already hides every panel; what is left is the page
-    // itself. Fading everything except the line being written keeps the
-    // sentence in front of the eye without touching the manuscript, the theme
-    // or the flow of the text. Two lines of context each way is the default:
-    // about what a writer can still read without moving their eyes.
-    // Deliberately immersive-only — with the shelf and toolbar on screen the
-    // fade would fight the chrome instead of helping.
-    const focusOn = immersive && settings.focusDim !== false;
+    // Fading everything except the line being written keeps the sentence in
+    // front of the eye without touching the manuscript, the theme or the flow
+    // of the text. Two lines of context each way is the default: about what a
+    // writer can still read without moving their eyes.
+    //
+    // R54: this used to be immersive-only, on the theory that with the shelf
+    // and toolbar on screen a fade would "fight the chrome". The writer
+    // disagrees — the fade is about the page, not about the chrome, and a
+    // manuscript that dims itself around the caret is just as useful with the
+    // shelf open. So it now follows the setting alone (`focusDim`, on by
+    // default, switchable off in 设置 → 写作), in both modes.
+    //
+    // R54b: the band is anchored to the MIDDLE of the pane, not to the caret's
+    // line — and the caret is brought into that band. The first attempt followed
+    // the caret, which is only right while you are typing: open a chapter and
+    // the caret sits on line one, so the light lands at the top of the page and
+    // the writer stares at a whole pane of dimmed text until they click
+    // something. Anchoring to the middle is what makes it read as "the
+    // paragraph I am on"; planBandScroll() then keeps the caret inside the lit
+    // band, so the two can never disagree. It is also cheaper: the band stops
+    // moving on every keystroke, so typing no longer repaints it.
+    const focusOn = settings.focusDim !== false;
     const focusLines = clampNum(numOf(settings.focusLines, 2), 0, 8);
+    // Whether the caret has to be pushed into the band (see focusCenter()).
+    // This is what typewriter mode has always done, so a writer who turned that
+    // off has said "leave my viewport alone" — the fade then simply lights the
+    // middle of the page and the caret may sit anywhere, which is the pre-R54
+    // behaviour and is still the right trade-off for those users.
+    const focusFollows = focusOn && settings.typewriter !== false;
 
     const surfaceStyle = {
       '--nw-font': fontFamily,
@@ -9328,7 +9578,7 @@ window.__ModuleLoader__.load({
     const propsRef = React.useRef(p);
     propsRef.current = p;
     const cfgRef = React.useRef(null);
-    cfgRef.current = { autoSaveMs, typewriterOn, fontSize, lineHeight, focusOn, focusLines };
+    cfgRef.current = { autoSaveMs, typewriterOn, fontSize, lineHeight, focusOn, focusLines, focusFollows };
 
     const highlightsRef = React.useRef([]);
     // R47: persistent annotations, kept apart from `highlightsRef` on purpose —
@@ -9399,13 +9649,37 @@ window.__ModuleLoader__.load({
     const [markView, setMarkView] = React.useState(null);
     const markViewRef = React.useRef(null);
     markViewRef.current = markView;
-    // R52: the "mark this" bar that appears when a range is selected. The
-    // writing surface is where the words are, so it is where you should be able
-    // to underline one — having to open 读一遍 first made marking feel like a
-    // separate mode rather than something you do while working.
-    const [markPick, setMarkPick] = React.useState(null);
-    const markPickRef = React.useRef(null);
-    markPickRef.current = markPick;
+    // R53：写作区不再有「选字弹条」。标注动作收进左上角的动作胶囊：一个铅笔
+    // 按钮开一张小菜单（下划线 / 删除线 / 批注）。菜单只认**按下那一刻**的选区，
+    // 所以它开着的这段时间里正文选区可以随便变，不会标错地方。
+    // R53c：那个按钮撤了，入口改成右键。
+    const [markMenu, setMarkMenu] = React.useState(null);
+    const markMenuRef = React.useRef(null);
+    markMenuRef.current = markMenu;
+    /** 页边批注签的容器（.nw-mark-gutter），由 paintGutter() 直接填 DOM。 */
+    const gutterRef = React.useRef(null);
+
+    // R53c：菜单现在从右键弹出（没有常驻按钮了）。按下菜单以外的任何地方、
+    // 或按 Escape 都会收起。捕获阶段监听，这样在纸面上按下开始选字时也能先
+    // 把菜单清掉。
+    React.useEffect(() => {
+      if (!markMenu) return undefined;
+      const onDown = (ev) => {
+        const t = ev.target;
+        if (t && typeof t.closest === 'function' && t.closest('.nw-mark-menu')) return;
+        closeMarkMenu();
+      };
+      const onKey = (ev) => {
+        if (ev.key !== 'Escape') return;
+        closeMarkMenu();
+      };
+      document.addEventListener('mousedown', onDown, true);
+      window.addEventListener('keydown', onKey, true);
+      return () => {
+        document.removeEventListener('mousedown', onDown, true);
+        window.removeEventListener('keydown', onKey, true);
+      };
+    }, [markMenu]);
     /** Right-hand blank currently reserved for the floating dock, in px. */
     const dockLaneRef = React.useRef(-1);
 
@@ -10088,14 +10362,12 @@ window.__ModuleLoader__.load({
             active: !!r.active,
             kind: 'hl',
             mark: MARK_CLASS[r.kind] ? r.kind : 'underline',
-            // R50：小方框标的是「这条线上挂着一句话」，不是「这条线的类型是批注」——
-            // 下划线和删除线现在也能带一句批注。
-            badge: !!String(r.note || '').trim() || String(r.kind) === 'comment',
           });
         }
       }
       if (!ranges.length) {
         if (hl.firstChild) clearNode(hl);
+        paintGutter();
         return;
       }
       ranges.sort((a, b) => a.start - b.start || a.end - b.end);
@@ -10115,20 +10387,13 @@ window.__ModuleLoader__.load({
         if (r.id !== undefined && r.id !== null) el.setAttribute('data-id', String(r.id));
         el.textContent = text.slice(s, r.end);
         frag.appendChild(el);
-        // R49：批注角标挂在**字尾**。镜像里一个 range 就是一个 `<mark>`，所以
-        // 紧跟其后的零宽零高锚点正好落在最后一个字后面；`left:100%` 那个写法
-        // 挂的是行盒末尾，批注一跨行点就跑到上一行去了。
-        if (r.badge) {
-          const dot = document.createElement('span');
-          dot.className = 'nw-mark-dot';
-          dot.setAttribute('aria-hidden', 'true');
-          frag.appendChild(dot);
-        }
         pos = r.end;
       }
       if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
       clearNode(hl);
       hl.appendChild(frag);
+      // R53：正文重建完之后画页边签。签不挂在字上，所以正文怎么切分都不影响它。
+      paintGutter();
     }
 
     // ------------------------------------------------------------- refresh --
@@ -10153,6 +10418,75 @@ window.__ModuleLoader__.load({
      * Read phase: returns the scrollTop the caret needs, or null to leave the
      * viewport completely alone. All writes happen later in the frame.
      */
+    /**
+     * R54b: the line the lit band is centred on, in *scroller content*
+     * coordinates, or null when the band is off.
+     *
+     * The band is a viewport rectangle (middle of the pane), while `m.top` is
+     * content-space. Given the current scrollTop the band's content top is
+     * `scrollTop + bandViewportTop`, so a caret is inside the band when
+     * `m.top` lies between that and `+ bandHeight`.
+     */
+    function bandContentTop(view) {
+      // Settings are read from cfgRef, not from the closure: this is called from
+      // listeners created on the first render, and a writer who turns the fade
+      // off must not have to reload the panel for it to stop chasing the caret.
+      const cfg = cfgRef.current || {};
+      const sc = view && view.el;
+      if (cfg.focusOn === false || !sc) return null;
+      const own = view.kind === 'self';
+      const vzH = own
+        ? (sc.clientHeight || window.innerHeight || 0)
+        : (window.innerHeight || document.documentElement.clientHeight || 0);
+      if (vzH <= 0) return null;
+      const lh = lineHeightPx();
+      const bandLines = numOf(cfg.focusLines, 2) * 2 + 1;
+      const bandViewportTop = Math.round((vzH / 2 - (bandLines * lh) / 2) / lh) * lh;
+      return {
+        top: bandViewportTop + (own ? sc.scrollTop || 0 : 0),
+        height: bandLines * lh,
+        origin: own ? 0 : bandViewportTop,
+        viewH: vzH,
+      };
+    }
+
+    /**
+     * R54b: keeps the caret inside the lit band.
+     *
+     * This is the piece that makes "the middle of the screen stays bright"
+     * safe. With the band anchored to the pane's middle, a caret that sits
+     * near the top or bottom of the viewport would be *inside the dimmed
+     * part* — you would be typing into grey. So whenever the caret leaves the
+     * band the viewport is nudged by exactly the amount needed to put it back,
+     * and nothing else: a caret already in the band costs no scroll at all.
+     *
+     * Deliberately not "always centre the caret": typewriter mode owns that
+     * (and can be switched off), and a writer who turned it off asked for the
+     * viewport to stay put. This only steps in when the band and the caret
+     * would otherwise contradict each other.
+     *
+     * Returns the scrollTop to write, or null to leave the viewport alone.
+     */
+    function planBandScroll(view, getM) {
+      const cfg = cfgRef.current || {};
+      const sc = view && view.el;
+      if (cfg.focusFollows === false || !sc) return null;
+      const band = bandContentTop(view);
+      if (!band) return null;
+      const m = getM ? getM() : measureCaret(taRef.current.selectionStart || 0, view);
+      if (!m) return null;
+      // Inside the band (with one line of feather either side so a caret on the
+      // boundary does not trigger a scroll it does not need).
+      const slack = lineHeightPx();
+      if (m.top >= band.top - slack && m.top + m.height <= band.top + band.height + slack) {
+        return null;
+      }
+      // Put the caret line in the middle of the band. Both terms are content
+      // coordinates: band.top is content already, band.height is a viewport
+      // length that is identical in both spaces.
+      return m.top + m.height / 2 - (band.top + band.height / 2);
+    }
+
     function planCaretScroll(wantCenter, view, getM) {
       if (!taRef.current) return null;
       // Only a caret/text change may move the viewport; layout refreshes never do.
@@ -10164,7 +10498,11 @@ window.__ModuleLoader__.load({
       // 800 ms after the last manual scroll, and the next input then re-centres.
       if (isManuallyScrolling()) return null;
       const cfg = cfgRef.current || {};
-      return caretScrollTop(cfg.typewriterOn !== false ? 'center' : 'nearest', view, getM);
+      const typedScroll = caretScrollTop(cfg.typewriterOn !== false ? 'center' : 'nearest', view, getM);
+      if (typedScroll != null) return typedScroll;
+      // R54b: typewriter off (or the caret already visible) — the band still
+      // needs the caret inside it, or the writer types into the dimmed part.
+      return planBandScroll(view, getM);
     }
 
     /** One-shot policy application (imperative paths outside the frame loop). */
@@ -10238,16 +10576,22 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * R46: places the two veils so that only the caret's line and the
-     * `focusLines` lines either side of it stay unfaded.
+     * R46/R54b: places the two veils so that the middle of the pane stays
+     * unfaded and everything above and below it fades.
+     *
+     * R54b changed what this anchors to. It used to follow the caret line,
+     * which is right while you are typing and wrong the rest of the time: open
+     * a chapter and the caret sits on line one, so the light sat at the top of
+     * the page and the writer looked at a pane of dimmed text until they
+     * clicked. Anchoring to the middle is what makes it read as "the paragraph
+     * I am on"; `focusCenter()` then keeps the caret inside the band, so the
+     * two can never disagree. It also stops the band from moving on every
+     * keystroke, so typing no longer repaints it.
      *
      * The veils are children of `.nw-surface`, which does not scroll, so their
-     * heights are viewport pixels. The caret line's *content* top is cached by
-     * every measure pass (focusTopRef), which means a scroll can repaint the
-     * band by subtracting scrollTop alone — no mirror measurement, no reflow.
-     *
-     * `origin` is the scroller's top inside `.nw-surface` (read in the measure
-     * pass, where a rect was already being taken for the caret).
+     * heights are viewport pixels. `origin` is the scroller's top inside
+     * `.nw-surface` (read in the measure pass, where a rect was already being
+     * taken for the caret).
      */
     function paintFocus(view, origin) {
       const s = surfaceRef.current;
@@ -10255,7 +10599,12 @@ window.__ModuleLoader__.load({
       const botEl = veilBotRef.current;
       if (!s || !topEl || !botEl) return;
       const sc = view && view.el;
-      const parked = !focusOn || !sc || focusTopRef.current < 0;
+      const cfg = cfgRef.current || {};
+      // R54b: the band no longer depends on where the caret is, so it does not
+      // need a caret measurement first. That is what makes it appear immediately
+      // when a chapter is opened (the caret is on line one and measureCaret may
+      // not have run yet), instead of after the first click.
+      const parked = cfg.focusOn === false || !sc;
       if (parked) {
         // Hidden veils must not claim a band: data-focus is owned here (not by
         // JSX) so an unrelated re-render cannot switch the fade back on.
@@ -10269,14 +10618,24 @@ window.__ModuleLoader__.load({
       //  - ancestor/document scroller (host slot with auto height): the surface
       //    itself travels with the page, so the band is plain content geometry
       //    and must NOT be clamped to the pane — the scrollport crops it.
+      //
+      // R54b: the band is the middle of the pane, independent of where the
+      // caret happens to be. planBandScroll() below keeps the caret inside it,
+      // so the two can never disagree — one anchor, and the thing that moves is
+      // the viewport, not the light.
       const own = view.kind === 'self';
       const viewH = own ? sc.clientHeight || window.innerHeight || 0 : Infinity;
       if (viewH <= 0) return;
-      const lineViewportTop = numOf(origin, 0) + focusTopRef.current - (own ? sc.scrollTop || 0 : 0);
-      // One line of feather on each side of the band: the edge then lands on a
-      // line boundary instead of through the middle of a glyph row.
-      const topH = Math.round(clampNum(lineViewportTop - focusLines * lh, 0, viewH));
-      const botY = Math.round(clampNum(lineViewportTop + (focusLines + 1) * lh, 0, viewH));
+      const vzH = own
+        ? viewH
+        : (window.innerHeight || document.documentElement.clientHeight || 0);
+      if (vzH <= 0) return;
+      // The middle line, snapped to a whole number of lines so the band edges
+      // land between lines rather than through a glyph row.
+      const bandLines = numOf(cfg.focusLines, 2) * 2 + 1;
+      const centerY = Math.round((vzH / 2 - (bandLines * lh) / 2) / lh) * lh;
+      const topH = Math.round(clampNum((own ? numOf(origin, 0) : 0) + centerY, 0, vzH));
+      const botY = Math.round(clampNum((own ? numOf(origin, 0) : 0) + centerY + bandLines * lh, 0, vzH));
       if (topEl.__nwH !== topH) {
         topEl.style.height = topH + 'px';
         topEl.__nwH = topH;
@@ -10297,12 +10656,20 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Repaints the band after a scroll, using only the cached line top. The
-     * rAF coalescing matters: a trackpad fling fires dozens of scroll events
-     * per frame and each one must not take a rect.
+     * Repaints the band after a scroll.
+     *
+     * R54b: still needed, but for a different reason than R46's. The band is
+     * now a fixed viewport rectangle, so scrolling does not move it — what
+     * scrolling does move is the caret relative to it, and a writer who scrolls
+     * the page by hand needs the light to keep sitting where their eyes are,
+     * which is the middle of the pane (where it already is). The one thing
+     * that genuinely changes is the mapped band position for scrollers whose
+     * origin moves (a host slot with auto height scrolls the surface itself),
+     * so the repaint is kept, coalesced.
      */
     function repaintFocusSoon() {
-      if (!focusOn) return;
+      const cfg = cfgRef.current || {};
+      if (cfg.focusOn === false) return;
       if (focusRafRef.current) return;
       const run = () => {
         focusRafRef.current = 0;
@@ -10357,11 +10724,11 @@ window.__ModuleLoader__.load({
       };
       const scrollTarget = planCaretScroll(!!wantCenter, view, getM);
       const caretPlan = planCaretPaint(view, getM);
-      // R46: the fade needs the caret line's top in *scroller content*
-      // coordinates, which is exactly what measureCaret().top already is. The
-      // memo is shared with the two consumers above, so this costs nothing
-      // extra: the mirror was measured anyway.
       const focusOrigin = focusOn ? surfaceOrigin(view) : 0;
+      // `focusTopRef` is no longer what places the veils (R54b anchors them to
+      // the pane's middle), but the shorthand it holds — "the caret's line, in
+      // content coordinates" — is still useful as a guard: paintFocus parks the
+      // fade when there is no caret to talk about.
       if (focusOn) {
         const fm = getM();
         focusTopRef.current = fm ? fm.top : -1;
@@ -10776,104 +11143,211 @@ window.__ModuleLoader__.load({
       return best || edge;
     }
 
+    /** Two rows mark the same words (the same chapter: marksRef is per chapter). */
+    function sameSpan(a, b) {
+      if (!a || !b) return false;
+      return Math.round(Number(a.start) || 0) === Math.round(Number(b.start) || 0)
+        && Math.round(Number(a.end) || 0) === Math.round(Number(b.end) || 0);
+    }
+
     /**
-     * R51: put a read-only card next to the line the writer just clicked.
+     * R53: put a read-only card next to the point that was clicked.
      *
-     * The card is positioned inside `.nw-stack` (not the viewport) so it moves
-     * with the paper instead of hanging over the chrome, and its `top` is the
-     * clicked line's own line box — measured through the same mirror the caret
-     * uses, so a wrapped line puts the card under the right line rather than
-     * under the paragraph's first line.
+     * It used to hang under the caret's line, which on a wide paper meant the
+     * card could open a screen away from the line the writer was pointing at.
+     * Now the card opens at the click: to the right of it when there is room,
+     * flipped to the left when there is not, always inside the paper.
      */
     function openMarkView(mark, ev) {
       const stack = stackRef.current;
-      const view = resolveScroller(false);
-      const sc = view && view.el;
-      if (!stack || !sc) return;
-      // The browser has already moved the caret to the click by the time `click`
-      // fires, so the selection start is exactly the character that was clicked
-      // — better than the mark's own start, which can be a paragraph away on a
-      // long line.
-      const ta = taRef.current;
-      const at = ta && typeof ta.selectionStart === 'number' ? ta.selectionStart : Number(mark.start) || 0;
-      const m = measureCaret(at, view);
-      const cardW = 200;
-      const stackW = stack.getBoundingClientRect().width || 0;
-      const left = clampNum(m ? m.left : 0, 8, Math.max(8, stackW - cardW - 8));
-      const top = (m ? m.lineTop : 0) + (m ? m.height : 0) + 6;
+      if (!stack || !mark) return;
+      // R53f：下划线 / 删除线的卡片只剩一个「删除」按钮，实测约 84×32，比批注卡小
+      // 一大截。还按 200×150 去避让的话，卡片会在离点击处很远的地方落地，看着像
+      // 点错了地方。两种尺寸分开算。
+      const compact = String(mark.kind) !== 'comment';
+      const cardW = compact ? 92 : 200;
+      const cardH = compact ? 34 : 150;
+      const box = stack.getBoundingClientRect();
+      const stackW = box.width || 0;
+      const vh = window.innerHeight || 768;
+      let cx = Number(ev && ev.clientX);
+      let cy = Number(ev && ev.clientY);
+      if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
+        // Keyboard / programmatic open: fall back to the mark's own first line.
+        const hl = hlRef.current;
+        const node = hl && hl.querySelector('mark[data-id="' + String(mark.id) + '"]');
+        const rects = node ? node.getClientRects() : [];
+        const r0 = rects && rects.length ? rects[0] : null;
+        cx = r0 ? r0.left + 2 : box.left + box.width / 2;
+        cy = r0 ? r0.top + r0.height / 2 : box.top + 80;
+      }
+      // Paper-relative: the card lives inside `.nw-stack`, so it scrolls with
+      // the words instead of hovering over the chrome.
+      const localX = cx - box.left;
+      let left = localX + 16;
+      if (left + cardW > stackW - 8) left = localX - cardW - 16;
+      left = clampNum(left, 8, Math.max(8, stackW - cardW - 8));
+      // Prefer level with the click; when the card would run off the bottom of
+      // the window, open it above the click instead of under it.
+      let top = cy - 14;
+      if (top + cardH > vh - 8) top = cy - cardH - 10;
+      top = clampNum(top - box.top, 8, Math.max(8, (stack.scrollHeight || box.height) - 8));
       setMarkView({ mark: mark, left: Math.round(left), top: Math.round(top) });
+      // Light the line the card belongs to, so the paper answers the click.
+      const hl = hlRef.current;
+      const nodes = hl ? hl.querySelectorAll('mark[data-id]') : [];
+      for (let i = 0; i < nodes.length; i += 1) {
+        const on = String(nodes[i].getAttribute('data-id')) === String(mark.id);
+        if (on) nodes[i].setAttribute('data-active', '1');
+        else nodes[i].removeAttribute('data-active');
+      }
+      const signs = gutterRef.current ? gutterRef.current.querySelectorAll('.nw-mark-side') : [];
+      for (let i = 0; i < signs.length; i += 1) {
+        const on = String(signs[i].getAttribute('data-id')) === String(mark.id);
+        if (on) signs[i].setAttribute('data-active', '1');
+        else signs[i].removeAttribute('data-active');
+      }
     }
 
     function closeMarkView() {
       setMarkView((cur) => (cur ? null : cur));
+      const hl = hlRef.current;
+      const nodes = hl ? hl.querySelectorAll('mark[data-active]') : [];
+      for (let i = 0; i < nodes.length; i += 1) nodes[i].removeAttribute('data-active');
+      const signs = gutterRef.current ? gutterRef.current.querySelectorAll('.nw-mark-side[data-active]') : [];
+      for (let i = 0; i < signs.length; i += 1) signs[i].removeAttribute('data-active');
     }
 
     /**
-     * R52: the "mark this" bar for a selected range.
+     * R53c: the marking menu, opened by right-clicking a selection.
      *
-     * Positioned under the end of the selection, clamped to the paper. It is a
-     * separate state from the card so a drag-select never opens a card and a
-     * click on a line never leaves the bar hanging around.
+     * The range is frozen at the moment the menu opens. The menu never appears
+     * by itself — selecting words used to pop a three-button bar right over the
+     * words being selected, which is what the writer asked to get rid of. Now
+     * it only shows up when the writer asks for it (right-click), and it opens
+     * at the pointer, next to the words instead of at the page corner.
      */
-    function openMarkPick(sel) {
-      const stack = stackRef.current;
-      const view = resolveScroller(false);
-      if (!stack || !view) return;
-      const m = measureCaret(sel.end, view);
-      const stackW = stack.getBoundingClientRect().width || 0;
-      const barW = 150;
-      const left = clampNum(m ? m.left : 0, 8, Math.max(8, stackW - barW - 8));
-      const top = (m ? m.lineTop : 0) + (m ? m.height : 0) + 6;
-      setMarkView(null);
-      setMarkPick({ start: sel.start, end: sel.end, left: Math.round(left), top: Math.round(top) });
-    }
-
-    function closeMarkPick() {
-      setMarkPick((cur) => (cur ? null : cur));
-    }
-
-    /**
-     * Create a mark over the current selection, then put the card on it.
-     *
-     * The card is where the note gets read and, for a comment, written — so a
-     * freshly drawn line lands on it rather than making the writer hunt for the
-     * line again just to say why it is there.
-     */
-    function createMarkOf(kind) {
-      const pick = markPickRef.current;
+    function openMarkMenu(ev) {
       const ta = taRef.current;
-      if (!pick || !ta) return;
-      const text = ta.value.slice(pick.start, pick.end);
+      if (!ta) return;
+      const a = Number(ta.selectionStart) || 0;
+      const b = Number(ta.selectionEnd) || 0;
+      const start = Math.min(a, b);
+      const end = Math.max(a, b);
+      const text = ta.value.slice(start, end);
+      const hasRange = end > start && !!String(text).trim() && end - start <= 4000;
+      // 右键点在哪，菜单就长在哪。菜单是 .nw-surface 的直接子节点（固定在纸面
+      // 之上，不跟着纸滚），所以坐标按 surface 换算；先右后左、先下后上夹在
+      // 纸面之内。
+      const surf = surfaceRef.current;
+      const surfRect = surf ? surf.getBoundingClientRect() : null;
+      const menuW = 152;
+      const menuH = 132;
+      let x = surfRect && ev ? Number(ev.clientX) - surfRect.left + 2 : 14;
+      let y = surfRect && ev ? Number(ev.clientY) - surfRect.top + 2 : 46;
+      if (surfRect) {
+        if (x + menuW > surfRect.width - 8) x = Math.max(8, x - menuW - 4);
+        if (y + menuH > surfRect.height - 8) y = Math.max(8, y - menuH - 4);
+        x = Math.max(8, Math.min(x, Math.max(8, surfRect.width - menuW - 8)));
+      }
+      setMarkView(null);
+      setMarkMenu({
+        start: start,
+        end: end,
+        quote: String(text || '').slice(0, 240),
+        hasRange: hasRange,
+        x: Math.round(x),
+        y: Math.round(y),
+      });
+    }
+
+    function closeMarkMenu() {
+      setMarkMenu((cur) => (cur ? null : cur));
+    }
+
+    /**
+     * R53: create (or retype) a mark over the range the menu was opened on.
+     *
+     * Duplicates are killed at the source: the same words never become two
+     * marks. Marking a span that is already marked just changes its type, and
+     * marking it with the type it already has only puts the card back on it.
+     * The database does the same merge, so a refresh cannot resurrect a twin.
+     */
+    function createMarkOfSelection(kind) {
+      const menu = markMenuRef.current;
+      const ta = taRef.current;
+      if (!menu || !ta) return;
+      if (!menu.hasRange) return;
+      const start = clampNum(menu.start, 0, ta.value.length);
+      const end = clampNum(menu.end, start, ta.value.length);
+      if (end <= start) return;
+      const text = ta.value.slice(start, end);
+      const rows = marksRef.current || [];
+      const existing = rows.find((r) => r && sameSpan(r, { start: start, end: end }));
+      closeMarkMenu();
+      if (existing) {
+        const existingNote = String(existing.note || '').trim();
+        // R53e：写着字的线就是批注，不能靠再点一次「下划线」把它降回一条线——
+        // 那样要么丢掉作者写的话，要么存进去又被 db 判回 comment，界面上闪一下
+        // 等于没反应。有字就只把卡片开出来，线本身不动。
+        if (existingNote && String(kind) !== 'comment') {
+          openMarkView(existing, null);
+          return;
+        }
+        if (String(existing.kind) === String(kind)) {
+          // Nothing to draw: the line is already on the paper. Just show it.
+          openMarkView(existing, null);
+          return;
+        }
+        marksRef.current = rows.map((r) => (r && sameSpan(r, { start: start, end: end })
+          ? Object.assign({}, r, { kind: kind })
+          : r));
+        rebuildHighlights();
+        if (typeof p.onMarkCreate === 'function') {
+          const retyped = p.onMarkCreate(Object.assign({}, existing, { kind: kind }));
+          if (retyped && typeof retyped.catch === 'function') retyped.catch(() => {});
+        }
+        const row = (marksRef.current || []).find((r) => r && sameSpan(r, { start: start, end: end }));
+        if (row) openMarkView(row, null);
+        return;
+      }
       const id = 'mk-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36);
       const draft = {
         id: id,
+        // Without this the row is thrown away by db.cleanMark (which requires a
+        // chapter) — every mark drawn in the writing surface used to vanish.
+        chapterId: chapterIdRef.current || (chapter && chapter.id) || '',
         kind: kind,
-        start: pick.start,
-        end: pick.end,
+        start: start,
+        end: end,
         quote: String(text || '').slice(0, 240),
         note: '',
       };
       // Paint it at once: the app round-trips through IndexedDB before the list
       // comes back, and a line that appears a beat late reads as "it didn't work".
-      marksRef.current = (marksRef.current || []).concat([draft]);
+      marksRef.current = rows.concat([draft]);
       rebuildHighlights();
-      closeMarkPick();
       if (typeof p.onMarkCreate === 'function') {
         const created = p.onMarkCreate(draft);
         if (created && typeof created.catch === 'function') created.catch(() => {});
       }
-      const view = resolveScroller(false);
-      const m = view ? measureCaret(draft.end, view) : null;
-      const stackW = (stackRef.current && stackRef.current.getBoundingClientRect().width) || 0;
-      const left = clampNum(m ? m.left : 0, 8, Math.max(8, stackW - 208));
-      const top = (m ? m.lineTop : 0) + (m ? m.height : 0) + 6;
-      setMarkView({ mark: draft, left: Math.round(left), top: Math.round(top) });
+      if (kind === 'comment') openMarkView(draft, null);
     }
 
     /** Delete a mark from the card, painting the change immediately. */
     function removeMarkOf(id) {
       if (id == null) return;
-      marksRef.current = (marksRef.current || []).filter((row) => String(row.id) !== String(id));
+      const rows = marksRef.current || [];
+      const target = rows.find((r) => r && String(r.id) === String(id));
+      // R53: one delete removes every row that marks these words. Before this,
+      // a range marked twice needed two deletes — the second row was invisible
+      // (it drew on top of the first) but kept coming back.
+      marksRef.current = rows.filter((r) => {
+        if (!r) return false;
+        if (String(r.id) === String(id)) return false;
+        if (target && sameSpan(r, target)) return false;
+        return true;
+      });
       rebuildHighlights();
       closeMarkView();
       if (typeof p.onMarkRemove === 'function') {
@@ -10883,20 +11357,105 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * R51: a click inside the textarea lands on a character, and that character
-     * may be inside a mark. There is no DOM element per mark here — the textarea
-     * is one big node — so the mark is found by offset, not by `closest()`.
-     */
-    /**
-     * R52: which mark is under the pointer, found by hit-testing the painted
-     * mirror instead of the caret.
+     * R53: paint the note signs in the page margin.
      *
-     * The first version asked `ta.selectionStart` where the click landed, which
-     * made the card depend on a caret that the click had not always placed yet —
-     * the user experienced it as "单击没用，双击才可以". The mirror already has one
-     * `<mark>` element per mark, laid out exactly where the line is drawn, so its
-     * client rects are the ground truth. It also handles marks that wrap across
-     * lines, where the caret can only be at one of several positions.
+     * The old badge was a 12×9 box drawn at the end of the marked words, with a
+     * negative `top` — it sat on the line above whenever the leading was tight,
+     * which is exactly the "遮住字" the writer kept reporting. A sign in the
+     * margin cannot overlap a glyph, and it is a real button instead of a
+     * zero-width anchor that had to be hit-tested through the mirror.
+     */
+    function paintGutter() {
+      const box = gutterRef.current;
+      if (!box) return;
+      // 重画前把上一轮的悬停点亮擦掉：签会被重建，正文上的 data-hover 却会留在
+      // 旧节点上——不扫一遍的话，字改完之后会有一句一直亮着，像被选中了。
+      const hl0 = hlRef.current;
+      if (hl0) {
+        const stale0 = hl0.querySelectorAll('[data-hover]');
+        for (let i = 0; i < stale0.length; i += 1) stale0[i].removeAttribute('data-hover');
+      }
+      // R53e：签只属于有字的批注——空批注不再在页边留一枚什么都不指的签。
+      const rows = (marksRef.current || []).filter(
+        (r) => r && String(r.note || '').trim(),
+      );
+      // The common case is "no notes in this chapter": leave the (empty) layer
+      // alone instead of rewriting it on every measured frame while typing.
+      if (!rows.length) {
+        if (box.firstChild) clearNode(box);
+        return;
+      }
+      clearNode(box);
+      const hl = hlRef.current;
+      const stack = stackRef.current;
+      if (!hl || !stack) return;
+      const stackRect = stack.getBoundingClientRect();
+      const stackW = stack.clientWidth || stackRect.width || 0;
+      if (stackW < 40) return;
+      const want = {};
+      for (let i = 0; i < rows.length; i += 1) want[String(rows[i].id)] = rows[i];
+      // R53b：签上写序号（本章之内按 start 排），否则同一行两条批注错开一格之
+      // 后就是两枚一模一样的点，谁也认不出哪枚对哪句。悬停再点亮它那句。
+      const seq = {};
+      const ordered = rows.slice().sort((a, b) => (Number(a.start) || 0) - (Number(b.start) || 0));
+      for (let i = 0; i < ordered.length; i += 1) seq[String(ordered[i].id)] = i + 1;
+      const nodes = hl.querySelectorAll('mark.nw-hl-mark[data-id]');
+      const placed = [];
+      const seen = {};
+      for (let i = 0; i < nodes.length; i += 1) {
+        const el = nodes[i];
+        const id = String(el.getAttribute('data-id') || '');
+        if (!id || !want[id] || seen[id]) continue;
+        const rects = el.getClientRects ? el.getClientRects() : [];
+        if (!rects.length) continue;
+        seen[id] = 1;
+        const r0 = rects[0];
+        placed.push({
+          id: id,
+          y: r0.top - stackRect.top + Math.min(r0.height, 26) / 2,
+        });
+      }
+      if (!placed.length) return;
+      placed.sort((a, b) => a.y - b.y);
+      // Two signs on the same line would stack; push the later one down a row of
+      // its own rather than letting them overlap into one indistinguishable blob.
+      // R53c：错开之后不再画引线（用户说那条细线看不出来），改由「悬停/点开
+      // 时句子明显变色」来指认——签上的序号说第几条，句子亮起来说哪一行。
+      let last = -Infinity;
+      const left = Math.round(Math.max(8, stackW - 22));
+      const SIDE_H = 16;
+      for (let i = 0; i < placed.length; i += 1) {
+        const row = placed[i];
+        let y = row.y - SIDE_H / 2;
+        if (y - last < SIDE_H + 2) y = last + SIDE_H + 2;
+        last = y;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'nw-mark-side';
+        btn.setAttribute('data-id', row.id);
+        btn.setAttribute('aria-label', NW.t('第') + (seq[row.id] || '') + NW.t('条批注'));
+        btn.title = '#' + (seq[row.id] || '') + ' ' + String(want[row.id].note || NW.t('批注')).slice(0, 80);
+        btn.textContent = String(seq[row.id] || '');
+        btn.style.left = left + 'px';
+        btn.style.top = Math.round(y) + 'px';
+        // 悬停点亮它指的那句：同一行两条批注时，这是唯一的「谁是谁」。
+        btn.addEventListener('mouseenter', () => {
+          const own = hl.querySelectorAll('mark[data-id="' + row.id + '"]');
+          for (let k = 0; k < own.length; k += 1) own[k].setAttribute('data-hover', '1');
+        });
+        btn.addEventListener('mouseleave', () => {
+          const own = hl.querySelectorAll('mark[data-id="' + row.id + '"]');
+          for (let k = 0; k < own.length; k += 1) own[k].removeAttribute('data-hover');
+        });
+        box.appendChild(btn);
+      }
+    }
+
+    /**
+     * R51/R52: a click inside the textarea lands on a character, and that
+     * character may be inside a mark. There is no DOM element per mark here —
+     * the textarea is one big node — so the mark is found by hit-testing the
+     * painted mirror, whose rects are the ground truth for wrapped lines.
      */
     function markAtPoint(ev) {
       const hl = hlRef.current;
@@ -10950,36 +11509,6 @@ window.__ModuleLoader__.load({
         return;
       }
       openMarkView(hit, ev);
-    }
-
-    /**
-     * R52: after a drag-selection, offer to mark it.
-     *
-     * The bar only appears for a real range (more than one character) and only
-     * while the textarea has focus — clicking a toolbar or the shelf must not
-     * pop it back up. It is dismissed by Escape, by collapsing the selection,
-     * and by scrolling away (its coordinates are paper-relative, so a scroll
-     * would leave it floating over the wrong line).
-     */
-    function syncMarkPick() {
-      const ta = taRef.current;
-      if (!ta) return;
-      const focused = document.activeElement === ta;
-      const start = ta.selectionStart || 0;
-      const end = ta.selectionEnd || 0;
-      if (!focused || end - start < 2) {
-        closeMarkPick();
-        return;
-      }
-      // Selecting across a whole chapter is not "mark this sentence"; capping it
-      // keeps the bar from being mistaken for a formatting toolbar.
-      if (end - start > 4000) {
-        closeMarkPick();
-        return;
-      }
-      const cur = markPickRef.current;
-      if (cur && cur.start === start && cur.end === end) return;
-      openMarkPick({ start: start, end: end });
     }
 
     // -------------------------------------------------------- find & replace --
@@ -11700,14 +12229,17 @@ window.__ModuleLoader__.load({
       }
     }, [notesLane]);
 
-    // R46: the fade only exists in immersive mode. Turning it on/off (or
-    // changing how many lines stay clear) must publish the attribute and
-    // re-place the band; the next measure pass alone would take a keystroke.
+    // R46: turning the fade on/off (or changing how many lines stay clear) must
+    // publish the attribute and re-place the band; the next measure pass alone
+    // would take a keystroke. R54: the veils no longer depend on immersive mode,
+    // but they DO depend on the page width (their inset is derived from it) and
+    // on `--nw-gutter-x`, which applyDockLane() rewrites on layout changes —
+    // so the band is re-placed whenever the column geometry can have moved.
     React.useEffect(() => {
       const view = resolveScroller(false);
       paintFocus(view, surfaceOrigin(view));
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [focusOn, focusLines]);
+    }, [focusOn, focusLines, pageWidth, effPageWidth]);
 
     // Adopt content the app pushed for the SAME chapter (version restore, AI
     // rewrite, LAN sync). Skipped when it merely echoes what we just saved,
@@ -11771,11 +12303,9 @@ window.__ModuleLoader__.load({
         const sc = scrollerRef.current;
         const at = sc ? sc.scrollTop || 0 : 0;
         if (Math.abs(at - expectedScrollTopRef.current) <= 2) return;
-        // R52: the "mark this" bar is placed against a line, so once the paper
-        // is moved by hand it is pointing at nothing. A scroll the editor asked
-        // for itself (re-centring after a selection) must not count, or the bar
-        // would vanish in the same frame it appeared.
-        if (markPickRef.current) closeMarkPick();
+        // R53: the corner menu is anchored to the capsule, not to a line, so a
+        // scroll can leave it alone — but the card points at words, so it goes.
+        if (markViewRef.current) closeMarkView();
         markManual();
       };
       scrollHooksRef.current = { wheel: onWheel, touchmove: onTouchMove, scroll: onScroll };
@@ -11790,14 +12320,8 @@ window.__ModuleLoader__.load({
 
       const onSelectionChange = () => {
         const ta = taRef.current;
-        if (!ta || document.activeElement !== ta) {
-          // R52: focus left the paper (a toolbar, the shelf) — the "mark this"
-          // bar belongs to a selection made here and must not linger.
-          if (markPickRef.current) closeMarkPick();
-          return;
-        }
+        if (!ta || document.activeElement !== ta) return;
         scheduleMeasure(true);
-        syncMarkPick();
       };
       // Window blur/focus also matter: the painted caret must disappear when
       // the whole app loses focus (Alt+Tab) even though the textarea keeps
@@ -11815,9 +12339,6 @@ window.__ModuleLoader__.load({
         draggingRef.current = false;
         // A drag-selection ended: re-centre once, now that it is safe to move.
         scheduleMeasure(true);
-        // R52: the selection now exists, so the "mark this" bar can be placed
-        // against the final caret position rather than mid-drag.
-        syncMarkPick();
       };
       const onBeforeUnload = () => {
         flushNow();
@@ -11977,38 +12498,66 @@ window.__ModuleLoader__.load({
     const matchPos = matchTotal ? Math.min(find.index + 1, matchTotal) : 0;
     const countText = find.notice || (find.query ? matchPos + '/' + matchTotal : '');
 
-    // R52: "mark this" — a three-button bar that appears under a selection.
-    // Without it the writing surface could show marks but never make one, which
-    // is why the user kept reporting "编辑页面不能删除线和批注": the only way to
-    // create a line was to open 读一遍 first. Positioned in paper coordinates so
-    // it sits under the selected text and scrolls away with it.
-    const markPickBar = markPick
+    // R53c：标记菜单——从**右键**弹出（角上那颗铅笔已按用户要求撤掉），永远不会
+    // 因为「选中了字」自己冒出来。三行，每行带一小段样本，选之前就能看见画出来
+    // 是什么样。`onMouseDown` preventDefault 是为了保住冻结的选区——菜单被点时
+    // textarea 若失焦，selectionStart/End 就没了。
+    const markMenuBar = markMenu
       ? h(
           'div',
           {
-            className: 'nw-mark-pick',
-            role: 'toolbar',
+            className: 'nw-mark-menu',
+            role: 'menu',
             'aria-label': NW.t('标一下'),
-            style: { left: markPick.left + 'px', top: markPick.top + 'px' },
+            // R53c：跟着右键的位置走，不再是左上角那个固定点。
+            style: { left: (markMenu.x || 0) + 'px', top: (markMenu.y || 0) + 'px' },
             onMouseDown: (ev) => {
               if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
             },
           },
-          h('button', {
-            type: 'button',
-            className: 'nw-mark-pick-btn',
-            onClick: () => createMarkOf('underline'),
-          }, NW.t('下划线')),
-          h('button', {
-            type: 'button',
-            className: 'nw-mark-pick-btn',
-            onClick: () => createMarkOf('strike'),
-          }, NW.t('删除线')),
-          h('button', {
-            type: 'button',
-            className: 'nw-mark-pick-btn',
-            onClick: () => createMarkOf('comment'),
-          }, NW.t('批注')),
+          h(
+            'div',
+            { className: 'nw-mark-menu-quote' },
+            markMenu.hasRange
+              ? '「' + String(markMenu.quote || '').slice(0, 14) + '」'
+              : NW.t('先选中一段字'),
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'nw-mark-menu-btn',
+              role: 'menuitem',
+              disabled: !markMenu.hasRange,
+              onClick: () => createMarkOfSelection('underline'),
+            },
+            h('span', { className: 'nw-mark-menu-swatch', 'data-kind': 'underline' }),
+            NW.t('下划线'),
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'nw-mark-menu-btn',
+              role: 'menuitem',
+              disabled: !markMenu.hasRange,
+              onClick: () => createMarkOfSelection('strike'),
+            },
+            h('span', { className: 'nw-mark-menu-swatch', 'data-kind': 'strike' }),
+            NW.t('删除线'),
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'nw-mark-menu-btn',
+              role: 'menuitem',
+              disabled: !markMenu.hasRange,
+              onClick: () => createMarkOfSelection('comment'),
+            },
+            h('span', { className: 'nw-mark-menu-swatch', 'data-kind': 'comment' }),
+            NW.t('批注'),
+          ),
         )
       : null;
 
@@ -12017,12 +12566,20 @@ window.__ModuleLoader__.load({
     // line says; writing the note happens in 读一遍, where the whole page is
     // yours and there is room to think. 删除 is here because deleting is a
     // reading-time decision — you see the line is wrong and it is gone.
+    //
+    // R53g：这张卡上不再有引文，也没有「知道了」。引文是刚点的那句字，正文里就在
+    // 眼前，抄一遍只是把同一句话说了两次；「知道了」是为了关掉一张本来不该挡路的
+    // 卡而多出来的一个动作——点别处就收，卡片自己会走。批注还留着它那句话本身
+    // （那是这条批注存在的理由），下划线和删除线则只剩一个「删除」。
+    const markIsLine = markView && markView.mark
+      && String(markView.mark.kind) !== 'comment';
     const markCard =
       markView && markView.mark
         ? h(
             'div',
             {
               className: 'nw-mark-view',
+              'data-compact': markIsLine ? '1' : '0',
               role: 'dialog',
               'aria-label': NW.t('标注'),
               style: { left: markView.left + 'px', top: markView.top + 'px' },
@@ -12032,23 +12589,19 @@ window.__ModuleLoader__.load({
                 if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
               },
             },
-            h('div', { className: 'nw-mark-view-quote' }, String(markView.mark.quote || '').slice(0, 40) || NW.t('这条线')),
-            h(
-              'div',
-              {
-                className: 'nw-mark-view-note',
-                'data-empty': String(markView.mark.note || '').trim() ? '0' : '1',
-              },
-              String(markView.mark.note || '').trim() || NW.t('没有批注'),
-            ),
+            markIsLine
+              ? null
+              : h(
+                'div',
+                {
+                  className: 'nw-mark-view-note',
+                  'data-empty': String(markView.mark.note || '').trim() ? '0' : '1',
+                },
+                String(markView.mark.note || '').trim() || NW.t('在「读一遍」里写这句话'),
+              ),
             h(
               'div',
               { className: 'nw-mark-view-acts' },
-              h('button', {
-                type: 'button',
-                className: 'nw-mark-view-btn',
-                onClick: closeMarkView,
-              }, NW.t('知道了')),
               h('button', {
                 type: 'button',
                 className: 'nw-mark-view-btn',
@@ -12238,12 +12791,60 @@ window.__ModuleLoader__.load({
               onCompositionStart: handleCompositionStart,
               onCompositionEnd: handleCompositionEnd,
               onSelect: () => scheduleMeasure(true),
+              // R53c：标注的唯一入口。选中一段字再按右键 → 在指针旁弹出小菜单；
+              // 没选中就原样放行，浏览器自己的复制/粘贴菜单照旧。这样纸面上不
+              // 再需要任何常驻按钮。
+              // 右键直接点在一条已有的线上（且没有选中文字）时，按「看批注」处理：
+              // 那一下的意思几乎总是「这条线写了什么」。
+              onContextMenu: (ev) => {
+                const ta = taRef.current;
+                if (!ta) return;
+                const a = Number(ta.selectionStart) || 0;
+                const b = Number(ta.selectionEnd) || 0;
+                const hasRange = Math.max(a, b) - Math.min(a, b) > 0;
+                if (hasRange) {
+                  if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+                  openMarkMenu(ev);
+                  return;
+                }
+                const hit = markAtPoint(ev);
+                if (hit) {
+                  if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+                  openMarkView(hit, ev);
+                }
+              },
             }),
             // R51: the read-only card. It sits inside `.nw-stack` so it scrolls
             // with the paper, and after the textarea so it is never buried under
             // the text it is describing.
-            markPickBar,
             markCard,
+            // R53: note signs live in the page margin, outside the words. Filled
+            // imperatively by paintGutter() so a sign costs one absolutely
+            // positioned button instead of an inline element in the mirror.
+            h('div', {
+              className: 'nw-mark-gutter',
+              ref: gutterRef,
+              onMouseDown: (ev) => {
+                // A sign must not steal the caret from the textarea.
+                if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+              },
+              onClick: (ev) => {
+                const node = ev && ev.target;
+                if (!node || typeof node.closest !== 'function') return;
+                const sign = node.closest('.nw-mark-side[data-id]');
+                if (!sign) return;
+                ev.preventDefault();
+                ev.stopPropagation();
+                const id = sign.getAttribute('data-id');
+                const rows = marksRef.current || [];
+                for (let i = 0; i < rows.length; i += 1) {
+                  if (rows[i] && String(rows[i].id) === String(id)) {
+                    openMarkView(rows[i], ev);
+                    return;
+                  }
+                }
+              },
+            }),
           ),
         )
       : h(
@@ -12285,8 +12886,10 @@ window.__ModuleLoader__.load({
       h('div', { className: 'nw-veil nw-veil-top', ref: veilTopRef, 'aria-hidden': 'true' }),
       h('div', { className: 'nw-veil nw-veil-bot', ref: veilBotRef, 'aria-hidden': 'true' }),
       findBar,
-      onHome || onLock
-        ? h(
+      // R53c：角落胶囊里只剩「回到首页」和「锁定」。原来那颗标记铅笔被用户点名
+      // 去掉了——标注是低频动作，不值得常驻一格视觉重量。入口改成选中字之后按
+      // 右键（见 textarea 的 onContextMenu），菜单开在指针旁边。
+      h(
             'div',
             { className: 'nw-surface-acts' },
             onHome
@@ -12317,6 +12920,9 @@ window.__ModuleLoader__.load({
             // 目录 toggle is gone — one button, one meaning, and the corner
             // stops needing a hairline to separate three things.
             onLock ? h('span', { className: 'nw-acts-div', 'aria-hidden': 'true' }) : null,
+            // R53c：这里原来有一颗铅笔按钮（R53 的入口），用户点名去掉了——它常驻
+            // 在纸面上方，为一件事关标注的低频动作占一格视觉重量。入口改到右键
+            // 菜单（见 textarea 的 onContextMenu），没有可见按钮，也就没有遮挡。
             onLock
               ? h(
                   'button',
@@ -12333,8 +12939,8 @@ window.__ModuleLoader__.load({
                   NW.icon('lock', { size: 16 }),
                 )
               : null,
-          )
-        : null,
+          ),
+      markMenuBar,
     );
   };
 })();
@@ -12438,18 +13044,15 @@ window.__ModuleLoader__.load({
       const s = Math.max(start, Number(m.start) || 0);
       const e = Math.min(end, Number(m.end) || 0);
       // A mark may cross a paragraph break; each paragraph then gets its own
-      // piece. Only the piece that holds the mark's real end may carry the
-      // little comment badge, otherwise a two-paragraph comment would sprout two.
-      // R50: a note is no longer its own kind — any underline or strike can carry
-      // one, so the badge follows `note`, not `kind`.
+      // piece. R53: the little comment badge no longer lives inside the text —
+      // it moved to the page margin (`paintGutter`), so a paragraph is only cut
+      // into plain runs of marked / unmarked words here.
       if (e > s) {
         hits.push({
           s: s - start,
           e: e - start,
           kind: m.kind,
           id: m.id,
-          tail: e >= (Number(m.end) || 0),
-          badge: !!String(m.note || '').trim() || String(m.kind) === 'comment',
         });
       }
     }
@@ -12473,19 +13076,6 @@ window.__ModuleLoader__.load({
           para.text.slice(s, m.e),
         ),
       );
-      // R49：角标挂在**字尾**，不是行尾。这个零宽零高的锚点紧跟在最后那个字
-      // 后面，所以它落在文字结束处；它不占排版空间，分页一个像素都不变。
-      // R50：角标自己带着 `data-mark`，点它等于点那条标注。
-      if (m.badge && m.tail) {
-        out.push(h('span', {
-          className: 'nw-mark nw-mark-dot',
-          key: 'd' + i + '-' + String(m.id),
-          'data-mark': String(m.id),
-          role: 'button',
-          tabIndex: -1,
-          'aria-label': NW.t('批注'),
-        }));
-      }
       pos = m.e;
     }
     if (pos < para.text.length) out.push(para.text.slice(pos));
@@ -12528,23 +13118,51 @@ window.__ModuleLoader__.load({
   display:flex;justify-content:center;
   padding:0 clamp(20px,6vw,64px);
 }
-/* The paged column. Width is written by the component (--nw-read-w) because
-   column-width accepts lengths only, never percentages. */
+/* The paged column. Both lengths are written by the component because
+   column-width accepts lengths only, never percentages.
+   R55: they are two different numbers now. --nw-read-col is one text column;
+   --nw-read-box is the page — one column when the pane is narrow, two when it is
+   wide enough to open like a book (see measure()). Keeping them separate is what
+   lets a spread show two columns inside one scrolling box. */
 .nw-read-flow{
   position:relative;
-  width:var(--nw-read-w,680px);height:100%;
-  column-width:var(--nw-read-w,680px);
+  width:var(--nw-read-box,680px);height:100%;
+  column-width:var(--nw-read-col,680px);
   column-gap:clamp(28px,5vw,64px);
   column-fill:auto;
   overflow-x:auto;overflow-y:hidden;
   overscroll-behavior-x:contain;
   scrollbar-width:none;-ms-overflow-style:none;
-  scroll-behavior:smooth;
+  /* 不用 CSS 的 smooth：翻页的位移由 slideToPage() 用 rAF 自己推，浏览器再补
+     一段 300ms 的匀速滑动只会和它打架。 */
+  scroll-behavior:auto;
   color:var(--nw-fg);
+  /* R53c：焦点在这个滚动容器上（翻页靠它收方向键），但它不是「一个控件」——
+     给键盘用户看的焦点环在这里只会变成翻页时闪一下的红框。:where() 那条通用
+     焦点样式特异性为 0，这里用类选择器就盖住了。 */
   outline:none;
+  /* R53b：翻页 = 真的横向滑动。整栏内容向左/向右移过去，下一页从相反方向滑
+     进来（位移由 slideToPage() 用 rAF 推 scrollLeft 完成，不是 CSS 过渡）。
+     滑动过程中只叠一层很轻的透明度，让字从纸面底色里浮出来；不再整块淡出淡
+     入，所以看不到「一个框在动」。 */
+  transition:opacity .22s var(--nw-ease, ease);
 }
+/* 特异度要比 05-css 里那条通用焦点样式更高：它写的是 .nw-root 加 :where()
+   （0,2,0），所以这里带两层类再叠伪类。 */
+.nw-read-stage .nw-read-flow:focus,
+.nw-read-stage .nw-read-flow:focus-visible{outline:none;box-shadow:none;}
+.nw-read-gutter{transition:opacity .22s var(--nw-ease, ease);}
+/* 滑动时正文轻轻让一下色（字从纸面底色里浮出来，不是整块白底平移），页边签
+   先退场——它挂在「某一行」上，滑动中途那行已经不在原位了，跟着跑只会抖。
+   透明度只压到 .85：再低字会发灰，读起来像信号不好。 */
+.nw-read-stage[data-turn="1"] .nw-read-flow{opacity:.85;}
+.nw-read-stage[data-turn="1"] .nw-read-gutter{opacity:0;}
 .nw-read-flow::-webkit-scrollbar{width:0;height:0;}
 .nw-read-flow[data-drag="1"]{cursor:grabbing;}
+/* R55: 对开两页时，中间那道装订线。只画在两栏之间——也就是每页正中各一道，
+   不会在书页边缘多画出线来（column-rule 只出现在同一页内的栏与栏之间）。
+   单页模式下没有这条规则，所以窄屏和以前一模一样。 */
+.nw-read-flow[data-spread="1"]{column-rule:1px solid var(--nw-rule);}
 .nw-read-chapter{margin:0;}
 .nw-read-chapter + .nw-read-chapter{break-before:column;}
 .nw-read-title{
@@ -12582,37 +13200,56 @@ window.__ModuleLoader__.load({
   background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 16%, transparent);
   box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
 }
-.nw-mark[data-active="1"]{background-color:color-mix(in srgb, var(--nw-brand) 22%, transparent);}
+.nw-mark[data-active="1"]{
+  background-color:color-mix(in srgb, var(--nw-brand) 30%, transparent);
+  box-shadow:inset 0 -1px 0 var(--nw-brand);
+}
+/* R53d：删除线被点开时只加底色，不补底边——它身上已经有一条穿字而过的线，再加
+   一道底边就成了「删除线附带下划线」，和编辑页那个 bug 是同一个。 */
+.nw-mark-strike[data-active="1"]{box-shadow:none;}
 /* 选中的标注：用外描边而不是换色，正文颜色始终是作者的字色。 */
 .nw-mark[data-selected="1"]{outline:1px solid color-mix(in srgb, var(--nw-brand) 55%, transparent);outline-offset:1px;}
-/* 批注角标：浮在划线末尾的一个小标识，说明这里挂了一条批注。
-   R49 修位置：原来把它挂在片段自身的 left:100%，而片段的 100% 是**行盒**的
-   末尾而不是文字的末尾 —— 批注一跨行，点就跑到上一行行尾去了，跨栏时还会被
-   栏边界裁掉，看起来像是「没浮在所划线的末尾」。
-   现在改成在片段的最后一个字后面插一个零宽零高的 inline-block 当锚点：它不占
-   任何排版空间（所以分页、字距、换行一个像素都不变，这是整个标注功能的前提），
-   位置却正好是文字的末尾，角标以它为基准绝对定位，就是「浮在字尾」。
-   只有真正到达批注终点的那个片段才画（一条批注跨段时，段段都画就成了三个点）。 */
-.nw-mark-dot{display:inline-block;width:0;height:0;position:relative;vertical-align:baseline;}
-/* R50：标识改成一个「小方框里三个点」——像一张便条，而不是一个墨点。圆点只能
-   说「这里有东西」，方框里三个点说的是一句话，而且和别处的批注图标是一个意思。
-   框里的三个点是拿三枚径向渐变画的，不引入图标、不多一个 DOM 节点。 */
-.nw-mark-dot::after{
-  /* R52：角标挂在字尾的**右上角**。原来贴着字腰右侧，行高紧的时候正好压住
-     下一行开头的几个字——用户说「有点遮挡文字」。右上角落在一行的上沿之外，
-     行距里本来就有空白，字本身一个像素也不动。 */
-  content:'';position:absolute;left:3px;top:-.86em;
-  box-sizing:border-box;width:12px;height:9px;
-  border-radius:2px;
-  background-color:var(--nw-mark-comment, var(--nw-brand));
-  background-image:
-    radial-gradient(circle at 3px 50%, var(--nw-panel) .8px, transparent 1px),
-    radial-gradient(circle at 6px 50%, var(--nw-panel) .8px, transparent 1px),
-    radial-gradient(circle at 9px 50%, var(--nw-panel) .8px, transparent 1px);
-  background-repeat:no-repeat;
-  box-shadow:0 0 0 1px color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 26%, transparent);
-  pointer-events:auto;cursor:pointer;
+/* 页边批注签（R53）——批注不再在字里插角标。
+   用户连着两轮说「小标识遮挡字体」：只要标识和文字共处一行，行距再松也会压到
+   某个字，而且字数一多就找不到它指的是哪一句。所以标识搬出正文：落在这一页
+   右侧的页边空白里，和它指向的那一行齐平。正文一个像素都不占，也再没有遮挡
+   的可能；点这个签就等于点那条线。
+   R53 也删掉了 .nw-mark-dot 那一套（零宽锚点 + 字尾小方框）和与之配套的
+   splitByMarks 角标节点——没有东西再往正文里塞额外节点了。 */
+.nw-read-gutter{
+  position:absolute;inset:0;z-index:2;
+  pointer-events:none;overflow:hidden;
 }
+/* R53b：签上带**章内序号**。
+   同一行挂两条批注时，两枚签只能上下错开一格——错开之后就分不清哪枚对哪句了，
+   光靠「三个点」这种无差别图案更不可能分辨。所以每枚签写自己的序号（按 start
+   排序，一章之内唯一），再把鼠标移上去时点亮它对应的那句话：看见序号，也看见
+   它指的是哪一行。 */
+.nw-mark-side{
+  position:absolute;box-sizing:border-box;
+  width:16px;height:16px;padding:0;border:0;border-radius:4px;
+  display:flex;align-items:center;justify-content:center;
+  pointer-events:auto;cursor:pointer;
+  font-family:var(--nw-ui-font);font-size:9px;line-height:1;
+  font-variant-numeric:tabular-nums;letter-spacing:0;
+  color:var(--nw-panel);
+  background:var(--nw-mark-comment, var(--nw-brand));
+  box-shadow:0 0 0 1px color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 30%, transparent);
+  transition:transform .12s var(--nw-ease, ease), box-shadow .12s var(--nw-ease, ease);
+}
+.nw-mark-side:hover{transform:scale(1.12);}
+.nw-mark-side[data-active="1"]{box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-brand) 45%, transparent);}
+.nw-mark-side:focus-visible{outline:2px solid var(--nw-brand);outline-offset:1px;}
+/* 鼠标停在签上、或点开一条批注时，那句话亮起来——这是「分不清是哪个」的答案。
+   R53c：原来 14% 太轻，用户说看不出来；现在 26% + 底边一道 2px 品牌线，
+   隔着一页也能一眼扫到是哪句。 */
+.nw-mark[data-hover="1"]{
+  background-color:color-mix(in srgb, var(--nw-brand) 26%, transparent);
+  box-shadow:inset 0 -2px 0 var(--nw-brand);
+}
+/* R53d：删除线悬停时也只加底色。底边一旦补上去，删除线底下就多出一道下划线——
+   这正是用户报的那个 bug，只不过换了个触发状态。 */
+.nw-mark-strike[data-hover="1"]{box-shadow:none;}
 .nw-read-empty{
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:var(--nw-sp-2);height:100%;
@@ -12650,9 +13287,9 @@ window.__ModuleLoader__.load({
    只负责「长什么样」：一小片面板，刚好放得下一句批注——不是屏幕底下那块大白板。 */
 .nw-mark-pop{
   position:fixed;left:0;top:0;transform:translateX(-50%);
-  z-index:35;width:min(220px,calc(100vw - 24px));
+  z-index:35;width:min(208px,calc(100vw - 16px));
   display:flex;flex-direction:column;gap:4px;
-  padding:6px;border-radius:var(--nw-r-control);
+  padding:5px;border-radius:var(--nw-r-control);
   border:1px solid var(--nw-line);background:var(--nw-panel);box-shadow:var(--nw-shadow-3);
   font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);
   animation:nw-fade-in var(--nw-dur, .18s) var(--nw-ease, ease) both;
@@ -12672,26 +13309,38 @@ window.__ModuleLoader__.load({
 /* 两个按钮那一版只是个小条，不该占满正文宽度。 */
 .nw-mark-pop.nw-mark-pick{width:auto;padding:4px;}
 /* R52：写批注那一版再窄一点、再矮一点——它是一张便条，不是一块面板。
-   用户说「编辑框太大」，所以宽度收到 176px、留白也收，让它真的像贴在字边上的便签。 */
-.nw-mark-pop.nw-mark-edit{width:min(176px,calc(100vw - 24px));padding:5px;gap:3px;}
+   用户说「编辑框太大」，所以宽度收到 176px、留白也收，让它真的像贴在字边上的便签。
+   R53：再收一档（196px 上限）并让它贴着点击处张开；输入框一行高、随字长高，
+   最多三行半，绝不先占一块空面板。 */
+.nw-mark-pop.nw-mark-edit{width:min(196px,calc(100vw - 16px));padding:5px;gap:3px;}
 .nw-mark-pop-note{
-  box-sizing:border-box;width:100%;min-height:28px;max-height:76px;
-  padding:3px 5px;
+  box-sizing:border-box;width:100%;min-height:24px;max-height:64px;
+  padding:2px 5px;
   border-radius:var(--nw-r-hair);border:1px solid var(--nw-line);
   background:var(--nw-bg);color:var(--nw-fg);
   font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);line-height:1.45;
-  resize:none;
+  resize:none;overflow-y:auto;
 }
 .nw-mark-pop-note:focus{outline:none;border-color:var(--nw-brand);}
+/* R53e：把一条下划线写成批注时，窗里那一行小字——说明「写下字它就不是下划线了」。
+   灰、小、不抢按钮，但必须有：这是唯一会让线本身变样的操作。R53g 之后窗里只剩
+   一颗「删除」，这行字反而成了唯一的说明，所以留在批注窗底部、输入框下面。 */
+.nw-mark-pop-hint{
+  color:var(--nw-soft);font-size:calc(var(--nw-fs-tiny) - 1px);
+  line-height:1.35;padding:0 2px;
+}
 .nw-mark-pop-btn[data-danger="1"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 45%, var(--nw-line-strong));}
 @media (max-width: 560px){
   .nw-mark-bar-btn{padding:0 8px;}
-  .nw-mark-pop{width:min(240px,calc(100vw - 16px));}
+  .nw-mark-pop{width:min(208px,calc(100vw - 16px));}
 }
 @media (prefers-reduced-motion: reduce){
   .nw-read{animation:none;}
-  .nw-read-flow{scroll-behavior:auto;}
+  .nw-read-flow{scroll-behavior:auto;transition:none;}
+  .nw-read-gutter{transition:none;}
+  .nw-read-stage[data-turn="1"] .nw-read-flow{opacity:1;}
   .nw-mark-pop{animation:none;}
+  .nw-mark-side{transition:none;}
 }
 @media (max-width: 560px){
   .nw-read-bar{padding-top:var(--nw-sp-2);}
@@ -12730,6 +13379,17 @@ window.__ModuleLoader__.load({
 
     const stageRef = React.useRef(null);
     const flowRef = React.useRef(null);
+    const gutterRef = React.useRef(null);
+    const paintGutterRef = React.useRef(null);
+    // 当前打开的那条标注：页边签是命令式重画的，重画后要把「选中」那枚重新点亮。
+    const activeRef = React.useRef('');
+    const noteRef = React.useRef(null);
+    const composerRef = React.useRef(null);
+    const turnTimersRef = React.useRef([]);
+    // 正在跑的滑动动画（一次一帧，翻页/卸载时取消）。
+    const slideRef = React.useRef(0);
+    // 滑动开始时容器的 scroll-behavior 原值：中途被打断要还回去。
+    const slideWasRef = React.useRef('');
     const marksRef = React.useRef({});
     const jumpedRef = React.useRef(false);
     const pageRef = React.useRef(0);
@@ -12746,7 +13406,9 @@ window.__ModuleLoader__.load({
     const [hintOn, setHintOn] = React.useState(true);
 
     const maxPage = Math.max(0, layout.total - 1);
-    const step = layout.w + layout.gap;
+    // R55：一页有多宽（单页 = 一栏 + 栏距，对开 = 两栏 + 两个栏距里的一整段）。
+    // 由 measure() 算好后放进 layout，凡是「翻一页」都读它，别再各自拼 w+gap。
+    const step = layout.step || (layout.w + layout.gap);
 
     const close = React.useCallback(() => {
       if (typeof p.onClose === 'function') p.onClose();
@@ -12755,7 +13417,12 @@ window.__ModuleLoader__.load({
     // Esc 走弹层自己的栈（40-ui 的 useEscapeOwner）：一次 Esc 只关一层，
     // 也不会被沉浸模式的 Esc 抢先退出全屏。
     // R50：批注小窗开着时，Esc 先收小窗，再按一次才离开「读一遍」。
+    // R53：新批注的便签也算一层。
     NW.useModalEscape(true, () => {
+      if (composer) {
+        closeComposer();
+        return;
+      }
       if (editing || picked) {
         closeMark();
         return;
@@ -12776,20 +13443,97 @@ window.__ModuleLoader__.load({
       }
     }, []);
 
-    const scrollToPage = React.useCallback((index, smooth) => {
+    const clearTurns = () => {
+      const list = turnTimersRef.current;
+      for (let i = 0; i < list.length; i += 1) window.clearTimeout(list[i]);
+      turnTimersRef.current = [];
+      if (slideRef.current) {
+        window.cancelAnimationFrame(slideRef.current);
+        slideRef.current = 0;
+        // 半路叫停的滑动必须把自己临时改过的 scroll-behavior 还回去，否则这
+        // 本书后面所有的「瞬间跳页」都会变成 300ms 的匀速滑动。
+        const flow = flowRef.current;
+        if (flow) flow.style.scrollBehavior = slideWasRef.current;
+      }
+    };
+
+    // 瞬间落到某一页：把 CSS 的平滑滚动临时关掉，否则「瞬间」也会被浏览器补
+    // 成一段 300ms 的滑动。要滑动的翻页走 slideToPage()，这里只负责「立刻」。
+    const scrollToPage = React.useCallback((index) => {
       const flow = flowRef.current;
       if (!flow) return;
-      const s = layout.w + layout.gap;
+      const s = step;
       if (!s) return;
-      // 让滚动监听器在这段时间里安静：平滑滚动要过好几百毫秒，中途每一帧的
-      // scrollLeft 都落在两页之间，不屏蔽会把页码拖来拖去。
-      quietRef.current = Date.now() + (smooth ? 620 : 90);
-      try {
-        flow.scrollTo({ left: Math.round(index * s), behavior: smooth ? 'smooth' : 'auto' });
-      } catch (err) {
-        flow.scrollLeft = Math.round(index * s);
+      const left = Math.round(index * s);
+      // 让滚动监听器在这段时间里安静：中途每一帧的 scrollLeft 都落在两页之间，
+      // 不屏蔽会把页码拖来拖去。
+      quietRef.current = Date.now() + 200;
+      const was = flow.style.scrollBehavior;
+      flow.style.scrollBehavior = 'auto';
+      flow.scrollLeft = left;
+      flow.style.scrollBehavior = was;
+    }, [step]);
+
+    // R53b：把「翻页」做成一次真正的横向滑动。滚的是容器的 scrollLeft，所以
+    // 效果就是整页内容往一侧走、下一页从另一侧进来——和纸质书翻页时视线移动
+    // 的方向一致。用 rAF 自己推，是为了控制时长和缓动（CSS 的 smooth 是 300ms
+    // 匀速，收尾很硬），也让「滑到一半又按了下一翻」能立刻改向。
+    const slideToPage = React.useCallback((index) => {
+      const flow = flowRef.current;
+      const stage = stageRef.current;
+      if (!flow || !stage) {
+        if (stage) stage.removeAttribute('data-turn');
+        return;
       }
-    }, [layout.w, layout.gap]);
+      const s = step;
+      if (!s) {
+        stage.removeAttribute('data-turn');
+        return;
+      }
+      const from = flow.scrollLeft;
+      const to = Math.round(index * s);
+      const dist = Math.abs(to - from);
+      if (dist < 2) {
+        scrollToPage(index);
+        if (stage) stage.removeAttribute('data-turn');
+        return;
+      }
+      // 滑动期间屏蔽 scroll 监听器：每一帧 scrollLeft 都在两页之间，不屏蔽会
+      // 把页码拖来拖去，还会触发「对齐到整页」的吸附，跟动画打架。
+      const was = flow.style.scrollBehavior;
+      flow.style.scrollBehavior = 'auto';
+      slideWasRef.current = was;
+      // R53c：用户说「翻页太快，没有动画」。原来 190-320ms 的起步快收尾慢，眨眼
+      // 就过去了；现在整页翻是 560ms，缓动换成「两头都慢、中间快」的 easeInOut：
+      // 起手轻轻带起来，中段走过去，最后自己停住——像纸页被手指推过去，而不是
+      // 被谁一甩。
+      // 但吸附（手指松开后那一点点回正）走的是同一个函数，不能也等半秒：时长按
+      // 「这次要走多远 / 一页有多宽」缩放，走满一页 560ms，走几像素 ~190ms。
+      const ratio = Math.min(1, dist / Math.max(1, s));
+      const dur = Math.round(190 + ratio * 370);
+      quietRef.current = Date.now() + dur + 140;
+      const t0 = (typeof performance !== 'undefined' && performance.now)
+        ? performance.now()
+        : Date.now();
+      const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+      // 这个回调不能叫 step：外层的 step 是「一页有多宽」，同心圆里再声明一个
+      // 同名 const 会把上面那行 `const s = step` 推进 TDZ（读的是还没初始化的
+      // 那个），运行时报 ReferenceError。
+      const frame = (now) => {
+        const t = Math.min(1, Math.max(0, (now - t0) / dur));
+        flow.scrollLeft = from + (to - from) * ease(t);
+        if (t < 1) {
+          slideRef.current = window.requestAnimationFrame(frame);
+          return;
+        }
+        flow.scrollLeft = to;
+        flow.style.scrollBehavior = was;
+        slideRef.current = 0;
+        quietRef.current = Date.now() + 160;
+        if (stage) stage.removeAttribute('data-turn');
+      };
+      slideRef.current = window.requestAnimationFrame(frame);
+    }, [step, scrollToPage]);
 
     const go = React.useCallback((delta) => {
       // pageRef is the source of truth: the scroll listener writes it on every
@@ -12799,8 +13543,27 @@ window.__ModuleLoader__.load({
       if (next === cur) return;
       pageRef.current = next;
       setPage(next);
-      scrollToPage(next, true);
-    }, [maxPage, scrollToPage]);
+      const stage = stageRef.current;
+      if (!stage) return;
+      const still = typeof window.matchMedia === 'function'
+        && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (still) {
+        // No motion wanted: swap the page with no slide at all.
+        scrollToPage(next);
+        return;
+      }
+      // R53b：翻页是**真的横向滑动**——整栏往翻页方向走，下一页从相反方向滑
+      // 进来。位移由 rAF 推 scrollLeft 完成（不是 CSS transition，因为要滚的是
+      // 滚动容器的 scrollLeft 而不是 transform），翻页方向就是滑动方向：往后翻
+      // 内容向左走，往前翻内容向右走。
+      // 滑动期间只把整体压到 .72 的透明度再回来：字从纸面底色里浮出来，不会
+      // 像「隔着一个框」那样整块平移一块白底。
+      clearTurns();
+      stage.setAttribute('data-turn', '1');
+      slideToPage(next);
+    }, [maxPage, scrollToPage, slideToPage]);
+
+    React.useEffect(() => () => clearTurns(), []);
 
     // ---- 选字 → 标注 --------------------------------------------------------
     //
@@ -12813,6 +13576,171 @@ window.__ModuleLoader__.load({
     const [picked, setPicked] = React.useState(null);
     const [editing, setEditing] = React.useState(null);
     const [noteDraft, setNoteDraft] = React.useState('');
+    // R53：新写一条批注不再弹 `NW.ui.prompt` 那块大对话框——就在选中的字旁边
+    // 展开一张便签，写完按保存才落库，按取消就当没发生过。
+    const [composer, setComposer] = React.useState(null);
+    const [composerNote, setComposerNote] = React.useState('');
+
+    // ---- 自动保存（R53g）----------------------------------------------------
+    // 批注框不再有「保存 / 取消」。字打进去就存，停下来 700ms 落一次库；关掉框
+    // （点别处、Esc、滚动、翻页）时立刻把还没落的那一次补上。
+    //
+    // 为什么不是每个按键都存：`onNote` 背后是 db.updateMark → notify → 应用层
+    // refreshMarks → marks 换新 → 本组件的 body 重新把整本书拆一遍段落。一本
+    // 二十万字的稿子两万行，每按一个字拆一次会当场卡住。合并成一次写，既保住
+    // 「不用点保存」，也不让打字变成重活。
+    const noteSaveRef = React.useRef({ id: '', timer: 0, body: '', saved: '', dirty: false });
+    const composerSaveRef = React.useRef({ id: '', timer: 0, body: '', saved: '', draft: null });
+    // 这一下 pointerdown 是不是「把浮层点掉」的。pointerup 里据此跳过翻页。
+    // 存时间戳而不是布尔：点在正文外时 flow 收不到 pointerup，布尔会一直挂着，
+    // 把下一次正常的翻页吞掉。
+    const dismissedRef = React.useRef(0);
+
+    const flushNote = React.useCallback(() => {
+      const st = noteSaveRef.current;
+      if (st.timer) {
+        window.clearTimeout(st.timer);
+        st.timer = 0;
+      }
+      if (!st.dirty || !st.id) return;
+      st.dirty = false;
+      const body = String(st.body || '').trim();
+      if (body === st.saved) return;
+      st.saved = body;
+      if (typeof p.onNote === 'function') p.onNote(st.id, body);
+    }, [p.onNote]);
+
+    const scheduleNote = React.useCallback((id, body) => {
+      const st = noteSaveRef.current;
+      st.id = String(id);
+      st.body = body;
+      st.dirty = true;
+      if (st.timer) window.clearTimeout(st.timer);
+      st.timer = window.setTimeout(() => {
+        st.timer = 0;
+        flushNote();
+      }, 700);
+    }, [flushNote]);
+
+    // 删掉一条批注前先把待写的这一次作废：先存再删是白跑一趟，而且万一删除先
+    // 落库、保存后落库，还会留下一条「刚删掉又冒出来」的行。
+    const dropNote = React.useCallback(() => {
+      const st = noteSaveRef.current;
+      if (st.timer) {
+        window.clearTimeout(st.timer);
+        st.timer = 0;
+      }
+      st.dirty = false;
+    }, []);
+
+    // 新写的那条批注：第一次出现非空文字时才真正建行（否则「写批注」点开又
+    // 什么都不写，会留下一条有批注底色却没有签的空批注——三种状态里最说不清的
+    // 一种）。建好之后就是普通的改批注。
+    const commitComposer = React.useCallback(() => {
+      const st = composerSaveRef.current;
+      if (st.timer) {
+        window.clearTimeout(st.timer);
+        st.timer = 0;
+      }
+      const body = String(st.body || '').trim();
+      if (st.id) {
+        if (body === st.saved) return;
+        st.saved = body;
+        if (typeof p.onNote === 'function') p.onNote(st.id, body);
+        return;
+      }
+      if (!body || !st.draft) return;
+      // 第一次落库是异步的（`p.onMark` 走 db 再回来才有 id）。这期间用户还在打字，
+      // 700ms 的下一拍会再进来一次——那时 `st.id` 还是空的，会再建一条。db 层按
+      // 「同章 + 同起止」会合并，但这里也没必要让它白跑一趟，用一个 pending 挡住。
+      if (st.pending) {
+        st.saved = body;
+        return;
+      }
+      st.saved = body;
+      st.pending = true;
+      const draft = st.draft;
+      if (typeof p.onMark === 'function') {
+        Promise.resolve(p.onMark({
+          chapterId: draft.chapterId,
+          kind: 'comment',
+          start: draft.start,
+          end: draft.end,
+          quote: draft.quote,
+          note: body,
+        })).then((created) => {
+          st.pending = false;
+          if (created && created.id != null) st.id = String(created.id);
+        }).catch(() => { st.pending = false; });
+      } else {
+        st.pending = false;
+      }
+    }, [p.onMark, p.onNote]);
+
+    const scheduleComposer = React.useCallback((body) => {
+      const st = composerSaveRef.current;
+      st.body = body;
+      if (st.timer) window.clearTimeout(st.timer);
+      st.timer = window.setTimeout(() => {
+        st.timer = 0;
+        commitComposer();
+      }, 700);
+    }, [commitComposer]);
+
+    // 关掉整个「读一遍」时别把最后一句丢了。
+    React.useEffect(() => () => {
+      flushNote();
+      commitComposer();
+    }, [flushNote, commitComposer]);
+
+    // ---- 点别处收起（R53g）--------------------------------------------------
+    // 用户要的是「鼠标点击其他任何地方，批注输入框收起来」。只在 flow 里监听不够：
+    // 顶栏、页脚、页边签、甚至窗口外框都算「其他地方」。所以在 document 上做捕获，
+    // 命中就收——但落在 `.nw-mark-pop`（也就是输入框自己）和正在编辑的那条标注
+    // 上时不收，否则点一下输入框里的字就把它关了。
+    //
+    // 用 pointerdown 而不是 click：点击的顺序是 pointerdown → blur → click，若等到
+    // click，textarea 的 blur 已经先触发过一次保存，框也会在按下与松开之间闪一下。
+    // 捕获阶段先处理，一次点击只收一次。
+    React.useEffect(() => {
+      const onDown = (ev) => {
+        const node = ev && ev.target;
+        if (!node || typeof node.closest !== 'function') return;
+        // 点在输入框里（含删除按钮）：不关。
+        if (node.closest('.nw-mark-pop')) return;
+        // 点在「正在编辑的那条批注」上：也不关，那是它的锚点。
+        if (node.closest('.nw-mark[data-mark]')) return;
+        if (node.closest('.nw-mark-side')) return;
+        if (composerRef.current && composerRef.current.contains && composerRef.current.contains(node)) return;
+        if (noteRef.current && noteRef.current.contains && noteRef.current.contains(node)) return;
+        // 这一下如果是「把框点掉」，就不要再当成翻页：一次 pointerdown 既收框又
+        // 翻页，等于点一下同时做了两件事，用户只会觉得「手一抖书就翻了」。
+        if (picked || editing || composer) dismissedRef.current = Date.now();
+        // 收起之前先把字存掉——收起 = 保存。
+        if (noteSaveRef.current.dirty || noteSaveRef.current.timer) flushNote();
+        if (composerSaveRef.current.timer || composerSaveRef.current.body) {
+          commitComposer();
+          composerSaveRef.current = { id: '', timer: 0, body: '', saved: '', draft: null };
+        }
+        setPicked(null);
+        setEditing(null);
+        setComposer(null);
+        setComposerNote('');
+        activeRef.current = '';
+        const flow = flowRef.current;
+        if (flow) {
+          const spans = flow.querySelectorAll('.nw-mark[data-mark][data-active]');
+          for (let i = 0; i < spans.length; i += 1) spans[i].removeAttribute('data-active');
+        }
+        const layer = gutterRef.current;
+        if (layer) {
+          const signs = layer.querySelectorAll('.nw-mark-side[data-active]');
+          for (let i = 0; i < signs.length; i += 1) signs[i].removeAttribute('data-active');
+        }
+      };
+      document.addEventListener('pointerdown', onDown, true);
+      return () => document.removeEventListener('pointerdown', onDown, true);
+    }, [flushNote, commitComposer, picked, editing, composer]);
 
     function locateNode(node) {
       let el = node;
@@ -12878,6 +13806,8 @@ window.__ModuleLoader__.load({
     const addMark = React.useCallback((kind) => {
       const cur = sel;
       if (!cur) return;
+      // 同一条线重复画：db 层会把「同章 + 同起止」并成一条，所以这里照常提交，
+      // 画第二遍只会把这条线换成新类型，不会多出一条删不掉的影子。
       if (typeof p.onMark === 'function') {
         p.onMark({
           chapterId: cur.chapterId,
@@ -12888,44 +13818,48 @@ window.__ModuleLoader__.load({
           note: '',
         });
       }
+      clearSelection();
+    }, [sel, p.onMark]);
+
+    const clearSelection = () => {
       setSel(null);
       const s = typeof window.getSelection === 'function' ? window.getSelection() : null;
       if (s) s.removeAllRanges();
-    }, [sel, p.onMark]);
+    };
 
-    const addNote = React.useCallback(() => {
+    // R53：原来这里调 `NW.ui.prompt`，弹的是屏幕正中一块大白板，跟选中的字
+    // 完全脱开；用户说「输入框太大」。现在只记下选区，让渲染层在选区旁边画
+    // 一张一行高的便签。R53g：便签上没有保存键——字打进去就存（停 700ms 落库，
+    // 收起来时补最后一次）。
+    const openComposer = React.useCallback(() => {
       const cur = sel;
       if (!cur) return;
-      // R49: the UI layer exports this as `prompt`; asking for `promptAsync`
-      // silently fell through to an empty string, so every new comment came
-      // back empty and was dropped without a word.
-      const ask = NW.ui && typeof NW.ui.prompt === 'function'
-        ? NW.ui.prompt({
-          title: NW.t('写一条批注'),
-          label: NW.t('批注'),
-          multiline: true,
-          placeholder: NW.t('这条批注写给自己看'),
-        })
-        : Promise.resolve('');
-      Promise.resolve(ask).then((note) => {
-        if (note == null) return;
-        const body = String(note).trim();
-        if (!body) return;
-        if (typeof p.onMark === 'function') {
-          p.onMark({
-            chapterId: cur.chapterId,
-            kind: 'comment',
-            start: cur.start,
-            end: cur.end,
-            quote: cur.text.slice(0, 240),
-            note: body,
-          });
-        }
-        setSel(null);
-        const s = typeof window.getSelection === 'function' ? window.getSelection() : null;
-        if (s) s.removeAllRanges();
+      setPicked(null);
+      setEditing(null);
+      setComposerNote('');
+      const st = composerSaveRef.current;
+      if (st.timer) window.clearTimeout(st.timer);
+      composerSaveRef.current = { id: '', timer: 0, body: '', saved: '', draft: null };
+      setComposer({
+        chapterId: cur.chapterId,
+        start: cur.start,
+        end: cur.end,
+        quote: cur.text.slice(0, 240),
+        x: cur.x,
+        y: cur.y + 18,
       });
-    }, [sel, p.onMark]);
+    }, [sel]);
+
+    const closeComposer = React.useCallback(() => {
+      // 收起来之前把没落库的那一次补上——「点别处收起」不等于「放弃」。
+      commitComposer();
+      const st = composerSaveRef.current;
+      if (st.timer) window.clearTimeout(st.timer);
+      composerSaveRef.current = { id: '', timer: 0, body: '', saved: '', draft: null };
+      setComposer(null);
+      setComposerNote('');
+      clearSelection();
+    }, [commitComposer]);
 
     // 讲清楚「点一下标注会发生什么」：就在点的位置浮出两个小按钮——删除 / 批注。
     // 点亮那几个 `<span>` 用 DOM 直接改属性，不把 picked 塞进正文的 useMemo
@@ -12934,16 +13868,15 @@ window.__ModuleLoader__.load({
       const list = marks.filter((m) => String(m.id) === String(id));
       const mark = list[0];
       if (!mark) return;
-      // 菜单贴着**那段字**走，不是贴着鼠标走：用户说的是「在所选文字旁边显示小框」，
-      // 点在字的哪一处都该张在同一行的同一侧。一条标注在分栏/跨段时会拆成好几个
-      // 片段，所以取所有片段的所有行盒，挑离点击点最近的那个——用并集会把框甩到
-      // 相邻的栏上去。
+      // R53：弹层贴着**点击处**张开。R50 时是贴着「离点击最近的那一行字」的
+      // 右下角，点在句子中间时框会飘到行尾十几厘米外，用户还得回手去够它。
+      // 现在只在拿不到点击坐标时（键盘/程序触发）才退回行盒定位。
       const flow = flowRef.current;
-      let x = ev && typeof ev.clientX === 'number' ? ev.clientX : window.innerWidth / 2;
-      let y = ev && typeof ev.clientY === 'number' ? ev.clientY : window.innerHeight / 2;
+      let clickX = ev && typeof ev.clientX === 'number' ? ev.clientX : NaN;
+      let clickY = ev && typeof ev.clientY === 'number' ? ev.clientY : NaN;
+      let best = null;
       if (flow) {
         const spans = flow.querySelectorAll('.nw-mark[data-mark="' + String(id) + '"]');
-        let best = null;
         let bestDist = Infinity;
         for (let i = 0; i < spans.length; i += 1) {
           const rects = spans[i].getClientRects ? spans[i].getClientRects() : [];
@@ -12952,47 +13885,242 @@ window.__ModuleLoader__.load({
             if (!r || (!r.width && !r.height)) continue;
             const cx = r.left + r.width / 2;
             const cy = r.top + r.height / 2;
-            const dist = Math.abs(cx - x) + Math.abs(cy - y);
+            const dist = Math.abs(cx - (Number.isFinite(clickX) ? clickX : cx))
+              + Math.abs(cy - (Number.isFinite(clickY) ? clickY : cy));
             if (dist < bestDist) { bestDist = dist; best = r; }
           }
         }
-        if (best) {
-          const width = Math.min(best.width, 160);
-          x = best.left + width / 2;
-          y = best.bottom;
-        }
-      }
-      if (flow) {
-        const spans = flow.querySelectorAll('.nw-mark[data-mark]');
         for (let i = 0; i < spans.length; i += 1) {
-          const on = spans[i].getAttribute('data-mark') === String(id);
-          spans[i].setAttribute('data-active', on ? '1' : '0');
+          spans[i].setAttribute('data-active', spans[i].getAttribute('data-mark') === String(id) ? '1' : '0');
         }
       }
-      // 点一条「批注」就是看/改那句话——它存在的意义就是那句话，不必再选一次。
-      // 下划线和删除线则先问「删了它，还是给它写一句」，因为这两件事对一条线
-      // 都说得通，而线本身并不暗示哪一个。
-      if (String(mark.kind) === 'comment') {
+      activeRef.current = String(id);
+      const layer = gutterRef.current;
+      if (layer) {
+        const signs = layer.querySelectorAll('.nw-mark-side');
+        for (let i = 0; i < signs.length; i += 1) {
+          if (signs[i].getAttribute('data-mark') === String(id)) signs[i].setAttribute('data-active', '1');
+          else signs[i].removeAttribute('data-active');
+        }
+      }
+      if (!Number.isFinite(clickX) || !Number.isFinite(clickY)) {
+        if (!best) return;
+        clickX = best.left + Math.min(best.width, 120) * 0.4;
+        clickY = best.top + best.height / 2;
+      }
+      // 打开一张新面板就把便签收起来，同时只留一个浮层。R53g：收之前先把便签里
+      // 还没落库的字存掉——「换看另一条」不是「把刚写的扔掉」。
+      commitComposer();
+      const cst = composerSaveRef.current;
+      if (cst.timer) window.clearTimeout(cst.timer);
+      composerSaveRef.current = { id: '', timer: 0, body: '', saved: '', draft: null };
+      setComposer(null);
+      setComposerNote('');
+      // R53e：文字只属于批注，所以「是不是批注」直接看有没有文字——一条带字的
+      // 线就是批注，点它就开编辑框。下划线和删除线（没有字）则先问「删了它，还是
+      // 给它写一句」，因为这两件事对一条线都说得通，而线本身并不暗示哪一个。
+      if (String(mark.kind) === 'comment' || String(mark.note || '').trim()) {
         setPicked(null);
+        // 换到另一条批注之前，把上一条还没落库的字补上。
+        flushNote();
+        const st = noteSaveRef.current;
+        st.id = String(mark.id);
+        st.body = String(mark.note || '');
+        st.saved = String(mark.note || '').trim();
+        st.dirty = false;
         setNoteDraft(String(mark.note || ''));
-        setEditing({ mark: mark, x: x, y: y });
+        setEditing({ mark: mark, x: clickX, y: clickY });
         return;
       }
+      flushNote();
       setEditing(null);
-      setPicked({ mark: mark, x: x, y: y });
-    }, [marks]);
+      setPicked({ mark: mark, x: clickX, y: clickY });
+    }, [marks, commitComposer, flushNote]);
 
     const closeMark = React.useCallback(() => {
+      // R53g：收起批注框 = 保存，不是放弃。没有保存键，那一下必须在这里补。
+      flushNote();
       setPicked(null);
       setEditing(null);
+      activeRef.current = '';
       const flow = flowRef.current;
       if (flow) {
         const spans = flow.querySelectorAll('.nw-mark[data-mark]');
         for (let i = 0; i < spans.length; i += 1) spans[i].setAttribute('data-active', '0');
       }
-    }, []);
+      const layer = gutterRef.current;
+      if (layer) {
+        const signs = layer.querySelectorAll('.nw-mark-side[data-active]');
+        for (let i = 0; i < signs.length; i += 1) signs[i].removeAttribute('data-active');
+      }
+    }, [flushNote]);
+
+    // ---- 页边批注签（R53）---------------------------------------------------
+    // 一条带批注的标注，在这一页的右侧页边留一个小签，和它指向的那一行齐平。
+    // 只在当前页上画：翻过去之后下一页的签会由 scroll/重排重新算出来。
+    // 正文里不再有任何角标节点，所以「遮挡字体」从结构上就不可能再发生。
+    const paintGutter = React.useCallback(() => {
+      const layer = gutterRef.current;
+      const stage = stageRef.current;
+      const flow = flowRef.current;
+      if (!layer) return;
+      while (layer.firstChild) layer.removeChild(layer.firstChild);
+      // 重画时把上一轮的悬停点亮清掉：签是新建的，正文上的 data-hover 却留在旧
+      // 节点上——不扫一遍的话，改完字之后会有一句话一直亮着，像被选中了一样。
+      const stale = flow ? flow.querySelectorAll('.nw-mark[data-hover]') : [];
+      for (let i = 0; i < stale.length; i += 1) stale[i].removeAttribute('data-hover');
+      if (!stage || !flow) return;
+      const w = layout.w;
+      if (!w) return;
+      const cols = layout.cols || 1;
+      const gap = layout.gap || 0;
+      // R55：一页现在可能是两栏。判定「这句在不在这页上」要用**页宽**（两栏加
+      // 中间的空档），不是一栏的宽——否则右半页的批注全都不出签。
+      const pageW = w * cols + gap * (cols - 1);
+      const stageRect = stage.getBoundingClientRect();
+      const flowRect = flow.getBoundingClientRect();
+      // R56：对开时签要分左右。
+      // 用户说「批注左页的在左侧，右页在右侧，变回单页时再回到右侧」——对开是
+      // 摊开的书，视线落在哪一页，那页的话就在哪一页的**外缘**；两页的签都挤在
+      // 书缝右边的话，左页的签会在右页的正文旁边，指认起来是错的。
+      // 所以 x 不再是常量：左栏的签落在整本书的左外侧，右栏的签落在右外侧，
+      // 单页（cols === 1）时所有签都回到右侧，和 R53 一样。
+      const PAD = 3;
+      const SIDE_W = 16;
+      // 左缘可能不够宽（stage 的左右 padding 是 clamp(20px,6vw,64px)，最窄 20px
+      // 而那正好是签要占的 16+3=19px）。gutter 是 overflow:hidden，所以夹一下，
+      // 不够就退回书内侧，宁可挤一点也不能让签整枚消失。
+      const leftOuter = Math.max(
+        0,
+        Math.round(flowRect.left - stageRect.left - SIDE_W - PAD),
+      );
+      const rightOuter = Math.round(flowRect.right - stageRect.left + PAD);
+      const notes = {};
+      for (let i = 0; i < marks.length; i += 1) {
+        const m = marks[i];
+        if (!m || m.id == null) continue;
+        const body = String(m.note || '').trim();
+        // R53e：签只属于**有字**的批注。以前这里放行 `kind==='comment'` 的空批注，
+        // 结果会有一枚签指着一句没有任何话的话；现在批注必须有文字，没字就没有签。
+        if (!body) continue;
+        notes[String(m.id)] = body;
+      }
+      // 序号：同一章里所有带批注的标注按 start 排，1、2、3……章内唯一。
+      // 读者看到的是「第 3 条批注」，而不是一枚和隔壁一模一样的点。
+      const seq = {};
+      const byChapter = {};
+      for (let i = 0; i < marks.length; i += 1) {
+        const m = marks[i];
+        if (!m || m.id == null) continue;
+        if (!Object.prototype.hasOwnProperty.call(notes, String(m.id))) continue;
+        const ck = String(m.chapterId || '');
+        if (!byChapter[ck]) byChapter[ck] = [];
+        byChapter[ck].push(m);
+      }
+      const chapterKeys = Object.keys(byChapter);
+      for (let i = 0; i < chapterKeys.length; i += 1) {
+        const list = byChapter[chapterKeys[i]].slice().sort(
+          (a, b) => (Number(a.start) || 0) - (Number(b.start) || 0),
+        );
+        for (let k = 0; k < list.length; k += 1) seq[String(list[k].id)] = k + 1;
+      }
+      const spans = flow.querySelectorAll('.nw-mark[data-mark]');
+      const tops = {};
+      for (let i = 0; i < spans.length; i += 1) {
+        const id = spans[i].getAttribute('data-mark') || '';
+        if (!Object.prototype.hasOwnProperty.call(notes, id)) continue;
+        if (tops[id] != null) continue;
+        const rects = spans[i].getClientRects ? spans[i].getClientRects() : [];
+        for (let k = 0; k < rects.length; k += 1) {
+          const r = rects[k];
+          if (!r || (!r.width && !r.height)) continue;
+          // 只给当前页上的片段配签：下一页的等翻过去再说。对开时一页横跨两栏，
+          // 所以这里用 pageW。
+          if (r.left < flowRect.left - 1 || r.left > flowRect.left + pageW - 2) continue;
+          // R56：这句落在哪一栏？左栏的签去左边，右栏的签去右边。用片段的中心点
+          // 判，而不是左边缘——一个长句可能跨过栏界（虽然多栏布局通常不会让一行
+          // 跨栏，但取中心的容错更好）。
+          const cx = r.left + r.width / 2;
+          // column 0 = 本页左栏。一栏宽 w、栏距 gap，所以第 n 栏的左边界是
+          // flowRect.left + n * (w + gap)。
+          const colAt = Math.max(0, Math.min(cols - 1, Math.floor((cx - flowRect.left) / (w + gap))));
+          const onLeft = cols > 1 && colAt === 0;
+          tops[id] = {
+            y: r.top + Math.min(r.height, 30) / 2 - stageRect.top,
+            onLeft: onLeft,
+          };
+          break;
+        }
+      }
+      const rows = Object.keys(tops)
+        .map((id) => ({ id: id, y: tops[id].y, onLeft: tops[id].onLeft, note: notes[id] }))
+        .sort((a, b) => a.y - b.y);
+      const used = [];
+      const usedL = [];
+      const SIDE_H = 16;
+      // 同一行挂了多条批注时，签会往下错开一格，免得两枚叠成一个。错开之后
+      // 靠什么分辨？R53c 的答案不再是引线（用户说那条细线看不出来），而是
+      // **句子自己变色**：鼠标停在签上、或点开一条批注时，它指的那句亮起来，
+      // 签上的序号说「第几条」。一冷一热两个信号，比在页边画线清楚得多。
+      // R56：左右两边的签各自排自己的队——它们在书的两侧，本就不会相撞，
+      // 混在一个 used 里会让右边的签因为左边的位置而无谓地下移。
+      for (let i = 0; i < rows.length; i += 1) {
+        const row = rows[i];
+        const lane = row.onLeft ? usedL : used;
+        let y = row.y - SIDE_H / 2;
+        // 同一行挂了两条批注：第二个签往下让一格，别叠成一个。
+        while (lane.some((u) => Math.abs(u - y) < SIDE_H + 2)) y += SIDE_H + 2;
+        lane.push(y);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'nw-mark-side';
+        btn.setAttribute('data-mark', row.id);
+        if (row.onLeft) btn.setAttribute('data-side', 'left');
+        btn.setAttribute('aria-label', NW.t('第') + (seq[row.id] || '') + NW.t('条批注'));
+        btn.title = (seq[row.id] ? '#' + seq[row.id] + ' ' : '') + (row.note || NW.t('批注')).slice(0, 80);
+        btn.textContent = String(seq[row.id] || '');
+        if (activeRef.current && activeRef.current === String(row.id)) btn.setAttribute('data-active', '1');
+        // R53c：不再画引线（用户说看不出来）。同一行第二条批注靠「悬停/点开时
+        // 句子变色」来指认——签上的序号说第几条，句子亮起来说哪一行。
+        // R56：左页的签贴左外缘，右页的签贴右外缘；单页时 onLeft 恒为 false，
+        // 于是所有签都在右侧，与之前完全一致。
+        btn.style.left = (row.onLeft ? leftOuter : rightOuter) + 'px';
+        btn.style.top = Math.round(y) + 'px';
+        btn.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          openMark(row.id, ev);
+        });
+        // 悬停：把签指的那句点亮。同一行有两条批注时，靠这个一眼分清谁是谁。
+        btn.addEventListener('mouseenter', () => {
+          const own = flow.querySelectorAll('.nw-mark[data-mark="' + row.id + '"]');
+          for (let k = 0; k < own.length; k += 1) own[k].setAttribute('data-hover', '1');
+        });
+        btn.addEventListener('mouseleave', () => {
+          const own = flow.querySelectorAll('.nw-mark[data-mark="' + row.id + '"]');
+          for (let k = 0; k < own.length; k += 1) own[k].removeAttribute('data-hover');
+        });
+        layer.appendChild(btn);
+      }
+    }, [layout.w, layout.cols, layout.gap, marks, openMark]);
+
+    // 滚动停下来之后重算一次：手指拖到半页时，签要跟着字走，不能停在旧行上。
 
     // ---- 量一次版面：定栏宽 → 读 scrollWidth → 得到页数 ----------------------
+    //
+    // R55: 分两页。用户的要求是「阅读页面如果是全屏模式下，请分两页」。
+    //
+    // 这里刻意**没有**去读某个「沉浸模式」标志：读一遍本身就是全屏的（它是
+    // `.nw-read` 绝对定位铺满的浮层），没有一个单独的 immersive 开关可读；真正
+    // 决定能不能并排放下两栏的，是**可用的宽度**。所以判据是宽度：一栏最多
+    // 34 个汉字，两栏加中间的空档放得下就开对开，放不下就还是单页。窄面板（手机、
+    // 侧栏挤出来的半屏）自动退回单页，不需要另一套逻辑。
+    //
+    // 三处步长都必须跟着页宽走，否则翻页会翻半页：
+    //   - measure() 里的 total 和起始页偏移
+    //   - scrollToPage() / slideToPage() 里的 s
+    //   - 滚动监听里换算页码的 s
+    // 三者统一读 layout.step（= 一页有多宽，含中间的空档）。
     const measure = React.useCallback(() => {
       const stage = stageRef.current;
       const flow = flowRef.current;
@@ -13000,20 +14128,33 @@ window.__ModuleLoader__.load({
       const cs = window.getComputedStyle(stage);
       const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
       const avail = Math.max(240, stage.clientWidth - padX);
-      // 一行 34 个汉字上下最像书，但不该越过面板宽度。
-      const w = Math.floor(Math.min(34 * fontSize, avail));
-      flow.style.setProperty('--nw-read-w', w + 'px');
       const gap = parseFloat(window.getComputedStyle(flow).columnGap) || 0;
-      const s = w + gap;
-      const total = Math.max(1, Math.round((flow.scrollWidth + gap) / s));
-      setLayout({ w, gap, total });
+      // 一行 34 个汉字上下最像书。
+      const oneCol = Math.floor(Math.min(34 * fontSize, avail));
+      // 对开要求：两栏 + 中间那道空档真的放得下，而且每栏还不至于窄到一行
+      // 十来个字（那比单页更难读）。900px 是临界点，再窄就单页。
+      const spread = avail >= 900 && (avail - gap) / 2 >= 300;
+      const cols = spread ? 2 : 1;
+      const w = spread
+        ? Math.floor(Math.min(oneCol, (avail - gap) / 2))
+        : oneCol;
+      flow.style.setProperty('--nw-read-col', w + 'px');
+      flow.style.setProperty('--nw-read-box', (w * cols + gap * (cols - 1)) + 'px');
+      if (spread) flow.setAttribute('data-spread', '1');
+      else flow.removeAttribute('data-spread');
+      // 一栏的步长（栏宽 + 栏距）：栏在 CSS 多栏里是连续的，页只是「一次显示几栏」。
+      const colStep = w + gap;
+      // 一页的步长：对开时跨两栏。
+      const step = colStep * cols;
+      const total = Math.max(1, Math.round((flow.scrollWidth + gap) / step));
+      setLayout({ w, gap, total, cols, step });
 
       if (!jumpedRef.current) {
         jumpedRef.current = true;
         const mark = marksRef.current[currentId];
         let start = 0;
-        if (mark && typeof mark.offsetLeft === 'number' && s > 0) {
-          start = Math.round(mark.offsetLeft / s);
+        if (mark && typeof mark.offsetLeft === 'number' && step > 0) {
+          start = Math.round(mark.offsetLeft / step);
         }
         start = Math.max(0, Math.min(start, total - 1));
         pageRef.current = start;
@@ -13022,7 +14163,7 @@ window.__ModuleLoader__.load({
         // 滑到一半，看起来像是自己翻了几页。
         const wasBehavior = flow.style.scrollBehavior;
         flow.style.scrollBehavior = 'auto';
-        flow.scrollLeft = Math.round(start * s);
+        flow.scrollLeft = Math.round(start * step);
         flow.style.scrollBehavior = wasBehavior;
       } else {
         setPage((cur) => {
@@ -13075,7 +14216,7 @@ window.__ModuleLoader__.load({
         if (scrollRafRef.current) return;
         scrollRafRef.current = window.requestAnimationFrame(() => {
           scrollRafRef.current = 0;
-          const s = layout.w + layout.gap;
+          const s = step;
           if (!s) return;
           // 自己滚的那一段不参与：页码已经由 go()/scrollToPage() 定好了。
           if (Date.now() < quietRef.current) return;
@@ -13085,12 +14226,13 @@ window.__ModuleLoader__.load({
             setPage(index);
           }
           // 手指停下来之后把页面对齐到整页：多栏布局没有 scroll-snap 可依（页
-          // 不是元素），停在半页上读起来像被人挪了一下椅子。
+          // 不是元素），停在半页上读起来像被人挪了一下椅子。吸附也走同一条滑
+          // 动，短距离 190ms，读起来是「轻轻一推」而不是突然跳过去。
           window.clearTimeout(snapTimer);
           snapTimer = window.setTimeout(() => {
             if (Date.now() < quietRef.current) return;
             const drift = flow.scrollLeft - Math.round(pageRef.current * s);
-            if (Math.abs(drift) > 2) scrollToPage(pageRef.current, true);
+            if (Math.abs(drift) > 2) slideToPage(pageRef.current);
           }, 170);
         });
       };
@@ -13099,7 +14241,7 @@ window.__ModuleLoader__.load({
         window.clearTimeout(snapTimer);
         flow.removeEventListener('scroll', onScroll);
       };
-    }, [layout.w, layout.gap, scrollToPage]);
+    }, [step, scrollToPage, slideToPage]);
 
     // 滚轮 / 触控板：竖着滚也要翻页。横向滚动容器对竖向滚轮没有反应，
     // 而看书的人不会先想一想该往哪个方向滚。
@@ -13174,18 +14316,33 @@ window.__ModuleLoader__.load({
       // 记下来在 pointerup 里用：一次点击会先 pointerup 再 click，如果 up 里
       // 就翻了页，等 click 打开批注时书已经跳到下一页了。
       const onSomething = !!(node && typeof node.closest === 'function'
-        && node.closest('.nw-mark[data-mark], .nw-mark-bar, .nw-mark-pop'));
+        && node.closest('.nw-mark[data-mark], .nw-mark-bar, .nw-mark-pop, .nw-mark-side, .nw-read-gutter'));
       pointerRef.current = { x: ev.clientX, y: ev.clientY, onSomething: onSomething };
     };
     const onPointerUp = (ev) => {
       const down = pointerRef.current;
       pointerRef.current = null;
+      // R53g：这一下按下时收掉了某个面板，那它到此为止——不再翻页。只认紧跟着
+      // 的那一次（600ms 内），否则点在正文外没收到 pointerup 时会一直吞翻页。
+      if (dismissedRef.current && Date.now() - dismissedRef.current < 600) {
+        dismissedRef.current = 0;
+        return;
+      }
+      dismissedRef.current = 0;
       if (!down) return;
       if (Math.abs(ev.clientX - down.x) > 8 || Math.abs(ev.clientY - down.y) > 8) {
         // 拖了一下 = 想标注这段字，不是想翻页。从已有标注上起手也一样：
         // 谁都会从一条下划线中间开始往外拖。
         const hit = readSelection();
-        if (hit) setSel(hit);
+        if (hit) {
+          // R53：又划了一段新字，默认是要处理新选区——便签里那条草稿收起来，
+          // 免得「框还停在上一句旁边」。
+          if (composer) {
+            setComposer(null);
+            setComposerNote('');
+          }
+          setSel(hit);
+        }
         return;
       }
       // 没动 = 一次点击。点在标注、工具条或批注面板上时这一下是给它们的，
@@ -13194,6 +14351,7 @@ window.__ModuleLoader__.load({
       if (down.onSomething) return;
       const s0 = typeof window.getSelection === 'function' ? window.getSelection() : null;
       if (s0 && String(s0.toString() || '').length > 0) return;
+      // 便签还开着时点正文这一下已经在 pointerdown 里收起（并保存）了，不再翻页。
       setSel(null);
       const flow = flowRef.current;
       if (!flow) return;
@@ -13258,13 +14416,40 @@ window.__ModuleLoader__.load({
       });
     }, [chapters, currentId, currentText, marks]);
 
+    // 正文重建后立刻重算页边批注签；`body` 变了说明分段/换页规则也可能变了。
+    React.useLayoutEffect(() => {
+      paintGutterRef.current = paintGutter;
+      paintGutter();
+    }, [paintGutter, body]);
+
+    React.useEffect(() => {
+      const flow = flowRef.current;
+      if (!flow) return undefined;
+      let timer = 0;
+      const relayout = () => {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(() => {
+          const fn = paintGutterRef.current;
+          if (typeof fn === 'function') fn();
+        }, 90);
+      };
+      flow.addEventListener('scroll', relayout, { passive: true });
+      window.addEventListener('resize', relayout);
+      return () => {
+        window.clearTimeout(timer);
+        flow.removeEventListener('scroll', relayout);
+        window.removeEventListener('resize', relayout);
+      };
+    }, []);
+
     const flowStyle = {
       fontSize: fontSize + 'px',
       lineHeight: String(lineHeight),
     };
 
     // 选中一段字之后浮出来的小工具条：就四个动作，不下拉、不弹窗。
-    const toolbar = sel
+    // 便签开着的时候收起来：那一版的选区已经交给便签了，再叠一个条子只是噪音。
+    const toolbar = sel && !composer
       ? h(
         'div',
         {
@@ -13291,22 +14476,28 @@ window.__ModuleLoader__.load({
         h('button', {
           type: 'button',
           className: 'nw-mark-bar-btn',
-          onClick: addNote,
-          title: NW.t('批注'),
+          onClick: openComposer,
+          title: NW.t('写批注'),
         }, NW.t('批注')),
       )
       : null;
 
-    // R50：点一条标注 → 就在点的位置浮出两个并列的小按钮（删除 / 批注）。
-    // 点「删除」这条线立刻没了；点「批注」就在同一个位置张开一个贴着字的小编辑框。
-    // 位置一律夹在视口里，贴着底边或右边点时菜单不会跑到屏幕外面去。
-    const anchorOf = (at, w, h) => {
+    // R53：浮层一律贴着点击处，而不是贴着那一行的下沿。
+    // 横向：先试点击处**右边**一拳的地方（不盖住刚点的那几个字），右边放不下
+    // 就翻到左边；`translateX(-50%)` 在 CSS 里，所以这里算的是中心点。
+    // 纵向：和点击处大致齐平，底边放不下就整体上提，永远夹在视口里。
+    const placeNear = (at, w, h) => {
       const vw = (typeof window !== 'undefined' && window.innerWidth) || 1024;
       const vh = (typeof window !== 'undefined' && window.innerHeight) || 768;
-      const left = Math.min(Math.max(at.x, w / 2 + 8), vw - w / 2 - 8);
-      // 优先张在字的下方（贴着那一行）；下面放不下就翻到上方。
-      const below = at.y + 8;
-      const top = below + h > vh - 8 ? Math.max(8, at.y - h - 20) : below;
+      const x = at && Number.isFinite(at.x) ? at.x : vw / 2;
+      const y = at && Number.isFinite(at.y) ? at.y : vh / 2;
+      const side = 14;
+      let center = x + side + w / 2;
+      if (center + w / 2 > vw - 8) center = x - side - w / 2;
+      const left = Math.min(Math.max(center, w / 2 + 8), vw - w / 2 - 8);
+      let top = y - 12;
+      if (top + h > vh - 8) top = Math.max(8, vh - h - 10);
+      if (top < 8) top = 8;
       return { left: Math.round(left) + 'px', top: Math.round(top) + 'px' };
     };
 
@@ -13317,7 +14508,7 @@ window.__ModuleLoader__.load({
           className: 'nw-mark-pop nw-mark-pick',
           role: 'toolbar',
           'aria-label': NW.t('这条标注'),
-          style: anchorOf(picked, 140, 34),
+          style: placeNear(picked, 140, 34),
         },
         h(
           'div',
@@ -13343,7 +14534,7 @@ window.__ModuleLoader__.load({
               setNoteDraft(String(at.mark.note || ''));
               setEditing({ mark: at.mark, x: at.x, y: at.y });
             },
-          }, NW.t('批注')),
+          }, NW.t('写批注')),
         ),
       )
       : null;
@@ -13355,18 +14546,28 @@ window.__ModuleLoader__.load({
           className: 'nw-mark-pop nw-mark-edit',
           role: 'dialog',
           'aria-label': NW.t('批注'),
-          style: anchorOf(editing, 176, 116),
+          style: placeNear(editing, 196, 96),
         },
         h('textarea', {
+          ref: noteRef,
           className: 'nw-mark-pop-note',
           value: noteDraft,
+          rows: 1,
           placeholder: NW.t('这条批注写给自己看'),
           'aria-label': NW.t('批注'),
           autoFocus: true,
-          onChange: (ev) => setNoteDraft(ev.target.value),
+          // R53g：没有保存键。打字即存（700ms 合并一次），收起时补最后一次。
+          onChange: (ev) => {
+            const body = ev.target.value;
+            setNoteDraft(body);
+            scheduleNote(editing.mark.id, body);
+          },
+          onBlur: () => flushNote(),
           onKeyDown: (ev) => {
             if (ev.key === 'Escape') {
               ev.stopPropagation();
+              // 收起就是保存：先补最后一次，再关。
+              flushNote();
               closeMark();
             }
           },
@@ -13374,8 +14575,7 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'nw-mark-pop-acts' },
-          // R51：批注窗里也能删。原先只有「取消/保存」，想扔掉一条批注得先关掉窗
-          // 再点那条线，而线在窗下面，点不到——于是那条批注永远删不掉。
+          // R51：批注窗里也能删。R53g 之后这里是唯一一颗按钮——保存和取消都没了。
           h('button', {
             type: 'button',
             className: 'nw-mark-pop-btn',
@@ -13383,29 +14583,81 @@ window.__ModuleLoader__.load({
             title: NW.t('删掉这条标注'),
             onClick: () => {
               const id = editing.mark.id;
+              // 先作废待写的这一次，否则「存完再删」会把刚删的行又写回来。
+              dropNote();
               closeMark();
               if (typeof p.onUnmark === 'function') p.onUnmark(id);
             },
           }, NW.t('删除')),
-          h('button', {
-            type: 'button',
-            className: 'nw-mark-pop-btn',
-            onClick: closeMark,
-          }, NW.t('取消')),
-          h('button', {
-            type: 'button',
-            className: 'nw-mark-pop-btn',
-            'data-primary': '1',
-            onClick: () => {
-              const id = editing.mark.id;
-              const body = String(noteDraft || '').trim();
-              closeMark();
-              if (typeof p.onNote === 'function') p.onNote(id, body);
-            },
-          }, NW.t('保存')),
         ),
+        // R53e：文字只属于批注。这句话在这里被写成批注，就等于它从「一条下划线」
+        // 变成「一条批注」——同一句话不可能同时是两样东西。所以窗里说清楚这件事，
+        // 而不是让作者以为自己在一条下划线上贴了一张便签。本来已经是批注的不必说。
+        String(editing.mark.kind) === 'comment'
+          ? null
+          : h(
+            'div',
+            { className: 'nw-mark-pop-hint' },
+            NW.t('写下字，这句话就是一条批注'),
+          ),
       )
       : null;
+
+    // R53：新批注的便签。一行高起步，随字长高（最多三行半），位置贴着选区
+    // ——不是屏幕正中那块大面板。R53g：同样没有保存键，第一次出现非空文字时
+    // 才建行（空着关掉就当没写过，不留一条没有话的批注）。
+    const composerBox = composer
+      ? h(
+        'div',
+        {
+          className: 'nw-mark-pop nw-mark-edit',
+          role: 'dialog',
+          'aria-label': NW.t('批注'),
+          style: placeNear(composer, 196, 96),
+        },
+        h('textarea', {
+          ref: composerRef,
+          className: 'nw-mark-pop-note',
+          value: composerNote,
+          rows: 1,
+          placeholder: NW.t('这条批注写给自己看'),
+          'aria-label': NW.t('批注'),
+          autoFocus: true,
+          onChange: (ev) => {
+            const body = ev.target.value;
+            setComposerNote(body);
+            const st = composerSaveRef.current;
+            st.draft = {
+              chapterId: composer.chapterId,
+              start: composer.start,
+              end: composer.end,
+              quote: composer.quote,
+            };
+            st.body = body;
+            scheduleComposer(body);
+          },
+          onBlur: () => commitComposer(),
+          onKeyDown: (ev) => {
+            if (ev.key === 'Escape') {
+              ev.stopPropagation();
+              commitComposer();
+              closeComposer();
+            }
+          },
+        }),
+      )
+      : null;
+
+    // 两个批注输入框都随内容长高：先复位成 auto 再读 scrollHeight，否则只增不减。
+    React.useLayoutEffect(() => {
+      const grow = (el) => {
+        if (!el) return;
+        el.style.height = 'auto';
+        el.style.height = Math.min(64, Math.max(24, el.scrollHeight)) + 'px';
+      };
+      grow(noteRef.current);
+      grow(composerRef.current);
+    }, [noteDraft, composerNote, editing, composer]);
 
     return h(
       'div',
@@ -13456,14 +14708,17 @@ window.__ModuleLoader__.load({
                   return;
                 }
               }
-              // 点空白处收起面板。
-              if (picked || editing) closeMark();
+              // 点空白处收起面板这件事已经由 document 上的 pointerdown 统一处理
+              // （R53g：要覆盖顶栏、页脚、页边签在内的「任何地方」），这里只负责
+              // 「点在标注上就打开它」。
             },
           },
           body,
         ),
+        h('div', { className: 'nw-read-gutter', ref: gutterRef }),
         toolbar,
         picker,
+        composerBox,
         editor,
       ),
       h(
@@ -13734,69 +14989,277 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 }
 .nw-shelfrestore-txt{writing-mode:vertical-rl;letter-spacing:.2em;max-height:72px;overflow:hidden;}
 .nw-shelfrestore-ico{display:inline-flex;flex:0 0 auto;}
+/* ---- 浮动坞（R61）--------------------------------------------------------
+   R57 把它摊成五枚常驻单字，R58 给它一块玻璃板，R59 才发现「点了没反应」
+   的病灶根本不在按钮上——是坞自己的 padding 在子元素之间留了一圈可命中的
+   死区。用户看完这一圈折腾说「还是改回悬浮坞吧」，于是 R60 收回成圆钮。
+
+   R61：用户在桌面同一位置点了一下，弹出的是**别的程序**的悬浮球菜单
+   （打开桌面端 / 开始全部任务 / 查看传输列表 / 隐藏悬浮球 / 取消置顶）。
+   也就是说五轮「上半部分是箭头 / 点了没反应」的真正原因是：那颗一直置顶的
+   悬浮球压在应用窗口的右下角，指针和点击都被它接走了。插件这边的 CSS 从
+   头到尾都是对的。
+
+   位置曾因此上移到 bottom:104px 躲避那颗球；R62 用户关掉了球，位置撤回原位。
+   留下的是那次排查真正属于本插件的那条结论，钉在这里别再丢：**坞的容器不许
+   拥有可命中面积**——没有 padding、没有 gap、不画背景、不画边框，所有看得见
+   的东西都由按钮或伪元素画。 */
+/* R63：五行的度量收到容器上的三个变量里——分隔线的起点、图标格宽、行内间距
+   都由它们算出来，窄屏断点只改这三个数，线就永远对着图标，不会再出现
+   「分隔线从行中间起笔」这种一眼就看得出不整齐的地方。
+   上面 R59 那三条硬规矩没有变：容器不 padding、不 gap、不画底不画框。 */
 .nw-dock{
-  position:absolute;z-index:var(--nw-z-float);
-  right:20px;bottom:56px;
-  display:flex;flex-direction:column;align-items:flex-end;gap:var(--nw-sp-1);
-  /* R21: .35 was invisible on the warm paper — the FAB read as a smudge and
-     nobody would guess it was a button. At rest the dock only ever shows the
-     FAB (the menu is display-gated behind data-open), so dimming it was dimming
-     the one thing that had to stay legible. .88 keeps it out of the way without
-     washing the brand fill into the page. */
-  opacity:.88;
-  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
+  position:absolute;z-index:var(--nw-z-panel);
+  right:22px;bottom:60px;
+  display:flex;flex-direction:column;align-items:flex-end;
+  padding:0;gap:0;
+  border:0;background:none;box-shadow:none;
+  --nw-dock-pad-l:12px;
+  --nw-dock-tile:26px;
+  --nw-dock-gap:12px;
 }
-.nw-dock:hover,.nw-dock:focus-within,.nw-dock[data-open="1"]{opacity:1;}
-/* R47: in immersive mode the dock is the only handle left, so it stays but
-   steps back — low enough not to sit on the prose, high enough to be found.
-   Hover / focus / an open menu bring it all the way back. */
-.nw-dock[data-immersive="1"]{bottom:20px;right:16px;opacity:.3;}
-.nw-dock[data-immersive="1"]:hover,
-.nw-dock[data-immersive="1"]:focus-within,
-.nw-dock[data-immersive="1"][data-open="1"]{opacity:1;}
-@media (prefers-reduced-motion: reduce){.nw-dock{transition:none;}}
-.nw-dock-fab{
-  width:44px;height:44px;border-radius:var(--nw-r-pill);
-  display:inline-flex;align-items:center;justify-content:center;
-  /* R21: this used the host aliases and a literal black shadow, so it was the
-     one control that did not follow the reading theme — on night it stayed a
-     pale chip, on paper it kept a grey halo. Worse, once it moved onto --nw-panel
-     it matched the sheet exactly and disappeared into it.
-     A floating action button has to be an action: it is now the one brand-filled
-     element in the writing view, which also balances the 新建小说 button on the
-     home screen. The dock's 0.55 opacity keeps it from shouting until hovered. */
-  border:1px solid color-mix(in srgb, var(--nw-brand) 82%, var(--nw-fg));
-  background:var(--nw-brand);
-  color:var(--nw-panel);
-  box-shadow:var(--nw-shadow-2);
-  cursor:pointer;font-size:18px;line-height:1;
-  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
+.nw-dock[data-immersive="1"]{bottom:22px;right:18px;}
+
+/* 菜单：从圆钮上方长出来的一张卡。行与行之间不留缝——留缝就是 R59 的死区。
+   R63：整张卡仍然由菜单自己的 ::before 一次画出，但材料换了一层：
+   ① 底不是平涂的 surface-2，顶部叠一道 5% 品牌色的暖光，往下 46% 化开——
+      卡片上沿因此比下沿亮一点点，纸面从「一块板」变成「一张有光的纸」；
+   ② 描边换成 l2 兑 38% 透明，比 l1 的发丝线略深，卡片边界在浅纸上才立得住；
+   ③ 阴影分两层：一层大而散（把卡托离纸面），一层小而紧（给下沿定边），
+      再补一条 1px 的内高光当「纸的切边」。
+   ::after 是底边探出的圆角小尖角，指着下面的圆钮。 */
+.nw-dock-menu{
+  position:relative;isolation:isolate;
+  display:flex;flex-direction:column;align-items:stretch;
+  /* margin 不是死区：它不属于任何盒子，指针在那条缝里落到的是正文。 */
+  margin:0 0 8px;
+  padding:0;gap:0;
+  min-width:152px;
+  transform-origin:100% 100%;
+  animation:nw-dock-rise .22s var(--nw-ease-pop, cubic-bezier(.22,1.16,.36,1)) both;
 }
-.nw-dock-fab:hover{transform:translateY(-2px);box-shadow:var(--nw-shadow-3);}
-.nw-dock-fab:active{transform:translateY(0) scale(.97);}
-.nw-dock-menu{display:flex;flex-direction:column;align-items:flex-end;gap:var(--nw-sp-1);}
-.nw-dock-menu[data-open="1"]{animation:nw-pop var(--nw-dur) var(--nw-ease,ease);}
+.nw-dock-menu::before{
+  content:'';position:absolute;inset:0;z-index:-1;
+  border-radius:calc(var(--nw-r-control) + 6px);
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--nw-brand) 5%, transparent),
+      transparent 46%),
+    var(--nw-surface-2);
+  border:1px solid color-mix(in srgb, var(--nw-line) 78%, transparent);
+  box-shadow:
+    0 20px 44px -16px color-mix(in srgb, var(--nw-fg) 30%, transparent),
+    0 3px 10px -3px color-mix(in srgb, var(--nw-fg) 12%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--nw-bg) 45%, transparent);
+  pointer-events:none;
+}
+.nw-dock-menu::after{
+  content:'';position:absolute;right:19px;bottom:-6px;
+  width:12px;height:12px;
+  /* z -1：小尖角只盖住卡片，不许盖最后一行的高亮——它在树里排在行之后，
+     不压下去就会把「投稿」右下角切掉一小块。 */
+  z-index:-1;
+  border-radius:2px;
+  transform:rotate(45deg);
+  background:var(--nw-surface-2);
+  border-right:1px solid color-mix(in srgb, var(--nw-line) 78%, transparent);
+  border-bottom:1px solid color-mix(in srgb, var(--nw-line) 78%, transparent);
+  pointer-events:none;
+}
+.nw-dock-menu[data-open="0"]{display:none;}
+@keyframes nw-dock-rise{
+  from{opacity:0;transform:translateY(8px) scale(.95);}
+  to{opacity:1;transform:none;}
+}
+/* 开放时五行依次浮起，每行晚 30ms——卡片先出来，字随后落定。
+   只在展开态挂动画（收起时 display:none，再展开自然重播）。 */
+@keyframes nw-dock-row-in{
+  from{opacity:0;transform:translateY(4px);}
+  to{opacity:1;transform:none;}
+}
+.nw-dock-menu[data-open="1"] .nw-dock-btn{
+  animation:nw-dock-row-in .2s var(--nw-ease, ease) both;
+}
+.nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(2){animation-delay:.03s;}
+.nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(3){animation-delay:.06s;}
+.nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(4){animation-delay:.09s;}
+.nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(5){animation-delay:.12s;}
+
+/* 一行动作：矩形盒子应答指针，高亮由 ::before 画。
+   盒子无圆角、无边框、无背景、无子元素应答指针——浏览器只有一个盒子要测。
+   R63：行高 44 → 42，图标格 24 → 26 并加一圈发丝内描边（读起来像一枚
+   压出来的工具格，而不是一块灰色补丁）；行首文字 13 → 14 并加 500 字重，
+   中文在浅纸上 400 太细；行尾多一枚只在悬停时浮现的箭嘴，把「这一行
+   通向别处」说清楚，也把卡片右侧的空白收住。 */
 .nw-dock-btn{
-  display:inline-flex;align-items:center;gap:var(--nw-sp-1);
-  height:38px;padding:0 16px;border-radius:var(--nw-r-pill);
-  /* R21: same host-alias leak as the FAB — the menu rows stayed white on night. */
-  border:1px solid var(--nw-line-strong);
-  background:var(--nw-panel);
-  color:var(--nw-fg);
-  font-size:14px;cursor:pointer;white-space:nowrap;
-  box-shadow:var(--nw-shadow-1);
-  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
+  position:relative;isolation:isolate;
+  display:flex;align-items:center;gap:var(--nw-dock-gap);
+  width:100%;
+  height:42px;padding:0 16px 0 var(--nw-dock-pad-l);
+  border-radius:0;border:0;background:transparent;
+  color:color-mix(in srgb, var(--nw-fg) 82%, var(--nw-bg));
+  font-size:var(--nw-fs-second);line-height:1;white-space:nowrap;
+  text-align:left;
+  cursor:pointer;
+  /* R54c：没有 hover/active 位移。会变形的按钮会把自己的命中区从指针底下挪走。 */
+  transition:color .16s var(--nw-ease, ease);
 }
-.nw-dock-btn:hover{transform:translateY(-1px);background:var(--nw-surface-2);}
-.nw-dock-btn[disabled]{opacity:.45;cursor:default;transform:none;}
-/* The dock carries nine rows in R5 (three writing tools + a 「更多」 group), so
-   the icon column is fixed-width to keep every label on the same baseline. */
-.nw-dock-icon{display:inline-flex;align-items:center;justify-content:center;
-  width:18px;height:18px;flex:0 0 auto;color:var(--dsw-alias-label-secondary);}
-.nw-dock-btn:hover:not([disabled]) .nw-dock-icon{color:var(--dsw-alias-label-primary);}
-.nw-dock-sep{width:100%;height:1px;background:var(--dsw-alias-border-l1);margin:0;flex:0 0 auto;}
-.nw-dock-fabicon{display:inline-flex;align-items:center;justify-content:center;}
-@keyframes nw-pop{from{opacity:0;transform:translateY(8px) scale(.94)}to{opacity:1;transform:none}}
+.nw-dock-btn:hover:not([data-blocked="1"]),
+.nw-dock-btn:focus-visible{color:var(--nw-fg);}
+/* 分隔线只出现在「行与行之间」，而且从图标格的右缘起笔、到右侧内边距收笔，
+   末端渐隐——它对齐的是文字，不是行盒子；这样五行的左边界读起来是一条线。 */
+.nw-dock-btn + .nw-dock-btn::after{
+  content:'';position:absolute;top:0;height:1px;
+  left:calc(var(--nw-dock-pad-l) + var(--nw-dock-tile) + var(--nw-dock-gap));
+  right:16px;
+  background:linear-gradient(90deg,
+    color-mix(in srgb, var(--nw-line-soft) 95%, transparent),
+    color-mix(in srgb, var(--nw-line-soft) 30%, transparent) 70%,
+    transparent);
+  pointer-events:none;
+}
+.nw-dock-btn::before{
+  content:'';position:absolute;inset:3px 6px;z-index:-1;
+  border-radius:calc(var(--nw-r-control) - 1px);
+  pointer-events:none;
+  background:transparent;
+  border:1px solid transparent;
+  box-shadow:none;
+  transition:background .16s var(--nw-ease, ease),
+    border-color .16s var(--nw-ease, ease),
+    box-shadow .16s var(--nw-ease, ease);
+}
+/* 悬停高亮：一条 100° 的品牌色斜光，左边略重、右边化开；描边只收 20%，
+   够看出边界又不至于读成一枚输入框；再压一道 1px 内高光当纸面反光。 */
+.nw-dock-btn:hover::before,
+.nw-dock-btn:focus-visible::before{
+  background:linear-gradient(100deg,
+    color-mix(in srgb, var(--nw-brand) 12%, transparent),
+    color-mix(in srgb, var(--nw-brand) 5%, transparent));
+  border-color:color-mix(in srgb, var(--nw-brand) 20%, transparent);
+  box-shadow:0 1px 2px color-mix(in srgb, var(--nw-brand) 12%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--nw-bg) 38%, transparent);
+}
+.nw-dock-btn:active:not([data-blocked="1"])::before{filter:brightness(.97);}
+.nw-dock-btn > *{pointer-events:none;}
+/* 焦点环画在 ::before 上：按钮盒子是直角矩形，原生 outline 会在圆角高亮
+   外面画出一个方框，看着像另一个控件。 */
+.nw-dock-btn:focus-visible{outline:none;}
+.nw-dock-btn:focus-visible::before{
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-brand) 45%, transparent);
+}
+/* R58：没开章时不再是 disabled。禁用按钮一声不响，那和坏掉长得一样。 */
+.nw-dock-btn[data-blocked="1"]{color:var(--nw-fg-soft);}
+.nw-dock-btn[data-blocked="1"] .nw-dock-icon{opacity:.5;}
+.nw-dock-btn[data-blocked="1"] .nw-dock-go{display:none;}
+.nw-dock-btn[disabled]{cursor:default;}
+
+/* 图标格：五个动作各有一枚自己的印记。静止时是浅墨底 + 发丝内描边，
+   悬停时底换成品牌色渐变、描边加深、图标本身转成品牌色——变的是光，
+   不是位置。尺寸由 --nw-dock-tile 给，窄屏跟着行高一起缩。 */
+.nw-dock-icon{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:var(--nw-dock-tile);height:var(--nw-dock-tile);flex:0 0 auto;
+  border-radius:8px;
+  background:color-mix(in srgb, var(--nw-fg) 6%, transparent);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--nw-fg) 5%, transparent);
+  color:color-mix(in srgb, var(--nw-fg-soft) 88%, var(--nw-fg));
+  transition:background .16s var(--nw-ease, ease),
+    color .16s var(--nw-ease, ease),
+    box-shadow .16s var(--nw-ease, ease);
+}
+.nw-dock-btn:hover:not([data-blocked="1"]) .nw-dock-icon{
+  background:linear-gradient(160deg,
+    color-mix(in srgb, var(--nw-brand) 24%, transparent),
+    color-mix(in srgb, var(--nw-brand) 11%, transparent));
+  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--nw-brand) 32%, transparent),
+    0 1px 3px color-mix(in srgb, var(--nw-brand) 20%, transparent);
+  color:var(--nw-brand);
+}
+.nw-dock-name{letter-spacing:.01em;font-weight:500;}
+/* 行尾箭嘴：静止透明、悬停浮现。它不说话，只说「这里通向下一屏」。 */
+.nw-dock-go{
+  display:inline-flex;align-items:center;justify-content:center;
+  margin-left:auto;flex:0 0 auto;
+  color:var(--nw-brand);opacity:0;
+  transition:opacity .16s var(--nw-ease, ease);
+}
+.nw-dock-btn:hover:not([data-blocked="1"]) .nw-dock-go,
+.nw-dock-btn:focus-visible .nw-dock-go{opacity:.7;}
+
+/* 圆钮（FAB）：盒子是方形、透明、无圆角；形状由 ::before 画。
+   R63：从「一枚品牌色圆贴纸」改成「一枚压进纸里的墨印」——
+   ① 形状从正圆改成 16px 圆角方块，和卡片同一个圆角家族，卡与钮读成一组；
+   ② 颜色不用纯品牌色，而是品牌色兑 20% 墨（--nw-dock-ink）：浅色主题里
+      得到一枚深砖红，像印泥；夜间主题在 98-shell-theme 里单独兑底色；
+   ③ 底是 115% 的偏心径向渐变（左上亮、右下沉），描边一圈深墨，顶上
+      一道 1px 白边当反光——三样东西加起来才有「一块有厚度的墨」；
+   ④ 阴影里混了一层品牌色，落在纸上是暖的，不是灰的；
+   ⑤ ::after 是一圈内收 5px 的发丝环，像印面边缘，悬停时提亮。
+   静止 82%（旧值 62% 太淡，深色墨印在浅纸上会读成脏点），悬停与展开到 1。 */
+.nw-dock-fab{
+  position:relative;isolation:isolate;
+  display:flex;align-items:center;justify-content:center;
+  width:52px;height:52px;padding:0;flex:0 0 auto;
+  border-radius:0;border:0;background:transparent;
+  color:color-mix(in srgb, #ffffff 92%, var(--nw-bg));
+  cursor:pointer;
+  --nw-dock-ink:color-mix(in srgb, var(--nw-brand) 80%, var(--nw-fg));
+  --nw-dock-lift:
+    0 8px 18px -8px color-mix(in srgb, var(--nw-dock-ink) 70%, transparent),
+    0 16px 34px -18px color-mix(in srgb, var(--nw-fg) 45%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #ffffff 28%, transparent);
+}
+.nw-dock-fab::before{
+  content:'';position:absolute;inset:0;z-index:-1;
+  border-radius:16px;
+  pointer-events:none;
+  background:radial-gradient(115% 115% at 30% 16%,
+    color-mix(in srgb, var(--nw-dock-ink) 74%, #ffffff) 0%,
+    var(--nw-dock-ink) 48%,
+    color-mix(in srgb, var(--nw-dock-ink) 86%, #0e0b08) 100%);
+  border:1px solid color-mix(in srgb, var(--nw-dock-ink) 62%, var(--nw-fg));
+  box-shadow:var(--nw-dock-lift);
+  opacity:.82;
+  transition:opacity .2s var(--nw-ease, ease),
+    box-shadow .2s var(--nw-ease, ease);
+}
+.nw-dock-fab::after{
+  content:'';position:absolute;inset:5px;z-index:-1;
+  border-radius:12px;
+  border:1px solid color-mix(in srgb, #ffffff 22%, transparent);
+  pointer-events:none;
+  opacity:.5;
+  transition:opacity .2s var(--nw-ease, ease);
+}
+.nw-dock-fab:hover::before,
+.nw-dock-fab:focus-visible::before{opacity:1;}
+.nw-dock-fab:hover::after,
+.nw-dock-fab:focus-visible::after{opacity:.85;}
+.nw-dock-fab[aria-expanded="true"]::before{opacity:1;}
+.nw-dock-fab[aria-expanded="true"]::after{opacity:.35;}
+.nw-dock-fab:active::before{filter:brightness(.95);}
+.nw-dock-fab:focus-visible{outline:none;}
+.nw-dock-fab:focus-visible::before{
+  box-shadow:var(--nw-dock-lift),
+    0 0 0 3px color-mix(in srgb, var(--nw-brand) 40%, transparent);
+}
+.nw-dock-fab > *{pointer-events:none;}
+.nw-dock-fabicon{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:20px;height:20px;
+  transition:transform .22s var(--nw-ease-pop, ease);
+}
+.nw-dock-fab[aria-expanded="true"] .nw-dock-fabicon{transform:rotate(90deg);}
+
+@media (prefers-reduced-motion: reduce){
+  .nw-dock-menu,
+  .nw-dock-menu[data-open="1"] .nw-dock-btn{animation:none;}
+  .nw-dock-fab::before,.nw-dock-fab::after{transition:none;}
+  .nw-dock-fabicon{transition:none;}
+  .nw-dock-go{transition:none;}
+}
+
 /* 灵感便签 (R13). R11 把它做成一整页纸：一展开就把正文顶掉，用户说「不用分窗口
    了，悬浮在编辑器上」，又说「看着好瘦长」—— 那是 196px 宽 × 整屏高 的结果。
    现在是一张 420×最多 320 的悬浮卡片，钉在写作列**左上角**：写作时一直看得见正文，
@@ -14100,6 +15563,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      */
     const [adviceOpen, setAdviceOpen] = useState(() => lsGet(LS_ADVICE_OPEN) === '1');
     /**
+     * R60: the dock is collapsed by default. R57 had no such state because the
+     * five rows were always laid out; now that the shape is a FAB again, this is
+     * what the button toggles. Not persisted on purpose — a dock that reopens
+     * itself on restart would cover the last paragraphs of the chapter.
+     */
+    const [dockOpen, setDockOpen] = useState(false);
+    /**
      * R25: null = auto. The column measures itself from the bench (see
      * .nw-suggest in the CSS above) so it always hugs the page instead of
      * leaving a dead margin. A drag stores an explicit pixel width and from then
@@ -14109,8 +15579,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       const raw = Number(lsGet(LS_ADVICE_WIDTH));
       return Number.isFinite(raw) && raw >= 260 && raw <= 640 ? raw : null;
     });
-    /** Bottom-right action dock: collapsed to a single round button by default. */
-    const [dockOpen, setDockOpen] = useState(false);
     /**
      * R44: 读一遍 — the whole book laid out as pages, over the writing surface.
      * It is an overlay rather than a route on purpose: the editor stays mounted
@@ -16271,9 +17739,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // was the one that vanished. It is dimmed down to a hint instead.
     const dock = h(Dock, {
           immersive: immersive,
+          chapter: chapter,
+          // R60: the FAB shape is back, so the dock needs the open flag again.
           open: dockOpen,
           onToggle: () => setDockOpen((v) => !v),
-          chapter: chapter,
+          // R58: a blocked row used to be a silently disabled button; now it
+          // stays clickable and explains itself through the same toast channel
+          // the rest of the shell uses.
+          onBlocked: (name) => {
+            pushToast('先打开一章，再' + name, 'warn');
+          },
           onProofread: () => {
             setDockOpen(false);
             openDialog('proofread');
@@ -16283,18 +17758,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             openDialog('typeset');
           },
           onAdvice: () => {
-            setDockOpen(false);
             // The column sits beside the paper, so it must be closable again by
             // the same row — the toggle is the only affordance that survives
             // after the panel takes a third of the width.
+            setDockOpen(false);
             setAdviceOpen((v) => !v);
           },
           onSubmit: () => {
-            setDockOpen(false);
             // R28 ②: AI 投稿 is a one-click path. Standing in a book means the
             // manuscript is already decided, so the wizard opens straight on the
             // preview and picks the model's top journal for the writer; from the
             // home screen there is no manuscript yet, so it opens on step 1.
+            setDockOpen(false);
             openDialog(
               'submit',
               view === 'write' && activeNovelId
@@ -16564,7 +18039,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       : NW.ui.btn({ onClick: () => setView('home'), children: '返回首页' }),
                   ),
                 ),
-          dock,
+          // R54e: 浮动坞只在写作页出现。它原本无条件挂在 `.nw-main` 里，而首页
+          // 也渲染在 `.nw-main` 中，于是「AI 校对 / 一键排版 / 读一遍 / 投稿」
+          // 这几个按钮浮在了首页右下角 —— 那些动作在首页没有一个可用（`chapter`
+          // 为空时全部 disabled），只剩下一枚关不掉的圆按钮压在快捷入口上。
+          // 首页有自己的卡片和操作行，不需要这块坞。
+          view === 'write' || immersive ? dock : null,
         ),
       ),
       // R44: 读一遍 — the book laid out as pages, covering the whole panel.
@@ -16804,56 +18284,85 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   }
 
   // ---------------------------------------------------------------- dock -----
-  // The toolbar is gone (R5): 四个写作工具 + 更多 live in this dock instead. It is
-  // collapsed to a single round button so it never covers the writing column.
+  // R60: back to a collapsed FAB that opens a menu of five rows. R57 spread the
+  // five actions out as permanent single characters because the writer asked for
+  // that; after living with it for a few rounds the answer was "还是改回悬浮坞
+  // 吧". So the shape returns, but the *structure* keeps R59's finding: the dock
+  // div itself owns no hit-testable area. No padding, no gap, no background on
+  // the container — every visible surface is painted by a button or its ::before.
+  // That is what made "上半部分是箭头 / 点了没反应" possible in the first place:
+  // the rail used to be 144px tall with a 5px padding band that belonged to a
+  // plain div with cursor:auto. A collapsed FAB has the same failure mode if the
+  // menu rows are spaced apart inside a container that paints nothing.
+  //
+  // The round shape is painted, not owned: `.nw-dock-fab` is a square transparent
+  // box and the circle is its ::before. R54d/R54f/R54g/R56 spent four rounds
+  // teaching that a rounded control asks the browser to hit-test a shape it will
+  // not reliably answer; a square box with a painted circle asks nothing.
   function Dock(props) {
     const p = props || {};
     const open = !!p.open;
 
-    /** One menu row: icon + label, disabled when the action needs a chapter. */
-    const item = (iconName, label, onClick, needsChapter) =>
-      h(
+    /**
+     * One action row. `disabled` is still gone (R58): a disabled button fires
+     * nothing at all, and "the screen did not change" is indistinguishable from
+     * a bug. The row stays clickable and says why it cannot act.
+     */
+    const item = (iconName, name, onClick, needsChapter) => {
+      const blocked = needsChapter && !p.chapter;
+      return h(
         'button',
         {
           type: 'button',
           className: 'nw-dock-btn',
           role: 'menuitem',
-          disabled: needsChapter ? !p.chapter : false,
-          onClick: onClick,
-          title: label,
+          'data-blocked': blocked ? '1' : '0',
+          'aria-disabled': blocked ? 'true' : undefined,
+          onClick: () => {
+            if (blocked) {
+              if (typeof p.onBlocked === 'function') p.onBlocked(name);
+              return;
+            }
+            if (typeof onClick === 'function') onClick();
+          },
+          title: blocked ? name + '（先打开一章）' : name,
+          'aria-label': name,
         },
         h('span', { className: 'nw-dock-icon', 'aria-hidden': 'true' }, NW.icon(iconName, { size: 16 })),
-        h('span', null, label),
+        h('span', { className: 'nw-dock-name' }, name),
+        // R63: a trailing arrow that only exists on hover. It is decoration —
+        // aria-hidden, inert, and it never becomes the only cue that a row does
+        // something. Blocked rows hide it in CSS, because there is no "next
+        // screen" behind them until a chapter is open.
+        h('span', { className: 'nw-dock-go', 'aria-hidden': 'true' }, NW.icon('chevright', { size: 12 })),
       );
+    };
 
-    // R10: the dock carries only the three writing actions. Everything that is
-    // really a setting moved there (theme, typewriter, layout, lock), and the
-    // home/shelf toggles already have their own permanently visible handles —
-    // a nine-row menu read as a second toolbar, which is what the user objected
-    // to. Fewer rows also means the collapsed FAB stays the only thing on top
-    // of the writing column.
     return h(
       'div',
-      { className: 'nw-dock', 'data-open': open ? '1' : '0', 'data-immersive': p.immersive ? '1' : '0' },
-      open
-        ? h(
-            'div',
-            { className: 'nw-dock-menu', 'data-open': '1', role: 'menu' },
-            item('proofread', NW.t('AI 校对'), p.onProofread, true),
-            item('typeset', NW.t('一键排版'), p.onTypeset, true),
-            item('sparkle', NW.t('修改建议'), p.onAdvice, true),
-            // Reading the manuscript back is how a writer sees the story rather
-            // than the sentence, so it sits with the other finishing actions.
-            item('book', NW.t('读一遍'), p.onRead, true),
-            item('send', NW.t('投稿'), p.onSubmit, true),
-          )
-        : null,
+      {
+        className: 'nw-dock',
+        'data-immersive': p.immersive ? '1' : '0',
+        'data-open': open ? '1' : '0',
+      },
+      h(
+        'div',
+        { className: 'nw-dock-menu', 'data-open': open ? '1' : '0', role: 'menu', 'aria-hidden': open ? 'false' : 'true' },
+        // 修改建议 toggles the advice column beside the paper, so its row stays
+        // lit while that column is open.
+        item('proofread', NW.t('AI 校对'), p.onProofread, true),
+        item('typeset', NW.t('一键排版'), p.onTypeset, true),
+        item('sparkle', NW.t('修改建议'), p.onAdvice, true),
+        item('book', NW.t('读一遍'), p.onRead, true),
+        item('send', NW.t('投稿'), p.onSubmit, true),
+      ),
       h(
         'button',
         {
           type: 'button',
           className: 'nw-dock-fab',
           'aria-expanded': open ? 'true' : 'false',
+          'aria-haspopup': 'menu',
           'aria-label': open ? NW.t('收起写作工具') : NW.t('展开写作工具'),
           title: open ? NW.t('收起写作工具') : NW.t('展开写作工具'),
           onClick: p.onToggle,
@@ -16861,7 +18370,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         h(
           'span',
           { className: 'nw-dock-fabicon', 'aria-hidden': 'true' },
-          NW.icon(open ? 'x' : 'pencil', { size: 18 }),
+          NW.icon(open ? 'x' : 'pencil', { size: 20 }),
         ),
       ),
     );
@@ -20136,10 +21645,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             rowToggle('打字机模式', draft.typewriter, (v) => set('typewriter', v)),
             rowToggle('沉浸模式（隐藏所有面板，Esc 或 Ctrl+Shift+F 退出）', draft.immersive, (v) => set('immersive', v)),
             rowToggle(
-              '沉浸时只照亮正在写的几行',
+              '只照亮正在写的几行',
               draft.focusDim !== false,
               (v) => set('focusDim', v),
-              NW.t('其余行淡去，仍在原处，鼠标一滚就回来。'),
+              NW.t('其余行淡去，仍在原处，鼠标一滚就回来。沉浸与非沉浸都生效。'),
             ),
             NW.ui.field({
               label: '上下各留 ' + String(Number(draft.focusLines) || 0) + ' 行',
@@ -23762,8 +25271,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    One transition vocabulary for controls that do not declare their own. The
    :where() keeps specificity at zero so any component rule still wins. */
 .nw-root :where(.nw-btn,.nw-input,.nw-select,.nw-textarea,.nw-rowitem,.nw-suggest,
-  .nw-journal-item,.nw-choice,.nw-fold > summary,.nw-toast,.nw-dock-btn,
-  .nw-dock-fab){
+  .nw-journal-item,.nw-choice,.nw-fold > summary,.nw-toast,.nw-dock-btn,.nw-dock-fab){
   transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
     border-color var(--nw-dur,.18s) var(--nw-ease,ease),
     color var(--nw-dur,.18s) var(--nw-ease,ease),
@@ -23781,7 +25289,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     scroll-behavior:auto !important;
   }
   .nw-btn:hover:not(:disabled),
-  .nw-dock-fab:hover,.nw-dock-fab:active,
   .nw-dock-btn:hover,.nw-journal-item:hover,
   .nw-choice:hover{transform:none !important;}
 }
@@ -24184,62 +25691,42 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-status .nw-dot{width:8px;height:8px;}
 
 /* ================================================================= dock ====
-   90-app draws the dock; this layer only keeps it in the same material world as
-   the paper: overlay surface, hairline, restrained shadow, and a hover that
-   re-lifts. The dock must never compete with the text, hence the low resting
-   opacity that 90-app already sets — nothing here raises it. */
-.nw-dock{
-  right:24px;bottom:64px;gap:var(--nw-sp-2);
-  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
-}
-/* R21: the FAB is the one control in the writing view that has to be findable
-   without hovering, so it is the brand fill — same role as 新建小说 on the home
-   screen. The earlier overlay fill sat within ~4% of the paper and vanished. */
-.nw-dock-fab{
-  width:46px;height:46px;border-radius:var(--nw-r-pill);
-  border:1px solid color-mix(in srgb, var(--nw-brand) 82%, var(--nw-fg));
-  background:var(--nw-brand);color:var(--nw-panel);
-  box-shadow:var(--nw-shadow-2);
-  font-size:19px;
-  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease-pop,ease),
-    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
-    background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
-}
-.nw-dock-fab:hover{
-  transform:translateY(-2px);
-  background:color-mix(in srgb, var(--nw-brand) 88%, var(--nw-fg));
-  box-shadow:var(--nw-shadow-3);
-}
-.nw-dock-fab:active{transform:translateY(0) scale(.97);}
-.nw-dock-fab:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
-.nw-dock-menu{gap:var(--nw-sp-2);}
-.nw-dock-menu[data-open="1"]{animation:nw-pop var(--nw-dur,var(--nw-dur)) var(--nw-ease-pop,ease) both;}
-.nw-dock-btn{
-  height:40px;padding:0 18px;border-radius:var(--nw-r-pill);
-  border:1px solid var(--nw-line-soft);
-  background:var(--nw-surface-overlay);color:var(--nw-fg);
-  font-size:var(--nw-fs-second);font-weight:500;gap:var(--nw-sp-1);
-  box-shadow:var(--nw-shadow-1);
-  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
-    background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
-}
-.nw-dock-btn:hover:not(:disabled){
-  transform:translateY(-1px);background:var(--nw-surface-overlay);
-  border-color:var(--nw-line);box-shadow:var(--nw-shadow-2);
-}
-.nw-dock-btn:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
-.nw-dock-btn > span[aria-hidden]{font-size:16px;line-height:1;color:var(--nw-fg-soft);}
+   R60: back to a FAB that opens a menu (the writer asked for it after living
+   with the five-row rail). This layer only keeps the dock in the same material
+   world as the paper — position, palette, radii — and it repeats R59's hard
+   rule: the container owns no hit-testable area. No padding, no gap, no
+   background, no border on .nw-dock itself; every visible surface belongs to a
+   button or its ::before. If a future edit gives this container a frame again,
+   the pointer will start landing on a plain div that has cursor:auto — which is
+   exactly the symptom that took five rounds to diagnose.
+
+   R61: the whole rail moved up, and not because of anything in this file. The
+   writer clicked the same spot on their desktop and got a third-party floating
+   ball's menu (start all tasks / transfer list / hide the ball / unpin). That
+   ball is always-on-top over the bottom-right corner and had been taking the
+   pointer and the click the whole time — five rounds of CSS were chasing a bug
+   that lived outside the app. R62: the ball is gone now, so the rail is back at
+   its original corner. The reason it moved is kept here because it is the only
+   part of that story that can bite again on another machine.
+
+   R63: 材料（底、圆角、描边、阴影、图标格、悬停光）整体搬回 90-app.js，
+   这里只留位置和容器的硬规矩。两层各声明一遍同一批属性、由源码顺序决胜，
+   正是 R56 的旧值能一直躺在文件里不被发现的原因——一个属性只该有一个出处。 */
+/* 位置：仍在右下角。R62 回到原位，R61 那段原因见上。 */
+.nw-dock{right:24px;bottom:68px;padding:0;gap:0;border:0;background:none;box-shadow:none;}
+/* 容器与菜单都不许有自己的 padding/gap：留缝就是死区。 */
+.nw-dock-menu{padding:0;gap:0;margin:0 0 8px;}
 
 /* ============================================================= immersive ===
    R3 removed the immersive top strip entirely: 90-app renders no Toolbar at all
    while immersive, and the only exit is Esc (announced by a toast). So there is
    nothing left to position — only the canvas itself and the dock, which stays
-   reachable but recedes until hovered. */
+   reachable but fades further until hovered. */
 .nw-root.nw-immersive{background:var(--nw-bg);}
-.nw-root.nw-immersive .nw-dock{opacity:.22;}
+.nw-root.nw-immersive .nw-dock{opacity:.32;}
 .nw-root.nw-immersive .nw-dock:hover,
-.nw-root.nw-immersive .nw-dock:focus-within{opacity:1;}
+.nw-root.nw-immersive .nw-dock:focus-within,
+.nw-root.nw-immersive .nw-dock[data-open="1"]{opacity:1;}
 
 /* ============================================================== narrow ====
    The tool strip is the one place that must degrade: below ~980px of *panel*
@@ -24262,8 +25749,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   .nw-modal-head{padding:15px 16px 13px;}
   .nw-modal-body{padding:var(--nw-sp-4);}
   .nw-modal-foot{padding:12px 16px;}
-  .nw-dock{right:12px;bottom:52px;}
-  .nw-dock-btn{height:38px;padding:0 15px;}
+  .nw-dock{right:12px;bottom:52px;--nw-dock-tile:24px;--nw-dock-gap:10px;}
+  .nw-dock-btn{height:38px;padding:0 14px 0 11px;}
 }
 /* Belt and braces: engines without container queries still degrade on a narrow
    window instead of clipping. */
@@ -24281,7 +25768,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 /* ====================================================== motion preference == */
 @media (prefers-reduced-motion: reduce){
   .nw-btn,.nw-btn:hover:not(:disabled),.nw-btn:active:not(:disabled),
-  .nw-dock-fab,.nw-dock-fab:hover,.nw-dock-fab:active,
   .nw-dock-btn,.nw-dock-btn:hover:not(:disabled),
   .nw-journal-item,.nw-choice,.nw-theme-swatch{transform:none !important;}
   .nw-root *,.nw-root *::before,.nw-root *::after{
@@ -24381,10 +25867,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    otherwise the sheet would read as a hole rather than a page. */
 .nw-root[data-theme="night"] .nw-modal{background:#232220;}
 .nw-root[data-theme="night"] .nw-toast{background:#2b2a26;}
-/* R21: the FAB no longer needs a night override — it is brand-filled in every
-   theme (see 97-theme.js). Only the menu rows still need the lift, because they
-   sit on --nw-panel and at night that is one step off the page. */
-.nw-root[data-theme="night"] .nw-dock-btn{background:#2b2a26;}
+/* R21/R63: the rows are transparent now, so nothing needs lifting at night —
+   the menu card itself is surface-2, which already sits above the page. The
+   FAB does need one override: its "seal" colour is brand mixed toward ink,
+   and at night the ink is light, which would wash it into pale peach. Mix
+   toward the page instead and it stays a deep terracotta. */
+.nw-root[data-theme="night"] .nw-dock-fab{
+  --nw-dock-ink:color-mix(in srgb, var(--nw-brand) 80%, var(--nw-bg));
+}
 
 /* ============================================================== card ====== */
 /* ========================================================= newspaper ====== */
@@ -24552,7 +26042,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   .nw-settings{grid-template-columns:132px minmax(0,1fr);gap:var(--nw-sp-3);}
   .nw-submit-grid{grid-template-columns:minmax(0,1fr);min-height:0;gap:var(--nw-sp-3);}
   .nw-journal-list{max-height:280px;}
-  .nw-dock{right:14px;bottom:52px;}
+  .nw-dock{right:14px;bottom:52px;--nw-dock-tile:24px;--nw-dock-gap:10px;}
   .nw-status{gap:var(--nw-sp-3);}
 }
 
@@ -24603,7 +26093,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   /* Tools: the dock shrinks to its FAB, the advice column narrows. R25: the
      column is auto-width now, so this tier only has to cap it — and it caps both
      the auto width and a dragged inline width. */
-  .nw-dock-btn{height:34px;padding:0 12px;font-size:13px;}
+  .nw-dock{--nw-dock-tile:22px;--nw-dock-gap:9px;}
+  .nw-dock-btn{height:36px;padding:0 12px 0 10px;font-size:var(--nw-fs-micro);}
   .nw-suggest{width:min(320px,42%) !important;max-width:42% !important;}
   .nw-suggest-body{padding:0 var(--nw-sp-2) var(--nw-sp-2);}
 }
@@ -24648,20 +26139,22 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      lifted out of the flow it must be able to cover the dock, otherwise its
      bottom buttons are unreachable on a phone-sized panel. */
   .nw-dock{right:10px;bottom:46px;z-index:var(--nw-z-panel);}
-  .nw-dock-fab{width:40px;height:40px;}
   .nw-notes-tabtxt{display:none;}
 
   .nw-status{padding:0 var(--nw-sp-2);font-size:12px;flex-wrap:wrap;row-gap:2px;height:auto;min-height:var(--nw-h-status);}
   .nw-status .nw-status-mid{gap:var(--nw-sp-1) !important;}
 }
 
-/* Touch and coarse pointers: no hover, so anything hidden behind :hover has to
-   be visible on its own. */
+/* Touch and coarse pointers: no hover, so anything that only appears on hover has
+   to be visible on its own. R60: the dock is a FAB again and its menu rows already
+   carry icon + name unconditionally, so all that is needed here is a readable
+   resting opacity for the FAB itself — otherwise the circle would sit at 62% with
+   nothing to reveal the rest. */
 @media (hover: none){
   .nw-row-actions{opacity:1;}
   .nw-notes-tab{opacity:.85;}
   .nw-homebtn{opacity:.85;}
-  .nw-dock{opacity:.85;}
+  .nw-dock-fab::before{opacity:1;}
 }
 `);
 })();

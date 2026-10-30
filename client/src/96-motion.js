@@ -56,8 +56,7 @@
    One transition vocabulary for controls that do not declare their own. The
    :where() keeps specificity at zero so any component rule still wins. */
 .nw-root :where(.nw-btn,.nw-input,.nw-select,.nw-textarea,.nw-rowitem,.nw-suggest,
-  .nw-journal-item,.nw-choice,.nw-fold > summary,.nw-toast,.nw-dock-btn,
-  .nw-dock-fab){
+  .nw-journal-item,.nw-choice,.nw-fold > summary,.nw-toast,.nw-dock-btn,.nw-dock-fab){
   transition:background-color var(--nw-dur,.18s) var(--nw-ease,ease),
     border-color var(--nw-dur,.18s) var(--nw-ease,ease),
     color var(--nw-dur,.18s) var(--nw-ease,ease),
@@ -75,7 +74,6 @@
     scroll-behavior:auto !important;
   }
   .nw-btn:hover:not(:disabled),
-  .nw-dock-fab:hover,.nw-dock-fab:active,
   .nw-dock-btn:hover,.nw-journal-item:hover,
   .nw-choice:hover{transform:none !important;}
 }

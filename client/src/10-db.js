@@ -44,10 +44,12 @@
     caretColor: '',
     caretBlink: true,
     /**
-     * R46: immersive mode can fade every line except the one being written.
-     * `focusDim` is the switch, `focusLines` how many lines either side stay
-     * clear. On by default because a writer who goes immersive has already said
-     * "give me the page and nothing else"; the setting is the way out.
+     * R46/R54: fade every line except the one being written. `focusDim` is the
+     * switch, `focusLines` how many lines either side stay clear. On by default
+     * because it is the whole point of a writing surface — the sentence under
+     * the caret in front, the rest of the page quiet behind it. R54: it used to
+     * be immersive-only; it now applies in both modes, so the setting is the
+     * single way out and the value was already right for the writer who asked.
      */
     focusDim: true,
     focusLines: 2,
@@ -1245,6 +1247,13 @@
    * "here is why" — and the extra kind only made the toolbar one button longer.
    * Rows written by R47 keep working: `todo` is normalised to `underline`
    * rather than rejected, so no annotation disappears from an older shelf.
+   *
+   * R53e: 文字只属于批注. `note` is not a free-floating extra that any kind may
+   * carry — it *is* what makes a mark a comment. A row with words in `note` is
+   * stored as `comment` whatever kind was asked for, so a range can no longer
+   * be an underline and a comment at the same time (that double identity is
+   * what made 下划线 and 批注 look like two names for one thing). Rows written
+   * before this keep their note and simply read back as comments.
    */
   const MARK_KINDS = { underline: 1, strike: 1, comment: 1 };
 
@@ -1253,10 +1262,18 @@
     const chapterId = String(data.chapterId || '');
     if (!chapterId) return null;
     const raw = String(data.kind || '');
-    const kind = raw === 'todo' ? 'underline' : (MARK_KINDS[raw] ? raw : 'underline');
     const start = Math.max(0, Math.round(Number(data.start) || 0));
     const end = Math.max(start, Math.round(Number(data.end) || 0));
     if (end <= start) return null;
+    const note = String(data.note == null ? '' : data.note).slice(0, 400);
+    // R53e：文字只属于批注。下划线是「这句好」、删除线是「这句要删」，两者都是
+    // 指一下就走；批注是「这里有话」。一条线一旦带了文字，它就已经是批注了，
+    // kind 只决定它画成什么样子。把这条不变式钉在写入端，就不会再出现「一条
+    // 下划线底下带一条批注」那种两个身份叠在同一句话上的状态——用户说的「重复」
+    // 指的就是它。反过来，comment 允许暂时没有文字（刚建出来还没写的那一下）。
+    const kind = note.trim()
+      ? 'comment'
+      : (raw === 'todo' ? 'underline' : (MARK_KINDS[raw] ? raw : 'underline'));
     return {
       chapterId: chapterId,
       novelId: data.novelId ? String(data.novelId) : '',
@@ -1267,7 +1284,7 @@
       // something useful after the paragraph around it is rewritten — the
       // offsets drift, the quote does not.
       quote: String(data.quote == null ? '' : data.quote).slice(0, 240),
-      note: String(data.note == null ? '' : data.note).slice(0, 400),
+      note: note,
     };
   }
 
@@ -1291,11 +1308,42 @@
         if (String(row.kind) === 'todo') {
           return Object.assign({}, row, { kind: 'underline' });
         }
+        // R53e: a row written before 文字只属于批注 could be an underline that
+        // also carried words. It is a comment — it always was, the kind just
+        // did not say so. Normalising on read keeps the old shelf intact and
+        // makes the rule true for everything the UI ever sees.
+        if (String(row.note || '').trim() && String(row.kind) !== 'comment') {
+          return Object.assign({}, row, { kind: 'comment' });
+        }
         return row;
       })
       .sort(function (a, b) {
         return (Number(a.start) || 0) - (Number(b.start) || 0) || (Number(a.end) || 0) - (Number(b.end) || 0);
       });
+  }
+
+  /**
+   * R53: one range of words carries at most one annotation.
+   *
+   * Re-selecting the same sentence and drawing another line used to insert a
+   * second row: the two lines painted on top of each other, and deleting the
+   * visible one left the other behind — so the writer had to press 删除 once per
+   * accidental duplicate. A range is now the identity of a mark: re-drawing it
+   * rewrites the existing row (kind / note) instead of adding a sibling, and
+   * deleting it removes every duplicate that an older build left in the store.
+   */
+  function sameRange(a, b) {
+    if (!a || !b) return false;
+    if (String(a.chapterId || '') !== String(b.chapterId || '')) return false;
+    return (Math.round(Number(a.start) || 0) === Math.round(Number(b.start) || 0))
+      && (Math.round(Number(a.end) || 0) === Math.round(Number(b.end) || 0));
+  }
+
+  async function sameRangeRows(clean) {
+    const rows = await listMarks(null, clean.chapterId);
+    return (rows || []).filter(function (row) {
+      return sameRange(row, clean);
+    });
   }
 
   async function createMark(input) {
@@ -1307,6 +1355,38 @@
     // the row came back under a different id, the card that was just opened
     // would point at a mark that does not exist and 删除 would do nothing.
     const wanted = input && input.id ? String(input.id) : '';
+    const siblings = await sameRangeRows(clean);
+    if (siblings.length) {
+      // Keep the oldest row as the one the UI has been pointing at; clean up any
+      // duplicates an older build wrote for the same range.
+      const keep = siblings[0];
+      const mergedNote = clean.note ? clean.note : String(keep.note || '');
+      const merged = Object.assign({}, keep, {
+        // R53e：文字说了算。合并后只要还有字，它就必须是批注——否则会出现
+        // 「kind=strike 但身上带 note」的行，刷新之后又变回一条批注，看着像
+        // 改了没生效。
+        kind: mergedNote.trim() ? 'comment' : clean.kind,
+        // An empty note on a re-draw must not wipe a note the writer already
+        // wrote — switching an underline to a strike should keep its comment.
+        note: mergedNote,
+        quote: clean.quote || String(keep.quote || ''),
+        novelId: clean.novelId || String(keep.novelId || ''),
+        updatedAt: stamp,
+      });
+      const ops = [{ store: 'marks', type: 'put', value: merged }];
+      for (let i = 1; i < siblings.length; i += 1) {
+        ops.push({ store: 'marks', type: 'delete', key: siblings[i].id });
+      }
+      if (wanted && siblings.every(function (row) { return String(row.id) !== wanted; })) {
+        // The caller painted with a fresh id; it never reached the store, but
+        // drop it anyway so a retry can not resurrect it.
+        ops.push({ store: 'marks', type: 'delete', key: wanted });
+      }
+      const ok = await writeBatch(ops);
+      if (!ok) throw new Error('保存标注失败');
+      notify();
+      return merged;
+    }
     const row = Object.assign({ id: wanted || uid('mark'), createdAt: stamp, updatedAt: stamp }, clean);
     const ok = await writeBatch([{ store: 'marks', type: 'put', value: row }]);
     if (!ok) throw new Error('保存标注失败');
@@ -1325,8 +1405,31 @@
     if (Object.prototype.hasOwnProperty.call(patch, 'kind') && MARK_KINDS[String(patch.kind)]) {
       next.kind = String(patch.kind);
     }
+    // R53e：写完这一句它是不是批注，由文字说了算——两个方向都成立。写着字的线
+    // 一律是批注（把一条下划线写成批注，就是「批注」这个动作本身）；把批注的文字
+    // 清空，它就退回一条下划线（否则会留下一条「没有话的批注」：占着批注的底色，
+    // 页边却没有签，是三种状态里最说不清的一种）。显式指定 kind 的重画走 createMark，
+    // 不经过这里。
+    const patchTouchesNote = Object.prototype.hasOwnProperty.call(patch, 'note');
+    const patchSetsKind = Object.prototype.hasOwnProperty.call(patch, 'kind')
+      && MARK_KINDS[String(patch.kind)];
+    if (String(next.note || '').trim()) next.kind = 'comment';
+    else if (patchTouchesNote && !patchSetsKind) next.kind = 'underline';
     next.updatedAt = now();
-    const ok = await writeBatch([{ store: 'marks', type: 'put', value: next }]);
+    const ops = [{ store: 'marks', type: 'put', value: next }];
+    // Duplicates an older build left on this range must not keep a stale note:
+    // after a refresh the copy without the new note could win the paint.
+    const siblings = await sameRangeRows(current);
+    for (let i = 0; i < siblings.length; i += 1) {
+      const row = siblings[i];
+      if (String(row.id) === String(next.id)) continue;
+      ops.push({
+        store: 'marks',
+        type: 'put',
+        value: Object.assign({}, row, { kind: next.kind, note: next.note, updatedAt: next.updatedAt }),
+      });
+    }
+    const ok = await writeBatch(ops);
     if (!ok) return undefined;
     notify();
     return next;
@@ -1334,7 +1437,17 @@
 
   async function deleteMark(id) {
     if (!id) return false;
-    const ok = await writeBatch([{ store: 'marks', type: 'delete', key: id }]);
+    const current = await readOne('marks', id);
+    if (!current) return false;
+    // R53: a range is one annotation, so 删除 clears every duplicate that sits on
+    // the same words — one press, no matter how many times it was drawn before.
+    const ops = [{ store: 'marks', type: 'delete', key: current.id }];
+    const siblings = await sameRangeRows(current);
+    for (let i = 0; i < siblings.length; i += 1) {
+      if (String(siblings[i].id) === String(current.id)) continue;
+      ops.push({ store: 'marks', type: 'delete', key: siblings[i].id });
+    }
+    const ok = await writeBatch(ops);
     if (!ok) return false;
     notify();
     return true;

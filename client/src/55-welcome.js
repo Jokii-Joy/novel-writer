@@ -637,6 +637,17 @@
     // 设置 already has a permanent home in the sidebar — a card whose only job
     // was to repeat two links one scroll below their real home was pure height.
 
+    // R54e: 四张卡按「列」排，不再按「两行」排。
+    //
+    // 原来是两个独立的 .nw-welcome-grid，每行两张：第一行 正在创作 + 创作统计，
+    // 第二行 收件箱 + 投稿记录。问题出在 `align-items:start` —— 卡片各自按内容
+    // 高度落座，而「创作统计」只有 2×2 的数字、比「正在创作」矮得多，于是第一行
+    // 右侧在统计卡下面空出一大块，接着才是第二行的投稿记录。用户看到的就是
+    // 「创作统计与投稿记录之间有一大段空白」。
+    //
+    // 现在改成一列两卡的结构：左列 正在创作 → 收件箱，右列 创作统计 → 投稿记录。
+    // 同一列里的两张卡紧挨着（列内 flex，间距就是原本的 --nw-sp-4），空白消失，
+    // 而且信息分组也顺了：左列是「我的书和来信」，右列是「数字和投出去的稿」。
     return NW.h(
       'div',
       { className: 'nw-welcome' },
@@ -644,8 +655,12 @@
         'div',
         { className: 'nw-welcome-inner' },
         header,
-        NW.h('div', { className: 'nw-welcome-grid' }, novelCard, statsCard),
-        NW.h('div', { className: 'nw-welcome-grid' }, inboxCard, subsCard),
+        NW.h(
+          'div',
+          { className: 'nw-welcome-cols' },
+          NW.h('div', { className: 'nw-welcome-col' }, novelCard, inboxCard),
+          NW.h('div', { className: 'nw-welcome-col' }, statsCard, subsCard),
+        ),
       ),
     );
   }
@@ -703,6 +718,16 @@
    one-row card (正在创作 with a single novel) into a half-empty panel, which read
    worse than a shorter card. */
 .nw-welcome-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:var(--nw-sp-4);align-items:start;}
+/* R54e: two columns of cards, each column a plain stack. The old layout paired
+   cards across two grids, so a short card (创作统计) left a hole beside a tall
+   one and the next row started below the hole — the blank stretch the writer
+   reported between 创作统计 and 投稿记录. A column is a flex stack: its cards
+   simply follow one another, so there is nothing to leave a hole with.
+   Collapsed below 620px by the container tier at the end of this file (the
+   plugin is a column inside the host shell, so window width is the wrong axis
+   — .nw-welcome is measured against @container nw). */
+.nw-welcome-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--nw-sp-4);align-items:start;}
+.nw-welcome-col{display:flex;flex-direction:column;gap:var(--nw-sp-4);min-width:0;}
 .nw-welcome-card{
   min-width:0;padding:var(--nw-sp-4);
   border:1px solid var(--nw-line-soft);
@@ -902,6 +927,10 @@
 @container nw (max-width: 620px){
   .nw-welcome{padding:20px 14px;}
   .nw-welcome-stats{grid-template-columns:minmax(0,1fr);}
+  /* R54e: one column of cards. The reading order stays my books → mail →
+     numbers → submissions, which is what the two-column layout already reads
+     as when you scan top-to-bottom in each column. */
+  .nw-welcome-cols{grid-template-columns:minmax(0,1fr);}
 }
 `);
 })();

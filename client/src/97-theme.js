@@ -393,62 +393,42 @@
 .nw-status .nw-dot{width:8px;height:8px;}
 
 /* ================================================================= dock ====
-   90-app draws the dock; this layer only keeps it in the same material world as
-   the paper: overlay surface, hairline, restrained shadow, and a hover that
-   re-lifts. The dock must never compete with the text, hence the low resting
-   opacity that 90-app already sets — nothing here raises it. */
-.nw-dock{
-  right:24px;bottom:64px;gap:var(--nw-sp-2);
-  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
-}
-/* R21: the FAB is the one control in the writing view that has to be findable
-   without hovering, so it is the brand fill — same role as 新建小说 on the home
-   screen. The earlier overlay fill sat within ~4% of the paper and vanished. */
-.nw-dock-fab{
-  width:46px;height:46px;border-radius:var(--nw-r-pill);
-  border:1px solid color-mix(in srgb, var(--nw-brand) 82%, var(--nw-fg));
-  background:var(--nw-brand);color:var(--nw-panel);
-  box-shadow:var(--nw-shadow-2);
-  font-size:19px;
-  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease-pop,ease),
-    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
-    background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
-}
-.nw-dock-fab:hover{
-  transform:translateY(-2px);
-  background:color-mix(in srgb, var(--nw-brand) 88%, var(--nw-fg));
-  box-shadow:var(--nw-shadow-3);
-}
-.nw-dock-fab:active{transform:translateY(0) scale(.97);}
-.nw-dock-fab:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
-.nw-dock-menu{gap:var(--nw-sp-2);}
-.nw-dock-menu[data-open="1"]{animation:nw-pop var(--nw-dur,var(--nw-dur)) var(--nw-ease-pop,ease) both;}
-.nw-dock-btn{
-  height:40px;padding:0 18px;border-radius:var(--nw-r-pill);
-  border:1px solid var(--nw-line-soft);
-  background:var(--nw-surface-overlay);color:var(--nw-fg);
-  font-size:var(--nw-fs-second);font-weight:500;gap:var(--nw-sp-1);
-  box-shadow:var(--nw-shadow-1);
-  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
-    box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
-    background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
-}
-.nw-dock-btn:hover:not(:disabled){
-  transform:translateY(-1px);background:var(--nw-surface-overlay);
-  border-color:var(--nw-line);box-shadow:var(--nw-shadow-2);
-}
-.nw-dock-btn:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
-.nw-dock-btn > span[aria-hidden]{font-size:16px;line-height:1;color:var(--nw-fg-soft);}
+   R60: back to a FAB that opens a menu (the writer asked for it after living
+   with the five-row rail). This layer only keeps the dock in the same material
+   world as the paper — position, palette, radii — and it repeats R59's hard
+   rule: the container owns no hit-testable area. No padding, no gap, no
+   background, no border on .nw-dock itself; every visible surface belongs to a
+   button or its ::before. If a future edit gives this container a frame again,
+   the pointer will start landing on a plain div that has cursor:auto — which is
+   exactly the symptom that took five rounds to diagnose.
+
+   R61: the whole rail moved up, and not because of anything in this file. The
+   writer clicked the same spot on their desktop and got a third-party floating
+   ball's menu (start all tasks / transfer list / hide the ball / unpin). That
+   ball is always-on-top over the bottom-right corner and had been taking the
+   pointer and the click the whole time — five rounds of CSS were chasing a bug
+   that lived outside the app. R62: the ball is gone now, so the rail is back at
+   its original corner. The reason it moved is kept here because it is the only
+   part of that story that can bite again on another machine.
+
+   R63: 材料（底、圆角、描边、阴影、图标格、悬停光）整体搬回 90-app.js，
+   这里只留位置和容器的硬规矩。两层各声明一遍同一批属性、由源码顺序决胜，
+   正是 R56 的旧值能一直躺在文件里不被发现的原因——一个属性只该有一个出处。 */
+/* 位置：仍在右下角。R62 回到原位，R61 那段原因见上。 */
+.nw-dock{right:24px;bottom:68px;padding:0;gap:0;border:0;background:none;box-shadow:none;}
+/* 容器与菜单都不许有自己的 padding/gap：留缝就是死区。 */
+.nw-dock-menu{padding:0;gap:0;margin:0 0 8px;}
 
 /* ============================================================= immersive ===
    R3 removed the immersive top strip entirely: 90-app renders no Toolbar at all
    while immersive, and the only exit is Esc (announced by a toast). So there is
    nothing left to position — only the canvas itself and the dock, which stays
-   reachable but recedes until hovered. */
+   reachable but fades further until hovered. */
 .nw-root.nw-immersive{background:var(--nw-bg);}
-.nw-root.nw-immersive .nw-dock{opacity:.22;}
+.nw-root.nw-immersive .nw-dock{opacity:.32;}
 .nw-root.nw-immersive .nw-dock:hover,
-.nw-root.nw-immersive .nw-dock:focus-within{opacity:1;}
+.nw-root.nw-immersive .nw-dock:focus-within,
+.nw-root.nw-immersive .nw-dock[data-open="1"]{opacity:1;}
 
 /* ============================================================== narrow ====
    The tool strip is the one place that must degrade: below ~980px of *panel*
@@ -471,8 +451,8 @@
   .nw-modal-head{padding:15px 16px 13px;}
   .nw-modal-body{padding:var(--nw-sp-4);}
   .nw-modal-foot{padding:12px 16px;}
-  .nw-dock{right:12px;bottom:52px;}
-  .nw-dock-btn{height:38px;padding:0 15px;}
+  .nw-dock{right:12px;bottom:52px;--nw-dock-tile:24px;--nw-dock-gap:10px;}
+  .nw-dock-btn{height:38px;padding:0 14px 0 11px;}
 }
 /* Belt and braces: engines without container queries still degrade on a narrow
    window instead of clipping. */
@@ -490,7 +470,6 @@
 /* ====================================================== motion preference == */
 @media (prefers-reduced-motion: reduce){
   .nw-btn,.nw-btn:hover:not(:disabled),.nw-btn:active:not(:disabled),
-  .nw-dock-fab,.nw-dock-fab:hover,.nw-dock-fab:active,
   .nw-dock-btn,.nw-dock-btn:hover:not(:disabled),
   .nw-journal-item,.nw-choice,.nw-theme-swatch{transform:none !important;}
   .nw-root *,.nw-root *::before,.nw-root *::after{

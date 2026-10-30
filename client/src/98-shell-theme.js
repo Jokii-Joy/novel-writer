@@ -86,10 +86,14 @@
    otherwise the sheet would read as a hole rather than a page. */
 .nw-root[data-theme="night"] .nw-modal{background:#232220;}
 .nw-root[data-theme="night"] .nw-toast{background:#2b2a26;}
-/* R21: the FAB no longer needs a night override — it is brand-filled in every
-   theme (see 97-theme.js). Only the menu rows still need the lift, because they
-   sit on --nw-panel and at night that is one step off the page. */
-.nw-root[data-theme="night"] .nw-dock-btn{background:#2b2a26;}
+/* R21/R63: the rows are transparent now, so nothing needs lifting at night —
+   the menu card itself is surface-2, which already sits above the page. The
+   FAB does need one override: its "seal" colour is brand mixed toward ink,
+   and at night the ink is light, which would wash it into pale peach. Mix
+   toward the page instead and it stays a deep terracotta. */
+.nw-root[data-theme="night"] .nw-dock-fab{
+  --nw-dock-ink:color-mix(in srgb, var(--nw-brand) 80%, var(--nw-bg));
+}
 
 /* ============================================================== card ====== */
 /* ========================================================= newspaper ====== */

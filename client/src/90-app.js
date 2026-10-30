@@ -251,69 +251,277 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 }
 .nw-shelfrestore-txt{writing-mode:vertical-rl;letter-spacing:.2em;max-height:72px;overflow:hidden;}
 .nw-shelfrestore-ico{display:inline-flex;flex:0 0 auto;}
+/* ---- 浮动坞（R61）--------------------------------------------------------
+   R57 把它摊成五枚常驻单字，R58 给它一块玻璃板，R59 才发现「点了没反应」
+   的病灶根本不在按钮上——是坞自己的 padding 在子元素之间留了一圈可命中的
+   死区。用户看完这一圈折腾说「还是改回悬浮坞吧」，于是 R60 收回成圆钮。
+
+   R61：用户在桌面同一位置点了一下，弹出的是**别的程序**的悬浮球菜单
+   （打开桌面端 / 开始全部任务 / 查看传输列表 / 隐藏悬浮球 / 取消置顶）。
+   也就是说五轮「上半部分是箭头 / 点了没反应」的真正原因是：那颗一直置顶的
+   悬浮球压在应用窗口的右下角，指针和点击都被它接走了。插件这边的 CSS 从
+   头到尾都是对的。
+
+   位置曾因此上移到 bottom:104px 躲避那颗球；R62 用户关掉了球，位置撤回原位。
+   留下的是那次排查真正属于本插件的那条结论，钉在这里别再丢：**坞的容器不许
+   拥有可命中面积**——没有 padding、没有 gap、不画背景、不画边框，所有看得见
+   的东西都由按钮或伪元素画。 */
+/* R63：五行的度量收到容器上的三个变量里——分隔线的起点、图标格宽、行内间距
+   都由它们算出来，窄屏断点只改这三个数，线就永远对着图标，不会再出现
+   「分隔线从行中间起笔」这种一眼就看得出不整齐的地方。
+   上面 R59 那三条硬规矩没有变：容器不 padding、不 gap、不画底不画框。 */
 .nw-dock{
-  position:absolute;z-index:var(--nw-z-float);
-  right:20px;bottom:56px;
-  display:flex;flex-direction:column;align-items:flex-end;gap:var(--nw-sp-1);
-  /* R21: .35 was invisible on the warm paper — the FAB read as a smudge and
-     nobody would guess it was a button. At rest the dock only ever shows the
-     FAB (the menu is display-gated behind data-open), so dimming it was dimming
-     the one thing that had to stay legible. .88 keeps it out of the way without
-     washing the brand fill into the page. */
-  opacity:.88;
-  transition:opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
+  position:absolute;z-index:var(--nw-z-panel);
+  right:22px;bottom:60px;
+  display:flex;flex-direction:column;align-items:flex-end;
+  padding:0;gap:0;
+  border:0;background:none;box-shadow:none;
+  --nw-dock-pad-l:12px;
+  --nw-dock-tile:26px;
+  --nw-dock-gap:12px;
 }
-.nw-dock:hover,.nw-dock:focus-within,.nw-dock[data-open="1"]{opacity:1;}
-/* R47: in immersive mode the dock is the only handle left, so it stays but
-   steps back — low enough not to sit on the prose, high enough to be found.
-   Hover / focus / an open menu bring it all the way back. */
-.nw-dock[data-immersive="1"]{bottom:20px;right:16px;opacity:.3;}
-.nw-dock[data-immersive="1"]:hover,
-.nw-dock[data-immersive="1"]:focus-within,
-.nw-dock[data-immersive="1"][data-open="1"]{opacity:1;}
-@media (prefers-reduced-motion: reduce){.nw-dock{transition:none;}}
-.nw-dock-fab{
-  width:44px;height:44px;border-radius:var(--nw-r-pill);
-  display:inline-flex;align-items:center;justify-content:center;
-  /* R21: this used the host aliases and a literal black shadow, so it was the
-     one control that did not follow the reading theme — on night it stayed a
-     pale chip, on paper it kept a grey halo. Worse, once it moved onto --nw-panel
-     it matched the sheet exactly and disappeared into it.
-     A floating action button has to be an action: it is now the one brand-filled
-     element in the writing view, which also balances the 新建小说 button on the
-     home screen. The dock's 0.55 opacity keeps it from shouting until hovered. */
-  border:1px solid color-mix(in srgb, var(--nw-brand) 82%, var(--nw-fg));
-  background:var(--nw-brand);
-  color:var(--nw-panel);
-  box-shadow:var(--nw-shadow-2);
-  cursor:pointer;font-size:18px;line-height:1;
-  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),box-shadow var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
+.nw-dock[data-immersive="1"]{bottom:22px;right:18px;}
+
+/* 菜单：从圆钮上方长出来的一张卡。行与行之间不留缝——留缝就是 R59 的死区。
+   R63：整张卡仍然由菜单自己的 ::before 一次画出，但材料换了一层：
+   ① 底不是平涂的 surface-2，顶部叠一道 5% 品牌色的暖光，往下 46% 化开——
+      卡片上沿因此比下沿亮一点点，纸面从「一块板」变成「一张有光的纸」；
+   ② 描边换成 l2 兑 38% 透明，比 l1 的发丝线略深，卡片边界在浅纸上才立得住；
+   ③ 阴影分两层：一层大而散（把卡托离纸面），一层小而紧（给下沿定边），
+      再补一条 1px 的内高光当「纸的切边」。
+   ::after 是底边探出的圆角小尖角，指着下面的圆钮。 */
+.nw-dock-menu{
+  position:relative;isolation:isolate;
+  display:flex;flex-direction:column;align-items:stretch;
+  /* margin 不是死区：它不属于任何盒子，指针在那条缝里落到的是正文。 */
+  margin:0 0 8px;
+  padding:0;gap:0;
+  min-width:152px;
+  transform-origin:100% 100%;
+  animation:nw-dock-rise .22s var(--nw-ease-pop, cubic-bezier(.22,1.16,.36,1)) both;
 }
-.nw-dock-fab:hover{transform:translateY(-2px);box-shadow:var(--nw-shadow-3);}
-.nw-dock-fab:active{transform:translateY(0) scale(.97);}
-.nw-dock-menu{display:flex;flex-direction:column;align-items:flex-end;gap:var(--nw-sp-1);}
-.nw-dock-menu[data-open="1"]{animation:nw-pop var(--nw-dur) var(--nw-ease,ease);}
+.nw-dock-menu::before{
+  content:'';position:absolute;inset:0;z-index:-1;
+  border-radius:calc(var(--nw-r-control) + 6px);
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--nw-brand) 5%, transparent),
+      transparent 46%),
+    var(--nw-surface-2);
+  border:1px solid color-mix(in srgb, var(--nw-line) 78%, transparent);
+  box-shadow:
+    0 20px 44px -16px color-mix(in srgb, var(--nw-fg) 30%, transparent),
+    0 3px 10px -3px color-mix(in srgb, var(--nw-fg) 12%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--nw-bg) 45%, transparent);
+  pointer-events:none;
+}
+.nw-dock-menu::after{
+  content:'';position:absolute;right:19px;bottom:-6px;
+  width:12px;height:12px;
+  /* z -1：小尖角只盖住卡片，不许盖最后一行的高亮——它在树里排在行之后，
+     不压下去就会把「投稿」右下角切掉一小块。 */
+  z-index:-1;
+  border-radius:2px;
+  transform:rotate(45deg);
+  background:var(--nw-surface-2);
+  border-right:1px solid color-mix(in srgb, var(--nw-line) 78%, transparent);
+  border-bottom:1px solid color-mix(in srgb, var(--nw-line) 78%, transparent);
+  pointer-events:none;
+}
+.nw-dock-menu[data-open="0"]{display:none;}
+@keyframes nw-dock-rise{
+  from{opacity:0;transform:translateY(8px) scale(.95);}
+  to{opacity:1;transform:none;}
+}
+/* 开放时五行依次浮起，每行晚 30ms——卡片先出来，字随后落定。
+   只在展开态挂动画（收起时 display:none，再展开自然重播）。 */
+@keyframes nw-dock-row-in{
+  from{opacity:0;transform:translateY(4px);}
+  to{opacity:1;transform:none;}
+}
+.nw-dock-menu[data-open="1"] .nw-dock-btn{
+  animation:nw-dock-row-in .2s var(--nw-ease, ease) both;
+}
+.nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(2){animation-delay:.03s;}
+.nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(3){animation-delay:.06s;}
+.nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(4){animation-delay:.09s;}
+.nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(5){animation-delay:.12s;}
+
+/* 一行动作：矩形盒子应答指针，高亮由 ::before 画。
+   盒子无圆角、无边框、无背景、无子元素应答指针——浏览器只有一个盒子要测。
+   R63：行高 44 → 42，图标格 24 → 26 并加一圈发丝内描边（读起来像一枚
+   压出来的工具格，而不是一块灰色补丁）；行首文字 13 → 14 并加 500 字重，
+   中文在浅纸上 400 太细；行尾多一枚只在悬停时浮现的箭嘴，把「这一行
+   通向别处」说清楚，也把卡片右侧的空白收住。 */
 .nw-dock-btn{
-  display:inline-flex;align-items:center;gap:var(--nw-sp-1);
-  height:38px;padding:0 16px;border-radius:var(--nw-r-pill);
-  /* R21: same host-alias leak as the FAB — the menu rows stayed white on night. */
-  border:1px solid var(--nw-line-strong);
-  background:var(--nw-panel);
-  color:var(--nw-fg);
-  font-size:14px;cursor:pointer;white-space:nowrap;
-  box-shadow:var(--nw-shadow-1);
-  transition:transform var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),background var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
+  position:relative;isolation:isolate;
+  display:flex;align-items:center;gap:var(--nw-dock-gap);
+  width:100%;
+  height:42px;padding:0 16px 0 var(--nw-dock-pad-l);
+  border-radius:0;border:0;background:transparent;
+  color:color-mix(in srgb, var(--nw-fg) 82%, var(--nw-bg));
+  font-size:var(--nw-fs-second);line-height:1;white-space:nowrap;
+  text-align:left;
+  cursor:pointer;
+  /* R54c：没有 hover/active 位移。会变形的按钮会把自己的命中区从指针底下挪走。 */
+  transition:color .16s var(--nw-ease, ease);
 }
-.nw-dock-btn:hover{transform:translateY(-1px);background:var(--nw-surface-2);}
-.nw-dock-btn[disabled]{opacity:.45;cursor:default;transform:none;}
-/* The dock carries nine rows in R5 (three writing tools + a 「更多」 group), so
-   the icon column is fixed-width to keep every label on the same baseline. */
-.nw-dock-icon{display:inline-flex;align-items:center;justify-content:center;
-  width:18px;height:18px;flex:0 0 auto;color:var(--dsw-alias-label-secondary);}
-.nw-dock-btn:hover:not([disabled]) .nw-dock-icon{color:var(--dsw-alias-label-primary);}
-.nw-dock-sep{width:100%;height:1px;background:var(--dsw-alias-border-l1);margin:0;flex:0 0 auto;}
-.nw-dock-fabicon{display:inline-flex;align-items:center;justify-content:center;}
-@keyframes nw-pop{from{opacity:0;transform:translateY(8px) scale(.94)}to{opacity:1;transform:none}}
+.nw-dock-btn:hover:not([data-blocked="1"]),
+.nw-dock-btn:focus-visible{color:var(--nw-fg);}
+/* 分隔线只出现在「行与行之间」，而且从图标格的右缘起笔、到右侧内边距收笔，
+   末端渐隐——它对齐的是文字，不是行盒子；这样五行的左边界读起来是一条线。 */
+.nw-dock-btn + .nw-dock-btn::after{
+  content:'';position:absolute;top:0;height:1px;
+  left:calc(var(--nw-dock-pad-l) + var(--nw-dock-tile) + var(--nw-dock-gap));
+  right:16px;
+  background:linear-gradient(90deg,
+    color-mix(in srgb, var(--nw-line-soft) 95%, transparent),
+    color-mix(in srgb, var(--nw-line-soft) 30%, transparent) 70%,
+    transparent);
+  pointer-events:none;
+}
+.nw-dock-btn::before{
+  content:'';position:absolute;inset:3px 6px;z-index:-1;
+  border-radius:calc(var(--nw-r-control) - 1px);
+  pointer-events:none;
+  background:transparent;
+  border:1px solid transparent;
+  box-shadow:none;
+  transition:background .16s var(--nw-ease, ease),
+    border-color .16s var(--nw-ease, ease),
+    box-shadow .16s var(--nw-ease, ease);
+}
+/* 悬停高亮：一条 100° 的品牌色斜光，左边略重、右边化开；描边只收 20%，
+   够看出边界又不至于读成一枚输入框；再压一道 1px 内高光当纸面反光。 */
+.nw-dock-btn:hover::before,
+.nw-dock-btn:focus-visible::before{
+  background:linear-gradient(100deg,
+    color-mix(in srgb, var(--nw-brand) 12%, transparent),
+    color-mix(in srgb, var(--nw-brand) 5%, transparent));
+  border-color:color-mix(in srgb, var(--nw-brand) 20%, transparent);
+  box-shadow:0 1px 2px color-mix(in srgb, var(--nw-brand) 12%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--nw-bg) 38%, transparent);
+}
+.nw-dock-btn:active:not([data-blocked="1"])::before{filter:brightness(.97);}
+.nw-dock-btn > *{pointer-events:none;}
+/* 焦点环画在 ::before 上：按钮盒子是直角矩形，原生 outline 会在圆角高亮
+   外面画出一个方框，看着像另一个控件。 */
+.nw-dock-btn:focus-visible{outline:none;}
+.nw-dock-btn:focus-visible::before{
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-brand) 45%, transparent);
+}
+/* R58：没开章时不再是 disabled。禁用按钮一声不响，那和坏掉长得一样。 */
+.nw-dock-btn[data-blocked="1"]{color:var(--nw-fg-soft);}
+.nw-dock-btn[data-blocked="1"] .nw-dock-icon{opacity:.5;}
+.nw-dock-btn[data-blocked="1"] .nw-dock-go{display:none;}
+.nw-dock-btn[disabled]{cursor:default;}
+
+/* 图标格：五个动作各有一枚自己的印记。静止时是浅墨底 + 发丝内描边，
+   悬停时底换成品牌色渐变、描边加深、图标本身转成品牌色——变的是光，
+   不是位置。尺寸由 --nw-dock-tile 给，窄屏跟着行高一起缩。 */
+.nw-dock-icon{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:var(--nw-dock-tile);height:var(--nw-dock-tile);flex:0 0 auto;
+  border-radius:8px;
+  background:color-mix(in srgb, var(--nw-fg) 6%, transparent);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--nw-fg) 5%, transparent);
+  color:color-mix(in srgb, var(--nw-fg-soft) 88%, var(--nw-fg));
+  transition:background .16s var(--nw-ease, ease),
+    color .16s var(--nw-ease, ease),
+    box-shadow .16s var(--nw-ease, ease);
+}
+.nw-dock-btn:hover:not([data-blocked="1"]) .nw-dock-icon{
+  background:linear-gradient(160deg,
+    color-mix(in srgb, var(--nw-brand) 24%, transparent),
+    color-mix(in srgb, var(--nw-brand) 11%, transparent));
+  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--nw-brand) 32%, transparent),
+    0 1px 3px color-mix(in srgb, var(--nw-brand) 20%, transparent);
+  color:var(--nw-brand);
+}
+.nw-dock-name{letter-spacing:.01em;font-weight:500;}
+/* 行尾箭嘴：静止透明、悬停浮现。它不说话，只说「这里通向下一屏」。 */
+.nw-dock-go{
+  display:inline-flex;align-items:center;justify-content:center;
+  margin-left:auto;flex:0 0 auto;
+  color:var(--nw-brand);opacity:0;
+  transition:opacity .16s var(--nw-ease, ease);
+}
+.nw-dock-btn:hover:not([data-blocked="1"]) .nw-dock-go,
+.nw-dock-btn:focus-visible .nw-dock-go{opacity:.7;}
+
+/* 圆钮（FAB）：盒子是方形、透明、无圆角；形状由 ::before 画。
+   R63：从「一枚品牌色圆贴纸」改成「一枚压进纸里的墨印」——
+   ① 形状从正圆改成 16px 圆角方块，和卡片同一个圆角家族，卡与钮读成一组；
+   ② 颜色不用纯品牌色，而是品牌色兑 20% 墨（--nw-dock-ink）：浅色主题里
+      得到一枚深砖红，像印泥；夜间主题在 98-shell-theme 里单独兑底色；
+   ③ 底是 115% 的偏心径向渐变（左上亮、右下沉），描边一圈深墨，顶上
+      一道 1px 白边当反光——三样东西加起来才有「一块有厚度的墨」；
+   ④ 阴影里混了一层品牌色，落在纸上是暖的，不是灰的；
+   ⑤ ::after 是一圈内收 5px 的发丝环，像印面边缘，悬停时提亮。
+   静止 82%（旧值 62% 太淡，深色墨印在浅纸上会读成脏点），悬停与展开到 1。 */
+.nw-dock-fab{
+  position:relative;isolation:isolate;
+  display:flex;align-items:center;justify-content:center;
+  width:52px;height:52px;padding:0;flex:0 0 auto;
+  border-radius:0;border:0;background:transparent;
+  color:color-mix(in srgb, #ffffff 92%, var(--nw-bg));
+  cursor:pointer;
+  --nw-dock-ink:color-mix(in srgb, var(--nw-brand) 80%, var(--nw-fg));
+  --nw-dock-lift:
+    0 8px 18px -8px color-mix(in srgb, var(--nw-dock-ink) 70%, transparent),
+    0 16px 34px -18px color-mix(in srgb, var(--nw-fg) 45%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #ffffff 28%, transparent);
+}
+.nw-dock-fab::before{
+  content:'';position:absolute;inset:0;z-index:-1;
+  border-radius:16px;
+  pointer-events:none;
+  background:radial-gradient(115% 115% at 30% 16%,
+    color-mix(in srgb, var(--nw-dock-ink) 74%, #ffffff) 0%,
+    var(--nw-dock-ink) 48%,
+    color-mix(in srgb, var(--nw-dock-ink) 86%, #0e0b08) 100%);
+  border:1px solid color-mix(in srgb, var(--nw-dock-ink) 62%, var(--nw-fg));
+  box-shadow:var(--nw-dock-lift);
+  opacity:.82;
+  transition:opacity .2s var(--nw-ease, ease),
+    box-shadow .2s var(--nw-ease, ease);
+}
+.nw-dock-fab::after{
+  content:'';position:absolute;inset:5px;z-index:-1;
+  border-radius:12px;
+  border:1px solid color-mix(in srgb, #ffffff 22%, transparent);
+  pointer-events:none;
+  opacity:.5;
+  transition:opacity .2s var(--nw-ease, ease);
+}
+.nw-dock-fab:hover::before,
+.nw-dock-fab:focus-visible::before{opacity:1;}
+.nw-dock-fab:hover::after,
+.nw-dock-fab:focus-visible::after{opacity:.85;}
+.nw-dock-fab[aria-expanded="true"]::before{opacity:1;}
+.nw-dock-fab[aria-expanded="true"]::after{opacity:.35;}
+.nw-dock-fab:active::before{filter:brightness(.95);}
+.nw-dock-fab:focus-visible{outline:none;}
+.nw-dock-fab:focus-visible::before{
+  box-shadow:var(--nw-dock-lift),
+    0 0 0 3px color-mix(in srgb, var(--nw-brand) 40%, transparent);
+}
+.nw-dock-fab > *{pointer-events:none;}
+.nw-dock-fabicon{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:20px;height:20px;
+  transition:transform .22s var(--nw-ease-pop, ease);
+}
+.nw-dock-fab[aria-expanded="true"] .nw-dock-fabicon{transform:rotate(90deg);}
+
+@media (prefers-reduced-motion: reduce){
+  .nw-dock-menu,
+  .nw-dock-menu[data-open="1"] .nw-dock-btn{animation:none;}
+  .nw-dock-fab::before,.nw-dock-fab::after{transition:none;}
+  .nw-dock-fabicon{transition:none;}
+  .nw-dock-go{transition:none;}
+}
+
 /* 灵感便签 (R13). R11 把它做成一整页纸：一展开就把正文顶掉，用户说「不用分窗口
    了，悬浮在编辑器上」，又说「看着好瘦长」—— 那是 196px 宽 × 整屏高 的结果。
    现在是一张 420×最多 320 的悬浮卡片，钉在写作列**左上角**：写作时一直看得见正文，
@@ -617,6 +825,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      */
     const [adviceOpen, setAdviceOpen] = useState(() => lsGet(LS_ADVICE_OPEN) === '1');
     /**
+     * R60: the dock is collapsed by default. R57 had no such state because the
+     * five rows were always laid out; now that the shape is a FAB again, this is
+     * what the button toggles. Not persisted on purpose — a dock that reopens
+     * itself on restart would cover the last paragraphs of the chapter.
+     */
+    const [dockOpen, setDockOpen] = useState(false);
+    /**
      * R25: null = auto. The column measures itself from the bench (see
      * .nw-suggest in the CSS above) so it always hugs the page instead of
      * leaving a dead margin. A drag stores an explicit pixel width and from then
@@ -626,8 +841,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       const raw = Number(lsGet(LS_ADVICE_WIDTH));
       return Number.isFinite(raw) && raw >= 260 && raw <= 640 ? raw : null;
     });
-    /** Bottom-right action dock: collapsed to a single round button by default. */
-    const [dockOpen, setDockOpen] = useState(false);
     /**
      * R44: 读一遍 — the whole book laid out as pages, over the writing surface.
      * It is an overlay rather than a route on purpose: the editor stays mounted
@@ -2788,9 +3001,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // was the one that vanished. It is dimmed down to a hint instead.
     const dock = h(Dock, {
           immersive: immersive,
+          chapter: chapter,
+          // R60: the FAB shape is back, so the dock needs the open flag again.
           open: dockOpen,
           onToggle: () => setDockOpen((v) => !v),
-          chapter: chapter,
+          // R58: a blocked row used to be a silently disabled button; now it
+          // stays clickable and explains itself through the same toast channel
+          // the rest of the shell uses.
+          onBlocked: (name) => {
+            pushToast('先打开一章，再' + name, 'warn');
+          },
           onProofread: () => {
             setDockOpen(false);
             openDialog('proofread');
@@ -2800,18 +3020,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             openDialog('typeset');
           },
           onAdvice: () => {
-            setDockOpen(false);
             // The column sits beside the paper, so it must be closable again by
             // the same row — the toggle is the only affordance that survives
             // after the panel takes a third of the width.
+            setDockOpen(false);
             setAdviceOpen((v) => !v);
           },
           onSubmit: () => {
-            setDockOpen(false);
             // R28 ②: AI 投稿 is a one-click path. Standing in a book means the
             // manuscript is already decided, so the wizard opens straight on the
             // preview and picks the model's top journal for the writer; from the
             // home screen there is no manuscript yet, so it opens on step 1.
+            setDockOpen(false);
             openDialog(
               'submit',
               view === 'write' && activeNovelId
@@ -3081,7 +3301,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       : NW.ui.btn({ onClick: () => setView('home'), children: '返回首页' }),
                   ),
                 ),
-          dock,
+          // R54e: 浮动坞只在写作页出现。它原本无条件挂在 `.nw-main` 里，而首页
+          // 也渲染在 `.nw-main` 中，于是「AI 校对 / 一键排版 / 读一遍 / 投稿」
+          // 这几个按钮浮在了首页右下角 —— 那些动作在首页没有一个可用（`chapter`
+          // 为空时全部 disabled），只剩下一枚关不掉的圆按钮压在快捷入口上。
+          // 首页有自己的卡片和操作行，不需要这块坞。
+          view === 'write' || immersive ? dock : null,
         ),
       ),
       // R44: 读一遍 — the book laid out as pages, covering the whole panel.
@@ -3321,56 +3546,85 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   }
 
   // ---------------------------------------------------------------- dock -----
-  // The toolbar is gone (R5): 四个写作工具 + 更多 live in this dock instead. It is
-  // collapsed to a single round button so it never covers the writing column.
+  // R60: back to a collapsed FAB that opens a menu of five rows. R57 spread the
+  // five actions out as permanent single characters because the writer asked for
+  // that; after living with it for a few rounds the answer was "还是改回悬浮坞
+  // 吧". So the shape returns, but the *structure* keeps R59's finding: the dock
+  // div itself owns no hit-testable area. No padding, no gap, no background on
+  // the container — every visible surface is painted by a button or its ::before.
+  // That is what made "上半部分是箭头 / 点了没反应" possible in the first place:
+  // the rail used to be 144px tall with a 5px padding band that belonged to a
+  // plain div with cursor:auto. A collapsed FAB has the same failure mode if the
+  // menu rows are spaced apart inside a container that paints nothing.
+  //
+  // The round shape is painted, not owned: `.nw-dock-fab` is a square transparent
+  // box and the circle is its ::before. R54d/R54f/R54g/R56 spent four rounds
+  // teaching that a rounded control asks the browser to hit-test a shape it will
+  // not reliably answer; a square box with a painted circle asks nothing.
   function Dock(props) {
     const p = props || {};
     const open = !!p.open;
 
-    /** One menu row: icon + label, disabled when the action needs a chapter. */
-    const item = (iconName, label, onClick, needsChapter) =>
-      h(
+    /**
+     * One action row. `disabled` is still gone (R58): a disabled button fires
+     * nothing at all, and "the screen did not change" is indistinguishable from
+     * a bug. The row stays clickable and says why it cannot act.
+     */
+    const item = (iconName, name, onClick, needsChapter) => {
+      const blocked = needsChapter && !p.chapter;
+      return h(
         'button',
         {
           type: 'button',
           className: 'nw-dock-btn',
           role: 'menuitem',
-          disabled: needsChapter ? !p.chapter : false,
-          onClick: onClick,
-          title: label,
+          'data-blocked': blocked ? '1' : '0',
+          'aria-disabled': blocked ? 'true' : undefined,
+          onClick: () => {
+            if (blocked) {
+              if (typeof p.onBlocked === 'function') p.onBlocked(name);
+              return;
+            }
+            if (typeof onClick === 'function') onClick();
+          },
+          title: blocked ? name + '（先打开一章）' : name,
+          'aria-label': name,
         },
         h('span', { className: 'nw-dock-icon', 'aria-hidden': 'true' }, NW.icon(iconName, { size: 16 })),
-        h('span', null, label),
+        h('span', { className: 'nw-dock-name' }, name),
+        // R63: a trailing arrow that only exists on hover. It is decoration —
+        // aria-hidden, inert, and it never becomes the only cue that a row does
+        // something. Blocked rows hide it in CSS, because there is no "next
+        // screen" behind them until a chapter is open.
+        h('span', { className: 'nw-dock-go', 'aria-hidden': 'true' }, NW.icon('chevright', { size: 12 })),
       );
+    };
 
-    // R10: the dock carries only the three writing actions. Everything that is
-    // really a setting moved there (theme, typewriter, layout, lock), and the
-    // home/shelf toggles already have their own permanently visible handles —
-    // a nine-row menu read as a second toolbar, which is what the user objected
-    // to. Fewer rows also means the collapsed FAB stays the only thing on top
-    // of the writing column.
     return h(
       'div',
-      { className: 'nw-dock', 'data-open': open ? '1' : '0', 'data-immersive': p.immersive ? '1' : '0' },
-      open
-        ? h(
-            'div',
-            { className: 'nw-dock-menu', 'data-open': '1', role: 'menu' },
-            item('proofread', NW.t('AI 校对'), p.onProofread, true),
-            item('typeset', NW.t('一键排版'), p.onTypeset, true),
-            item('sparkle', NW.t('修改建议'), p.onAdvice, true),
-            // Reading the manuscript back is how a writer sees the story rather
-            // than the sentence, so it sits with the other finishing actions.
-            item('book', NW.t('读一遍'), p.onRead, true),
-            item('send', NW.t('投稿'), p.onSubmit, true),
-          )
-        : null,
+      {
+        className: 'nw-dock',
+        'data-immersive': p.immersive ? '1' : '0',
+        'data-open': open ? '1' : '0',
+      },
+      h(
+        'div',
+        { className: 'nw-dock-menu', 'data-open': open ? '1' : '0', role: 'menu', 'aria-hidden': open ? 'false' : 'true' },
+        // 修改建议 toggles the advice column beside the paper, so its row stays
+        // lit while that column is open.
+        item('proofread', NW.t('AI 校对'), p.onProofread, true),
+        item('typeset', NW.t('一键排版'), p.onTypeset, true),
+        item('sparkle', NW.t('修改建议'), p.onAdvice, true),
+        item('book', NW.t('读一遍'), p.onRead, true),
+        item('send', NW.t('投稿'), p.onSubmit, true),
+      ),
       h(
         'button',
         {
           type: 'button',
           className: 'nw-dock-fab',
           'aria-expanded': open ? 'true' : 'false',
+          'aria-haspopup': 'menu',
           'aria-label': open ? NW.t('收起写作工具') : NW.t('展开写作工具'),
           title: open ? NW.t('收起写作工具') : NW.t('展开写作工具'),
           onClick: p.onToggle,
@@ -3378,7 +3632,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         h(
           'span',
           { className: 'nw-dock-fabicon', 'aria-hidden': 'true' },
-          NW.icon(open ? 'x' : 'pencil', { size: 18 }),
+          NW.icon(open ? 'x' : 'pencil', { size: 20 }),
         ),
       ),
     );
