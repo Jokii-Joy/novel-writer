@@ -15017,6 +15017,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   --nw-dock-pad-l:12px;
   --nw-dock-tile:26px;
   --nw-dock-gap:12px;
+  /* R64：卡片的两样材料由容器给出，主题可以各自改：
+     --nw-dock-card  纸色里掺多少墨（浅色主题往下压一点，夜盘反而要往上提，
+                     深色页面上的浮层靠"更亮"表示抬起）；
+     --nw-dock-sheen 顶部那道光。浅纸上是白反光，白值给大了就成了磨砂膜；
+                     夜盘必须压到很低，否则 26% 的白会在深底上糊成一层灰雾。 */
+  --nw-dock-card:color-mix(in srgb, var(--nw-fg) 4%, var(--nw-bg));
+  --nw-dock-sheen:color-mix(in srgb, #ffffff 14%, transparent);
 }
 .nw-dock[data-immersive="1"]{bottom:22px;right:18px;}
 
@@ -15041,16 +15048,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-dock-menu::before{
   content:'';position:absolute;inset:0;z-index:-1;
   border-radius:calc(var(--nw-r-control) + 6px);
+  /* R64：用户说「显得突兀，与背景融入得不太好」。上一版把卡片做成了
+     surface-2（纸色 + 7% 墨）+ 78% 的 l2 描边 + 30% 的大阴影 + 一道品牌色
+     暖光——四样东西叠起来，卡片在纸面上读成「贴上去的一块板」。这一版只
+     留一份材料：纸色只掺 4% 墨，几乎就是纸本身；顶部那道光是白纸反光，
+     不是品牌色；描边退到 l1 的 55%，让边界由影子而不是线条来定。 */
   background:
-    linear-gradient(180deg,
-      color-mix(in srgb, var(--nw-brand) 5%, transparent),
-      transparent 46%),
-    var(--nw-surface-2);
-  border:1px solid color-mix(in srgb, var(--nw-line) 78%, transparent);
+    linear-gradient(180deg, var(--nw-dock-sheen), transparent 42%),
+    var(--nw-dock-card);
+  border:1px solid color-mix(in srgb, var(--nw-line-soft) 55%, transparent);
   box-shadow:
-    0 20px 44px -16px color-mix(in srgb, var(--nw-fg) 30%, transparent),
-    0 3px 10px -3px color-mix(in srgb, var(--nw-fg) 12%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--nw-bg) 45%, transparent);
+    0 16px 34px -22px color-mix(in srgb, var(--nw-fg) 34%, transparent),
+    0 2px 6px -2px color-mix(in srgb, var(--nw-fg) 10%, transparent);
   pointer-events:none;
 }
 .nw-dock-menu::after{
@@ -15061,9 +15070,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   z-index:-1;
   border-radius:2px;
   transform:rotate(45deg);
-  background:var(--nw-surface-2);
-  border-right:1px solid color-mix(in srgb, var(--nw-line) 78%, transparent);
-  border-bottom:1px solid color-mix(in srgb, var(--nw-line) 78%, transparent);
+  /* R64：尖角跟着卡片一起退回纸色，描边也跟卡片同一条 l1 线。 */
+  background:var(--nw-dock-card);
+  border-right:1px solid color-mix(in srgb, var(--nw-line-soft) 55%, transparent);
+  border-bottom:1px solid color-mix(in srgb, var(--nw-line-soft) 55%, transparent);
   pointer-events:none;
 }
 .nw-dock-menu[data-open="0"]{display:none;}
@@ -15113,8 +15123,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   left:calc(var(--nw-dock-pad-l) + var(--nw-dock-tile) + var(--nw-dock-gap));
   right:16px;
   background:linear-gradient(90deg,
-    color-mix(in srgb, var(--nw-line-soft) 95%, transparent),
-    color-mix(in srgb, var(--nw-line-soft) 30%, transparent) 70%,
+    color-mix(in srgb, var(--nw-line-soft) 78%, transparent),
+    color-mix(in srgb, var(--nw-line-soft) 22%, transparent) 70%,
     transparent);
   pointer-events:none;
 }
@@ -15134,11 +15144,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-dock-btn:hover::before,
 .nw-dock-btn:focus-visible::before{
   background:linear-gradient(100deg,
-    color-mix(in srgb, var(--nw-brand) 12%, transparent),
-    color-mix(in srgb, var(--nw-brand) 5%, transparent));
-  border-color:color-mix(in srgb, var(--nw-brand) 20%, transparent);
-  box-shadow:0 1px 2px color-mix(in srgb, var(--nw-brand) 12%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--nw-bg) 38%, transparent);
+    color-mix(in srgb, var(--nw-brand) 10%, transparent),
+    color-mix(in srgb, var(--nw-brand) 4%, transparent));
+  border-color:color-mix(in srgb, var(--nw-brand) 16%, transparent);
+  box-shadow:0 1px 2px color-mix(in srgb, var(--nw-brand) 10%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #ffffff 30%, transparent);
 }
 .nw-dock-btn:active:not([data-blocked="1"])::before{filter:brightness(.97);}
 .nw-dock-btn > *{pointer-events:none;}
@@ -15161,8 +15171,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   display:inline-flex;align-items:center;justify-content:center;
   width:var(--nw-dock-tile);height:var(--nw-dock-tile);flex:0 0 auto;
   border-radius:8px;
-  background:color-mix(in srgb, var(--nw-fg) 6%, transparent);
-  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--nw-fg) 5%, transparent);
+  background:color-mix(in srgb, var(--nw-fg) 5%, transparent);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--nw-fg) 4%, transparent);
   color:color-mix(in srgb, var(--nw-fg-soft) 88%, var(--nw-fg));
   transition:background .16s var(--nw-ease, ease),
     color .16s var(--nw-ease, ease),
@@ -15188,13 +15198,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-dock-btn:focus-visible .nw-dock-go{opacity:.7;}
 
 /* 圆钮（FAB）：盒子是方形、透明、无圆角；形状由 ::before 画。
-   R63：从「一枚品牌色圆贴纸」改成「一枚压进纸里的墨印」——
-   ① 形状从正圆改成 16px 圆角方块，和卡片同一个圆角家族，卡与钮读成一组；
-   ② 颜色不用纯品牌色，而是品牌色兑 20% 墨（--nw-dock-ink）：浅色主题里
-      得到一枚深砖红，像印泥；夜间主题在 98-shell-theme 里单独兑底色；
-   ③ 底是 115% 的偏心径向渐变（左上亮、右下沉），描边一圈深墨，顶上
-      一道 1px 白边当反光——三样东西加起来才有「一块有厚度的墨」；
-   ④ 阴影里混了一层品牌色，落在纸上是暖的，不是灰的；
+   R63：从「一枚品牌色圆贴纸」改成「一枚压进纸里的墨印」。
+   R64：上一版把这枚印调成了品牌 80% + 墨 20% 的砖红，在奶油纸上仍然是
+   全屏最饱和的一块——用户说「突兀」。这一版把印色往墨里退到品牌 55%，
+   读起来是印泥落下的一枚旧印，不是一枚红色按钮；阴影从三层收到两层、
+   去掉品牌色染色，径向渐变的高光也压掉一半，它落在纸上的重量随之变轻。
    ⑤ ::after 是一圈内收 5px 的发丝环，像印面边缘，悬停时提亮。
    静止 82%（旧值 62% 太淡，深色墨印在浅纸上会读成脏点），悬停与展开到 1。 */
 .nw-dock-fab{
@@ -15204,21 +15212,20 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   border-radius:0;border:0;background:transparent;
   color:color-mix(in srgb, #ffffff 92%, var(--nw-bg));
   cursor:pointer;
-  --nw-dock-ink:color-mix(in srgb, var(--nw-brand) 80%, var(--nw-fg));
+  --nw-dock-ink:color-mix(in srgb, var(--nw-brand) 55%, var(--nw-fg));
   --nw-dock-lift:
-    0 8px 18px -8px color-mix(in srgb, var(--nw-dock-ink) 70%, transparent),
-    0 16px 34px -18px color-mix(in srgb, var(--nw-fg) 45%, transparent),
-    inset 0 1px 0 color-mix(in srgb, #ffffff 28%, transparent);
+    0 6px 16px -8px color-mix(in srgb, var(--nw-dock-ink) 55%, transparent),
+    0 2px 5px -1px color-mix(in srgb, var(--nw-fg) 18%, transparent);
 }
 .nw-dock-fab::before{
   content:'';position:absolute;inset:0;z-index:-1;
   border-radius:16px;
   pointer-events:none;
-  background:radial-gradient(115% 115% at 30% 16%,
-    color-mix(in srgb, var(--nw-dock-ink) 74%, #ffffff) 0%,
-    var(--nw-dock-ink) 48%,
-    color-mix(in srgb, var(--nw-dock-ink) 86%, #0e0b08) 100%);
-  border:1px solid color-mix(in srgb, var(--nw-dock-ink) 62%, var(--nw-fg));
+  background:radial-gradient(120% 120% at 32% 18%,
+    color-mix(in srgb, var(--nw-dock-ink) 84%, #ffffff) 0%,
+    var(--nw-dock-ink) 52%,
+    color-mix(in srgb, var(--nw-dock-ink) 90%, #0e0b08) 100%);
+  border:1px solid color-mix(in srgb, var(--nw-dock-ink) 55%, var(--nw-fg));
   box-shadow:var(--nw-dock-lift);
   opacity:.82;
   transition:opacity .2s var(--nw-ease, ease),
@@ -15227,9 +15234,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-dock-fab::after{
   content:'';position:absolute;inset:5px;z-index:-1;
   border-radius:12px;
-  border:1px solid color-mix(in srgb, #ffffff 22%, transparent);
+  border:1px solid color-mix(in srgb, #ffffff 16%, transparent);
   pointer-events:none;
-  opacity:.5;
+  opacity:.45;
   transition:opacity .2s var(--nw-ease, ease);
 }
 .nw-dock-fab:hover::before,
@@ -25867,13 +25874,23 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    otherwise the sheet would read as a hole rather than a page. */
 .nw-root[data-theme="night"] .nw-modal{background:#232220;}
 .nw-root[data-theme="night"] .nw-toast{background:#2b2a26;}
-/* R21/R63: the rows are transparent now, so nothing needs lifting at night —
-   the menu card itself is surface-2, which already sits above the page. The
-   FAB does need one override: its "seal" colour is brand mixed toward ink,
-   and at night the ink is light, which would wash it into pale peach. Mix
-   toward the page instead and it stays a deep terracotta. */
+/* R21/R63/R64: the rows are transparent now, so nothing needs lifting at night —
+   the menu card is the paper colour plus a little ink, which already sits on the
+   page. The FAB does need one override: its "seal" colour mixes brand toward ink,
+   and at night the ink is light, which would wash it into pale peach. Mix toward
+   the page instead and it stays a deep terracotta. R64 deepened it from 80% to
+   72% so the seal reads as ink on a dark page rather than a lit button. */
 .nw-root[data-theme="night"] .nw-dock-fab{
-  --nw-dock-ink:color-mix(in srgb, var(--nw-brand) 80%, var(--nw-bg));
+  --nw-dock-ink:color-mix(in srgb, var(--nw-brand) 72%, var(--nw-bg));
+}
+/* R64: in daylight the card is the page plus a breath of ink, and a 14% white
+   sheen reads as paper catching light. On a dark page both signs flip — the card
+   has to be *lighter* than the page to look raised, and the same white sheen
+   would smear into grey fog. So night gets its own two numbers: a slightly
+   stronger card, a much weaker sheen. */
+.nw-root[data-theme="night"] .nw-dock{
+  --nw-dock-card:color-mix(in srgb, var(--nw-fg) 7%, var(--nw-bg));
+  --nw-dock-sheen:color-mix(in srgb, #ffffff 6%, transparent);
 }
 
 /* ============================================================== card ====== */
