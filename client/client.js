@@ -8615,6 +8615,10 @@ window.__ModuleLoader__.load({
    */
   const NOTES_CLEAR_PX = 212;
   const TYPEWRITER_RESUME_MS = 800; // manual scroll keeps typewriter off this long
+  // R68: how long a sideways arrow keeps the typewriter gentle ('nearest'
+  // instead of 'centre'). Long enough to cover a burst of held arrows, short
+  // enough that the next keystroke re-centres immediately.
+  const CARET_NAV_EASE_MS = 400;
   // How long after the last keystroke a peer's edit may still take the caret
   // with it. Long enough to cover a pause for thought in the middle of a
   // sentence, short enough that someone watching the screen (typing on the
@@ -9595,6 +9599,11 @@ window.__ModuleLoader__.load({
     const measureQueuedRef = React.useRef(false);
     const noticeTimerRef = React.useRef(0);
     const manualAtRef = React.useRef(-1e9);
+    // R68: last time the caret moved sideways (ArrowLeft/ArrowRight). Unlike
+    // manualAtRef it does not freeze the viewport — it only downgrades the
+    // typewriter from 'center' to 'nearest' for a moment, so the page stays
+    // put while the writer arrows along a line and still follows when typing.
+    const caretNavAtRef = React.useRef(-1e9);
     // Last time the caret moved because this writer typed here. Distinguishes
     // "someone is writing in this pane" from "this pane is just being watched".
     const typedAtRef = React.useRef(-1e9);
@@ -10400,6 +10409,10 @@ window.__ModuleLoader__.load({
     function isManuallyScrolling() {
       return nowMs() - manualAtRef.current < TYPEWRITER_RESUME_MS;
     }
+    /** R68: the caret was just arrowed sideways, so keep the page still. */
+    function isCaretNavEasing() {
+      return nowMs() - caretNavAtRef.current < CARET_NAV_EASE_MS;
+    }
 
     /**
      * Scroll policy.
@@ -10498,7 +10511,14 @@ window.__ModuleLoader__.load({
       // 800 ms after the last manual scroll, and the next input then re-centres.
       if (isManuallyScrolling()) return null;
       const cfg = cfgRef.current || {};
-      const typedScroll = caretScrollTop(cfg.typewriterOn !== false ? 'center' : 'nearest', view, getM);
+      // R68: arrowing sideways is caret movement, not writing. Centring on it
+      // made one press look like two at a line crossing — the caret's own jump
+      // plus a whole line of page sliding under it — so the typewriter drops to
+      // 'nearest' while it lasts: the page holds still and only moves if the
+      // caret really leaves the viewport. Typing clears the flag (handleInput)
+      // and gets the full centre back.
+      const mode = cfg.typewriterOn !== false && !isCaretNavEasing() ? 'center' : 'nearest';
+      const typedScroll = caretScrollTop(mode, view, getM);
       if (typedScroll != null) return typedScroll;
       // R54b: typewriter off (or the caret already visible) — the band still
       // needs the caret inside it, or the writer types into the dimmed part.
@@ -11728,6 +11748,9 @@ window.__ModuleLoader__.load({
       valueRef.current = ta.value;
       dirtyRef.current = true;
       typedAtRef.current = nowMs();
+      // R68: typing ends the sideways-arrow easing — a keystroke is writing,
+      // and writing still gets the full centred typewriter.
+      caretNavAtRef.current = -1e9;
       // R26: same as afterEdit — the status bar must say 未保存 from the first
       // keystroke, not 1.2s later when the debounce finally fires.
       const notify = propsRef.current.onDirty;
@@ -11809,6 +11832,13 @@ window.__ModuleLoader__.load({
         return;
       }
 
+      // R68: the horizontal arrows are handled separately, below, and must NOT
+      // land in this set. Parking the typewriter here would also trip
+      // isManuallyScrolling(), which returns before the reveal branch, so a
+      // held arrow key would walk the caret off screen with the view frozen.
+      // Vertical and paging keys park because the handler moves the viewport
+      // itself; the horizontal keys only move the caret, so they ask for the
+      // gentler 'nearest' scroll instead (see caretNavAtRef).
       const nav =
         ev.key === 'PageUp' ||
         ev.key === 'PageDown' ||
@@ -11816,6 +11846,16 @@ window.__ModuleLoader__.load({
         ev.key === 'End' ||
         ev.key === 'ArrowUp' ||
         ev.key === 'ArrowDown';
+      const caretNav = ev.key === 'ArrowLeft' || ev.key === 'ArrowRight';
+      if (caretNav) {
+        // One press, one move: the caret keeps its own step and the page keeps
+        // still. At a line crossing the caret legitimately jumps from the end
+        // of one line to the start of the next — that alone already reads as
+        // "it passed the punctuation and the character" — and until now the
+        // typewriter slid a whole line under it at the same moment, so a single
+        // press looked like two.
+        caretNavAtRef.current = nowMs();
+      }
       if (nav) {
         // Keyboard navigation counts as manual viewport movement: park the
         // typewriter for a moment so it cannot yank the view back.

@@ -8,6 +8,24 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.2.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第六十八轮（R68）修复：**一次方向键，只走一步**。用户说「光标移动一下，在隔行之间会跨过一个标点符号和一个
+  汉字，相当于移动两次」，且只发生在换行/段首。四轮排查先把绘制排除了：`measureCaret()` 用同一个零宽标记
+  相对镜像原点取 `left` / `lineTop`，亚像素精确，画出来的光标不可能偏两字符；`handleKeyDown` 里也根本没有
+  `ArrowLeft` / `ArrowRight` 分支，插件不可能在横向方向键上推进 `selectionStart`。真正的根因在另一处：
+  打字机默认开（`cfg.typewriterOn !== false`），于是**每次光标移动都重算居中**；而 `nav` 集合只收了
+  PageUp/PageDown/Home/End/ArrowUp/ArrowDown，**正好漏掉左右键**，横向移动享受不到 `manualAtRef` 的
+  800ms 停放。跨行时，光标本就从 N 行右缘跳到 N+1 行左缘（这一跳看着就像跨过了行末标点和行首汉字），
+  同时整页又滑了一行——两个动作叠在一起就是「移动了两次」。纵向按键从没被抱怨，正是因为它们会停放。
+  修法不能把左右键直接塞进 `nav`：那会连带触发 `isManuallyScrolling()`，而它在 `planCaretScroll` 里
+  **先于** reveal 分支返回 null，长按方向键会把光标走出屏幕而页面纹丝不动。所以另开一个更轻的标记：
+  ① 新增 `CARET_NAV_EASE_MS = 400` 与 `caretNavAtRef`，`handleKeyDown` 里左右键只置这一个 ref；
+  ② `handleInput` 里清成 `-1e9`——打字是写作，写作照旧拿完整居中；
+  ③ 新增 `isCaretNavEasing()`，`planCaretScroll` 据此把 `'center'` 降级成 `'nearest'`
+  （`const mode = cfg.typewriterOn !== false && !isCaretNavEasing() ? 'center' : 'nearest';`）。
+  `'nearest'` 在 `caretScrollTop()` 里本来就写着「already visible: do not touch the viewport at all」，
+  页面因此完全不动；万一光标真跑出屏幕，`planBandScroll` 仍会把它捞回来。
+  `client.js` 重建 21 段 **1073178 字节**，`verify-client-load: ok`，`verify-host` 219/0，`probe-dock`、
+  `verify-dock-hit`（15 条）全过。
 - 第六十七轮（R67）改造：**五枚按钮排成从下往上的一级级台阶**。用户说「从下到上，按钮的长度呈阶梯式，上下位置可变。」
   ① **宽度和高度都从布局搬进变量**。`.nw-dock-btn` 的 `width:auto` 换成 `width:var(--nw-dock-w, auto)`、
   加上 `height:var(--nw-dock-h, 42px)`，再给五行各发一组 `--nw-dock-w` / `--nw-dock-h`。R66 的
