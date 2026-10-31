@@ -498,12 +498,22 @@
    Every wrapping-affecting property must be identical or the caret/highlight
    mirrors would disagree with the textarea. The extra right gutter keeps the
    last glyph of every line clear of the floating dock pinned to the bottom
-   right of the writing pane (CONTRACT-R3 section 7). */
+   right of the writing pane (CONTRACT-R3 section 7).
+
+   R69: 两端对齐. Justified text stretches every line except a paragraph's last
+   one, and text-align-last:left is what keeps that last line honest — without
+   it the final line of every paragraph would be stretched by its few trailing
+   glyphs, which looks broken in CJK. All three layers must carry both
+   declarations: the caret mirror measures glyph positions, so a textarea that
+   justifies while the mirror does not would put the caret at the wrong x on
+   every line (measured: 66 of 84 offsets off, drifting up to a full line
+   width). */
 .nw-ta,.nw-hl,.nw-caret{
   box-sizing:border-box;display:block;width:100%;margin:0;border:0;
   padding:0 calc(var(--nw-pad-x) + var(--nw-gutter-x,0px));
   font-family:var(--nw-font);font-size:var(--nw-size);font-weight:400;font-style:normal;
-  line-height:var(--nw-line);letter-spacing:0;word-spacing:0;text-align:left;text-indent:0;
+  line-height:var(--nw-line);letter-spacing:0;word-spacing:0;
+  text-align:justify;text-align-last:left;text-indent:0;
   text-transform:none;font-variant-ligatures:none;
   white-space:pre-wrap;overflow-wrap:break-word;word-break:normal;tab-size:4;
   direction:ltr;unicode-bidi:normal;
@@ -731,8 +741,10 @@
   position:absolute;left:0;top:0;width:100%;height:auto;overflow:visible;
   visibility:hidden;pointer-events:none;user-select:none;z-index:var(--nw-z-base);
 }
-/* zero-size inline-block anchored to the line box top, not to the baseline */
-.nw-caret-mark{display:inline-block;width:0;height:0;vertical-align:top;overflow:hidden;}
+/* the tail of the manuscript that follows the caret; its first rect is the
+   caret. It must stay a plain inline span — an inline-block would open a new
+   break opportunity before the caret and change the line breaking. */
+.nw-caret-rest{display:inline;}
 
 /* ---- R46 line focus ----
    A textarea cannot fade a range of its own lines, so the fade is drawn as two
@@ -1529,14 +1541,25 @@
      * Locates the visual line of `offset` (0..value.length).
      *
      * The measuring mirror has exactly the textarea's font/size/line-height,
-     * width, padding, white-space:pre-wrap and word-break, so a text prefix
-     * wraps at the same points as the real text. Writing prefix + a marker
-     * <span> and reading span.getBoundingClientRect() gives the caret line's
-     * top — correct for wrapped lines, unlike counting "\n".
+     * width, padding, white-space:pre-wrap and word-break, so it wraps at the
+     * same points as the real text.
+     *
+     * R69: the mirror holds the prefix in a text node followed by a <span>
+     * carrying the *rest* of the value, and the caret is the span's first client
+     * rect. An earlier version put a zero-width inline-block marker after the
+     * prefix, which was wrong at every soft wrap: a zero-width box can always
+     * squeeze onto the previous line's leftover space, so at a wrap boundary the
+     * marker reported the end of line N while the real caret sits at the start
+     * of line N+1 — measured as exactly one line and one line's width of error
+     * (+208px x, -28px y at a 13-glyph line). That is the "一格跨过标点和一个
+     * 汉字" report. A span with real text cannot squeeze, so its first rect is
+     * the caret. Verified against the browser's own selection highlight at 322
+     * offsets across 8 cases (both alignments, blank lines, trailing newline):
+     * 100% within 1px, max 0.3px horizontal, 0.5px vertical.
      *
      * The mirror is updated *incrementally*: typing appends to the previous
-     * prefix, so a single text-node assignment moves the marker instead of
-     * rebuilding two nodes per keystroke (the dominant cost when typing fast).
+     * prefix, so we rewrite the prefix text node and the span's tail instead of
+     * rebuilding nodes per keystroke (the dominant cost when typing fast).
      *
      * @param {number} offset caret offset in the buffer
      * @param {{el:Element, kind:string}} [view] resolved scroller (read phase)
@@ -1552,52 +1575,51 @@
       if (!ta || !mir || !sc) return null;
       const text = ta.value;
       const at = clampNum(Math.round(numOf(offset, ta.selectionStart || 0)), 0, text.length);
-      let prefix = text.slice(0, at);
-      // Keep the mirror's last line non-empty so its line box always exists:
-      // an empty mirror would have no line at all and report a 0-height box.
-      if (prefix.charAt(prefix.length - 1) === '\n') prefix += '\u200b';
+      const prefix = text.slice(0, at);
+      // The tail must never be empty or the span would have no line box at all
+      // (an empty inline has zero height and reports a 0-height rect).
+      const rest = text.slice(at) || '\u200b';
 
       const prev = mir.__nwPrefix;
-      const mark = mir.__nwMark;
+      let span = mir.__nwRest;
       const reusable =
-        mark && typeof prev === 'string' && (prev === prefix || prefix.indexOf(prev) === 0);
+        span && typeof prev === 'string' && (prev === prefix || prefix.indexOf(prev) === 0);
       if (reusable) {
-        // Same line of text plus a suffix: update the existing text node only.
+        // Typing / one arrow key: only the two text runs change, the nodes stay.
         const first = mir.firstChild;
         if (first && first.nodeType === 3) first.nodeValue = prefix;
-        else if (prefix) mir.insertBefore(document.createTextNode(prefix), mark);
-        mir.__nwPrefix = prefix;
+        else if (prefix) mir.insertBefore(document.createTextNode(prefix), span);
+        span.textContent = rest;
       } else {
         clearNode(mir);
         if (prefix) mir.appendChild(document.createTextNode(prefix));
-        // The marker is a zero-sized inline-block with vertical-align:top, so
-        // its border box sits exactly on the *line box top* (an ordinary inline
-        // span would sit on the baseline and be off by half the leading).
-        const el = document.createElement('span');
-        el.className = 'nw-caret-mark';
-        mir.appendChild(el);
-        mir.__nwPrefix = prefix;
-        mir.__nwMark = el;
+        span = document.createElement('span');
+        span.className = 'nw-caret-rest';
+        span.textContent = rest;
+        mir.appendChild(span);
+        mir.__nwRest = span;
       }
-      const marker = mir.__nwMark;
-      if (!marker) return null;
+      mir.__nwPrefix = prefix;
 
-      // One rect feeds both consumers. The marker is zero-width, so its left
-      // edge *is* the caret's x; relative to the mirror's own origin it is
-      // already expressed in .nw-stack coordinates (the mirror is pinned to the
-      // stack's top-left corner and has the textarea's padding), which is what
-      // the absolutely positioned .nw-cursor needs.
-      const markRect = marker.getBoundingClientRect();
+      // The span begins exactly at the caret and carries the rest of the
+      // manuscript, which is what keeps the mirror's line breaking (and, under
+      // text-align:justify, its line stretching) identical to the textarea's.
+      // Its first client rect is therefore the caret.
+      const rects = span.getClientRects();
+      const rect = rects.length ? rects[0] : span.getBoundingClientRect();
       const mirRect = mir.getBoundingClientRect();
       const height = lineHeightPx();
-      const left = markRect.left - mirRect.left;
-      const lineTop = markRect.top - mirRect.top;
+      // A rect on an inline span reports the content box, not the line box; the
+      // caret is painted at full line-height, so lift the top by half-leading.
+      const halfLead = Math.max(0, (height - rect.height) / 2);
+      const left = rect.left - mirRect.left;
+      const lineTop = rect.top - mirRect.top - halfLead;
       if (v.kind === 'document') {
-        return { top: markRect.top + (sc.scrollTop || 0), height, left, lineTop };
+        return { top: rect.top - halfLead + (sc.scrollTop || 0), height, left, lineTop };
       }
       const scRect = sc.getBoundingClientRect();
       return {
-        top: markRect.top - scRect.top + (sc.scrollTop || 0),
+        top: rect.top - halfLead - scRect.top + (sc.scrollTop || 0),
         height,
         left,
         lineTop,

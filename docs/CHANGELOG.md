@@ -8,6 +8,30 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.2.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第六十九轮（R69）改造 + 修复：**正文两端对齐；光标不再在折行处一次跨两个字**。用户说「编辑页面和阅读页面，
+  文字实现两端对齐」，而此前那条「移动光标会跳过标点符号」正是同一件事的两面——这两条必须一起做。
+  ① **先把根因测出来，而不是猜出来**。无头 Chrome（`--headless=new` 需 `danger-full-access`，沙箱会拦
+  Chrome 的 mojo 命名管道，报 `platform_channel.cc:112 Check failed (0x5)`）＋ 自写 CDP 客户端跑真排版：
+  用 `setSelectionRange(k, k+1)` 让浏览器**自己**画出绿色选区，选区左缘就是原生光标的 x。84 个偏移逐一截图后用
+  Pillow 量，拿到硬数据。
+  ② **今天的测量法在每个软折行点错整整一行**。`measureCaret()` 原本往镜像里写「前缀 + 零宽 inline-block
+  标记」——零宽的盒子总能挤进上一行剩下的缝里，所以折行点上它报的是第 N 行行尾，而 textarea 里的真光标
+  在第 N+1 行行首。实测误差 **dx=+208px、dy=−28px**，正好是一行的宽和高：这就是「一次按键跨过行末标点和
+  行首汉字」。其余 78 个偏移误差为 0，所以只在换行/段首被察觉。
+  ③ **开启两端对齐会让这个误差从 6/84 涨到 66/84**。前缀镜像的最后一行不参与拉伸，而 textarea 里那一行是
+  被拉伸的中间行，于是整行越靠右偏得越多（60→62、76→79、92→95…）。这两件事因此是同一根绳子。
+  ④ 修法：镜像改成「前缀 + `<span>` 装剩下的全文」，取该 span 的 `getClientRects()[0]`——带真文字的 span
+  挤不进上一行，第一个 rect 就是光标；镜像里装有全文，换行与 justify 拉伸也就和 textarea 逐行一致。
+  rect 报的是行内内容盒而非行盒，按半行距 `(lineHeight - rect.height) / 2` 抬回去。增量路径保留：只改两个
+  文本节点的值，不重建节点。CSS 里 `.nw-caret-mark` 换成 `.nw-caret-rest{display:inline;}`（不能是
+  inline-block，那会在光标前多出一个断行机会）。
+  ⑤ **验证**：8 个用例 × 两种对齐（长文 / 末尾换行 / 空行分段 / 单字成行）共 **322 个偏移，322 个都在 1px
+  以内**，max|dx|=0.3px、max|dy|=0.5px。
+  ⑥ 两端对齐本身：`.nw-ta,.nw-hl,.nw-caret` 共享排版里 `text-align:left` → **`text-align:justify;
+  text-align-last:left`**（三层必须同时改，否则镜像与 textarea 换行不一致）；阅读页 `.nw-read-p` 同样改成
+  justify + `text-align-last:left`——最后一行留在左边，否则每段结尾那几个字会被拉满一整行。
+  `client.js` 重建 21 段 **1074692 字节**，`verify-client-load: ok`，`verify-host` 219/0，`probe-dock`、
+  `verify-dock-hit`、`verify-read-spread`、`verify-dialog-kinds` 全过。
 - 第六十八轮（R68）修复：**一次方向键，只走一步**。用户说「光标移动一下，在隔行之间会跨过一个标点符号和一个
   汉字，相当于移动两次」，且只发生在换行/段首。四轮排查先把绘制排除了：`measureCaret()` 用同一个零宽标记
   相对镜像原点取 `left` / `lineTop`，亚像素精确，画出来的光标不可能偏两字符；`handleKeyDown` 里也根本没有

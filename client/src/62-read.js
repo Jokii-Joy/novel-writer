@@ -224,10 +224,13 @@
   line-height:1.5;letter-spacing:.04em;color:var(--nw-fg);
   break-after:avoid;
 }
+/* R69: 两端对齐。阅读页的段落按 Justification 排，但最后一行必须留在左边
+   （text-align-last:left）——否则每段结尾那几个字会被拉满一整行，中文里看起来
+   像是排版坏了。text-indent:2em 的首行缩进不受影响。 */
 .nw-read-p{
   margin:0 0 .9em;text-indent:2em;
   white-space:pre-wrap;overflow-wrap:break-word;word-break:normal;
-  text-align:left;
+  text-align:justify;text-align-last:left;
 }
 /* An empty line in the manuscript is a scene break, not a typo: it earns an
    extra line of air instead of being flattened into the paragraph wall. */
