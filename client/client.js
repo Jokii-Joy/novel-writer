@@ -10480,16 +10480,18 @@ window.__ModuleLoader__.load({
     /**
      * R71: the paragraph that contains `at`.
      *
-     * Two conventions live in the same field, so the rule is adaptive:
-     *  - a chapter that uses blank lines to separate paragraphs (Markdown-ish,
-     *    common in imported drafts) groups every non-blank line between two
-     *    blank lines into one paragraph;
-     *  - a chapter with no blank line at all is the Chinese web-novel shape —
-     *    one line IS one paragraph — so each logical line is its own.
+     * One logical line IS one paragraph. That is the Chinese web-novel shape,
+     * and it is also the only rule that cannot misfire: a line that soft-wraps
+     * still reports every wrapped visual line, because the extent is measured
+     * as a character Range (see measureParagraphBand), so a long paragraph is
+     * fully lit.
      *
-     * Without the adaptive half, a chapter that never uses blank lines would
-     * come back as a single paragraph covering the whole document and nothing
-     * would ever be dimmed.
+     * R71b: an earlier version tried to be cleverer — "if the chapter uses
+     * blank lines anywhere, group every non-blank line between two blanks into
+     * one paragraph". That collapsed whole chapters: a title line followed by a
+     * blank line makes every body line one contiguous block, so the paragraph
+     * was the entire body and nothing ever got dimmed. Reported as「鼠标聚焦时，
+     * 其他段落并没有变浅」. A blank line is now just its own paragraph.
      *
      * A caret sitting on a blank line belongs to that blank line alone, so the
      * writer can see the gap they just made.
@@ -10499,31 +10501,27 @@ window.__ModuleLoader__.load({
     function paragraphBoundsAt(text, at) {
       const n = text.length;
       const pos = clampNum(Math.round(numOf(at, 0)), 0, n);
-      const lines = [];
       let from = 0;
+      let lineStart = 0;
+      let lineEnd = n;
       for (;;) {
         const nl = text.indexOf('\n', from);
         const to = nl < 0 ? n : nl;
-        lines.push([from, to]);
-        if (nl < 0) break;
+        // A caret immediately before a newline is still on the line that
+        // newline ends, hence `<=`.
+        if (pos <= to) {
+          lineStart = from;
+          lineEnd = to;
+          break;
+        }
+        if (nl < 0) {
+          lineStart = from;
+          lineEnd = to;
+          break;
+        }
         from = nl + 1;
       }
-      const blank = (i) => /^[ \t\u3000]*$/.test(text.slice(lines[i][0], lines[i][1]));
-      const usesBlankLines = /\n[ \t\u3000]*\n/.test(text);
-      // The line holding the caret. A caret immediately before a newline is
-      // still on the line that newline ends, hence `<=`.
-      let idx = 0;
-      for (let i = 0; i < lines.length; i += 1) {
-        idx = i;
-        if (pos <= lines[i][1]) break;
-      }
-      let lo = idx;
-      let hi = idx;
-      if (usesBlankLines && !blank(idx)) {
-        while (lo > 0 && !blank(lo - 1)) lo -= 1;
-        while (hi + 1 < lines.length && !blank(hi + 1)) hi += 1;
-      }
-      return { start: lines[lo][0], end: lines[hi][1] };
+      return { start: lineStart, end: lineEnd };
     }
 
     /**
