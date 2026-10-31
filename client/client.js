@@ -10584,19 +10584,30 @@ window.__ModuleLoader__.load({
       // Same half-leading correction as measureCaret(): a rect on inline text
       // reports the content box, the veil edge has to land on the line box.
       const halfLead = Math.max(0, (lh - first.height) / 2);
-      const mirRect = mir.getBoundingClientRect();
-      const relTop = first.top - mirRect.top - halfLead;
-      const relBottom = last.bottom - mirRect.top + halfLead;
+      // R71e: the band must be reported in *scroller content* coordinates — the
+      // space caretScrollTop()/planBandScroll()/paintFocus() already use — so it
+      // has to be anchored to the scroller, not to the mirror.
+      //
+      // The previous version subtracted `mirRect.top` (a viewport number) from
+      // viewport rects and then added scrollTop, which silently mixed the two
+      // spaces. In the shipped host the manuscript starts ~165px below the
+      // scroller's top (the chapter title row sits above the text), so the band
+      // was drawn that much too high, and past the first screenful
+      // `band.top - scrollTop` went negative for a paragraph that was plainly on
+      // screen — paintFocus() then parked the veils and the page came back
+      // uniform. That is exactly the "整页都很清楚，没有任何浓淡区别" report. The
+      // mock probes could not see it: their mirror sat at the scroller's top,
+      // where the two spaces coincide.
       const scrollTop = numOf(sc.scrollTop, 0);
-      if (v.kind === 'document') {
-        return { top: relTop + scrollTop, bottom: relBottom + scrollTop, height: relBottom - relTop };
-      }
-      const scRect = sc.getBoundingClientRect();
-      return {
-        top: relTop - scRect.top + scrollTop,
-        bottom: relBottom - scRect.top + scrollTop,
-        height: relBottom - relTop,
-      };
+      const mirRect = mir.getBoundingClientRect();
+      // Content-space y of any viewport y, per scroller kind.
+      const toContent = (viewportY) => (v.kind === 'document'
+        ? viewportY + scrollTop
+        : viewportY - sc.getBoundingClientRect().top + scrollTop);
+      const mirTop = toContent(mirRect.top);
+      const top = mirTop + (first.top - mirRect.top) - halfLead;
+      const bottom = mirTop + (last.bottom - mirRect.top) + halfLead;
+      return { top, bottom, height: bottom - top };
     }
 
     /**

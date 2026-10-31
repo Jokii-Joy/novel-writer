@@ -46,6 +46,30 @@
   段落滚出视野 → `0`、滚回来 → `1`，四个状态全对。
   ⑧ `client.js` 重建 21 段 **1090122 字节**，`verify-client-load: ok`，`verify-host` 219/0，
   `verify-dock-hit`、`probe-dock` 全过。
+- 第七十一轮（R71e）修复：**遮罩重新压暗了——段落带以前被画高了整整一个页头**。用户说「都不淡了。
+  我让你淡的是光标所在的那一段的文字。」，追问后确认看到的是「整页都很清楚，没有任何浓淡区别」。
+  前四轮都在改分段规则和羽化，机制本身是对的，错在坐标系。
+  ① **根因：`measureParagraphBand()` 把两个坐标空间混着减**。它拿 Range 的视口 rect 减
+  `mirRect.top`（视口坐标）得到「相对镜像的偏移」，再把这个偏移加上 `scrollTop` 当成内容坐标返回。
+  只有镜像正好贴在滚动容器顶边时这一步才等价——而实机里 `.nw-caret` 镜像顶边在滚动容器下方
+  **165px**（章节标题那一行占了位置）。于是段落带整体被画高 165px：第一屏还能勉强看到一点压暗，
+  往下翻之后 `band.top - scrollTop` 对一段明明在屏幕上的文字算成了负数，`paintFocus()` 命中
+  「整段滚出视野」的停放分支，`data-focus="0"`，两片遮罩一起隐藏——页面就变成全亮。这正是
+  「整页都很清楚」的来源，也解释了为什么之前的 mock 探针全都通过：那些探针里镜像就在容器顶边，
+  两个空间重合，误差恒等于 0。
+  ② **修法：把段落带锚到滚动容器上，而不是锚到镜像上**。新增 `toContent(viewportY)`，按
+  `v.kind === 'document'` 分两支把任意视口 y 换成内容 y，用它换 `mirRect.top` 得到 `mirTop`，
+  段落上下沿都用 `mirTop + (rect.top - mirRect.top)` 表示。两种 scroller 从此走同一条路径。
+  ③ **验证方式换成了真 GUI**。DSH Web GUI 用 HMAC 签名 cookie 鉴权（`dsh-auth-<sha256(authority)>`，
+  payload `v1.<base64url(json)>.<base64url(hmac)>`，secret 在 `~/.dsh/.credentials.yaml`），
+  签出 cookie 后 CDP 可以真进插件：点「精神空间」→ 点作品卡 → `.nw-ta` 出现。实测 84 行、4331 字的
+  真实章节，字号 20px、行高 40px、窗高 866px、镜像顶边 165px。修复前 off=1200/1500/2000 三处
+  `data-focus` 全是 **0**；修复后全部为 **1**，且 `veilBotTop` 随段落移动（205 → 485 → 866 → 826）。
+  ④ **像素级复核**：截图逐行取最深像素，光标所在段落那一行 **24**（纯墨色，完全没被压暗），
+  其余每一行 **181**（被 72% 的纸色遮罩盖住）。整页不再是同一个灰度。
+  ⑤ `client.js` 重建 21 段 **1091082 字节**，`verify-client-load: ok`，`verify-host` 219/0，
+  `verify-dock-hit`、`probe-dock`、`verify-read-spread`、`verify-dialog-kinds` 全过；
+  `scripts/.tmp/probe-para-band.mjs` 六项状态断言（聚焦/失焦/重新聚焦/滚走/滚过/滚回）全过。
 - 第七十轮（R70）修复：**按左右方向键时，整页不再上下晃**。用户说「我按左右移动光标时，整个页面上下晃动」——
   R68 只压住了打字机的居中，晃动还在，而且这次是真正的 bug，不是观感。
   ① **`planBandScroll()` 返回的是增量，调用方却当绝对 offset 写回去**。`bandContentTop()` 给
