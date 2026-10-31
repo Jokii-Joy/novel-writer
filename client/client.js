@@ -10480,48 +10480,57 @@ window.__ModuleLoader__.load({
     /**
      * R71: the paragraph that contains `at`.
      *
-     * One logical line IS one paragraph. That is the Chinese web-novel shape,
-     * and it is also the only rule that cannot misfire: a line that soft-wraps
-     * still reports every wrapped visual line, because the extent is measured
-     * as a character Range (see measureParagraphBand), so a long paragraph is
-     * fully lit.
+     * R71c: a paragraph is what the writer says it is — it **starts with two
+     * spaces** (ASCII or full-width). Everything after that line belongs to it
+     * until the next line that also starts with two spaces, so a paragraph that
+     * was hard-wrapped across several lines is lit as one block, and the visual
+     * extent still comes from a character Range (see measureParagraphBand), so
+     * soft-wrapped lines are included too.
      *
-     * R71b: an earlier version tried to be cleverer — "if the chapter uses
-     * blank lines anywhere, group every non-blank line between two blanks into
-     * one paragraph". That collapsed whole chapters: a title line followed by a
-     * blank line makes every body line one contiguous block, so the paragraph
-     * was the entire body and nothing ever got dimmed. Reported as「鼠标聚焦时，
-     * 其他段落并没有变浅」. A blank line is now just its own paragraph.
+     * Chapters written one-line-per-paragraph without indentation fall back to
+     * one line = one paragraph, which is the same answer when every line is a
+     * paragraph.
      *
-     * A caret sitting on a blank line belongs to that blank line alone, so the
-     * writer can see the gap they just made.
+     * R71b history: an earlier version grouped non-blank lines between blank
+     * lines. That collapsed whole chapters — a title line followed by a blank
+     * line made every body line one contiguous block — reported as「鼠标聚焦时，
+     * 其他段落并没有变浅」.
+     *
+     * A blank line is its own paragraph, so the writer can see the gap they just
+     * made, and a paragraph never reaches across one.
      *
      * @returns {{start:number, end:number}} character offsets, `end` exclusive
      */
     function paragraphBoundsAt(text, at) {
       const n = text.length;
       const pos = clampNum(Math.round(numOf(at, 0)), 0, n);
+      const lines = [];
       let from = 0;
-      let lineStart = 0;
-      let lineEnd = n;
       for (;;) {
         const nl = text.indexOf('\n', from);
         const to = nl < 0 ? n : nl;
-        // A caret immediately before a newline is still on the line that
-        // newline ends, hence `<=`.
-        if (pos <= to) {
-          lineStart = from;
-          lineEnd = to;
-          break;
-        }
-        if (nl < 0) {
-          lineStart = from;
-          lineEnd = to;
-          break;
-        }
+        lines.push([from, to]);
+        if (nl < 0) break;
         from = nl + 1;
       }
-      return { start: lineStart, end: lineEnd };
+      const slice = (i) => text.slice(lines[i][0], lines[i][1]);
+      const blank = (i) => /^[ \t\u3000]*$/.test(slice(i));
+      // R71c: two leading spaces mark the start of a paragraph.
+      const starts = (i) => /^[ \t\u3000]{2}/.test(slice(i));
+      const usesIndent = lines.some((_, i) => starts(i));
+      // The line holding the caret. A caret immediately before a newline is
+      // still on the line that newline ends, hence `<=`.
+      let idx = 0;
+      for (let i = 0; i < lines.length; i += 1) {
+        idx = i;
+        if (pos <= lines[i][1]) break;
+      }
+      if (!usesIndent || blank(idx)) return { start: lines[idx][0], end: lines[idx][1] };
+      let lo = idx;
+      while (lo > 0 && !starts(lo) && !blank(lo - 1)) lo -= 1;
+      let hi = idx;
+      while (hi + 1 < lines.length && !starts(hi + 1) && !blank(hi + 1)) hi += 1;
+      return { start: lines[lo][0], end: lines[hi][1] };
     }
 
     /**
