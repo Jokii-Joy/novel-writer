@@ -295,9 +295,13 @@
      The writer asked for "that kind of effect" in normal mode too, so the wash
      strength has to be the one they already liked in immersive mode. */
   --nw-veil-ink:color-mix(in srgb, var(--nw-bg) 72%, transparent);
-  /* R46: one line of feather, derived from the letter size, so the band edge lands
-   on the line box instead of in the middle of one. */
-  --nw-focus-feather:calc(var(--nw-size) * var(--nw-line,2));
+  /* R46: the feather softens the band edge so it does not read as a cut-out.
+     R71d: it used to be a FULL line (size * line-height), which meant the fade
+     bled one whole line above and one below — a one-line paragraph then looked
+     like a three-line highlight, reported as「凸显的不是光标所在段落，而是上下
+     几行」. A small feather keeps the edge at the line box and the paragraph is
+     the only thing that stays at full strength. */
+  --nw-focus-feather:calc(var(--nw-size) * 0.4);
 }
 }
 /* Small panes: the gutter shrinks, the 88px rule does not (22 + 66 = 88).
