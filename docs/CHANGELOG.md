@@ -8,6 +8,33 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.2.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第七十一轮（R71）改造：**亮带跟着光标所在的段落走；光标离开编辑区时全部文字恢复原样**。用户说
+  「在编辑器页面，应该凸显光标所在的段落。光标没聚集时，所有内容都凸显。」——原来那条「窗格正中固定
+  N 行」的亮带，是拿固定行数去猜段落，段落一长一短就永远对不上。
+  ① **亮带 = 光标所在的段落**。新增 `paragraphBoundsAt(text, at)`，自适应两种分段约定：文本里存在空行
+  （`/\n[ \t\u3000]*\n/`）时，空行之间的连续非空行算一段；**完全没有空行时（中文网文常态，一行即一段）
+  每行自成一段**。没有这个自适应，整篇会算成一段，永远不压暗任何东西。空行自成一节，光标落在空行上
+  只照亮那个空行。`if (pos <= lines[i][1]) break;` 让光标紧贴换行符时仍属于该行。
+  ② **段落带用 Range 量，不写 DOM**。新增 `measureParagraphBand(view, getM)`：`document.createRange()`
+  + `range.getClientRects()` 量段落首行与末行的 rect，减半行距 `halfLead = (lh - first.height) / 2` 对齐行盒。
+  特意**不**开第三个镜像——那是每次按键多一次强制回流，正是单镜像设计要避免的成本。空行段落 range 折叠、
+  没有 rects 时回退用 `getM()` 的行盒。
+  ③ **失焦时完全停放**。新增 `editorFocusedRef`（用 ref 不用 state，因为 `paintFocus()` 从滚动监听器里跑，
+  不能触发 re-render）：`cfg.focusOn === false || !sc || !editorFocusedRef.current` 三者任一成立就
+  `data-focus="0"` 直接 return。`handleBlur()` 置 false + `repaintFocusSoon()`，textarea `onFocus` 置 true
+  并重新测量。这就是「光标没聚集时，所有内容都凸显」。
+  ④ **段落整段滚出视野时也停放**（`botPx <= 0 || topPx >= vzH`）。否则两片遮罩会合拢把整屏压暗——作者
+  手动往上翻去看前文时，屏幕不该突然全暗。
+  ⑤ `planBandScroll()` 里 `if (band.height >= band.viewH) return null;`：段落比窗格还高时完全不管，否则
+  每键都追一个永远到不了的边界，正是 R70 刚消掉的晃动。可见就不动，否则最小位移揭示。
+  ⑥ **删掉 `focusLines` 设置项**（`10-db.js` 的 `DEFAULT_SETTINGS`、`95-dialogs.js` 的「上下各留 N 行」
+  滑杆、`cfgRef` 与 effect 依赖全部清掉）。设置页文案改成「只照亮光标所在的那一段」。
+  ⑦ 验证：`scripts/.tmp/test-paragraph-bounds.mjs` 穷举 6 个用例的每个偏移；无头 Chrome + CDP 探针
+  （`scripts/.tmp/probe-para-band.mjs`，从源码抽出七个真函数注入）跑 `webnovel` / `blankLines` /
+  `oneLongLine` 三份文本共 **298 个偏移，全部落在自己的段落带内**；失焦 → `data-focus=0`、重新聚焦 → `1`、
+  段落滚出视野 → `0`、滚回来 → `1`，四个状态全对。
+  ⑧ `client.js` 重建 21 段 **1089318 字节**，`verify-client-load: ok`，`verify-host` 219/0，
+  `verify-dock-hit`、`probe-dock` 全过。
 - 第七十轮（R70）修复：**按左右方向键时，整页不再上下晃**。用户说「我按左右移动光标时，整个页面上下晃动」——
   R68 只压住了打字机的居中，晃动还在，而且这次是真正的 bug，不是观感。
   ① **`planBandScroll()` 返回的是增量，调用方却当绝对 offset 写回去**。`bandContentTop()` 给

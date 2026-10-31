@@ -483,14 +483,18 @@ window.__ModuleLoader__.load({
     caretBlink: true,
     /**
      * R46/R54: fade every line except the one being written. `focusDim` is the
-     * switch, `focusLines` how many lines either side stay clear. On by default
-     * because it is the whole point of a writing surface — the sentence under
-     * the caret in front, the rest of the page quiet behind it. R54: it used to
-     * be immersive-only; it now applies in both modes, so the setting is the
-     * single way out and the value was already right for the writer who asked.
+     * switch. On by default because it is the whole point of a writing
+     * surface — the paragraph under the caret in front, the rest of the page
+     * quiet behind it. R54: it used to be immersive-only; it now applies in
+     * both modes, so the setting is the single way out and the value was
+     * already right for the writer who asked.
+     *
+     * R71: `focusLines` was removed with the fixed-height band. The lit region
+     * is now the caret's own paragraph, so there is no "lines either side" left
+     * to configure. The key is simply absent; an old stored value is ignored
+     * (mergeSettings keeps unknown keys but nothing reads this one).
      */
     focusDim: true,
-    focusLines: 2,
     autoSaveMs: 1200,
     /**
      * R16 ⑥: whether 字数 counts punctuation marks. Chinese word processors count
@@ -9527,10 +9531,9 @@ window.__ModuleLoader__.load({
     const caretBlink = settings.caretBlink !== false;
 
     // ---- R46 line focus ------------------------------------------------------
-    // Fading everything except the line being written keeps the sentence in
-    // front of the eye without touching the manuscript, the theme or the flow
-    // of the text. Two lines of context each way is the default: about what a
-    // writer can still read without moving their eyes.
+    // Fading everything except the paragraph being written keeps the sentence
+    // in front of the eye without touching the manuscript, the theme or the
+    // flow of the text.
     //
     // R54: this used to be immersive-only, on the theory that with the shelf
     // and toolbar on screen a fade would "fight the chrome". The writer
@@ -9539,22 +9542,21 @@ window.__ModuleLoader__.load({
     // shelf open. So it now follows the setting alone (`focusDim`, on by
     // default, switchable off in 设置 → 写作), in both modes.
     //
-    // R54b: the band is anchored to the MIDDLE of the pane, not to the caret's
-    // line — and the caret is brought into that band. The first attempt followed
-    // the caret, which is only right while you are typing: open a chapter and
-    // the caret sits on line one, so the light lands at the top of the page and
-    // the writer stares at a whole pane of dimmed text until they click
-    // something. Anchoring to the middle is what makes it read as "the
-    // paragraph I am on"; planBandScroll() then keeps the caret inside the lit
-    // band, so the two can never disagree. It is also cheaper: the band stops
-    // moving on every keystroke, so typing no longer repaints it.
+    // R54b: the band was anchored to the MIDDLE of the pane, because following
+    // the caret meant a freshly opened chapter lit its first line and left the
+    // rest of the page grey.
+    //
+    // R71 replaces that with the thing the writer actually asked for: "应该凸显
+    // 光标所在的段落。光标没聚焦时，所有内容都凸显。" So the band is now the
+    // caret's own paragraph, measured from the text (paragraphBoundsAt +
+    // measureParagraphBand), and it is parked entirely while the editor is not
+    // focused. `focusLines` is gone with the fixed-height band: the band's
+    // height is the paragraph's, not a number of lines either side.
     const focusOn = settings.focusDim !== false;
-    const focusLines = clampNum(numOf(settings.focusLines, 2), 0, 8);
-    // Whether the caret has to be pushed into the band (see focusCenter()).
+    // Whether the caret has to be pushed into the band (see planBandScroll).
     // This is what typewriter mode has always done, so a writer who turned that
     // off has said "leave my viewport alone" — the fade then simply lights the
-    // middle of the page and the caret may sit anywhere, which is the pre-R54
-    // behaviour and is still the right trade-off for those users.
+    // paragraph and the caret may sit anywhere.
     const focusFollows = focusOn && settings.typewriter !== false;
 
     const surfaceStyle = {
@@ -9589,6 +9591,12 @@ window.__ModuleLoader__.load({
     // Scrolling does not change it, which is what lets a scroll event repaint
     // the fade without measuring anything. -1 means "not measured yet".
     const focusTopRef = React.useRef(-1);
+    /**
+     * R71: the caret's paragraph, in scroller content coordinates, cached by the
+     * measure pass so paintFocus() can run from a scroll listener without
+     * measuring anything (a Range per scroll event would force a reflow).
+     */
+    const paraBandRef = React.useRef(null);
     // Pending frame for that repaint (0 = none queued).
     const focusRafRef = React.useRef(0);
     const findInputRef = React.useRef(null);
@@ -9597,7 +9605,7 @@ window.__ModuleLoader__.load({
     const propsRef = React.useRef(p);
     propsRef.current = p;
     const cfgRef = React.useRef(null);
-    cfgRef.current = { autoSaveMs, typewriterOn, fontSize, lineHeight, focusOn, focusLines, focusFollows };
+    cfgRef.current = { autoSaveMs, typewriterOn, fontSize, lineHeight, focusOn, focusFollows };
 
     const highlightsRef = React.useRef([]);
     // R47: persistent annotations, kept apart from `highlightsRef` on purpose —
@@ -9640,6 +9648,12 @@ window.__ModuleLoader__.load({
     // The painted caret hides when the whole window loses focus (Alt+Tab) even
     // though the textarea may still be document.activeElement.
     const winFocusedRef = React.useRef(true);
+    // R71: whether the manuscript itself has the caret. Unlike winFocusedRef this
+    // is about the editor, not the window: clicking a shelf row or the settings
+    // dialog takes focus off the textarea and the paragraph fade lifts, so the
+    // page reads as plain text again. Tracked as a ref (not state) because
+    // paintFocus() runs from listeners that must not schedule a re-render.
+    const editorFocusedRef = React.useRef(false);
     const chapterIdRef = React.useRef(null);
     const pendingCenterRef = React.useRef(false);
     const dirtyRef = React.useRef(false);
@@ -10464,13 +10478,152 @@ window.__ModuleLoader__.load({
      * viewport completely alone. All writes happen later in the frame.
      */
     /**
-     * R54b: the line the lit band is centred on, in *scroller content*
+     * R71: the paragraph that contains `at`.
+     *
+     * Two conventions live in the same field, so the rule is adaptive:
+     *  - a chapter that uses blank lines to separate paragraphs (Markdown-ish,
+     *    common in imported drafts) groups every non-blank line between two
+     *    blank lines into one paragraph;
+     *  - a chapter with no blank line at all is the Chinese web-novel shape —
+     *    one line IS one paragraph — so each logical line is its own.
+     *
+     * Without the adaptive half, a chapter that never uses blank lines would
+     * come back as a single paragraph covering the whole document and nothing
+     * would ever be dimmed.
+     *
+     * A caret sitting on a blank line belongs to that blank line alone, so the
+     * writer can see the gap they just made.
+     *
+     * @returns {{start:number, end:number}} character offsets, `end` exclusive
+     */
+    function paragraphBoundsAt(text, at) {
+      const n = text.length;
+      const pos = clampNum(Math.round(numOf(at, 0)), 0, n);
+      const lines = [];
+      let from = 0;
+      for (;;) {
+        const nl = text.indexOf('\n', from);
+        const to = nl < 0 ? n : nl;
+        lines.push([from, to]);
+        if (nl < 0) break;
+        from = nl + 1;
+      }
+      const blank = (i) => /^[ \t\u3000]*$/.test(text.slice(lines[i][0], lines[i][1]));
+      const usesBlankLines = /\n[ \t\u3000]*\n/.test(text);
+      // The line holding the caret. A caret immediately before a newline is
+      // still on the line that newline ends, hence `<=`.
+      let idx = 0;
+      for (let i = 0; i < lines.length; i += 1) {
+        idx = i;
+        if (pos <= lines[i][1]) break;
+      }
+      let lo = idx;
+      let hi = idx;
+      if (usesBlankLines && !blank(idx)) {
+        while (lo > 0 && !blank(lo - 1)) lo -= 1;
+        while (hi + 1 < lines.length && !blank(hi + 1)) hi += 1;
+      }
+      return { start: lines[lo][0], end: lines[hi][1] };
+    }
+
+    /**
+     * R71: the paragraph's line-box extent, in the same content coordinates
+     * measureCaret() reports, so the veils and the caret cannot disagree.
+     *
+     * Uses a DOM Range over the caret mirror instead of a second mirror: the
+     * mirror already holds the whole manuscript with the same typography and
+     * the same wrapping, and a Range costs no DOM write at all. Writing the
+     * paragraph into a third mirror would add one more forced reflow to every
+     * keystroke — the exact cost the single-mirror design was built to avoid.
+     */
+    function measureParagraphBand(view, getM) {
+      const cfg = cfgRef.current || {};
+      const ta = taRef.current;
+      const mir = caretRef.current;
+      const v = view || resolveScroller(false);
+      const sc = v && v.el;
+      if (cfg.focusOn === false || !ta || !mir || !sc) return null;
+      const text = ta.value;
+      if (!text) return null;
+      const span = paragraphBoundsAt(text, ta.selectionStart || 0);
+      // A blank line is its own paragraph and has no characters to range over,
+      // so the range would be collapsed and report no rects at all. Fall back to
+      // the caret's own line box, which is exactly that blank line.
+      if (span.end <= span.start) {
+        const m = getM ? getM() : measureCaret(ta.selectionStart || 0, v);
+        if (!m) return null;
+        return { top: m.top, bottom: m.top + m.height, height: m.height };
+      }
+      const a = mirrorTextPoint(mir, span.start);
+      const b = mirrorTextPoint(mir, span.end);
+      if (!a || !b) return null;
+      let rects = null;
+      try {
+        const r = document.createRange();
+        r.setStart(a.node, a.offset);
+        r.setEnd(b.node, b.offset);
+        rects = r.getClientRects();
+      } catch (err) {
+        return null;
+      }
+      if (!rects || !rects.length) return null;
+      const lh = lineHeightPx();
+      const first = rects[0];
+      const last = rects[rects.length - 1];
+      // Same half-leading correction as measureCaret(): a rect on inline text
+      // reports the content box, the veil edge has to land on the line box.
+      const halfLead = Math.max(0, (lh - first.height) / 2);
+      const mirRect = mir.getBoundingClientRect();
+      const relTop = first.top - mirRect.top - halfLead;
+      const relBottom = last.bottom - mirRect.top + halfLead;
+      const scrollTop = numOf(sc.scrollTop, 0);
+      if (v.kind === 'document') {
+        return { top: relTop + scrollTop, bottom: relBottom + scrollTop, height: relBottom - relTop };
+      }
+      const scRect = sc.getBoundingClientRect();
+      return {
+        top: relTop - scRect.top + scrollTop,
+        bottom: relBottom - scRect.top + scrollTop,
+        height: relBottom - relTop,
+      };
+    }
+
+    /**
+     * R71: walks the caret mirror to the DOM point that holds character `offset`
+     * of the manuscript.
+     *
+     * The mirror is laid out as [prefix text node][span.nw-caret-rest], so the
+     * offset can land in either. Offsets inside the span are relative to it.
+     * Returns null when the mirror has not been built yet.
+     */
+    function mirrorTextPoint(mir, offset) {
+      if (!mir) return null;
+      const span = mir.__nwRest;
+      const prefixLen = mir.__nwPrefix == null ? 0 : String(mir.__nwPrefix).length;
+      const inner = span && span.firstChild && span.firstChild.nodeType === 3 ? span.firstChild : null;
+      if (offset <= prefixLen) {
+        // `mir.firstChild` is the prefix text node — or, when the prefix is
+        // empty (caret at offset 0), the rest span itself. In that second case
+        // offset 0 is the start of the span's text, not a sibling of it.
+        const first = mir.firstChild;
+        if (first && first.nodeType === 3) return { node: first, offset };
+        if (offset === 0 && inner) return { node: inner, offset: 0 };
+        return null;
+      }
+      if (!inner) return null;
+      return { node: inner, offset: Math.min(offset - prefixLen, inner.nodeValue.length) };
+    }
+
+    /**
+     * R54b: the band the caret must stay inside, in *scroller content*
      * coordinates, or null when the band is off.
      *
-     * The band is a viewport rectangle (middle of the pane), while `m.top` is
-     * content-space. Given the current scrollTop the band's content top is
-     * `scrollTop + bandViewportTop`, so a caret is inside the band when
-     * `m.top` lies between that and `+ bandHeight`.
+     * R71: the band is no longer the middle of the pane — it is the paragraph
+     * the caret is in, read back from the last measure pass. That is what makes
+     * the fade say "this paragraph" instead of "whatever is halfway down the
+     * screen". planBandScroll() still keeps the caret inside it, which now costs
+     * nothing: the caret is in its own paragraph by construction, so the safety
+     * net only fires when the cached band is stale.
      */
     function bandContentTop(view) {
       // Settings are read from cfgRef, not from the closure: this is called from
@@ -10479,18 +10632,18 @@ window.__ModuleLoader__.load({
       const cfg = cfgRef.current || {};
       const sc = view && view.el;
       if (cfg.focusOn === false || !sc) return null;
+      const band = paraBandRef.current;
+      if (!band) return null;
       const own = view.kind === 'self';
       const vzH = own
         ? (sc.clientHeight || window.innerHeight || 0)
         : (window.innerHeight || document.documentElement.clientHeight || 0);
       if (vzH <= 0) return null;
-      const lh = lineHeightPx();
-      const bandLines = numOf(cfg.focusLines, 2) * 2 + 1;
-      const bandViewportTop = Math.round((vzH / 2 - (bandLines * lh) / 2) / lh) * lh;
       return {
-        top: bandViewportTop + (own ? sc.scrollTop || 0 : 0),
-        height: bandLines * lh,
-        origin: own ? 0 : bandViewportTop,
+        top: band.top,
+        bottom: band.bottom,
+        height: band.height,
+        origin: own ? 0 : band.top,
         viewH: vzH,
       };
     }
@@ -10518,28 +10671,28 @@ window.__ModuleLoader__.load({
       if (cfg.focusFollows === false || !sc) return null;
       const band = bandContentTop(view);
       if (!band) return null;
-      const m = getM ? getM() : measureCaret(taRef.current.selectionStart || 0, view);
-      if (!m) return null;
-      // Inside the band (with one line of feather either side so a caret on the
-      // boundary does not trigger a scroll it does not need).
-      const slack = lineHeightPx();
-      if (m.top >= band.top - slack && m.top + m.height <= band.top + band.height + slack) {
-        return null;
-      }
-      // Put the caret line in the middle of the band.
+      // R71: `band.top`/`band.bottom` are content-space for BOTH scroller kinds
+      // (measureParagraphBand() maps them through the same scrollTop the caret
+      // uses), so the band's viewport rectangle is just a subtraction — no
+      // per-kind branch, which is where R70's delta/absolute bug lived.
+      const st = numOf(sc.scrollTop, 0);
+      const topVp = band.top - st;
+      const botVp = band.bottom - st;
+      const lh = lineHeightPx();
+      // R71: with the band being the caret's own paragraph the caret is inside
+      // it by construction, so this only fires when the cached band is one pass
+      // stale (a paragraph that just grew by a wrapped line). Then reveal it the
+      // least amount that works rather than re-centring: the writer is reading
+      // a paragraph, not following a caret.
       //
-      // R70: the result must be an ABSOLUTE scrollTop, and getting there is not
-      // the same for the two scroller kinds. `m.top` is always content space;
-      // `band.top` is content space only for a document scroller. For the own
-      // `.nw-scroll` port bandContentTop() adds scrollTop to it, so subtracting
-      // the two yields a *delta* — and the caller wrote it back as an absolute
-      // offset, which teleported the page to a few hundred pixels from the top
-      // (measured: 1614 -> 106, a 1508px jump) the moment a sideways arrow
-      // crossed out of the band. Normalising the band anchor back to viewport
-      // space makes both kinds return the same thing.
-      const own = view.kind === 'self';
-      const bandViewportTop = own ? band.top - numOf(sc.scrollTop, 0) : band.top;
-      return m.top + m.height / 2 - (bandViewportTop + band.height / 2);
+      // A paragraph taller than the pane can never be fully revealed, so it is
+      // left alone entirely — otherwise every keystroke would scroll to chase an
+      // edge it can never reach, which is the shake R70 just removed. The caret
+      // itself was already revealed above, which is what actually matters.
+      if (band.height >= band.viewH) return null;
+      if (botVp <= band.viewH && topVp >= 0) return null;
+      if (topVp < 0) return Math.max(0, band.top - lh);
+      return Math.min(maxScrollTopOf(sc), band.bottom - band.viewH + lh);
     }
 
     function planCaretScroll(wantCenter, view, getM) {
@@ -10670,29 +10823,24 @@ window.__ModuleLoader__.load({
       if (!s || !topEl || !botEl) return;
       const sc = view && view.el;
       const cfg = cfgRef.current || {};
-      // R54b: the band no longer depends on where the caret is, so it does not
-      // need a caret measurement first. That is what makes it appear immediately
-      // when a chapter is opened (the caret is on line one and measureCaret may
-      // not have run yet), instead of after the first click.
-      const parked = cfg.focusOn === false || !sc;
+      // R71: the fade now has a third way to be parked — the editor is not
+      // focused. "光标没聚焦时，所有内容都凸显" is the report: an unfocused page is
+      // a page being *read*, and dimming the text you are reading is exactly
+      // backwards. So blur lifts the veils entirely (the text becomes uniform
+      // again) and focus brings the paragraph back. It is tracked with a ref
+      // rather than React state so blur costs no re-render.
+      const parked = cfg.focusOn === false || !sc || !editorFocusedRef.current;
       if (parked) {
         // Hidden veils must not claim a band: data-focus is owned here (not by
         // JSX) so an unrelated re-render cannot switch the fade back on.
         if (s.getAttribute('data-focus') !== '0') s.setAttribute('data-focus', '0');
         return;
       }
-      const lh = lineHeightPx();
-      // Two coordinate spaces, because `.nw-surface` is what the veils sit in:
-      //  - own scroller (`.nw-scroll`): the surface stays put, so the band is a
-      //    viewport rectangle and must be clamped to the pane;
-      //  - ancestor/document scroller (host slot with auto height): the surface
-      //    itself travels with the page, so the band is plain content geometry
-      //    and must NOT be clamped to the pane — the scrollport crops it.
-      //
-      // R54b: the band is the middle of the pane, independent of where the
-      // caret happens to be. planBandScroll() below keeps the caret inside it,
-      // so the two can never disagree — one anchor, and the thing that moves is
-      // the viewport, not the light.
+      const band = paraBandRef.current;
+      if (!band) {
+        if (s.getAttribute('data-focus') !== '0') s.setAttribute('data-focus', '0');
+        return;
+      }
       const own = view.kind === 'self';
       const viewH = own ? sc.clientHeight || window.innerHeight || 0 : Infinity;
       if (viewH <= 0) return;
@@ -10700,14 +10848,32 @@ window.__ModuleLoader__.load({
         ? viewH
         : (window.innerHeight || document.documentElement.clientHeight || 0);
       if (vzH <= 0) return;
-      // The middle line, snapped to a whole number of lines so the band edges
-      // land between lines rather than through a glyph row.
-      const bandLines = numOf(cfg.focusLines, 2) * 2 + 1;
-      const centerY = Math.round((vzH / 2 - (bandLines * lh) / 2) / lh) * lh;
-      const topH = Math.round(clampNum((own ? numOf(origin, 0) : 0) + centerY, 0, vzH));
-      const botY = Math.round(clampNum((own ? numOf(origin, 0) : 0) + centerY + bandLines * lh, 0, vzH));
+      // Two coordinate spaces, because `.nw-surface` is what the veils sit in:
+      //  - own scroller (`.nw-scroll`): the surface stays put, so the band is a
+      //    viewport rectangle and must be clamped to the pane;
+      //  - ancestor/document scroller (host slot with auto height): the surface
+      //    itself travels with the page, so the band is plain content geometry
+      //    and must NOT be clamped to the pane — the scrollport crops it.
+      //
+      // R71: the band is the caret's paragraph, so it is content geometry in
+      // both kinds and only the own-scroller case needs the scrollTop mapping.
+      const shift = own ? -numOf(sc.scrollTop, 0) : 0;
+      const topPx = band.top + shift;
+      const botPx = band.bottom + shift;
+      // R71: if the paragraph is entirely off-screen — the writer scrolled away
+      // to reread something else — there is nothing to light, and painting both
+      // veils shut would dim the whole pane. Park instead: the page is uniform
+      // until the caret comes back into view (the scroll handler repaints).
+      if (own && (botPx <= 0 || topPx >= vzH)) {
+        if (s.getAttribute('data-focus') !== '0') s.setAttribute('data-focus', '0');
+        return;
+      }
+      // A paragraph that runs past the pane is clamped to it: the visible part
+      // of the paragraph stays bright and the veils keep off the rest.
+      const topH = Math.round(own ? clampNum(topPx, 0, vzH) : topPx);
+      const botY = Math.round(own ? clampNum(botPx, 0, vzH) : botPx);
       if (topEl.__nwH !== topH) {
-        topEl.style.height = topH + 'px';
+        topEl.style.height = Math.max(0, topH) + 'px';
         topEl.__nwH = topH;
       }
       if (botEl.__nwY !== botY) {
@@ -10795,15 +10961,18 @@ window.__ModuleLoader__.load({
       const scrollTarget = planCaretScroll(!!wantCenter, view, getM);
       const caretPlan = planCaretPaint(view, getM);
       const focusOrigin = focusOn ? surfaceOrigin(view) : 0;
-      // `focusTopRef` is no longer what places the veils (R54b anchors them to
-      // the pane's middle), but the shorthand it holds — "the caret's line, in
-      // content coordinates" — is still useful as a guard: paintFocus parks the
-      // fade when there is no caret to talk about.
+      // R71: the band is the caret's paragraph. Measured in the read phase
+      // (a Range over the caret mirror, no DOM writes) and cached, because
+      // paintFocus() also runs from the scroll listener where a measurement
+      // would force a reflow per scroll event.
       if (focusOn) {
         const fm = getM();
         focusTopRef.current = fm ? fm.top : -1;
+        const band = measureParagraphBand(view, getM);
+        if (band) paraBandRef.current = band;
       } else {
         focusTopRef.current = -1;
+        paraBandRef.current = null;
       }
       // ---------- write phase ----------
       autosizeWrite(height);
@@ -12082,7 +12251,11 @@ window.__ModuleLoader__.load({
       flushNow();
       // Unfocused editor: the painted caret hides (the browser has no caret of
       // its own to show either). A measurement pass is all that is needed.
+      // R71: and the paragraph fade lifts — an unfocused page is being read, so
+      // every line comes back to full strength (paintFocus parks on this ref).
+      editorFocusedRef.current = false;
       scheduleMeasure(false);
+      repaintFocusSoon();
     }
 
     function handleCompositionStart() {
@@ -12249,6 +12422,8 @@ window.__ModuleLoader__.load({
       typedAtRef.current = -1e9;
       // R46: the cached caret line belonged to the old chapter's text.
       focusTopRef.current = -1;
+      // R71: so did the cached paragraph band.
+      paraBandRef.current = null;
       // R51: so did the card's mark and its offsets.
       setMarkView(null);
       composingRef.current = false;
@@ -12319,17 +12494,18 @@ window.__ModuleLoader__.load({
       }
     }, [notesLane]);
 
-    // R46: turning the fade on/off (or changing how many lines stay clear) must
-    // publish the attribute and re-place the band; the next measure pass alone
-    // would take a keystroke. R54: the veils no longer depend on immersive mode,
-    // but they DO depend on the page width (their inset is derived from it) and
-    // on `--nw-gutter-x`, which applyDockLane() rewrites on layout changes —
-    // so the band is re-placed whenever the column geometry can have moved.
+    // R46: turning the fade on/off must publish the attribute and re-place the
+    // band; the next measure pass alone would take a keystroke. R54: the veils
+    // no longer depend on immersive mode, but they DO depend on the page width
+    // (their inset is derived from it) and on `--nw-gutter-x`, which
+    // applyDockLane() rewrites on layout changes — so the band is re-placed
+    // whenever the column geometry can have moved. R71: `focusLines` is no
+    // longer a dependency because the band height is the paragraph's.
     React.useEffect(() => {
       const view = resolveScroller(false);
       paintFocus(view, surfaceOrigin(view));
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [focusOn, focusLines, pageWidth, effPageWidth]);
+    }, [focusOn, pageWidth, effPageWidth]);
 
     // Adopt content the app pushed for the SAME chapter (version restore, AI
     // rewrite, LAN sync). Skipped when it merely echoes what we just saved,
@@ -12887,7 +13063,12 @@ window.__ModuleLoader__.load({
                   : null;
               },
               onBlur: handleBlur,
-              onFocus: () => scheduleMeasure(false),
+              onFocus: () => {
+                // R71: focusing the manuscript lights its paragraph again.
+                editorFocusedRef.current = true;
+                scheduleMeasure(false);
+                repaintFocusSoon();
+              },
               onClick: (ev) => {
                 scheduleMeasure(true);
                 handleMarkClick(ev);
@@ -21704,23 +21885,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             rowToggle('打字机模式', draft.typewriter, (v) => set('typewriter', v)),
             rowToggle('沉浸模式（隐藏所有面板，Esc 或 Ctrl+Shift+F 退出）', draft.immersive, (v) => set('immersive', v)),
             rowToggle(
-              '只照亮正在写的几行',
+              '只照亮光标所在的那一段',
               draft.focusDim !== false,
               (v) => set('focusDim', v),
-              NW.t('其余行淡去，仍在原处，鼠标一滚就回来。沉浸与非沉浸都生效。'),
+              NW.t('其余段落淡去，仍在原处；光标离开编辑区时全部恢复，鼠标一滚就回来。沉浸与非沉浸都生效。'),
             ),
-            NW.ui.field({
-              label: '上下各留 ' + String(Number(draft.focusLines) || 0) + ' 行',
-              hint: NW.t('0 表示只照亮正在写的那一行。'),
-              children: rangeInput({
-                value: Number(draft.focusLines) >= 0 ? Number(draft.focusLines) : 2,
-                min: 0,
-                max: 8,
-                step: 1,
-                onChange: (v) => set('focusLines', v),
-                label: NW.t('照亮行数'),
-              }),
-            }),
           ),
         ),
         // ---------------------------------------------------------- 2 写作 ----

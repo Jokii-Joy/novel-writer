@@ -45,14 +45,18 @@
     caretBlink: true,
     /**
      * R46/R54: fade every line except the one being written. `focusDim` is the
-     * switch, `focusLines` how many lines either side stay clear. On by default
-     * because it is the whole point of a writing surface — the sentence under
-     * the caret in front, the rest of the page quiet behind it. R54: it used to
-     * be immersive-only; it now applies in both modes, so the setting is the
-     * single way out and the value was already right for the writer who asked.
+     * switch. On by default because it is the whole point of a writing
+     * surface — the paragraph under the caret in front, the rest of the page
+     * quiet behind it. R54: it used to be immersive-only; it now applies in
+     * both modes, so the setting is the single way out and the value was
+     * already right for the writer who asked.
+     *
+     * R71: `focusLines` was removed with the fixed-height band. The lit region
+     * is now the caret's own paragraph, so there is no "lines either side" left
+     * to configure. The key is simply absent; an old stored value is ignored
+     * (mergeSettings keeps unknown keys but nothing reads this one).
      */
     focusDim: true,
-    focusLines: 2,
     autoSaveMs: 1200,
     /**
      * R16 ⑥: whether 字数 counts punctuation marks. Chinese word processors count

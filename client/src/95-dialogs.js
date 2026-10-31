@@ -2317,23 +2317,11 @@
             rowToggle('打字机模式', draft.typewriter, (v) => set('typewriter', v)),
             rowToggle('沉浸模式（隐藏所有面板，Esc 或 Ctrl+Shift+F 退出）', draft.immersive, (v) => set('immersive', v)),
             rowToggle(
-              '只照亮正在写的几行',
+              '只照亮光标所在的那一段',
               draft.focusDim !== false,
               (v) => set('focusDim', v),
-              NW.t('其余行淡去，仍在原处，鼠标一滚就回来。沉浸与非沉浸都生效。'),
+              NW.t('其余段落淡去，仍在原处；光标离开编辑区时全部恢复，鼠标一滚就回来。沉浸与非沉浸都生效。'),
             ),
-            NW.ui.field({
-              label: '上下各留 ' + String(Number(draft.focusLines) || 0) + ' 行',
-              hint: NW.t('0 表示只照亮正在写的那一行。'),
-              children: rangeInput({
-                value: Number(draft.focusLines) >= 0 ? Number(draft.focusLines) : 2,
-                min: 0,
-                max: 8,
-                step: 1,
-                onChange: (v) => set('focusLines', v),
-                label: NW.t('照亮行数'),
-              }),
-            }),
           ),
         ),
         // ---------------------------------------------------------- 2 写作 ----
