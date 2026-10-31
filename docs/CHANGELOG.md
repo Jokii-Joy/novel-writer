@@ -8,6 +8,25 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.2.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第七十轮（R70）修复：**按左右方向键时，整页不再上下晃**。用户说「我按左右移动光标时，整个页面上下晃动」——
+  R68 只压住了打字机的居中，晃动还在，而且这次是真正的 bug，不是观感。
+  ① **`planBandScroll()` 返回的是增量，调用方却当绝对 offset 写回去**。`bandContentTop()` 给
+  `.nw-scroll` 这种「自己滚」的端口算的 `band.top` 里**已经加了 `scrollTop`**，所以
+  `m.top + h/2 - (band.top + band.height/2)` 是「还差多少」，不是「该滚到哪」。而 `refresh()` 里
+  `setScrollTop(scrollTarget)` 是绝对赋值。600px 高的写作区里实测：光标一旦滑出亮带，页面从
+  **1614px 直接跳到 106px（−1508px）**，下一帧 `'nearest'` 再把它拽回 1290px ——这就是「上下晃动」。
+  ② **R68 的时间窗本身也是错的**。`CARET_NAV_EASE_MS = 400` 意味着隔半秒按一下方向键，每次都会重新
+  居中，页面跟着吸一口气。改成**粘性布尔** `arrowNavRef`：左右键置 true，`handleInput`（打字）和
+  textarea 上的 `mousedown`（点击定位）置回 false。没有计时器，就不会有「到点反弹」。
+  ③ **亮带也要一起让开**。`planCaretScroll()` 原本在 `'nearest'` 返回 null 后无条件落到
+  `planBandScroll()`，于是横向方向键跨出亮带时页面仍被推 4 行。现在 `arrowNav` 为真时直接 `return null`：
+  `'nearest'` 已经保证了光标在屏幕内，亮带在这里帮不上任何忙。
+  ④ 验证：把 `planCaretScroll` / `caretScrollTop` / `planBandScroll` / `bandContentTop` / `typewriterRoom`
+  **从源码里原样抽出来**跑（`scripts/.tmp/sim-band-scroll.mjs`，不是重写一遍），14 次跨行：
+  打字路径每次 28px（1 行，居中跟随）；方向键路径**前 12 次全是 0px**，直到第 13 次光标真的出屏才
+  滚动 6px + 28px 把它捞回来。
+  ⑤ `client.js` 重建 21 段 **1077144 字节**，`verify-client-load: ok`，`verify-host` 219/0，
+  `probe-dock`、`verify-dock-hit`、`verify-read-spread`、`verify-dialog-kinds` 全过。
 - 第六十九轮（R69）改造 + 修复：**正文两端对齐；光标不再在折行处一次跨两个字**。用户说「编辑页面和阅读页面，
   文字实现两端对齐」，而此前那条「移动光标会跳过标点符号」正是同一件事的两面——这两条必须一起做。
   ① **先把根因测出来，而不是猜出来**。无头 Chrome（`--headless=new` 需 `danger-full-access`，沙箱会拦

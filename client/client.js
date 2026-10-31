@@ -8615,10 +8615,13 @@ window.__ModuleLoader__.load({
    */
   const NOTES_CLEAR_PX = 212;
   const TYPEWRITER_RESUME_MS = 800; // manual scroll keeps typewriter off this long
-  // R68: how long a sideways arrow keeps the typewriter gentle ('nearest'
-  // instead of 'centre'). Long enough to cover a burst of held arrows, short
-  // enough that the next keystroke re-centres immediately.
-  const CARET_NAV_EASE_MS = 400;
+  // R68/R70: whether the last caret movement came from the horizontal arrows.
+  // While it is set the typewriter drops to 'nearest' and the lit band stops
+  // pulling the viewport, so arrowing along a line — or over a line break —
+  // never slides the page. Typing or clicking clears it and the full centred
+  // typewriter comes back. A time window was tried first and was wrong: one
+  // slow press every half second re-centred the page every time, which is
+  // exactly the wobble this flag is here to remove.
   // How long after the last keystroke a peer's edit may still take the caret
   // with it. Long enough to cover a pause for thought in the middle of a
   // sentence, short enough that someone watching the screen (typing on the
@@ -9611,11 +9614,11 @@ window.__ModuleLoader__.load({
     const measureQueuedRef = React.useRef(false);
     const noticeTimerRef = React.useRef(0);
     const manualAtRef = React.useRef(-1e9);
-    // R68: last time the caret moved sideways (ArrowLeft/ArrowRight). Unlike
-    // manualAtRef it does not freeze the viewport — it only downgrades the
-    // typewriter from 'center' to 'nearest' for a moment, so the page stays
-    // put while the writer arrows along a line and still follows when typing.
-    const caretNavAtRef = React.useRef(-1e9);
+    // R68/R70: true while the last caret movement came from ArrowLeft /
+    // ArrowRight. Unlike manualAtRef it does not freeze the viewport forever —
+    // it parks the typewriter and the band together, so arrowing along a line
+    // never slides the page, and typing puts both back.
+    const arrowNavRef = React.useRef(false);
     // Last time the caret moved because this writer typed here. Distinguishes
     // "someone is writing in this pane" from "this pane is just being watched".
     const typedAtRef = React.useRef(-1e9);
@@ -10431,9 +10434,16 @@ window.__ModuleLoader__.load({
     function isManuallyScrolling() {
       return nowMs() - manualAtRef.current < TYPEWRITER_RESUME_MS;
     }
-    /** R68: the caret was just arrowed sideways, so keep the page still. */
+    /**
+     * R68/R70: true while the caret's most recent movement came from a
+     * horizontal arrow. Sticky on purpose — no timer. A window-based flag made
+     * the page re-centre once every timer expiry while the writer was reading
+     * and arrowing slowly, which reads as the page breathing up and down.
+     * Cleared by anything that is genuinely writing (handleInput) or by a
+     * click that relocates the caret.
+     */
     function isCaretNavEasing() {
-      return nowMs() - caretNavAtRef.current < CARET_NAV_EASE_MS;
+      return arrowNavRef.current === true;
     }
 
     /**
@@ -10516,10 +10526,20 @@ window.__ModuleLoader__.load({
       if (m.top >= band.top - slack && m.top + m.height <= band.top + band.height + slack) {
         return null;
       }
-      // Put the caret line in the middle of the band. Both terms are content
-      // coordinates: band.top is content already, band.height is a viewport
-      // length that is identical in both spaces.
-      return m.top + m.height / 2 - (band.top + band.height / 2);
+      // Put the caret line in the middle of the band.
+      //
+      // R70: the result must be an ABSOLUTE scrollTop, and getting there is not
+      // the same for the two scroller kinds. `m.top` is always content space;
+      // `band.top` is content space only for a document scroller. For the own
+      // `.nw-scroll` port bandContentTop() adds scrollTop to it, so subtracting
+      // the two yields a *delta* — and the caller wrote it back as an absolute
+      // offset, which teleported the page to a few hundred pixels from the top
+      // (measured: 1614 -> 106, a 1508px jump) the moment a sideways arrow
+      // crossed out of the band. Normalising the band anchor back to viewport
+      // space makes both kinds return the same thing.
+      const own = view.kind === 'self';
+      const bandViewportTop = own ? band.top - numOf(sc.scrollTop, 0) : band.top;
+      return m.top + m.height / 2 - (bandViewportTop + band.height / 2);
     }
 
     function planCaretScroll(wantCenter, view, getM) {
@@ -10533,15 +10553,23 @@ window.__ModuleLoader__.load({
       // 800 ms after the last manual scroll, and the next input then re-centres.
       if (isManuallyScrolling()) return null;
       const cfg = cfgRef.current || {};
-      // R68: arrowing sideways is caret movement, not writing. Centring on it
-      // made one press look like two at a line crossing — the caret's own jump
-      // plus a whole line of page sliding under it — so the typewriter drops to
-      // 'nearest' while it lasts: the page holds still and only moves if the
-      // caret really leaves the viewport. Typing clears the flag (handleInput)
-      // and gets the full centre back.
-      const mode = cfg.typewriterOn !== false && !isCaretNavEasing() ? 'center' : 'nearest';
+      // R68/R70: arrowing sideways is caret movement, not writing. Centring on
+      // it made one press look like two at a line crossing — the caret's own
+      // jump plus a whole line of page sliding under it. So while the last
+      // caret movement was a horizontal arrow, the page holds still: the
+      // typewriter drops to 'nearest' (which only reveals an off-screen caret)
+      // and the lit band is not allowed to pull the viewport either — it used
+      // to drag the page four lines whenever the caret slid out of the middle,
+      // which is the "整个页面上下晃动" report. Typing or clicking clears the
+      // flag and the full centred typewriter comes back.
+      const arrowNav = isCaretNavEasing();
+      const mode = cfg.typewriterOn !== false && !arrowNav ? 'center' : 'nearest';
       const typedScroll = caretScrollTop(mode, view, getM);
       if (typedScroll != null) return typedScroll;
+      // R70: a sideways arrow must not be recovered by the band either. The
+      // reveal above already guarantees the caret is on screen, which is the
+      // only thing the band would have added here.
+      if (arrowNav) return null;
       // R54b: typewriter off (or the caret already visible) — the band still
       // needs the caret inside it, or the writer types into the dimmed part.
       return planBandScroll(view, getM);
@@ -11770,9 +11798,9 @@ window.__ModuleLoader__.load({
       valueRef.current = ta.value;
       dirtyRef.current = true;
       typedAtRef.current = nowMs();
-      // R68: typing ends the sideways-arrow easing — a keystroke is writing,
-      // and writing still gets the full centred typewriter.
-      caretNavAtRef.current = -1e9;
+      // R68/R70: typing ends the sideways-arrow parking — a keystroke is
+      // writing, and writing still gets the full centred typewriter.
+      arrowNavRef.current = false;
       // R26: same as afterEdit — the status bar must say 未保存 from the first
       // keystroke, not 1.2s later when the debounce finally fires.
       const notify = propsRef.current.onDirty;
@@ -11854,13 +11882,13 @@ window.__ModuleLoader__.load({
         return;
       }
 
-      // R68: the horizontal arrows are handled separately, below, and must NOT
-      // land in this set. Parking the typewriter here would also trip
+      // R68/R70: the horizontal arrows are handled separately, below, and must
+      // NOT land in this set. Parking the typewriter here would also trip
       // isManuallyScrolling(), which returns before the reveal branch, so a
       // held arrow key would walk the caret off screen with the view frozen.
       // Vertical and paging keys park because the handler moves the viewport
-      // itself; the horizontal keys only move the caret, so they ask for the
-      // gentler 'nearest' scroll instead (see caretNavAtRef).
+      // itself; the horizontal keys only move the caret, so they park the
+      // typewriter *and* the band and leave the page where it is.
       const nav =
         ev.key === 'PageUp' ||
         ev.key === 'PageDown' ||
@@ -11876,7 +11904,7 @@ window.__ModuleLoader__.load({
         // "it passed the punctuation and the character" — and until now the
         // typewriter slid a whole line under it at the same moment, so a single
         // press looked like two.
-        caretNavAtRef.current = nowMs();
+        arrowNavRef.current = true;
       }
       if (nav) {
         // Keyboard navigation counts as manual viewport movement: park the
@@ -12402,6 +12430,18 @@ window.__ModuleLoader__.load({
         // A drag-selection ended: re-centre once, now that it is safe to move.
         scheduleMeasure(true);
       };
+      /**
+       * R70: a plain click relocates the caret deliberately, so it ends the
+       * sideways-arrow parking. Without this a writer who arrows along a line
+       * and then clicks somewhere else would be left in "page never moves"
+       * mode until they typed — the click is a statement of intent about where
+       * they want to look, exactly like typing is.
+       */
+      const onPointerDown = (ev) => {
+        const ta = taRef.current;
+        if (!ta || ev.target !== ta) return;
+        arrowNavRef.current = false;
+      };
       const onBeforeUnload = () => {
         flushNow();
       };
@@ -12453,6 +12493,7 @@ window.__ModuleLoader__.load({
       window.addEventListener('focus', onWindowFocus, true);
       document.addEventListener('visibilitychange', onVisibility);
       document.addEventListener('mouseup', onMouseUp);
+      document.addEventListener('mousedown', onPointerDown);
       // R30: Ctrl/Cmd+F works from anywhere on the surface, not just the textarea.
       window.addEventListener('keydown', onFindShortcut, true);
 
@@ -12511,6 +12552,7 @@ window.__ModuleLoader__.load({
         window.removeEventListener('focus', onWindowFocus, true);
         document.removeEventListener('visibilitychange', onVisibility);
         document.removeEventListener('mouseup', onMouseUp);
+        document.removeEventListener('mousedown', onPointerDown);
         window.removeEventListener('keydown', onFindShortcut, true);
         if (observer) observer.disconnect();
         if (measureRafRef.current) {
