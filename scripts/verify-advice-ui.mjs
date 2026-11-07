@@ -1,6 +1,6 @@
 // 选中改写 / 接受拒绝 / 已接收 的渲染级检查（R73）。
 //
-// 为什么要有这个脚本：这一轮的界面全部长在 90-app.js 里，而"能不能渲染"和
+// 为什么要有这个脚本：这些界面（R78 起在 92-advice.js），而"能不能渲染"和
 // "能不能点"是两件事——`node --check` 只能证明语法，`verify-client-load` 只能
 // 证明工厂函数能跑；组件真正被调用时才会暴露出拼错的字段、写反的条件、漏传的
 // 回调。这里没有浏览器，只有一个小到不能再小的 React 替身：hooks 按实例存状态，
@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const src = readFileSync(join(here, '..', 'client', 'src', '90-app.js'), 'utf8');
+const src = readFileSync(join(here, '..', 'client', 'src', '92-advice.js'), 'utf8');
 
 // The components attach window listeners in effects; the harness has no DOM.
 globalThis.window = {
@@ -29,7 +29,7 @@ globalThis.window = {
 };
 
 const START = '/* ========================== R73';
-const END = '/** Clamp a number into [lo, hi]';
+const END = '  NW.Advice = Advice;';
 const a = src.indexOf(START);
 const b = src.indexOf(END, a);
 if (a < 0 || b < 0) {
@@ -222,6 +222,8 @@ const fakeEditor = {
 };
 
 // ---------------------------------------------------------------- load code --
+// R78: the advice block lives in 92-advice.js now; the slice already carries its
+// own errText / clampNum helpers, so they are no longer injected.
 const factory = new Function(
   'h',
   'React',
@@ -231,8 +233,6 @@ const factory = new Function(
   'useCallback',
   'useMemo',
   'useEffect',
-  'errText',
-  'clampNum',
   `${block}\nreturn { AdviceCard, AcceptedPanel, Advice, SelectionAdvice, ordinalMark, groupRevisions, locateRevision };`,
 );
 const C = factory(
@@ -244,8 +244,6 @@ const C = factory(
   useCallback,
   useMemo,
   useEffect,
-  (err, fallback) => String((err && err.message) || fallback),
-  (v, lo, hi) => Math.max(lo, Math.min(hi, Number(v))),
 );
 
 // ---------------------------------------------------------------- assertions --

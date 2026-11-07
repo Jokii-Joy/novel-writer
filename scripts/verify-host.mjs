@@ -1063,6 +1063,29 @@ const stored = await readSyncState();
 check('落盘内容与 pull 一致', stored.books.length === 3, String(stored.books.length));
 
 // ---------------------------------------------------------------------------
+// 8b. library.mirrorLibrary 增量 (R78)
+// ---------------------------------------------------------------------------
+console.log('\n[8b] library.mirrorLibrary {changed}');
+{
+  const mirrorDir = path.join(tmpHome, 'mirror-incremental');
+  const twoBooks = [
+    { id: 'n1', title: '甲', author: '', chapters: [{ title: '一', content: '甲的内容' }] },
+    { id: 'n2', title: '乙', author: '', chapters: [{ title: '一', content: '乙的内容' }] },
+  ];
+  const fullWrite = await library.mirrorLibrary(mirrorDir, twoBooks, { extra: { chapters: [] } });
+  check('首次是整库写', fullWrite.ok !== false && fullWrite.reused === 0 && fullWrite.files.length === 3, JSON.stringify({ reused: fullWrite.reused, files: (fullWrite.files || []).length }));
+  const otherPath = path.join(mirrorDir, '乙.docx');
+  const before = fs.statSync(otherPath).mtimeMs;
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  const partial = await library.mirrorLibrary(mirrorDir, twoBooks, { extra: { chapters: [] }, changed: ['n1'] });
+  check('增量只重写变了的书', partial.ok !== false && partial.reused === 1 && partial.files.length === 2, JSON.stringify({ reused: partial.reused, files: (partial.files || []).length }));
+  check('没变的书文件还在', fs.existsSync(otherPath));
+  check('没变的书没有被重写（mtime 不变）', fs.statSync(otherPath).mtimeMs === before);
+  const listed = fs.readdirSync(mirrorDir).filter((name) => name.endsWith('.docx')).sort();
+  check('两本书的 docx 都在', listed.length === 2, listed.join(','));
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 console.log('\n' + '='.repeat(66));

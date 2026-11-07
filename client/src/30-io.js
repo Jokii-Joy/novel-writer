@@ -673,12 +673,19 @@
    */
   function libraryMirror(payload) {
     const input = payload && typeof payload === 'object' ? payload : {};
-    return api('library.mirror', {
+    const body = {
       novels: Array.isArray(input.novels) ? input.novels : [],
       chapters: Array.isArray(input.chapters) ? input.chapters : [],
       settings: input.settings && typeof input.settings === 'object' ? input.settings : null,
       encrypt: input.encrypt === true,
-    });
+    };
+    // R78: 便签与投稿记录本来就该跟着快照走 —— 这个包装层上一版把它们丢了，
+    // 恢复时看着像数据丢失。同时新增 changed：只报变了的书，宿主就不再重写
+    // 其它 .docx。
+    if (Array.isArray(input.notes)) body.notes = input.notes;
+    if (Array.isArray(input.submissions)) body.submissions = input.submissions;
+    if (Array.isArray(input.changed)) body.changed = input.changed.map((id) => String(id));
+    return api('library.mirror', body);
   }
 
   /** Opens the native folder picker on the host; resolves `{dir}`. */

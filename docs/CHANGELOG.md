@@ -6,8 +6,25 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.5.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第七十八轮（R78）改造：**自动保存只写变了的书；修改建议整块搬出 90-app.js**。
+  ① **增量写盘（C1）**：以前每次自动保存都是 `db.dump()` 之后把**每一本**书重新渲染成 docx 写一遍
+  ——一百本书就是每次空闲写十几 MB。现在客户端按「每本书 + 它的章节」算一份签名，与上次成功写盘时
+  比对，只把变过的书报给宿主；宿主 `mirrorLibrary` 收到 `changed: [...]` 后**只重写这几个 .docx**，
+  其余原样留着（返回里多一个 `reused` 计数）。三条退回整库的路径都保留了：本会话第一次保存、
+  加密开关变化、书的数量变化（删书要靠整库那次比对去清掉旧文件）。什么都没变时**直接跳过**，
+  连 dump 都不做。
+  ② 顺手修了一个一直没被发现的丢数据：`NW.io.library.mirror` 这个包装层把 `notes` 与 `submissions`
+  悄悄丢了，而 App 一直在传——文件夹快照里其实**没有便签、没有投稿记录**，与 CHANGELOG 里
+  「便签跟着快照走」的说法不符。现在两个字段真的进快照了。
+  ③ **拆分巨型文件（C3）**：修改建议整块（R73–R76 的卡片、已接收、悬浮坞栏、选中改写窗口，
+  约 1100 行 / 71KB）从 `90-app.js` 搬到新的 `client/src/92-advice.js`，只通过
+  `props`（editorApi / accepted / onAccept / onToast）与工作室说话；`90-app.js` 从 270KB 降到 207KB，
+  App 里改成 `h(NW.Advice)` / `h(NW.SelectionAdvice)`。组件测试的切片目标也跟着换了文件。
+  ④ 验收：`verify-host.mjs` **246 项 0 失败**（新增 [8b] 增量写盘 5 项：首次整库、只写变了的书、
+  另一本没被重写（mtime 不变）、两本 docx 都在）；`verify-advice-ui.mjs` 42 项 0 失败；
+  `build-client` 现在是 **22 个 part**。
 - 第七十七轮（R77）改造：**把整本书「写到哪了」这件事补上**——从目录到状态、从今日字数到设定集。
   ① **版本对比（A2）**：版本历史原来只有「预览 / 恢复」，恢复是不可逆的一步。现在每条多一个
   「对比当前」，用 `NW.format.diffPreview`（行级 LCS）把那一版和**当前缓冲区**逐行摊开，
@@ -1948,7 +1965,7 @@ body 为 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`，错误绝不�
 4. **PDF 导出依赖运行时探测**：无 LibreOffice kit 时 `/ping` 的 `capabilities.pdf` 为 `false`，导出对话框会自动隐藏 PDF 选项。
 5. 编辑器是纯文本 / Markdown 源文编辑，不是所见即所得；加粗斜体以 Markdown 记号插入。查找为字面量匹配、大小写不敏感、单次最多 5000 处命中，替换不支持正则。
 6. `chmod 0600` 在 Windows 上是 advisory 语义，密钥文件保护依赖 `DSH_HOME` 目录权限。
-7. **自动保存是「全量覆盖」而不是增量**：每次触发（停止输入 1.2s 或切章）都重写整库快照。几百章的长篇单次写盘约几百 KB，可接受；但保存目录若放在机械盘或网络盘上会有可感知的延迟。
+7. **自动保存只写改动过的书（R78）**：保存目录里每次自动保存只重写「这本书变了」的那几个 `.docx`，其余文件原样不动；本会话第一次保存、加密开关变化、书的数量变化时会退回整库重写（删书的旧文件要靠整库那次比对清掉）。快照 `library.json` 仍然是整库一份。IndexedDB 那一侧本来就是一章一行，不是整库覆盖。
 8. 单章正文整串读写，数千万字级别单章会有明显内存开销（长篇建议按章拆分，这也是目录树的默认形态）。
 9. **保存目录只增不删**：`library.mirror` 不删除「上次写过、这次书单里没有」的旧文件（避免误删用户手改过的文件）。同名小说靠 `(2)` 后缀去重，顺序可能随书单顺序漂移。**R16 起文件格式只有 `.nwe`**（加密时 `.docx.nwe`，不加密时 `.docx`），不再有加密/明文两套并存；切换加密后残留的旧文件不会被自动清理，需要手动删。
 10. **自动保存的密钥就是宿主 secrets 的 `key.bin`**：删掉 `DSH_HOME/novel-writer/secrets/` 之后，之前写出的 `.nwe` 再也解不开（这是加密的正常代价）。要换机，请连 `secrets/` 一起拷。
@@ -2017,9 +2034,12 @@ body 为 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`，错误绝不�
 43. **IMAP 的 8bit / 7bit 正文仍按 UTF-8 解**：base64 与 quoted-printable 会按 `charset` 正确解码，
     但服务器直接给 8bit 的 GB2312 / GBK 老邮件（多见于国内老系统）会显示成乱码 —— 修它要让
     `parseFullBody` 收原始 `Buffer` 而不是已经 `toString('utf8')` 过的字符串，属重构，本轮没做。
-44. **离线测试脚本只覆盖宿主**：`scripts/verify-host.mjs` 现在跑 174 项（ping / models / proofread /
-    export.build / secrets / library / selftest / lansync 合并），**云备份那一整套用例随 R9 一起删掉了**，
-    客户端界面（Esc 栈、校对护栏、配对轮询、内联配对面板）与 Java 侧没有任何自动化覆盖；
+44. **离线测试脚本只覆盖宿主与少量界面组件**：`scripts/verify-host.mjs` 现在跑 **246 项**
+    （ping / models / proofread / revise / 流式改写 / export.build / secrets / library / 增量写盘 /
+    selftest / lansync 合并），**云备份那一整套用例随 R9 一起删掉了**；
+    `scripts/verify-advice-ui.mjs` 用一枚极小的 React 替身覆盖修改建议那套组件（42 项），
+    `verify-dialog-kinds.mjs` 审弹窗接线，`verify-dock-hit.mjs` / `verify-read-spread.mjs` 审几何。
+    但 App 本体（编辑器的 DOM 行为、Esc 栈、配对轮询）与 Java 侧仍然没有自动化覆盖；
     `scripts/verify-e2e.mjs` 需要先在跑的宿主（`NOVEL_WRITER_BASE` 可指定端口）。
 45. **手机主题是手动开关，不跟系统深色模式**：☀ / ☾ 只写 `Skin` 自己的偏好，读系统 `uiMode` 只在首次
     没有记录时借用一次；系统在日落时自动切深色时，App 不会跟着变。切换走 `recreate()`，编辑器会回到

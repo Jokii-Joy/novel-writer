@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.5.0',
+      version: '1.6.0',
     };
     NW.ReactDOM = null;
 
@@ -4166,12 +4166,19 @@ window.__ModuleLoader__.load({
    */
   function libraryMirror(payload) {
     const input = payload && typeof payload === 'object' ? payload : {};
-    return api('library.mirror', {
+    const body = {
       novels: Array.isArray(input.novels) ? input.novels : [],
       chapters: Array.isArray(input.chapters) ? input.chapters : [],
       settings: input.settings && typeof input.settings === 'object' ? input.settings : null,
       encrypt: input.encrypt === true,
-    });
+    };
+    // R78: 便签与投稿记录本来就该跟着快照走 —— 这个包装层上一版把它们丢了，
+    // 恢复时看着像数据丢失。同时新增 changed：只报变了的书，宿主就不再重写
+    // 其它 .docx。
+    if (Array.isArray(input.notes)) body.notes = input.notes;
+    if (Array.isArray(input.submissions)) body.submissions = input.submissions;
+    if (Array.isArray(input.changed)) body.changed = input.changed.map((id) => String(id));
+    return api('library.mirror', body);
   }
 
   /** Opens the native folder picker on the host; resolves `{dir}`. */
@@ -17010,6 +17017,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const dailyWordsRef = useRef({});
     const dailyTimerRef = useRef(0);
     /**
+     * R78: 增量保存的状态。`mirrorSeenRef` 记「上次成功写盘时每本书长什么样」，
+     * 每次自动保存只把变过的那几本报给宿主；空 Map（本会话第一次）或加密开关
+     * 变化时退回整库重写。
+     */
+    const mirrorSeenRef = useRef(new Map());
+    const mirrorEncryptRef = useRef(null);
+    /**
      * R77 (B2): 跟随系统深浅色。`prefers-color-scheme` 是唯一可靠的信号；
      * 老浏览器没有 matchMedia 时永远算「亮」，行为退回手动主题。
      */
@@ -17713,6 +17727,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             .slice()
             .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || String(a.id).localeCompare(String(b.id)));
           return {
+            // R78: the id is what makes an incremental save possible — the host
+            // matches these against the books it must rewrite.
+            id: novel.id != null ? String(novel.id) : '',
             title: novel.title || '未命名小说 ' + (index + 1),
             author: novel.author || '',
             chapters: rows.map((row, position) => ({
@@ -17733,6 +17750,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // `submissions` yet).
           submissions: log,
           encrypt: cfg.encrypt === true || settings.libraryEncrypt === true,
+          // R78: undefined = 「整库重写」(first save of the session, encryption
+          // toggled, or an old caller); an array = only these books changed.
+          ...(Array.isArray(options && options.changed) ? { changed: options.changed } : {}),
         });
         if (!aliveRef.current) return data;
         setLibrary((prev) =>
@@ -17777,10 +17797,51 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     useEffect(() => {
       if (!ready || locked || !autosaveSignature) return undefined;
       const timer = window.setTimeout(() => {
-        mirrorLibrary({ silent: true });
+        // R78: which books actually changed since the last successful mirror.
+        const next = new Map();
+        for (const row of novels) {
+          if (row && row.id != null) next.set(String(row.id), 'n' + String(row.updatedAt || ''));
+        }
+        for (const row of chapters) {
+          if (!row || row.novelId == null) continue;
+          const key = String(row.novelId);
+          next.set(
+            key,
+            (next.get(key) || '') + '|' + String(row.id) + ':' + String(row.updatedAt || '') + ':' + String(row.wordCount || 0),
+          );
+        }
+        const seen = mirrorSeenRef.current;
+        const encryptNow = settings.libraryEncrypt === true;
+        const encryptChanged = mirrorEncryptRef.current !== encryptNow;
+        let changed = null;
+        if (seen.size > 0 && !encryptChanged) {
+          // A book disappeared: the host can only clean up its file when it is
+          // asked for the whole library (the stale-file pass compares the
+          // previous snapshot against this one).
+          if (next.size !== seen.size) changed = null;
+          else {
+            changed = [];
+            for (const [id, sig] of next) {
+              if (seen.get(id) !== sig) changed.push(id);
+            }
+          }
+          // Nothing about any book moved (e.g. only a setting did): the folder
+          // already holds exactly this library, so skip the write entirely.
+          if (Array.isArray(changed) && changed.length === 0) return;
+        }
+        const run = mirrorLibrary({ silent: true, changed: changed });
+        if (run && typeof run.then === 'function') {
+          run.then((ok) => {
+            // Only a successful write may advance the baseline; a failed one
+            // must leave every book "changed" so the next tick retries it.
+            if (!ok) return;
+            mirrorSeenRef.current = next;
+            mirrorEncryptRef.current = encryptNow;
+          });
+        }
       }, 1200);
       return () => window.clearTimeout(timer);
-    }, [ready, locked, autosaveSignature, mirrorLibrary]);
+    }, [ready, locked, autosaveSignature, mirrorLibrary, novels, chapters, settings.libraryEncrypt]);
 
     /**
      * R34 ④: hand the library to the host's sync mirror.
@@ -19666,7 +19727,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     }),
                   ),
                   adviceOpen && !immersive
-                    ? h(Advice, {
+                    ? h(NW.Advice, {
                         key: 'advice-' + String(chapter.id),
                         chapter: chapter,
                         editorApi: editorRef,
@@ -19688,7 +19749,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                   // about different words starts a fresh read instead of showing
                   // the previous selection's cards.
                   selAdvice && !immersive
-                    ? h(SelectionAdvice, {
+                    ? h(NW.SelectionAdvice, {
                         key: 'seladvice-' + String(chapter.id) + '-' + String(selAdvice.start) + '-' + String(selAdvice.end),
                         chapter: chapter,
                         editorApi: editorRef,
@@ -20064,7 +20125,566 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    * gutter, so the two can be open at the same time. Collapsed it is a single
    * small tab, which is what the writer sees most of the time.
    */
-  /* ========================== R73：修改建议的卡片与已接收 ==================== */
+  /* 修改建议 / 选中改写 (R73–R76) 已搬到 92-advice.js —— 它只通过
+     props 与工作室说话，放在这里只是让 90-app 重新长出三千行。 */
+
+/** Clamp a number into [lo, hi]; non-finite input falls back to `lo`. */
+  function clampNum(value, lo, hi) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return lo;
+    if (n < lo) return lo;
+    if (n > hi) return hi;
+    return n;
+  }
+
+  /** Keep a 0..1 scroll ratio inside its bounds (scrollTo multiplies it). */
+  function clampRatio(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    if (n < 0) return 0;
+    if (n > 1) return 1;
+    return n;
+  }
+
+  /**
+   * 灵感便签 (R11) — a solid-colour editing page and nothing else.
+   *
+   * The R10 version was a 196px card with a header, a badge, a list and a
+   * button row; the user asked for a plain page instead. So the open state is
+   * one full-bleed sheet of paper colour holding a single textarea: no title,
+   * no counts, no buttons. The whole note body is edited as one document —
+   * stored notes are joined on open and written back as a single note on
+   * Ctrl/Cmd+Enter or blur, which keeps the model simple and the page empty.
+   */
+  function Notes(props) {
+    const p = props || {};
+    const [text, setText] = useState('');
+    const [state, setState] = useState('idle');
+    const areaRef = useRef(null);
+    const savedRef = useRef('');
+    const lastChapterRef = useRef(p.chapterId);
+    const timerRef = useRef(0);
+
+    // R14 ③: the card is bound to one chapter, so the seed is a single string
+    // handed down by the App (`p.text`), not a list of rows to join. The text
+    // also arrives one render later (the App loads it from IndexedDB), which is
+    // why `p.text` is a dependency — the `savedRef` guard keeps a save that
+    // echoes our own keystrokes from resetting the caret.
+    useEffect(() => {
+      const next = String(p.text == null ? '' : p.text);
+      const switched = lastChapterRef.current !== p.chapterId;
+      lastChapterRef.current = p.chapterId;
+      if (!switched && next === savedRef.current) return;
+      savedRef.current = next;
+      // While the card has focus, a value echoed back by the save round trip
+      // must not overwrite what is being typed (it would jump the caret). A
+      // chapter switch is the exception — that content is a different note.
+      if (!switched && areaRef.current && document.activeElement === areaRef.current) return;
+      setText(next);
+      setState('idle');
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [p.chapterId, p.open, p.text]);
+
+    // Autosave: 600ms after the last keystroke. Blur/Esc still commit at once so
+    // closing the card never loses the last sentence.
+    const flush = (value) => {
+      const body = String(value == null ? '' : value);
+      if (body === savedRef.current) return;
+      savedRef.current = body;
+      setState('saved');
+      // Hand the chapter along: the debounce can outlive a chapter switch, and
+      // the note must land on the chapter it was typed in.
+      if (typeof p.onSave === 'function') p.onSave(body, p.chapterId);
+    };
+
+    const schedule = (value) => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      setState('typing');
+      timerRef.current = setTimeout(() => {
+        timerRef.current = 0;
+        flush(value);
+      }, 600);
+    };
+
+    const commit = (value) => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = 0;
+      }
+      flush(value);
+    };
+
+    useEffect(
+      () => () => {
+        if (timerRef.current) clearTimeout(timerRef.current);
+      },
+      [],
+    );
+
+    // Auto-grow: the box follows the text instead of scrolling inside a fixed
+    // 96px window. Re-measured on every value change and when the card opens
+    // (a chapter switch can change the text length without a keystroke).
+    useEffect(() => {
+      const el = areaRef.current;
+      if (!el) return;
+      el.style.height = 'auto';
+      el.style.height = `${Math.min(el.scrollHeight + 2, 420)}px`;
+    }, [text, p.open]);
+
+    return h(
+      'aside',
+      {
+        className: 'nw-notes',
+        'data-open': p.open ? '1' : '0',
+        'aria-label': NW.t('灵感便签'),
+        'aria-hidden': p.open ? undefined : 'true',
+      },
+      h(
+        'button',
+        {
+          type: 'button',
+          className: 'nw-notes-tab',
+          'aria-expanded': p.open ? 'true' : 'false',
+          title: p.open ? NW.t('收起灵感便签') : NW.t('展开灵感便签'),
+          'aria-label': p.open ? NW.t('收起灵感便签') : NW.t('展开灵感便签'),
+          onClick: p.onToggle,
+        },
+        h('span', { className: 'nw-notes-tabicon', 'aria-hidden': 'true' }, NW.icon('sparkle', { size: 16 })),
+        // The label doubles as the state: closed it invites you in, open it is
+        // the collapse handle the card itself does not otherwise have.
+        h('span', { className: 'nw-notes-tabtxt' }, p.open ? NW.t('收起') : NW.t('灵感')),
+      ),
+      p.open
+        ? h(
+            'div',
+            { className: 'nw-notes-card', role: 'dialog', 'aria-label': NW.t('灵感便签') },
+            // R16 ④: no header/footer strips. The state word and the close button
+            // float over the corner and only surface on hover or keyboard focus,
+            // so the card is nothing but paper and the note itself.
+            h(
+              'div',
+              { className: 'nw-notes-tools' },
+              h(
+                'span',
+                { className: 'nw-notes-state' },
+                state === 'typing' ? NW.t('未保存') : text ? NW.t('已保存') : NW.t('空白'),
+              ),
+              NW.ui.btn({
+                kind: 'icon',
+                title: NW.t('收起灵感便签'),
+                ariaLabel: NW.t('收起灵感便签'),
+                onClick: () => {
+                  commit(text);
+                  if (typeof p.onToggle === 'function') p.onToggle();
+                },
+                children: NW.icon('x', { size: 14 }),
+              }),
+            ),
+            h('textarea', {
+              ref: areaRef,
+              className: 'nw-notes-input',
+              value: text,
+              rows: 3,
+              spellCheck: false,
+              placeholder: NW.t('随手记一句：一个画面、一句对白、一个转折…'),
+              'aria-label': NW.t('灵感便签'),
+              onChange: (ev) => {
+                setText(ev.target.value);
+                schedule(ev.target.value);
+              },
+              onBlur: (ev) => commit(ev.target.value),
+              onKeyDown: (ev) => {
+                // Escape closes the card (and commits) — Enter is plain newline
+                // now that saving is automatic.
+                if (ev.key === 'Escape') {
+                  ev.preventDefault();
+                  commit(ev.target.value);
+                  if (typeof p.onToggle === 'function') p.onToggle();
+                }
+              },
+            }),
+          )
+        : null,
+    );
+  }
+
+  // ------------------------------------------------------------------ misc ---
+  function Toasts(props) {
+    const list = (props && props.toasts) || [];
+    const dismiss = typeof props.onDismiss === 'function' ? props.onDismiss : null;
+    if (list.length === 0) return null;
+    return h(
+      'div',
+      { className: 'nw-toast-wrap', role: 'status', 'aria-live': 'polite' },
+      list.map((row) =>
+        h(
+          'div',
+          { key: row.id, className: 'nw-toast', 'data-kind': row.kind },
+          h('span', { className: 'nw-toast-text' }, row.message),
+          row.actionLabel
+            ? h(
+                'button',
+                {
+                  className: 'nw-toast-act',
+                  type: 'button',
+                  onClick: () => {
+                    if (dismiss) dismiss(row.id);
+                    try {
+                      row.onClick();
+                    } catch (err) {
+                      /* the action owns its own error reporting */
+                    }
+                  },
+                },
+                row.actionLabel,
+              )
+            : null,
+        ),
+      ),
+    );
+  }
+
+  function ModalRequest(props) {
+    const req = (props && props.req) || {};
+    const isPrompt = req.kind === 'prompt';
+    const [value, setValue] = useState(isPrompt ? String(req.value || '') : '');
+    const inputRef = useRef(null);
+
+    useEffect(() => {
+      if (isPrompt && inputRef.current) {
+        try {
+          inputRef.current.focus();
+          inputRef.current.select();
+        } catch (err) {
+          /* ignore */
+        }
+      }
+    }, [isPrompt]);
+
+    const done = (result) => {
+      if (typeof req.resolve === 'function') req.resolve(result);
+      if (props.onDone) props.onDone();
+    };
+
+    const submit = () => done(isPrompt ? value : true);
+    const cancel = () => done(isPrompt ? null : false);
+
+    // Escape answers the request with "no". It has to be registered here: the
+    // dialog underneath already owns a window listener, and before the escape
+    // stack existed Escape closed that dialog instead, leaving this prompt
+    // stranded while its guarded action went on to run.
+    NW.useModalEscape(true, cancel);
+
+    return h(
+      'div',
+      { className: 'nw-modal-mask', role: 'presentation' },
+      h(
+        'div',
+        { className: 'nw-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': req.title || '' },
+        h('div', { className: 'nw-modal-head' }, h('h2', null, req.title || NW.t('确定'))),
+        h(
+          'div',
+          { className: 'nw-modal-body' },
+          req.text ? h('p', { style: { margin: '0 0 10px', fontSize: '12.5px', lineHeight: 1.7 } }, req.text) : null,
+          isPrompt
+            ? (req.multiline
+                ? NW.ui.textarea({
+                    value: value,
+                    onChange: setValue,
+                    rows: 6,
+                    placeholder: req.placeholder || '',
+                    ariaLabel: req.label || req.title || '',
+                  })
+                : NW.ui.input({
+                    value: value,
+                    onChange: setValue,
+                    placeholder: req.placeholder || '',
+                    ariaLabel: req.label || req.title || '',
+                    autoFocus: true,
+                  }))
+            : null,
+        ),
+        h(
+          'div',
+          { className: 'nw-modal-foot' },
+          NW.ui.btn({ onClick: cancel, children: NW.t('取消') }),
+          NW.ui.btn({ kind: req.danger ? 'danger' : 'primary', onClick: submit, children: req.okText || NW.t('确定') }),
+        ),
+      ),
+    );
+  }
+
+  // --------------------------------------------------------- model picker ----
+  /**
+   * R34: 「模型连不上时，弹出选择其他模型的窗口」.
+   *
+   * Shown only after every configured model has failed, so the writer never sees
+   * it during normal operation. It lists what was tried (with the host's own
+   * message for each) and every other pair the host knows about, so picking one
+   * is a single click instead of a trip through Settings.
+   */
+  function ModelPicker(props) {
+    const p = props || {};
+    const req = p.req || {};
+    const list = req.models || null;
+    const picked = req.preferred || {};
+    const options = useMemo(() => {
+      const seen = new Set();
+      const rows = [];
+      for (const row of (list && list.models) || []) {
+        if (!row) continue;
+        const key = String(row.provider) + '\u0000' + String(row.id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push({
+          value: key,
+          label: (row.name || row.id) + ' · ' + row.provider,
+        });
+      }
+      const current = (list && list.current) || {};
+      const currentKey = current.provider && current.model ? String(current.provider) + '\u0000' + String(current.model) : '';
+      if (currentKey && !seen.has(currentKey)) {
+        rows.unshift({ value: currentKey, label: String(current.model) + ' · ' + String(current.provider) + '（当前默认）' });
+      }
+      return rows;
+    }, [list]);
+
+    const [value, setValue] = useState(() => {
+      const first = options[0];
+      return first ? first.value : '';
+    });
+    const tried = Array.isArray(req.tried) ? req.tried : [];
+    // R34: the caller passes a Chinese label ('AI 校对' / 'AI 投稿' / '修改建议');
+    // translate it here so the picker reads as one sentence in either language.
+    const label = NW.t(String(req.label || '本次请求'));
+    const failedLine =
+      picked.provider && picked.model
+        ? NW.t('{0}用 {1} · {2} 没有成功，换一个模型再试一次？', label, String(picked.model), String(picked.provider))
+        : NW.t('{0}没有可用的模型，换一个模型再试一次？', label);
+
+    const confirm = () => {
+      if (!value) return;
+      const parts = value.split('\u0000');
+      p.onDone({ provider: parts[0], model: parts.slice(1).join('\u0000') });
+    };
+
+    return h(
+      'div',
+      { className: 'nw-modal-mask', role: 'presentation' },
+      h(
+        'div',
+        { className: 'nw-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': NW.t('换个模型重试') },
+        h('div', { className: 'nw-modal-head' }, h('h2', null, NW.t('换个模型重试'))),
+        h(
+          'div',
+          { className: 'nw-modal-body' },
+          h(
+            'p',
+            { className: 'nw-hint-block' },
+            failedLine,
+          ),
+          tried.length
+            ? h(
+                'ul',
+                { className: 'nw-picker-tried' },
+                tried.slice(0, 6).map((row, index) =>
+                  h('li', { key: 't' + index }, h('span', { className: 'nw-picker-triedname' }, row.label), h('span', { className: 'nw-picker-triedmsg' }, row.message)),
+                ),
+              )
+            : null,
+          h(
+            'div',
+            { className: 'nw-field' },
+            h('label', null, NW.t('改用这个模型')),
+            options.length
+              ? NW.ui.select({ value: value, options: options, onChange: setValue, ariaLabel: NW.t('改用这个模型') })
+              : h('div', { className: 'nw-lock-error' }, NW.t('没有可用的模型，请先在 Harness 里登录一个模型提供方。')),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'nw-modal-foot' },
+          NW.ui.btn({ onClick: () => p.onDone(null), children: NW.t('取消') }),
+          NW.ui.btn({ kind: 'primary', onClick: confirm, disabled: !value, children: NW.t('重试') }),
+        ),
+      ),
+    );
+  }
+
+  // ----------------------------------------------------------------- services --
+  /**
+   * R40: the host's `layout` service, fetched on every use.
+   *
+   * The service is provided by the shell's own client plugin, and `ctx.get()`
+   * only answers once that plugin's fiber is active — the apply order between
+   * two plugins is not something a third one can rely on. Reading it a single
+   * time during apply therefore cached `null` on any boot where the shell came
+   * up second, which turned 「收起宿主侧栏」 into a button that did nothing at all
+   * (no error, no toast, no clue). Re-reading here is cheap: it is a map lookup
+   * on the host store, and it means a late provider heals itself on first click.
+   */
+  NW.layoutService = function layoutService() {
+    const ctx = NW._ctx;
+    if (ctx && typeof ctx.get === 'function') {
+      try {
+        const live = ctx.get('layout') || null;
+        if (live) {
+          NW._layout = live;
+          return live;
+        }
+      } catch (err) {
+        /* fall through to the cached handle */
+      }
+    }
+    return NW._layout || null;
+  };
+
+  // --------------------------------------------------------------- apply -----
+  NW.apply = function apply(ctx) {
+    if (NW._applied) return;
+    NW._applied = true;
+    const disposers = [];
+    const push = (fn) => {
+      if (typeof fn === 'function') disposers.push(fn);
+    };
+
+    try {
+      push(NW.bindLocale(ctx));
+    } catch (err) {
+      console.error('[novel-writer] locale registration failed', err);
+    }
+
+    // Stylesheet: prefer the package-owned `styles` builtin, fall back to a
+    // <style> node in <head> (never document.body).
+    try {
+      const css = NW.CSS_PARTS.join('\n');
+      if (typeof styles !== 'undefined' && styles && typeof styles.insert === 'function') {
+        push(styles.insert(css));
+      } else if (typeof document !== 'undefined') {
+        const el = document.createElement('style');
+        el.setAttribute('data-novel-writer', '1');
+        el.textContent = css;
+        (document.head || document.documentElement).appendChild(el);
+        push(() => {
+          if (el.parentNode) el.parentNode.removeChild(el);
+        });
+      }
+    } catch (err) {
+      console.error('[novel-writer] stylesheet injection failed', err);
+    }
+
+    // R40: the host provides `layout` from its own client plugin, and plugin
+    // apply order is not ours to decide — reading it once here could cache null
+    // forever and leave 「收起宿主侧栏」 a dead button with no error. Keep the handle
+    // we get now for the unload hook, but let every *use* re-read the service
+    // through `NW.layoutService()`, which retries on the injected context and
+    // only then falls back to the stale handle.
+    try {
+      NW._ctx = ctx;
+    } catch (err) {
+      NW._ctx = null;
+    }
+    const layout = NW.layoutService();
+    // Service handles the dialogs need (uiWorkspace for the native folder
+    // picker). Stored on NW so any part can reach them without threading props
+    // through every component.
+    try {
+      NW._workspace = ctx.get('uiWorkspace') || null;
+    } catch (err) {
+      NW._workspace = null;
+    }
+
+    const registerPanels = () => {
+      const offMain = ctx.slots.register({ name: 'main', key: PANEL_ID, locale: 'novel-writer' }, () => h(NW.App));
+      const offRow = ctx.slots.register(
+        { name: 'sidebar.panellist', id: PANEL_ID, order: 5, label: () => NW.t('精神空间'), locale: 'novel-writer' },
+        (owner) => h(NW.SidebarIcon, { size: (owner && owner.size) || 16 }),
+      );
+      return () => {
+        try {
+          if (layout && layout.panelInfo && layout.panelInfo.getSnapshot().activePanelId === PANEL_ID) layout.selectPanel(null);
+        } catch (err) {
+          /* ignore */
+        }
+        if (typeof offRow === 'function') offRow();
+        if (typeof offMain === 'function') offMain();
+      };
+    };
+
+    try {
+      if (typeof ctx.slots.inject === 'function') {
+        push(ctx.slots.inject('sidebar.panellist', registerPanels));
+      } else {
+        push(registerPanels());
+      }
+    } catch (err) {
+      console.error('[novel-writer] slot registration failed', err);
+      try {
+        push(registerPanels());
+      } catch (err2) {
+        console.error('[novel-writer] slot registration fallback failed', err2);
+      }
+    }
+
+    if (typeof ctx.effect === 'function') {
+      try {
+        ctx.effect(() => () => {
+          for (let i = disposers.length - 1; i >= 0; i -= 1) {
+            try {
+              disposers[i]();
+            } catch (err) {
+              /* ignore */
+            }
+          }
+          NW._applied = false;
+        }, 'novel-writer:client');
+      } catch (err) {
+        /* ignore */
+      }
+    }
+  };
+})();
+
+/* ==== 92-advice.js ==== */
+;(() => {
+  'use strict';
+
+  /**
+   * 修改建议 (R73–R76) — 卡片、已接收、悬浮坞那一栏、选中改写窗口。
+   *
+   * 从 90-app.js 里拆出来：那一半是「工作室」（目录、编辑器、状态、弹窗接线），
+   * 这一半是「意见」——它自己的缓存、diff、剪贴板、键盘，和工作室只通过
+   * props（editorApi / accepted / onAccept / onToast）说话。
+   */
+  const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+/* ========================== R73：修改建议的卡片与已接收 ==================== */
+
+
+  /** Same message helper the rest of the client uses (each part keeps its own). */
+  function errText(err, fallback) {
+    const text = err && err.message ? String(err.message) : '';
+    return text || fallback || '未知错误';
+  }
+
+  /** Clamp a number into [lo, hi]; non-finite input falls back to `lo`. */
+  function clampNum(value, lo, hi) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return lo;
+    if (n < lo) return lo;
+    if (n > hi) return hi;
+    return n;
+  }
+
+  /** Keep a 0..1 scroll ratio inside its bounds. */
+  function clampRatio(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    if (n < 0) return 0;
+    if (n > 1) return 1;
+    return n;
+  }
+
 
   /** ①②③… — the order the same stretch of text was revised in. */
   function ordinalMark(n) {
@@ -21897,521 +22517,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     );
   }
 
-  /** Clamp a number into [lo, hi]; non-finite input falls back to `lo`. */
-  function clampNum(value, lo, hi) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return lo;
-    if (n < lo) return lo;
-    if (n > hi) return hi;
-    return n;
-  }
-
-  /** Keep a 0..1 scroll ratio inside its bounds (scrollTo multiplies it). */
-  function clampRatio(value) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return 0;
-    if (n < 0) return 0;
-    if (n > 1) return 1;
-    return n;
-  }
-
-  /**
-   * 灵感便签 (R11) — a solid-colour editing page and nothing else.
-   *
-   * The R10 version was a 196px card with a header, a badge, a list and a
-   * button row; the user asked for a plain page instead. So the open state is
-   * one full-bleed sheet of paper colour holding a single textarea: no title,
-   * no counts, no buttons. The whole note body is edited as one document —
-   * stored notes are joined on open and written back as a single note on
-   * Ctrl/Cmd+Enter or blur, which keeps the model simple and the page empty.
-   */
-  function Notes(props) {
-    const p = props || {};
-    const [text, setText] = useState('');
-    const [state, setState] = useState('idle');
-    const areaRef = useRef(null);
-    const savedRef = useRef('');
-    const lastChapterRef = useRef(p.chapterId);
-    const timerRef = useRef(0);
-
-    // R14 ③: the card is bound to one chapter, so the seed is a single string
-    // handed down by the App (`p.text`), not a list of rows to join. The text
-    // also arrives one render later (the App loads it from IndexedDB), which is
-    // why `p.text` is a dependency — the `savedRef` guard keeps a save that
-    // echoes our own keystrokes from resetting the caret.
-    useEffect(() => {
-      const next = String(p.text == null ? '' : p.text);
-      const switched = lastChapterRef.current !== p.chapterId;
-      lastChapterRef.current = p.chapterId;
-      if (!switched && next === savedRef.current) return;
-      savedRef.current = next;
-      // While the card has focus, a value echoed back by the save round trip
-      // must not overwrite what is being typed (it would jump the caret). A
-      // chapter switch is the exception — that content is a different note.
-      if (!switched && areaRef.current && document.activeElement === areaRef.current) return;
-      setText(next);
-      setState('idle');
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [p.chapterId, p.open, p.text]);
-
-    // Autosave: 600ms after the last keystroke. Blur/Esc still commit at once so
-    // closing the card never loses the last sentence.
-    const flush = (value) => {
-      const body = String(value == null ? '' : value);
-      if (body === savedRef.current) return;
-      savedRef.current = body;
-      setState('saved');
-      // Hand the chapter along: the debounce can outlive a chapter switch, and
-      // the note must land on the chapter it was typed in.
-      if (typeof p.onSave === 'function') p.onSave(body, p.chapterId);
-    };
-
-    const schedule = (value) => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-      setState('typing');
-      timerRef.current = setTimeout(() => {
-        timerRef.current = 0;
-        flush(value);
-      }, 600);
-    };
-
-    const commit = (value) => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = 0;
-      }
-      flush(value);
-    };
-
-    useEffect(
-      () => () => {
-        if (timerRef.current) clearTimeout(timerRef.current);
-      },
-      [],
-    );
-
-    // Auto-grow: the box follows the text instead of scrolling inside a fixed
-    // 96px window. Re-measured on every value change and when the card opens
-    // (a chapter switch can change the text length without a keystroke).
-    useEffect(() => {
-      const el = areaRef.current;
-      if (!el) return;
-      el.style.height = 'auto';
-      el.style.height = `${Math.min(el.scrollHeight + 2, 420)}px`;
-    }, [text, p.open]);
-
-    return h(
-      'aside',
-      {
-        className: 'nw-notes',
-        'data-open': p.open ? '1' : '0',
-        'aria-label': NW.t('灵感便签'),
-        'aria-hidden': p.open ? undefined : 'true',
-      },
-      h(
-        'button',
-        {
-          type: 'button',
-          className: 'nw-notes-tab',
-          'aria-expanded': p.open ? 'true' : 'false',
-          title: p.open ? NW.t('收起灵感便签') : NW.t('展开灵感便签'),
-          'aria-label': p.open ? NW.t('收起灵感便签') : NW.t('展开灵感便签'),
-          onClick: p.onToggle,
-        },
-        h('span', { className: 'nw-notes-tabicon', 'aria-hidden': 'true' }, NW.icon('sparkle', { size: 16 })),
-        // The label doubles as the state: closed it invites you in, open it is
-        // the collapse handle the card itself does not otherwise have.
-        h('span', { className: 'nw-notes-tabtxt' }, p.open ? NW.t('收起') : NW.t('灵感')),
-      ),
-      p.open
-        ? h(
-            'div',
-            { className: 'nw-notes-card', role: 'dialog', 'aria-label': NW.t('灵感便签') },
-            // R16 ④: no header/footer strips. The state word and the close button
-            // float over the corner and only surface on hover or keyboard focus,
-            // so the card is nothing but paper and the note itself.
-            h(
-              'div',
-              { className: 'nw-notes-tools' },
-              h(
-                'span',
-                { className: 'nw-notes-state' },
-                state === 'typing' ? NW.t('未保存') : text ? NW.t('已保存') : NW.t('空白'),
-              ),
-              NW.ui.btn({
-                kind: 'icon',
-                title: NW.t('收起灵感便签'),
-                ariaLabel: NW.t('收起灵感便签'),
-                onClick: () => {
-                  commit(text);
-                  if (typeof p.onToggle === 'function') p.onToggle();
-                },
-                children: NW.icon('x', { size: 14 }),
-              }),
-            ),
-            h('textarea', {
-              ref: areaRef,
-              className: 'nw-notes-input',
-              value: text,
-              rows: 3,
-              spellCheck: false,
-              placeholder: NW.t('随手记一句：一个画面、一句对白、一个转折…'),
-              'aria-label': NW.t('灵感便签'),
-              onChange: (ev) => {
-                setText(ev.target.value);
-                schedule(ev.target.value);
-              },
-              onBlur: (ev) => commit(ev.target.value),
-              onKeyDown: (ev) => {
-                // Escape closes the card (and commits) — Enter is plain newline
-                // now that saving is automatic.
-                if (ev.key === 'Escape') {
-                  ev.preventDefault();
-                  commit(ev.target.value);
-                  if (typeof p.onToggle === 'function') p.onToggle();
-                }
-              },
-            }),
-          )
-        : null,
-    );
-  }
-
-  // ------------------------------------------------------------------ misc ---
-  function Toasts(props) {
-    const list = (props && props.toasts) || [];
-    const dismiss = typeof props.onDismiss === 'function' ? props.onDismiss : null;
-    if (list.length === 0) return null;
-    return h(
-      'div',
-      { className: 'nw-toast-wrap', role: 'status', 'aria-live': 'polite' },
-      list.map((row) =>
-        h(
-          'div',
-          { key: row.id, className: 'nw-toast', 'data-kind': row.kind },
-          h('span', { className: 'nw-toast-text' }, row.message),
-          row.actionLabel
-            ? h(
-                'button',
-                {
-                  className: 'nw-toast-act',
-                  type: 'button',
-                  onClick: () => {
-                    if (dismiss) dismiss(row.id);
-                    try {
-                      row.onClick();
-                    } catch (err) {
-                      /* the action owns its own error reporting */
-                    }
-                  },
-                },
-                row.actionLabel,
-              )
-            : null,
-        ),
-      ),
-    );
-  }
-
-  function ModalRequest(props) {
-    const req = (props && props.req) || {};
-    const isPrompt = req.kind === 'prompt';
-    const [value, setValue] = useState(isPrompt ? String(req.value || '') : '');
-    const inputRef = useRef(null);
-
-    useEffect(() => {
-      if (isPrompt && inputRef.current) {
-        try {
-          inputRef.current.focus();
-          inputRef.current.select();
-        } catch (err) {
-          /* ignore */
-        }
-      }
-    }, [isPrompt]);
-
-    const done = (result) => {
-      if (typeof req.resolve === 'function') req.resolve(result);
-      if (props.onDone) props.onDone();
-    };
-
-    const submit = () => done(isPrompt ? value : true);
-    const cancel = () => done(isPrompt ? null : false);
-
-    // Escape answers the request with "no". It has to be registered here: the
-    // dialog underneath already owns a window listener, and before the escape
-    // stack existed Escape closed that dialog instead, leaving this prompt
-    // stranded while its guarded action went on to run.
-    NW.useModalEscape(true, cancel);
-
-    return h(
-      'div',
-      { className: 'nw-modal-mask', role: 'presentation' },
-      h(
-        'div',
-        { className: 'nw-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': req.title || '' },
-        h('div', { className: 'nw-modal-head' }, h('h2', null, req.title || NW.t('确定'))),
-        h(
-          'div',
-          { className: 'nw-modal-body' },
-          req.text ? h('p', { style: { margin: '0 0 10px', fontSize: '12.5px', lineHeight: 1.7 } }, req.text) : null,
-          isPrompt
-            ? (req.multiline
-                ? NW.ui.textarea({
-                    value: value,
-                    onChange: setValue,
-                    rows: 6,
-                    placeholder: req.placeholder || '',
-                    ariaLabel: req.label || req.title || '',
-                  })
-                : NW.ui.input({
-                    value: value,
-                    onChange: setValue,
-                    placeholder: req.placeholder || '',
-                    ariaLabel: req.label || req.title || '',
-                    autoFocus: true,
-                  }))
-            : null,
-        ),
-        h(
-          'div',
-          { className: 'nw-modal-foot' },
-          NW.ui.btn({ onClick: cancel, children: NW.t('取消') }),
-          NW.ui.btn({ kind: req.danger ? 'danger' : 'primary', onClick: submit, children: req.okText || NW.t('确定') }),
-        ),
-      ),
-    );
-  }
-
-  // --------------------------------------------------------- model picker ----
-  /**
-   * R34: 「模型连不上时，弹出选择其他模型的窗口」.
-   *
-   * Shown only after every configured model has failed, so the writer never sees
-   * it during normal operation. It lists what was tried (with the host's own
-   * message for each) and every other pair the host knows about, so picking one
-   * is a single click instead of a trip through Settings.
-   */
-  function ModelPicker(props) {
-    const p = props || {};
-    const req = p.req || {};
-    const list = req.models || null;
-    const picked = req.preferred || {};
-    const options = useMemo(() => {
-      const seen = new Set();
-      const rows = [];
-      for (const row of (list && list.models) || []) {
-        if (!row) continue;
-        const key = String(row.provider) + '\u0000' + String(row.id);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        rows.push({
-          value: key,
-          label: (row.name || row.id) + ' · ' + row.provider,
-        });
-      }
-      const current = (list && list.current) || {};
-      const currentKey = current.provider && current.model ? String(current.provider) + '\u0000' + String(current.model) : '';
-      if (currentKey && !seen.has(currentKey)) {
-        rows.unshift({ value: currentKey, label: String(current.model) + ' · ' + String(current.provider) + '（当前默认）' });
-      }
-      return rows;
-    }, [list]);
-
-    const [value, setValue] = useState(() => {
-      const first = options[0];
-      return first ? first.value : '';
-    });
-    const tried = Array.isArray(req.tried) ? req.tried : [];
-    // R34: the caller passes a Chinese label ('AI 校对' / 'AI 投稿' / '修改建议');
-    // translate it here so the picker reads as one sentence in either language.
-    const label = NW.t(String(req.label || '本次请求'));
-    const failedLine =
-      picked.provider && picked.model
-        ? NW.t('{0}用 {1} · {2} 没有成功，换一个模型再试一次？', label, String(picked.model), String(picked.provider))
-        : NW.t('{0}没有可用的模型，换一个模型再试一次？', label);
-
-    const confirm = () => {
-      if (!value) return;
-      const parts = value.split('\u0000');
-      p.onDone({ provider: parts[0], model: parts.slice(1).join('\u0000') });
-    };
-
-    return h(
-      'div',
-      { className: 'nw-modal-mask', role: 'presentation' },
-      h(
-        'div',
-        { className: 'nw-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': NW.t('换个模型重试') },
-        h('div', { className: 'nw-modal-head' }, h('h2', null, NW.t('换个模型重试'))),
-        h(
-          'div',
-          { className: 'nw-modal-body' },
-          h(
-            'p',
-            { className: 'nw-hint-block' },
-            failedLine,
-          ),
-          tried.length
-            ? h(
-                'ul',
-                { className: 'nw-picker-tried' },
-                tried.slice(0, 6).map((row, index) =>
-                  h('li', { key: 't' + index }, h('span', { className: 'nw-picker-triedname' }, row.label), h('span', { className: 'nw-picker-triedmsg' }, row.message)),
-                ),
-              )
-            : null,
-          h(
-            'div',
-            { className: 'nw-field' },
-            h('label', null, NW.t('改用这个模型')),
-            options.length
-              ? NW.ui.select({ value: value, options: options, onChange: setValue, ariaLabel: NW.t('改用这个模型') })
-              : h('div', { className: 'nw-lock-error' }, NW.t('没有可用的模型，请先在 Harness 里登录一个模型提供方。')),
-          ),
-        ),
-        h(
-          'div',
-          { className: 'nw-modal-foot' },
-          NW.ui.btn({ onClick: () => p.onDone(null), children: NW.t('取消') }),
-          NW.ui.btn({ kind: 'primary', onClick: confirm, disabled: !value, children: NW.t('重试') }),
-        ),
-      ),
-    );
-  }
-
-  // ----------------------------------------------------------------- services --
-  /**
-   * R40: the host's `layout` service, fetched on every use.
-   *
-   * The service is provided by the shell's own client plugin, and `ctx.get()`
-   * only answers once that plugin's fiber is active — the apply order between
-   * two plugins is not something a third one can rely on. Reading it a single
-   * time during apply therefore cached `null` on any boot where the shell came
-   * up second, which turned 「收起宿主侧栏」 into a button that did nothing at all
-   * (no error, no toast, no clue). Re-reading here is cheap: it is a map lookup
-   * on the host store, and it means a late provider heals itself on first click.
-   */
-  NW.layoutService = function layoutService() {
-    const ctx = NW._ctx;
-    if (ctx && typeof ctx.get === 'function') {
-      try {
-        const live = ctx.get('layout') || null;
-        if (live) {
-          NW._layout = live;
-          return live;
-        }
-      } catch (err) {
-        /* fall through to the cached handle */
-      }
-    }
-    return NW._layout || null;
-  };
-
-  // --------------------------------------------------------------- apply -----
-  NW.apply = function apply(ctx) {
-    if (NW._applied) return;
-    NW._applied = true;
-    const disposers = [];
-    const push = (fn) => {
-      if (typeof fn === 'function') disposers.push(fn);
-    };
-
-    try {
-      push(NW.bindLocale(ctx));
-    } catch (err) {
-      console.error('[novel-writer] locale registration failed', err);
-    }
-
-    // Stylesheet: prefer the package-owned `styles` builtin, fall back to a
-    // <style> node in <head> (never document.body).
-    try {
-      const css = NW.CSS_PARTS.join('\n');
-      if (typeof styles !== 'undefined' && styles && typeof styles.insert === 'function') {
-        push(styles.insert(css));
-      } else if (typeof document !== 'undefined') {
-        const el = document.createElement('style');
-        el.setAttribute('data-novel-writer', '1');
-        el.textContent = css;
-        (document.head || document.documentElement).appendChild(el);
-        push(() => {
-          if (el.parentNode) el.parentNode.removeChild(el);
-        });
-      }
-    } catch (err) {
-      console.error('[novel-writer] stylesheet injection failed', err);
-    }
-
-    // R40: the host provides `layout` from its own client plugin, and plugin
-    // apply order is not ours to decide — reading it once here could cache null
-    // forever and leave 「收起宿主侧栏」 a dead button with no error. Keep the handle
-    // we get now for the unload hook, but let every *use* re-read the service
-    // through `NW.layoutService()`, which retries on the injected context and
-    // only then falls back to the stale handle.
-    try {
-      NW._ctx = ctx;
-    } catch (err) {
-      NW._ctx = null;
-    }
-    const layout = NW.layoutService();
-    // Service handles the dialogs need (uiWorkspace for the native folder
-    // picker). Stored on NW so any part can reach them without threading props
-    // through every component.
-    try {
-      NW._workspace = ctx.get('uiWorkspace') || null;
-    } catch (err) {
-      NW._workspace = null;
-    }
-
-    const registerPanels = () => {
-      const offMain = ctx.slots.register({ name: 'main', key: PANEL_ID, locale: 'novel-writer' }, () => h(NW.App));
-      const offRow = ctx.slots.register(
-        { name: 'sidebar.panellist', id: PANEL_ID, order: 5, label: () => NW.t('精神空间'), locale: 'novel-writer' },
-        (owner) => h(NW.SidebarIcon, { size: (owner && owner.size) || 16 }),
-      );
-      return () => {
-        try {
-          if (layout && layout.panelInfo && layout.panelInfo.getSnapshot().activePanelId === PANEL_ID) layout.selectPanel(null);
-        } catch (err) {
-          /* ignore */
-        }
-        if (typeof offRow === 'function') offRow();
-        if (typeof offMain === 'function') offMain();
-      };
-    };
-
-    try {
-      if (typeof ctx.slots.inject === 'function') {
-        push(ctx.slots.inject('sidebar.panellist', registerPanels));
-      } else {
-        push(registerPanels());
-      }
-    } catch (err) {
-      console.error('[novel-writer] slot registration failed', err);
-      try {
-        push(registerPanels());
-      } catch (err2) {
-        console.error('[novel-writer] slot registration fallback failed', err2);
-      }
-    }
-
-    if (typeof ctx.effect === 'function') {
-      try {
-        ctx.effect(() => () => {
-          for (let i = disposers.length - 1; i >= 0; i -= 1) {
-            try {
-              disposers[i]();
-            } catch (err) {
-              /* ignore */
-            }
-          }
-          NW._applied = false;
-        }, 'novel-writer:client');
-      } catch (err) {
-        /* ignore */
-      }
-    }
-  };
+  NW.Advice = Advice;
+  NW.AdviceCard = AdviceCard;
+  NW.AcceptedPanel = AcceptedPanel;
+  NW.SelectionAdvice = SelectionAdvice;
 })();
 
 /* ==== 95-dialogs.js ==== */
