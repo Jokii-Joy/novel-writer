@@ -43,6 +43,8 @@ public final class MainActivity extends Activity {
     private Store store;
     private LinearLayout listBox;
     private TextView statusLine;
+    private TextView subtitleLine;
+    private View emptyState;
     private TextView emptyHint;
     /**
      * Book id → {updatedAt, 字数}, so a redraw does not recount every chapter of
@@ -50,6 +52,16 @@ public final class MainActivity extends Activity {
      * exactly what changes when the text does.
      */
     private final java.util.Map<String, long[]> wordCache = new java.util.HashMap<>();
+
+    /** Repaints the two status lines while the shelf is on screen. */
+    private final Handler ticker = new Handler(Looper.getMainLooper());
+    private final Runnable tick = new Runnable() {
+        @Override
+        public void run() {
+            refreshStatus();
+            ticker.postDelayed(this, 5000);
+        }
+    };
 
     /** R38: the night/resources override has to be in place before any view. */
     @Override
@@ -74,7 +86,25 @@ public final class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         render();
-        if (store.paired()) SyncService.start(this);
+        if (store.paired()) {
+            SyncService.start(this);
+            // R72: a manual tap is no longer how a returning writer catches up —
+            // opening the shelf is. The service would get here within 45 s anyway;
+            // doing it now is what makes the app feel connected rather than merely
+            // capable of connecting.
+            SyncService.requestSync(this);
+        }
+        // One number — 「上次同步」 — changes underneath us while the service works.
+        // Refreshing it every 5 s is cheaper than wiring the activity to the
+        // service, and it means the line is never stale in the user's hands.
+        ticker.removeCallbacks(tick);
+        ticker.post(tick);
+    }
+
+    @Override
+    protected void onPause() {
+        ticker.removeCallbacks(tick);
+        super.onPause();
     }
 
     private int color(int id) {
@@ -91,23 +121,40 @@ public final class MainActivity extends Activity {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(18), dp(18), dp(12), dp(10));
+        header.setPadding(dp(20), dp(20), dp(14), dp(12));
+
+        // Title and one honest line under it: which desktop this shelf is
+        // attached to is the first thing a writer checks after opening the app.
+        LinearLayout titles = new LinearLayout(this);
+        titles.setOrientation(LinearLayout.VERTICAL);
 
         TextView title = new TextView(this);
         title.setText("精神空间");
-        title.setTextSize(23);
+        title.setTextSize(26);
+        title.setLetterSpacing(0.02f);
         title.setTypeface(Typeface.create("serif", Typeface.BOLD));
         title.setTextColor(color(R.color.nw_ink));
-        header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        titles.addView(title);
+
+        TextView subtitle = new TextView(this);
+        subtitle.setTextSize(11.5f);
+        subtitle.setTextColor(color(R.color.nw_soft));
+        subtitle.setPadding(0, dp(3), 0, 0);
+        titles.addView(subtitle);
+        subtitleLine = subtitle;
+        header.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         // R38 ⑤: 白天 / 黑夜. A glyph rather than a label so it does not compete
         // with ＋; the content description carries the meaning for TalkBack.
         Button skin = new Button(this);
         skin.setText(Skin.night(this) ? "☀" : "☾");
-        skin.setTextSize(19);
+        skin.setTextSize(18);
         skin.setContentDescription("切换白天黑夜");
         skin.setTextColor(color(R.color.nw_ink));
-        skin.setBackgroundColor(Color.TRANSPARENT);
+        skin.setBackgroundResource(R.drawable.nw_touch_pill);
+        skin.setPadding(0, 0, 0, 0);
+        skin.setMinWidth(dp(40));
+        skin.setMinimumWidth(dp(40));
         skin.setOnClickListener(v -> {
             Skin.toggle(this);
             // Recreate instead of repainting: every colour already comes from a
@@ -116,12 +163,22 @@ public final class MainActivity extends Activity {
         });
         header.addView(skin);
 
+        // R72: the shelf's one primary action is a clay disc, not a ＋ floating in
+        // the title row — on a phone the plus was the least visible thing on screen
+        // while being the only way to start writing.
         Button add = new Button(this);
         add.setText("＋");
-        add.setTextSize(20);
-        add.setTextColor(color(R.color.nw_clay));
-        add.setBackgroundColor(Color.TRANSPARENT);
+        add.setTextSize(22);
+        add.setAllCaps(false);
+        add.setIncludeFontPadding(false);
+        add.setPadding(0, 0, 0, 0);
+        add.setTextColor(color(R.color.nw_on_clay));
+        add.setBackgroundResource(R.drawable.nw_fab);
+        add.setContentDescription("新建书");
         add.setOnClickListener(v -> promptNewBook());
+        LinearLayout.LayoutParams fab = new LinearLayout.LayoutParams(dp(44), dp(44));
+        fab.setMargins(dp(10), 0, 0, 0);
+        add.setLayoutParams(fab);
         header.addView(add);
         root.addView(header);
 
@@ -132,23 +189,19 @@ public final class MainActivity extends Activity {
         syncRow.setPadding(dp(18), 0, dp(12), dp(10));
 
         statusLine = new TextView(this);
-        statusLine.setTextSize(12.5f);
+        statusLine.setTextSize(12);
         statusLine.setTextColor(color(R.color.nw_soft));
+        statusLine.setLineSpacing(dp(2), 1f);
         syncRow.addView(statusLine, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        Button syncBtn = new Button(this);
-        syncBtn.setText("同步");
-        syncBtn.setTextSize(12.5f);
-        syncBtn.setTextColor(color(R.color.nw_ink));
-        syncBtn.setBackgroundColor(Color.TRANSPARENT);
+        // R72: sync is automatic; the button is a "catch up now" for the case where
+        // the writer wants to see it happen, not the way it normally works. It is
+        // therefore a quiet text button, while 配对/已配对 keeps the clay accent.
+        Button syncBtn = textButton("立即同步", R.color.nw_soft);
         syncBtn.setOnClickListener(v -> manualSync());
         syncRow.addView(syncBtn);
 
-        Button pairBtn = new Button(this);
-        pairBtn.setTextSize(12.5f);
-        pairBtn.setTextColor(color(R.color.nw_clay));
-        pairBtn.setBackgroundColor(Color.TRANSPARENT);
-        pairBtn.setText(store.paired() ? "已配对" : "配对");
+        Button pairBtn = textButton(store.paired() ? "已配对" : "配对", R.color.nw_clay);
         pairBtn.setOnClickListener(v -> {
             if (store.paired()) confirmUnpair();
             else openPairing();
@@ -166,14 +219,40 @@ public final class MainActivity extends Activity {
         root.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         // ---- empty state (sits under the list, toggled in render)
+        LinearLayout empty = new LinearLayout(this);
+        empty.setOrientation(LinearLayout.VERTICAL);
+        empty.setGravity(Gravity.CENTER_HORIZONTAL);
+        empty.setPadding(dp(28), dp(52), dp(28), dp(28));
+
+        TextView emptyTitle = new TextView(this);
+        emptyTitle.setText("书架还是空的");
+        emptyTitle.setTextSize(17);
+        emptyTitle.setTypeface(Typeface.create("serif", Typeface.NORMAL));
+        emptyTitle.setTextColor(color(R.color.nw_ink));
+        empty.addView(emptyTitle);
+
         emptyHint = new TextView(this);
-        emptyHint.setText("还没有书。点右上角 ＋ 新建，或者在电脑上配对后自动同步。");
-        emptyHint.setTextSize(14);
+        emptyHint.setText("在电脑上配对后，书会自动同步过来；也可以就在这里写第一本。");
+        emptyHint.setTextSize(13.5f);
         emptyHint.setTextColor(color(R.color.nw_soft));
         emptyHint.setGravity(Gravity.CENTER);
-        emptyHint.setPadding(dp(32), dp(40), dp(32), dp(40));
-        emptyHint.setVisibility(View.GONE);
-        listBox.addView(emptyHint);
+        emptyHint.setLineSpacing(dp(3), 1f);
+        emptyHint.setPadding(0, dp(10), 0, dp(18));
+        empty.addView(emptyHint);
+
+        Button first = new Button(this);
+        first.setText("新建第一本书");
+        first.setAllCaps(false);
+        first.setTextSize(14);
+        first.setTextColor(color(R.color.nw_on_clay));
+        first.setBackgroundResource(R.drawable.nw_button_clay);
+        first.setPadding(dp(20), dp(10), dp(20), dp(10));
+        first.setOnClickListener(v -> promptNewBook());
+        empty.addView(first);
+
+        empty.setVisibility(View.GONE);
+        listBox.addView(empty);
+        emptyState = empty;
 
         setContentView(root);
         Skin.applyBars(this);
@@ -183,27 +262,81 @@ public final class MainActivity extends Activity {
         listBox.removeAllViews();
         Library library = store.library();
         List<Library.Book> books = library.visibleBooks();
-        emptyHint.setVisibility(books.isEmpty() ? View.VISIBLE : View.GONE);
-        if (books.isEmpty()) listBox.addView(emptyHint);
+        emptyState.setVisibility(books.isEmpty() ? View.VISIBLE : View.GONE);
+        if (books.isEmpty()) listBox.addView(emptyState);
 
         for (Library.Book book : books) listBox.addView(bookRow(book));
 
-        if (!store.paired()) {
-            statusLine.setText("未配对 · 在电脑插件里打开「手机同步」，把地址和配对码填进手机");
-        } else {
-            long at = store.lastSyncAt();
-            String host = store.hostName();
-            statusLine.setText(at > 0
-                ? "已连接 " + host + " · " + new SimpleDateFormat("HH:mm", Locale.CHINA).format(new Date(at)) + " 同步过"
-                : "已配对 " + host + " · 尚未同步");
+        refreshStatus();
+        // A quiet cross-fade instead of a hard swap: the shelf is redrawn after
+        // every edit, and a hard swap on resume is the flash that made coming back
+        // to the app feel janky.
+        listBox.setAlpha(0f);
+        listBox.animate().alpha(1f).setDuration(140).start();
+    }
+
+    /**
+     * The two status lines above the shelf.
+     *
+     * Called from `render` and from the 5 s ticker, so it must stay allocation-
+     * light and must not touch the list. Reading `markSynced()`'s timestamp is how
+     * the background service's work becomes visible without the activity having to
+     * observe the service: the number simply changes under it.
+     */
+    private void refreshStatus() {
+        if (subtitleLine != null) {
+            subtitleLine.setText(store.paired()
+                ? "书房 · 与「" + hostLabel() + "」相连"
+                : "书房 · 还没有连接电脑");
         }
+        if (statusLine == null) return;
+        if (!store.paired()) {
+            statusLine.setText("未配对 · 打开电脑插件的「手机同步」，把地址和配对码填进来");
+            return;
+        }
+        long at = store.lastSyncAt();
+        if (at <= 0) statusLine.setText("自动同步已开启 · 还没有同步过");
+        else statusLine.setText("自动同步已开启 · " + ago(at) + "同步过");
+    }
+
+    private String hostLabel() {
+        String name = store.hostName();
+        return name == null || name.isEmpty() ? "电脑" : name;
+    }
+
+    /** "刚刚" / "3 分钟前" / "12:03" / "10-31 12:03" — never a raw timestamp. */
+    private String ago(long at) {
+        long delta = Math.max(0, System.currentTimeMillis() - at);
+        if (delta < 45_000) return "刚刚";
+        if (delta < 3_600_000) return (delta / 60_000) + " 分钟前";
+        String pattern = delta < 86_400_000 ? "HH:mm" : "MM-dd HH:mm";
+        return new SimpleDateFormat(pattern, Locale.CHINA).format(new Date(at)) + " ";
+    }
+
+    /** A text-only button with pill feedback, used by the header and sync row. */
+    private Button textButton(String label, int colorRes) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setTextSize(12.5f);
+        button.setAllCaps(false);
+        button.setTextColor(color(colorRes));
+        button.setBackgroundResource(R.drawable.nw_touch_pill);
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setMinHeight(0);
+        button.setMinimumHeight(0);
+        button.setPadding(dp(10), dp(4), dp(10), dp(4));
+        return button;
     }
 
     private View bookRow(Library.Book book) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(dp(14), dp(13), dp(14), dp(13));
-        row.setBackgroundColor(color(R.color.nw_card));
+        row.setPadding(dp(16), dp(14), dp(16), dp(14));
+        row.setBackgroundResource(R.drawable.nw_card_touch);
+        // A one-dip lift is what separates the card from the paper behind it; a
+        // bigger elevation on a full-width row reads as a floating dialog.
+        row.setElevation(dp(1));
 
         TextView name = new TextView(this);
         name.setText(book.title == null || book.title.isEmpty() ? "未命名" : book.title);
@@ -240,7 +373,7 @@ public final class MainActivity extends Activity {
         }
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        params.setMargins(0, 0, 0, dp(8));
+        params.setMargins(dp(2), 0, dp(2), dp(10));
         row.setLayoutParams(params);
 
         row.setOnClickListener(v -> openBook(book));

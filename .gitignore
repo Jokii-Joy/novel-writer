@@ -13,6 +13,10 @@ dist/*.idsig
 # Scratch workspace of scripts/verify-host.mjs (a crashed run can leave it)
 scripts/.tmp/
 
+# Android build scratch: tools/build-apk.mjs unpacks classes.dex and res-*.zip
+# here while it assembles dist/精神空间.apk, and a crashed run leaves it behind.
+.tmp/
+
 # Node leftovers (the plugin itself ships no node_modules)
 node_modules/
 npm-debug.log*

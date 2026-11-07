@@ -11,4 +11,8 @@
     <color name="nw_soft">#a89c8b</color>
     <color name="nw_card">#221f1a</color>
     <color name="nw_bar">#171512</color>
+    <!-- Night press feedback is light, not dark: a black ripple on a charcoal
+         card is invisible. -->
+    <color name="nw_ripple">#24ffffff</color>
+    <color name="nw_on_clay">#1a1613</color>
 </resources>

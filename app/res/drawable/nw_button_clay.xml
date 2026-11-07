@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A filled capsule for the one labelled primary action (「新建第一本书」).
+     Not the oval used by the ＋ disc: an ellipse behind a six-character label
+     reads as a rugby ball. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="#40ffffff">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/nw_clay" />
+            <corners android:radius="999dp" />
+        </shape>
+    </item>
+</ripple>

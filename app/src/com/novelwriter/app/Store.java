@@ -265,6 +265,107 @@ public final class Store {
         prefs.edit().putFloat("editTextSize", size).apply();
     }
 
+    // ---------------------------------------------------- 修改建议用的模型 (R72)
+
+    /**
+     * The model this phone last chose for 修改建议.
+     *
+     * Empty means "use whatever the desktop has selected". The choice is local on
+     * purpose: picking a model on the phone must not silently change the model the
+     * desktop's own 校对/修改建议 uses the next time the writer sits at the desk.
+     */
+    public String aiProvider() {
+        return prefs.getString("aiProvider", "");
+    }
+
+    public String aiModel() {
+        return prefs.getString("aiModel", "");
+    }
+
+    public void setAiChoice(String provider, String model) {
+        prefs.edit()
+            .putString("aiProvider", provider == null ? "" : provider)
+            .putString("aiModel", model == null ? "" : model)
+            .apply();
+    }
+
+    // ------------------------------------------------- 修改建议的运行状态 (R72)
+
+    /**
+     * The 修改建议 job, as written by {@link ReviseService}.
+     *
+     * A blob rather than three dozen keys: the service writes it from a worker
+     * thread, the editor polls it, and a single `putString` is the only atom the
+     * two have to agree on. Shape:
+     * `{state: running|done|error|canceled, bookId, chapterId, title, base,
+     *   done, total, advice?, message?, code?, empty?, startedAt}`.
+     */
+    public String reviseJob() {
+        return prefs.getString("reviseJob", "");
+    }
+
+    public void setReviseJob(String json) {
+        prefs.edit().putString("reviseJob", json == null ? "" : json).apply();
+    }
+
+    /** Convenience for the service, which builds the blob as a JSONObject. */
+    public void setReviseJob(org.json.JSONObject job) {
+        setReviseJob(job == null ? "" : job.toString());
+    }
+
+    public void clearReviseJob() {
+        prefs.edit().remove("reviseJob").apply();
+    }
+
+    /**
+     * The last advice for a chapter, so leaving the page does not throw it away.
+     *
+     * Capped at twelve chapters: advice is a few KB each, and the writer only ever
+     * looks at the last few. Oldest entries fall off by `at`.
+     */
+    public String adviceFor(String chapterId) {
+        if (chapterId == null || chapterId.isEmpty()) return "";
+        org.json.JSONObject map = map();
+        org.json.JSONObject entry = map.optJSONObject(chapterId);
+        return entry == null ? "" : entry.optString("advice", "");
+    }
+
+    public long adviceAt(String chapterId) {
+        org.json.JSONObject entry = map().optJSONObject(chapterId == null ? "" : chapterId);
+        return entry == null ? 0 : entry.optLong("at", 0);
+    }
+
+    public void saveAdvice(String chapterId, String title, String advice) {
+        if (chapterId == null || chapterId.isEmpty() || advice == null || advice.isEmpty()) return;
+        org.json.JSONObject map = map();
+        org.json.JSONObject entry = new org.json.JSONObject();
+        try {
+            entry.put("advice", advice);
+            entry.put("title", title == null ? "" : title);
+            entry.put("at", System.currentTimeMillis());
+            map.put(chapterId, entry);
+            // Keep the newest twelve.
+            java.util.List<String> keys = new java.util.ArrayList<>();
+            java.util.Iterator<String> it = map.keys();
+            while (it.hasNext()) keys.add(it.next());
+            if (keys.size() > 12) {
+                keys.sort((a, b) -> Long.compare(map.optJSONObject(a) == null ? 0 : map.optJSONObject(a).optLong("at"), map.optJSONObject(b) == null ? 0 : map.optJSONObject(b).optLong("at")));
+                for (int i = 0; i < keys.size() - 12; i += 1) map.remove(keys.get(i));
+            }
+        } catch (Exception ignored) {
+            return;
+        }
+        prefs.edit().putString("reviseAdvice", map.toString()).apply();
+    }
+
+    private org.json.JSONObject map() {
+        try {
+            return new org.json.JSONObject(prefs.getString("reviseAdvice", "{}"));
+        } catch (Exception error) {
+            return new org.json.JSONObject();
+        }
+    }
+
     // ---------------------------------------------------------- 书级同步标记
 
     /**

@@ -14,8 +14,8 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.novelwriter.app"
-    android:versionCode="1"
-    android:versionName="1.0.0">
+    android:versionCode="2"
+    android:versionName="1.1.0">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -68,8 +68,21 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- R41: 修改建议 is its own page: the chapter laid out paragraph by
+             paragraph with a read-only note under each one. -->
+        <activity
+            android:name=".AdviceActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
         <service
             android:name=".SyncService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- R72: the 修改建议 run lives here so leaving the screen does not end it. -->
+        <service
+            android:name=".ReviseService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 

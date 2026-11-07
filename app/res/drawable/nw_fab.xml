@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The single primary action on the shelf (新建书 / 新建章节): a compact clay
+     disc rather than a ＋ glyph floating in the text row. 40dp is deliberately
+     below the 56dp FAB of Material — this is a writing app, and a full-size FAB
+     would cover the last row of the list it is supposed to add to. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="#40ffffff">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="@color/nw_clay" />
+        </shape>
+    </item>
+</ripple>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A tappable card: the card shape plus a ripple clipped to the same corners.
+     Without the mask the ripple squares off the corners on press, which reads as
+     a layout jump rather than feedback. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/nw_ripple">
+    <item
+        android:id="@android:id/mask"
+        android:drawable="@drawable/nw_card" />
+    <item android:drawable="@drawable/nw_card" />
+</ripple>

@@ -43,17 +43,30 @@ const manifest = path.join(appDir, 'AndroidManifest.xml');
 const javaSrc = path.join(appDir, 'src');
 const outApk = path.join(root, 'dist', '精神空间.apk');
 
+/**
+ * aapt2 34 on Windows mangles path arguments that contain non-ASCII text
+ * ("bad resource path" for every input), and this checkout lives under 编码区.
+ * Every aapt2 path therefore goes in relative to the project root — relative
+ * arguments are pure ASCII and aapt2 resolves them against `cwd` itself.
+ * javac/d8 are JVM programs and take the absolute paths fine.
+ */
+const rel = (target) => path.relative(root, target);
+
 function run(file, args, options = {}) {
   const started = Date.now();
   const shown = path.basename(file) + ' ' + args.filter((a) => !a.startsWith('-')).slice(0, 2).map((a) => path.basename(a)).join(' ');
   try {
-    const stdout = execFileSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024, ...options });
+    // `inherit`, never `pipe`: under a Windows harness sandbox a child launched
+    // with piped stdio fails at spawn with EPERM (named pipes are not openable
+    // in the confined session), which surfaced as a bare "step failed" with no
+    // output at all. Letting aapt2/javac/d8 write straight to this console costs
+    // the ability to reformat their output and buys a build that actually runs.
+    execFileSync(file, args, { stdio: ['ignore', 'inherit', 'inherit'], maxBuffer: 64 * 1024 * 1024, ...options });
     console.log(`  ok  ${shown} (${Date.now() - started}ms)`);
-    return stdout;
+    return '';
   } catch (error) {
     console.error(`  !!  ${shown}`);
-    console.error(String(error.stdout || ''));
-    console.error(String(error.stderr || ''));
+    console.error(error && error.message ? error.message : String(error));
     throw new Error(`step failed: ${shown}`);
   }
 }
@@ -92,9 +105,12 @@ const walk = async (dir) => {
 };
 if (fs.existsSync(resDir)) await walk(resDir);
 if (resFiles.length) {
-  // aapt2 compile wants one file per invocation when passing a list via -o dir;
-  // passing every file at once produces a single .zip which `link` accepts.
-  run(aapt2, ['compile', '-o', compiled, ...resFiles]);
+  // `--dir` rather than one path per file: aapt2 34 on Windows rejects the
+  // absolute per-file form with a bare "bad resource path" whenever the project
+  // sits under a non-ASCII directory (this checkout lives in 编码区). Pointing
+  // it at the res directory sidesteps path parsing entirely and produces the
+  // same .flat entries.
+  run(aapt2, ['compile', '--dir', rel(resDir), '-o', rel(compiled)], { cwd: root });
 }
 
 // ----------------------------------------------------------------- 2. link
@@ -104,17 +120,21 @@ const genDir = path.join(build, 'gen');
 await fsp.mkdir(genDir, { recursive: true });
 const linkArgs = [
   'link',
-  '-o', unsigned,
-  '-I', androidJar,
-  '--manifest', manifest,
-  '--java', genDir,
+  '-o', rel(unsigned),
+  // android.jar has to be relative too, even though it normally lives on an
+  // ASCII path: this checkout is under 编码区, so the *absolute* form fails
+  // aapt2's stat with "Failed to stat file" and it silently links without the
+  // framework — an APK whose @android: style references do not resolve.
+  '-I', rel(androidJar),
+  '--manifest', rel(manifest),
+  '--java', rel(genDir),
   '--min-sdk-version', '24',
   '--target-sdk-version', '34',
-  '--version-code', '1',
-  '--version-name', '1.0.0',
+  '--version-code', '2',
+  '--version-name', '1.1.0',
 ];
-if (resFiles.length) linkArgs.push('--auto-add-overlay', '-R', compiled);
-run(aapt2, linkArgs);
+if (resFiles.length) linkArgs.push('--auto-add-overlay', '-R', rel(compiled));
+run(aapt2, linkArgs, { cwd: root });
 
 // ----------------------------------------------------------------- 3. javac
 console.log('javac');

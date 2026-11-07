@@ -14,4 +14,9 @@
     <color name="nw_card">#ffffff</color>
     <!-- Status / navigation bar strip, a shade darker than the page. -->
     <color name="nw_bar">#f4efe3</color>
+    <!-- Press feedback. Ink rather than grey, so a ripple looks like the paper
+         darkening under a finger instead of a system overlay. -->
+    <color name="nw_ripple">#1f000000</color>
+    <!-- Text on the clay disc. -->
+    <color name="nw_on_clay">#fffaf3</color>
 </resources>

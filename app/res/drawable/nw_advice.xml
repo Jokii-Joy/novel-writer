@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One 修改建议 card. Not a warning banner: a note tucked under the paragraph
+     it is about — hairline border, page-coloured fill, no shadow. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/nw_bar" />
+    <stroke
+        android:width="1dp"
+        android:color="@color/nw_line" />
+    <corners android:radius="12dp" />
+</shape>

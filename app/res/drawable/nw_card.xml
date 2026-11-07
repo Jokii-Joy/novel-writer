@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One book / chapter row, and every panel that should read as "a card on the
+     paper". 16dp corners: round enough to feel like a card, not so round that a
+     row of text looks like a bubble. Colour comes from the day/night palette. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/nw_card" />
+    <corners android:radius="16dp" />
+</shape>

@@ -185,6 +185,12 @@ public final class PairActivity extends Activity {
             pairButton.setEnabled(true);
             if (ok) {
                 Toast.makeText(this, "配对成功", Toast.LENGTH_SHORT).show();
+                // R72: pairing used to leave the writer on a shelf that only
+                // updated when they found the 同步 button. Getting the service up
+                // and asking for one pass right here is what makes the books
+                // appear on their own.
+                SyncService.start(this);
+                SyncService.requestSync(this);
                 setResult(RESULT_OK);
                 finish();
                 return;

@@ -36,6 +36,10 @@ public final class LanClient {
     private static final int CONNECT_TIMEOUT_MS = 4000;
     private static final int READ_TIMEOUT_MS = 15000;
     private static final int PING_READ_TIMEOUT_MS = 4000;
+    /** R72: a proofread is a model run, not a LAN round trip. See `proofread`. */
+    private static final int AI_READ_TIMEOUT_MS = 180000;
+    /** The model list is a host-local query; it should answer in well under a second. */
+    private static final int AI_MODELS_TIMEOUT_MS = 15000;
 
     private LanClient() {
     }
@@ -210,5 +214,231 @@ public final class LanClient {
             out.message = error.getMessage() == null ? "读取失败" : error.getMessage();
             return out;
         }
+    }
+
+    /**
+     * R72: ask the desktop to proofread text the phone is holding.
+     *
+     * The phone never talks to a model itself — it has no key, no model picker,
+     * and no business sending a chapter to a third party behind the writer's
+     * back. The desktop host owns all three, so this is a signed request in the
+     * same shape as `sync`: base64url(JSON) plus an HMAC over those exact bytes.
+     *
+     * The read timeout is deliberately much longer than a sync's. A sync is one
+     * round trip on the LAN; a proofread is one *model* run, and a chapter can
+     * take a minute on a busy provider. Fifteen seconds would have reported
+     * "timeout" on requests that were about to succeed.
+     */
+    public static Result proofread(String address, int port, String deviceId, String secret, String text, String mode) {
+        try {
+            JSONObject inner = new JSONObject();
+            inner.put("text", text);
+            if (mode != null && !mode.isEmpty()) inner.put("mode", mode);
+            return ai("/nw/v1/ai/proofread", address, port, deviceId, secret, inner);
+        } catch (Exception error) {
+            Result out = new Result();
+            out.message = error.getMessage() == null ? "校对失败" : error.getMessage();
+            return out;
+        }
+    }
+
+    /**
+     * R72: ask the desktop for 修改建议 — editorial advice, not replacements.
+     *
+     * Same envelope as `proofread`, different verb and answer shape: `revise`
+     * returns `{quote, issue, why, advice, example, kind, severity, start, end}`.
+     * The phone pins each one under the paragraph that contains its quote, so
+     * the writer reads the note and edits their own sentence — there is nothing
+     * to "apply" here, which is the point.
+     */
+    public static Result revise(String address, int port, String deviceId, String secret, String text, String focus, String note, String provider, String model) {
+        try {
+            JSONObject inner = new JSONObject();
+            inner.put("text", text);
+            if (focus != null && !focus.isEmpty()) inner.put("focus", focus);
+            if (note != null && !note.isEmpty()) inner.put("note", note);
+            // Empty means "whatever the desktop has selected": the host resolves
+            // the fallback itself, so forwarding an empty pair would be noise.
+            if (provider != null && !provider.isEmpty()) inner.put("provider", provider);
+            if (model != null && !model.isEmpty()) inner.put("model", model);
+            return ai("/nw/v1/ai/revise", address, port, deviceId, secret, inner);
+        } catch (Exception error) {
+            Result out = new Result();
+            out.message = error.getMessage() == null ? "获取修改建议失败" : error.getMessage();
+            return out;
+        }
+    }
+
+    /** R72: the desktop's model list, so the phone's sheet can offer a choice. */
+    public static Result models(String address, int port, String deviceId, String secret) {
+        try {
+            return ai("/nw/v1/ai/models", address, port, deviceId, secret, new JSONObject(), AI_MODELS_TIMEOUT_MS);
+        } catch (Exception error) {
+            Result out = new Result();
+            out.message = error.getMessage() == null ? "读取模型列表失败" : error.getMessage();
+            return out;
+        }
+    }
+
+    /**
+     * R72: the streaming form of `revise`.
+     *
+     * The host answers with one JSON object per line — `progress` events before
+     * each paragraph block, then a single `result`. That is what lets the dialog
+     * show "3 / 7 段" instead of a spinner that means nothing for a minute.
+     *
+     * `onProgress` is called on this (worker) thread; the caller hops to the UI
+     * thread itself.
+     */
+    public static Result reviseStream(String address, int port, String deviceId, String secret, String text, String focus, String note, String provider, String model, Progress onProgress) {
+        try {
+            JSONObject inner = new JSONObject();
+            inner.put("text", text);
+            inner.put("stream", true);
+            if (focus != null && !focus.isEmpty()) inner.put("focus", focus);
+            if (note != null && !note.isEmpty()) inner.put("note", note);
+            if (provider != null && !provider.isEmpty()) inner.put("provider", provider);
+            if (model != null && !model.isEmpty()) inner.put("model", model);
+            return stream("/nw/v1/ai/revise", address, port, deviceId, secret, inner, onProgress);
+        } catch (Exception error) {
+            Result out = new Result();
+            out.message = error.getMessage() == null ? "获取修改建议失败" : error.getMessage();
+            return out;
+        }
+    }
+
+    /** One `progress` line: how many blocks are done, how many there are. */
+    public interface Progress {
+        void onProgress(int done, int total);
+    }
+
+    /**
+     * The in-flight streaming request, so the ✕ can actually stop it.
+     *
+     * `HttpURLConnection.disconnect()` on a blocked read throws out of the
+     * reader; the host sees the socket close and aborts the model call. This is
+     * the only cancellation path — an interrupt flag would not unblock a socket
+     * read.
+     */
+    private static volatile HttpURLConnection activeStream;
+    private static volatile boolean cancelRequested;
+
+    public static void cancelAi() {
+        cancelRequested = true;
+        HttpURLConnection connection = activeStream;
+        if (connection != null) {
+            try {
+                connection.disconnect();
+            } catch (Exception ignored) {
+                /* already gone */
+            }
+        }
+    }
+
+    public static void clearCancel() {
+        cancelRequested = false;
+    }
+
+    private static Result stream(String path, String address, int port, String deviceId, String secret, JSONObject inner, Progress onProgress) {
+        Result out = new Result();
+        HttpURLConnection connection = null;
+        try {
+            String encoded = base64Url(inner.toString().getBytes(StandardCharsets.UTF_8));
+            JSONObject payload = new JSONObject();
+            payload.put("deviceId", deviceId);
+            payload.put("body", encoded);
+            payload.put("signature", sign(secret, encoded));
+
+            connection = (HttpURLConnection) new URL("http://" + address + ":" + port + path).openConnection();
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            // No read timeout: a block can take a minute, and the only thing that
+            // should end this wait early is the ✕ (which disconnects) or the
+            // desktop answering. A read timeout here would turn a slow model into
+            // a "同步失败" that is really "still thinking".
+            connection.setReadTimeout(0);
+            connection.setRequestProperty("connection", "close");
+            connection.setRequestProperty("content-type", "application/json; charset=utf-8");
+            byte[] body = payload.toString().getBytes(StandardCharsets.UTF_8);
+            connection.setFixedLengthStreamingMode(body.length);
+            connection.setDoOutput(true);
+            try (OutputStream stream = connection.getOutputStream()) {
+                stream.write(body);
+            }
+
+            activeStream = connection;
+            int status = connection.getResponseCode();
+            out.reachable = true;
+            if (status != 200) {
+                String text = read(connection.getErrorStream());
+                try {
+                    out.data = text.isEmpty() ? new JSONObject() : new JSONObject(text);
+                } catch (Exception error) {
+                    out.data = new JSONObject();
+                }
+                out.ok = false;
+                out.code = out.data.optString("code", "http-" + status);
+                out.message = out.data.optString("message", "");
+                return out;
+            }
+
+            java.io.BufferedReader reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.trim().isEmpty()) continue;
+                JSONObject event;
+                try {
+                    event = new JSONObject(line);
+                } catch (Exception error) {
+                    continue;
+                }
+                String type = event.optString("type", "");
+                if ("progress".equals(type)) {
+                    if (onProgress != null) onProgress.onProgress(event.optInt("done", 0), event.optInt("total", 0));
+                    continue;
+                }
+                if ("result".equals(type)) {
+                    out.ok = event.optBoolean("ok", false);
+                    out.code = event.optString("code", "");
+                    out.message = event.optString("message", "");
+                    // `suggestions` rides on the event itself, so the caller reads
+                    // it exactly as it reads the non-streaming answer.
+                    out.data = event;
+                    return out;
+                }
+            }
+            out.ok = false;
+            out.code = "bad-answer";
+            out.message = "电脑没有返回结果";
+            return out;
+        } catch (Exception error) {
+            out.reachable = false;
+            out.ok = false;
+            if (cancelRequested) {
+                out.code = "canceled";
+                out.message = "已取消";
+            } else {
+                out.code = "unreachable";
+                out.message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+            }
+            return out;
+        } finally {
+            activeStream = null;
+        }
+    }
+
+    /** Signed POST to one of the AI verbs. */
+    private static Result ai(String path, String address, int port, String deviceId, String secret, JSONObject inner) throws Exception {
+        return ai(path, address, port, deviceId, secret, inner, AI_READ_TIMEOUT_MS);
+    }
+
+    private static Result ai(String path, String address, int port, String deviceId, String secret, JSONObject inner, int readTimeoutMs) throws Exception {
+        String encoded = base64Url(inner.toString().getBytes(StandardCharsets.UTF_8));
+        JSONObject payload = new JSONObject();
+        payload.put("deviceId", deviceId);
+        payload.put("body", encoded);
+        payload.put("signature", sign(secret, encoded));
+        return call("POST", address, port, path, payload, readTimeoutMs);
     }
 }

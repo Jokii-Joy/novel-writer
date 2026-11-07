@@ -160,4 +160,160 @@ public final class SyncEngine {
     public static void pushSoon(Context context) {
         SyncService.requestSync(context);
     }
+
+    // ------------------------------------------- R72: the desktop's model
+
+    /**
+     * What one AI request produced.
+     *
+     * The two verbs answer different shapes and the phone treats them
+     * differently: `proofread` is a list of replacements
+     * (`{start,end,original,replacement,reason}`) that can be applied, while
+     * `revise` is a list of opinions (`{quote,issue,why,advice,example,kind,
+     * severity,start,end}`) that are only ever read.
+     */
+    public static final class AiOutcome {
+        public boolean ok;
+        public String message = "";
+        public String code = "";
+        /** The writer pressed ✕; the caller must not treat this as a failure. */
+        public boolean canceled;
+        /** Blocks whose model reply was empty — "said nothing", not "nothing to fix". */
+        public int empty;
+        public org.json.JSONArray suggestions;
+    }
+
+    /**
+     * A lock of its own, not `LOCK`.
+     *
+     * The sync lock exists to stop two discovery rounds from fighting over the
+     * same UDP socket. Sharing it here would be worse than the race it prevents:
+     * a model run takes tens of seconds, and holding the sync lock for that long
+     * would stall the background service's tick — the phone would stop syncing
+     * exactly while the writer is waiting for advice.
+     */
+    private static final Object AI_LOCK = new Object();
+
+    /** One signed request, with the address and credentials already resolved. */
+    private interface AiCall {
+        LanClient.Result run(String address, int port, String deviceId, String secret);
+    }
+
+    public static AiOutcome proofread(Context context, String text, String mode) {
+        return runAi(context, text, "校对", (address, port, deviceId, secret) ->
+            LanClient.proofread(address, port, deviceId, secret, text, mode));
+    }
+
+    /** R72: 修改建议 — the editorial verb the phone actually shows. */
+    public static AiOutcome revise(Context context, String text, String focus, String note, String provider, String model) {
+        return runAi(context, text, "点评", (address, port, deviceId, secret) ->
+            LanClient.revise(address, port, deviceId, secret, text, focus, note, provider, model));
+    }
+
+    /** R72: same request, but reporting per-block progress and cancellable. */
+    public static AiOutcome reviseStream(Context context, String text, String focus, String note, String provider, String model, LanClient.Progress progress) {
+        return runAi(context, text, "点评", (address, port, deviceId, secret) ->
+            LanClient.reviseStream(address, port, deviceId, secret, text, focus, note, provider, model, progress));
+    }
+
+    /** Stops the in-flight streaming request (the ✕). */
+    public static void cancelAi() {
+        LanClient.cancelAi();
+    }
+
+    public static void clearCancel() {
+        LanClient.clearCancel();
+    }
+
+    /** R72: what models this desktop can run right now. */
+    public static final class ModelsOutcome {
+        public boolean ok;
+        public String message = "";
+        public org.json.JSONObject data;
+    }
+
+    /**
+     * The desktop's model list.
+     *
+     * Its own lock-free path is fine — this is a short host query, not a model
+     * run — but it goes through the same resolve/retry dance so "找不到电脑"
+     * means the same thing here as it does for a sync.
+     */
+    public static ModelsOutcome models(Context context) {
+        Store store = new Store(context);
+        ModelsOutcome out = new ModelsOutcome();
+        if (!store.paired()) {
+            out.message = "还没有配对电脑";
+            return out;
+        }
+        String pair = locate(store, true);
+        if (pair.isEmpty()) {
+            out.message = "找不到电脑，确认两台设备在同一个 Wi-Fi";
+            return out;
+        }
+        LanClient.Result result = LanClient.models(host(pair), port(pair), store.deviceId(), store.secret());
+        if (!result.ok && !result.reachable) {
+            Discovery.Found found = Discovery.listen(store.context(), DISCOVERY_TIMEOUT_MS, store.hostId());
+            if (found != null) {
+                store.updateAddress(found.address, found.port);
+                result = LanClient.models(found.address, found.port, store.deviceId(), store.secret());
+            }
+        }
+        if (!result.ok) {
+            out.message = result.message.isEmpty() ? "读取模型列表失败" : result.message;
+            return out;
+        }
+        out.data = result.data;
+        out.ok = true;
+        return out;
+    }
+
+    /**
+     * Resolves the desktop, signs, sends, and gives a stale address one second
+     * chance.
+     *
+     * Deliberately not offline-capable: the model, the key and the model picker
+     * all live on the desktop. When it is not reachable the honest answer is
+     * "现在联系不上电脑", not a fake local checker.
+     */
+    private static AiOutcome runAi(Context context, String text, String verb, AiCall call) {
+        synchronized (AI_LOCK) {
+            Store store = new Store(context);
+            AiOutcome out = new AiOutcome();
+            if (!store.paired()) {
+                out.message = "还没有配对电脑，先在桌面插件的「手机同步」里配对";
+                return out;
+            }
+            if (text == null || text.trim().isEmpty()) {
+                out.message = "这一章还没有正文";
+                return out;
+            }
+            String pair = locate(store, true);
+            if (pair.isEmpty()) {
+                out.message = "找不到电脑，确认两台设备在同一个 Wi-Fi";
+                return out;
+            }
+            LanClient.Result result = call.run(host(pair), port(pair), store.deviceId(), store.secret());
+            if (!result.ok && !result.reachable) {
+                // Same second chance as sync: a DHCP lease can move between the
+                // ping and the request, and a model call is too expensive to
+                // lose to a stale address.
+                Discovery.Found found = Discovery.listen(store.context(), DISCOVERY_TIMEOUT_MS, store.hostId());
+                if (found != null) {
+                    store.updateAddress(found.address, found.port);
+                    result = call.run(found.address, found.port, store.deviceId(), store.secret());
+                }
+            }
+            if (!result.ok) {
+                out.code = result.code;
+                out.canceled = "canceled".equals(result.code);
+                out.message = result.message.isEmpty() ? verb + "失败" : result.message;
+                return out;
+            }
+            out.suggestions = result.data == null ? null : result.data.optJSONArray("suggestions");
+            out.empty = result.data == null ? 0 : result.data.optInt("empty", 0);
+            out.ok = true;
+            return out;
+        }
+    }
 }
