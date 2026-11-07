@@ -201,9 +201,17 @@ const NW = {
   },
 };
 
+const BASE_TEXT = '他把门推开，屋子里很安静。桌上那本书还摊着，像在等他回来。';
+let editorText = BASE_TEXT;
 const fakeEditor = {
   current: {
-    getContent: () => '他把门推开，屋子里很安静。桌上那本书还摊着，像在等他回来。',
+    getContent: () => editorText,
+    replaceRange: (start, end, text) => {
+      const s = Math.max(0, Number(start) || 0);
+      const e = Math.max(s, Number(end) || s);
+      editorText = editorText.slice(0, s) + String(text == null ? '' : text) + editorText.slice(e);
+      calls.replaced = [s, e, String(text)];
+    },
     setHighlights: (list) => {
       calls.highlight = list;
     },
@@ -274,6 +282,13 @@ text(
 );
 check('并排两栏：原文 / 改后', /原文/.test(textOf(rootTree)) && /改后/.test(textOf(rootTree)));
 check('有 接受 / 拒绝 按钮', /接受/.test(textOf(rootTree)) && /拒绝/.test(textOf(rootTree)));
+// R76 (A2): the two columns are a character diff, not two plain paragraphs.
+check(
+  '字符级差异：删掉的字/补上的字都有标记',
+  nodes().some((n) => n.tag === 'mark' && n.props.className === 'nw-diff-del')
+    && nodes().some((n) => n.tag === 'mark' && n.props.className === 'nw-diff-add'),
+  nodes().filter((n) => n.tag === 'mark').map((n) => n.props.className),
+);
 clickText('接受');
 check('点接受把整条交给上层', accepted && accepted.quote === '屋子里很安静', accepted && accepted.quote);
 
@@ -315,60 +330,107 @@ console.log('[3] SelectionAdvice');
 const content = fakeEditor.current.getContent();
 const selStart = content.indexOf('屋子里很安静');
 const selEnd = selStart + '屋子里很安静'.length;
+const offsetOf = (needle) => content.indexOf(needle) - selStart;
 const suggestions = [
-  { id: 's1', quote: '屋子里很安静', revised: '屋里静得能听见心跳', issue: '交代', why: '更近', kind: 'detail', start: 0, end: 6 },
-  { id: 's2', quote: '像在等他回来', revised: '像是他还坐在那儿', kind: 'diction', start: content.indexOf('像在等他回来') - selStart, end: content.indexOf('像在等他回来') - selStart + 7 },
+  { quote: '屋子里很安静', revised: '屋里静得能听见心跳', issue: '交代', why: '更近', kind: 'detail', start: 0, end: 6 },
+  { quote: '像在等他回来', revised: '像是他还坐在那儿', kind: 'diction', start: offsetOf('像在等他回来'), end: offsetOf('像在等他回来') + 7 },
 ];
+let streamCalls = [];
+let streamSeq = 0;
 NW.ai = {
-  reviseSelectionSafe: async (input) => {
+  // R76: the window uses the streaming route when it exists.
+  reviseSelectionStream: async (input, handlers) => {
+    streamCalls.push(input);
+    const out = [];
+    for (const item of suggestions) {
+      streamSeq += 1;
+      const next = Object.assign({}, item, { id: 'x' + streamSeq });
+      out.push(next);
+      handlers.onEvent({ type: 'suggestion', item: next });
+      // eslint-disable-next-line no-await-in-loop
+      await tick(0);
+    }
+    return { suggestions: out, model: 'p/m' };
+  },
+  reviseSelectionSafe: async () => {
     calls.ai += 1;
-    check('请求里带上了选中的文字', input.text === '屋子里很安静', input.text);
-    check('请求里带了上下文', typeof input.before === 'string' && typeof input.after === 'string');
-    return { suggestions: suggestions, model: 'p/m' };
+    return { suggestions: [], model: 'fallback' };
   },
 };
 const acceptedRows = [];
 const sel = { start: selStart, end: selEnd, text: '屋子里很安静' };
-mount(
-  createElement(C.SelectionAdvice, {
-    chapter: { id: 'c1' },
-    editorApi: fakeEditor,
-    selection: sel,
-    accepted: acceptedRows,
-    onAccept: async (draft) => {
-      acceptedRows.push(Object.assign({ id: 'new', createdAt: 4000 }, draft));
-      return { id: 'new' };
-    },
-    onRemoveAccepted: async (row) => {
-      calls.remove.push(row.id);
-    },
-    onClose: () => {
-      calls.closed = true;
-    },
-  }),
-);
-await tick(10);
+const mountWindow = () =>
+  mount(
+    createElement(C.SelectionAdvice, {
+      chapter: { id: 'c1' },
+      editorApi: fakeEditor,
+      selection: sel,
+      accepted: acceptedRows,
+      onAccept: async (draft) => {
+        acceptedRows.push(Object.assign({ id: 'new', createdAt: 4000 }, draft));
+        return { id: 'new' };
+      },
+      onRemoveAccepted: async (row) => {
+        calls.remove.push(row.id);
+      },
+      onToast: () => {},
+      onClose: () => {
+        calls.closed = true;
+      },
+    }),
+  );
+mountWindow();
+await tick(20);
 let view = textOf(rootTree);
-check('打开即自动发起请求', calls.ai >= 1);
+check('打开即发起流式请求', streamCalls.length === 1 && calls.ai === 0, { stream: streamCalls.length, unary: calls.ai });
+check('请求里带上了选中的文字', streamCalls[0] && streamCalls[0].text === '屋子里很安静', streamCalls[0] && streamCalls[0].text);
+check('请求里带了上下文', !!streamCalls[0] && typeof streamCalls[0].before === 'string' && typeof streamCalls[0].after === 'string');
 check('卡片出现', /屋里静得能听见心跳/.test(view));
 check('选中的原文显示在顶部', /屋子里很安静/.test(view));
-check('偏移换算成章节坐标', nodes().some((n) => false) || true);
+check('两张流式卡片都在', nodes().filter((n) => n.tag === 'div' && n.props.className === 'nw-adv').length === 2);
+
+// R76 (A1): 替换到正文 / 撤销替换
+check('卡片上有复制 / 替换 / 再改一版', /复制/.test(view) && /替换到正文/.test(view) && /再改一版/.test(view));
+clickText('替换到正文');
+await tick(10);
+check('替换真的写进了正文', fakeEditor.current.getContent().indexOf('屋里静得能听见心跳') >= 0, fakeEditor.current.getContent());
+check('替换记下了原文与改写', calls.replaced && calls.replaced[0] === selStart && calls.replaced[2] === '屋里静得能听见心跳', calls.replaced);
+check('替换后按钮变成撤销替换', /撤销替换/.test(textOf(rootTree)));
+clickText('撤销替换');
+await tick(10);
+check('撤销把原文放回去了', fakeEditor.current.getContent() === BASE_TEXT, fakeEditor.current.getContent());
+
+// 接受仍然是「只记账」
 clickText('接受');
 await tick(10);
 view = textOf(rootTree);
 check('接受后卡片转绿标「已接受」', /已接受/.test(view));
 check('接受写进上层（source=selection）', acceptedRows.length === 1 && acceptedRows[0].source === 'selection', acceptedRows[0] && acceptedRows[0].source);
-check('接受不改正文', fakeEditor.current.getContent().indexOf('屋里静得能听见心跳') < 0);
+check('接受不动正文', fakeEditor.current.getContent() === BASE_TEXT);
 
-const rejectedCard = nodes().find((n) => n.tag === 'div' && n.props['data-state'] === 'pending');
-check('还有一张待定卡片', !!rejectedCard);
+// R76 (C3): 再改一版
+clickText('再改一版');
+await tick(20);
+check('再改一版把上一版作为 previous 发出去', streamCalls.length === 2 && streamCalls[1].previous === '屋里静得能听见心跳', streamCalls[1] && streamCalls[1].previous);
+check('新一版带「第 2 版」标记', /第 2 版/.test(textOf(rootTree)), textOf(rootTree).slice(0, 80));
+
+// R76 (A3): 关掉再打开同一段，不该再请求
+const callsBefore = streamCalls.length;
+mountWindow();
+await tick(20);
+check('重开同一段命中缓存，不再请求', streamCalls.length === callsBefore, { before: callsBefore, after: streamCalls.length });
+check('缓存来的结果标了「上次的结果」', /上次的结果/.test(textOf(rootTree)));
 
 // ---- 4. 点击卡片定位正文 -----------------------------------------------------
 console.log('[4] 点击卡片高亮正文');
 calls.highlight = null;
-const card = nodes().find((n) => n.tag === 'div' && n.props['data-state'] === 'accepted');
+const card = nodes().find((n) => n.tag === 'div' && n.props.className === 'nw-adv');
 card.props.onClick();
-check('点已接受的卡也把正文对应句高亮', calls.highlight && calls.highlight[0].start === selStart && calls.highlight[0].end === selEnd, calls.highlight && calls.highlight[0]);
+check(
+  '点卡片把正文对应句高亮',
+  calls.highlight && calls.highlight[0].start === selStart && calls.highlight[0].end === selStart + 6,
+  calls.highlight && calls.highlight[0],
+);
 
 // ---- 5. Advice（悬浮坞里的修改建议栏） ---------------------------------------
 console.log('[5] Advice 栏：角度可选 + 接受');

@@ -302,6 +302,17 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   flex:0 0 auto;max-height:46%;overflow:auto;padding:0 12px 10px;
 }
 .nw-selwin-accepted:empty{display:none;}
+/* R76 (C2): 流式读取时卡片已经在屏幕上，而请求还没完——这一行说明后面可能还有。 */
+.nw-selwin-progress{
+  display:flex;align-items:center;gap:6px;
+  padding:2px 2px 4px;font-size:11px;color:var(--nw-fg-soft);
+}
+.nw-selwin-progress[data-kind="warn"]{color:var(--nw-warn);}
+/* R76 (A3): 这些结果是缓存来的，没有花第二次钱。 */
+.nw-selwin-cached,.nw-suggest-cached{
+  font-size:10.5px;color:var(--nw-fg-soft);opacity:.85;
+  padding:1px 7px;border-radius:999px;border:1px dashed var(--nw-line);
+}
 
 /* 一张建议卡。整卡可点：点哪一处都把正文里的对应句子滚到视线中线并高亮。 */
 .nw-adv{
@@ -315,15 +326,25 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-adv:hover{border-color:var(--nw-line-strong);transform:translateY(-1px);}
 .nw-adv:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
 /* 三态：接受=绿，拒绝=红。色块很淡，只做边缘提示，不抢正文。 */
+/* R76 (B4): 状态不能只靠一层淡淡的底色——夜间主题里 6% 的绿几乎看不见。
+   左边一条 3px 的实色竖条 + 稍重的描边 + 10% 的底，在白天和夜里都站得住；
+   文字仍然走主题色，所以对比度跟着宿主走。 */
 .nw-adv[data-state="accepted"]{
-  border-color:color-mix(in srgb, var(--nw-ok) 62%, var(--nw-line));
-  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--nw-ok) 30%, transparent);
-  background:color-mix(in srgb, var(--nw-ok) 6%, var(--dsw-alias-bg-base));
+  border-color:color-mix(in srgb, var(--nw-ok) 70%, var(--nw-line));
+  border-left:3px solid var(--nw-ok);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--nw-ok) 34%, transparent);
+  background:color-mix(in srgb, var(--nw-ok) 10%, var(--dsw-alias-bg-base));
 }
 .nw-adv[data-state="rejected"]{
-  border-color:color-mix(in srgb, var(--nw-danger) 55%, var(--nw-line));
-  background:color-mix(in srgb, var(--nw-danger) 5%, var(--dsw-alias-bg-base));
-  opacity:.86;
+  border-color:color-mix(in srgb, var(--nw-danger) 65%, var(--nw-line));
+  border-left:3px solid var(--nw-danger);
+  background:color-mix(in srgb, var(--nw-danger) 8%, var(--dsw-alias-bg-base));
+  opacity:.92;
+}
+/* R76 (A1): 这一条已经被替换进正文了——再淡一层底，并把状态写在左边。 */
+.nw-adv[data-applied="1"]{
+  border-left:3px solid var(--nw-brand);
+  background:color-mix(in srgb, var(--nw-brand) 8%, var(--dsw-alias-bg-base));
 }
 .nw-adv[data-active="1"]{border-color:var(--nw-brand);box-shadow:inset 0 0 0 1px var(--nw-brand);}
 .nw-adv-compare{
@@ -347,6 +368,38 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   padding:6px 8px;border-radius:8px;
   background:color-mix(in srgb, var(--nw-ok) 8%, var(--nw-sunken));
   border:1px dashed color-mix(in srgb, var(--nw-ok) 38%, var(--nw-line));
+}
+/* R76 (A2): 字符级差异。删掉的字在原文一侧压一道浅红底 + 删除线，补上的字在
+   改后一侧压一道浅绿底——字体颜色不动，所以夜间主题下也不会变成一片荧光。 */
+.nw-diff-del{
+  background:color-mix(in srgb, var(--nw-danger) 22%, transparent);
+  color:inherit;border-radius:2px;
+  text-decoration:line-through;
+  text-decoration-color:color-mix(in srgb, var(--nw-danger) 70%, transparent);
+  padding:0 .5px;
+}
+.nw-diff-add{
+  background:color-mix(in srgb, var(--nw-ok) 26%, transparent);
+  color:inherit;border-radius:2px;padding:0 .5px;
+}
+/* R76 (A1): 改后文字下面那一排动作：复制 / 替换 / 再改一版。 */
+.nw-adv-acts{display:flex;align-items:center;gap:5px;flex-wrap:wrap;}
+.nw-adv-mini{
+  display:inline-flex;align-items:center;gap:4px;
+  height:22px;padding:0 8px;border-radius:999px;
+  border:1px solid var(--nw-line);background:transparent;color:var(--nw-fg-soft);
+  font-family:inherit;font-size:10.5px;font-weight:600;cursor:pointer;
+  transition:border-color var(--nw-dur) ease,color var(--nw-dur) ease,background var(--nw-dur) ease;
+}
+.nw-adv-mini:hover:not(:disabled){color:var(--nw-fg);border-color:var(--nw-line-strong);background:color-mix(in srgb, var(--nw-fg) 5%, transparent);}
+.nw-adv-mini[data-kind="apply"]{color:var(--nw-brand);border-color:color-mix(in srgb, var(--nw-brand) 40%, var(--nw-line));}
+.nw-adv-mini[data-kind="apply"]:hover:not(:disabled){background:color-mix(in srgb, var(--nw-brand) 10%, transparent);}
+.nw-adv-mini[data-kind="undo"]{color:var(--nw-warn);border-color:color-mix(in srgb, var(--nw-warn) 40%, var(--nw-line));}
+.nw-adv-mini:disabled{opacity:.45;cursor:default;}
+.nw-adv-ver{
+  font-size:10px;padding:1px 6px;border-radius:999px;
+  border:1px dashed color-mix(in srgb, var(--nw-brand) 45%, var(--nw-line));
+  color:var(--nw-brand);
 }
 .nw-adv-issue{font-size:var(--nw-fs-micro);font-weight:600;line-height:1.55;color:var(--nw-fg);}
 .nw-adv-why{font-size:var(--nw-fs-tiny);line-height:1.65;color:var(--nw-fg-soft);}
@@ -3577,6 +3630,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                         accepted: chapterRevisions,
                         onAccept: acceptRevision,
                         onRemoveAccepted: removeRevision,
+                        // R76: 复制 / 替换 / 撤销替换 report through the same toast bus.
+                        onToast: pushToast,
                         onClose: () => setSelAdvice(null),
                       })
                     : null,
@@ -4010,6 +4065,191 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     return groups;
   }
 
+  /* ========================= R76：并排对照的字符级差异 ==================== */
+
+  /** Tiny LRU for `diffChars` results — a re-render must not redo the LCS. */
+  const DIFF_CACHE = new Map();
+  const DIFF_CACHE_MAX = 64;
+  /** Above this length a character diff is noise (and slow); show plain text. */
+  const DIFF_LIMIT = 400;
+
+  /**
+   * Character-level diff between 原文 and 改后.
+   *
+   * "在这一层楼里安静地等待着" → "在楼道里等着" is one or two words changed, but
+   * side-by-side paragraphs make the writer re-read both to find them. Marking
+   * the removed characters on the left and the added ones on the right is the
+   * difference between "looks similar" and "here is the change".
+   *
+   * Common prefix/suffix are trimmed first (usually most of the sentence), then
+   * a plain LCS over what is left. Chinese has no word breaks, so per-character
+   * is the honest granularity and also the cheapest.
+   */
+  function diffChars(beforeRaw, afterRaw) {
+    const a = String(beforeRaw == null ? '' : beforeRaw);
+    const b = String(afterRaw == null ? '' : afterRaw);
+    const plain = () => ({ old: [{ text: a, changed: false }], neu: [{ text: b, changed: false }] });
+    if (a === b) return { old: [{ text: a, changed: false }], neu: [{ text: b, changed: false }] };
+    if (a.length > DIFF_LIMIT || b.length > DIFF_LIMIT) return plain();
+    const key = a + '\u0000' + b;
+    const cached = DIFF_CACHE.get(key);
+    if (cached) return cached;
+
+    let start = 0;
+    while (start < a.length && start < b.length && a.charAt(start) === b.charAt(start)) start += 1;
+    let endA = a.length;
+    let endB = b.length;
+    while (endA > start && endB > start && a.charAt(endA - 1) === b.charAt(endB - 1)) {
+      endA -= 1;
+      endB -= 1;
+    }
+    const midA = a.slice(start, endA).split('');
+    const midB = b.slice(start, endB).split('');
+    const n = midA.length;
+    const m = midB.length;
+    // dp[i][j] = LCS length of midA[i..], midB[j..]
+    const dp = [];
+    for (let i = 0; i <= n; i += 1) dp.push(new Array(m + 1).fill(0));
+    for (let i = n - 1; i >= 0; i -= 1) {
+      for (let j = m - 1; j >= 0; j -= 1) {
+        dp[i][j] = midA[i] === midB[j]
+          ? dp[i + 1][j + 1] + 1
+          : Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+    const oldSegs = [];
+    const neuSegs = [];
+    const push = (arr, ch, changed) => {
+      const last = arr[arr.length - 1];
+      if (last && last.changed === changed) last.text += ch;
+      else arr.push({ text: ch, changed: changed });
+    };
+    if (start > 0) {
+      oldSegs.push({ text: a.slice(0, start), changed: false });
+      neuSegs.push({ text: b.slice(0, start), changed: false });
+    }
+    let i = 0;
+    let j = 0;
+    while (i < n && j < m) {
+      if (midA[i] === midB[j]) {
+        push(oldSegs, midA[i], false);
+        push(neuSegs, midB[j], false);
+        i += 1;
+        j += 1;
+      } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+        push(oldSegs, midA[i], true);
+        i += 1;
+      } else {
+        push(neuSegs, midB[j], true);
+        j += 1;
+      }
+    }
+    while (i < n) {
+      push(oldSegs, midA[i], true);
+      i += 1;
+    }
+    while (j < m) {
+      push(neuSegs, midB[j], true);
+      j += 1;
+    }
+    if (endA < a.length) {
+      oldSegs.push({ text: a.slice(endA), changed: false });
+      neuSegs.push({ text: b.slice(endB), changed: false });
+    }
+    const out = { old: oldSegs, neu: neuSegs };
+    if (DIFF_CACHE.size >= DIFF_CACHE_MAX) {
+      const first = DIFF_CACHE.keys().next();
+      if (!first.done) DIFF_CACHE.delete(first.value);
+    }
+    DIFF_CACHE.set(key, out);
+    return out;
+  }
+
+  /** Render one side of a diff as text + <mark> runs. */
+  function diffNodes(segments, kind) {
+    const list = Array.isArray(segments) ? segments : [];
+    return list.map((seg, index) =>
+      seg.changed
+        ? h(
+            'mark',
+            {
+              key: 'd' + index,
+              className: kind === 'old' ? 'nw-diff-del' : 'nw-diff-add',
+            },
+            seg.text,
+          )
+        : seg.text,
+    );
+  }
+
+  /* ========================= R76：建议结果的本地缓存 ====================== */
+
+  /**
+   * Reopening the window for the same words must not bill the model again.
+   *
+   * Keyed on chapter + range + *fingerprint of the text*, so an edit invalidates
+   * the entry instead of showing advice about a sentence that no longer exists.
+   * Module scope on purpose: closing the window unmounts the component, and the
+   * cache has to outlive that. Small LRU so a long session cannot grow forever.
+   */
+  const ADVICE_CACHE = new Map();
+  const ADVICE_CACHE_MAX = 12;
+
+  function textFingerprint(text) {
+    const s = String(text == null ? '' : text);
+    let hash = 5381;
+    const n = Math.min(s.length, 4000);
+    for (let i = 0; i < n; i += 1) hash = ((hash * 33) ^ s.charCodeAt(i)) >>> 0;
+    return hash.toString(36) + ':' + s.length;
+  }
+
+  function cacheGet(key) {
+    if (!key || !ADVICE_CACHE.has(key)) return null;
+    const hit = ADVICE_CACHE.get(key);
+    // Refresh recency so the entries actually used survive the eviction.
+    ADVICE_CACHE.delete(key);
+    ADVICE_CACHE.set(key, hit);
+    return hit;
+  }
+
+  function cachePut(key, value) {
+    if (!key || !value) return;
+    if (ADVICE_CACHE.has(key)) ADVICE_CACHE.delete(key);
+    ADVICE_CACHE.set(key, value);
+    while (ADVICE_CACHE.size > ADVICE_CACHE_MAX) {
+      const first = ADVICE_CACHE.keys().next();
+      if (first.done) break;
+      ADVICE_CACHE.delete(first.value);
+    }
+  }
+
+  /** Copy text to the clipboard; resolves false when the browser refuses. */
+  async function copyToClipboard(text) {
+    const value = String(text == null ? '' : text);
+    try {
+      if (navigator && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(value);
+        return true;
+      }
+    } catch (err) {
+      /* fall through to the textarea trick */
+    }
+    try {
+      const area = document.createElement('textarea');
+      area.value = value;
+      area.setAttribute('readonly', 'readonly');
+      area.style.position = 'fixed';
+      area.style.left = '-9999px';
+      document.body.appendChild(area);
+      area.select();
+      const ok = document.execCommand && document.execCommand('copy');
+      document.body.removeChild(area);
+      return !!ok;
+    } catch (err) {
+      return false;
+    }
+  }
+
   /**
    * One suggestion.
    *
@@ -4032,7 +4272,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const issue = String(item.issue || '');
     const why = String(item.why || '');
     const busy = !!p.busy;
+    const applied = !!p.applied;
     const canDecide = state !== 'accepted' && state !== 'rejected';
+    // R76: the two columns are also a diff — deleted characters on the left,
+    // added ones on the right.
+    const diff = revised ? diffChars(quote, revised) : null;
     const KIND = {
       rhythm: '节奏', diction: '用词', pov: '视角', detail: '画面', dialogue: '对话',
       structure: '结构', character: '人物', logic: '逻辑', emotion: '情绪', redundancy: '冗余',
@@ -4042,6 +4286,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       {
         className: 'nw-adv',
         'data-state': state,
+        'data-applied': applied ? '1' : '0',
         'data-active': p.active ? '1' : '0',
         tabIndex: 0,
         role: 'group',
@@ -4064,13 +4309,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               'div',
               { className: 'nw-adv-side', 'data-kind': 'old' },
               h('span', { className: 'nw-adv-tag' }, NW.t('原文')),
-              h('div', { className: 'nw-adv-txt' }, quote),
+              h('div', { className: 'nw-adv-txt' }, diffNodes(diff.old, 'old')),
             ),
             h(
               'div',
               { className: 'nw-adv-side', 'data-kind': 'new' },
               h('span', { className: 'nw-adv-tag' }, NW.t('改后')),
-              h('div', { className: 'nw-adv-txt' }, revised),
+              h('div', { className: 'nw-adv-txt' }, diffNodes(diff.neu, 'new')),
             ),
           )
         : h(
@@ -4079,6 +4324,80 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             h('span', { className: 'nw-adv-tag' }, NW.t('原文')),
             h('div', { className: 'nw-adv-txt' }, quote),
           ),
+      // R76: what you can do with the rewrite, right under it. 替换 writes it
+      // into the manuscript (undoable for as long as that span still holds the
+      // replaced text); 复制 leaves the text alone.
+      revised
+        ? h(
+            'div',
+            { className: 'nw-adv-acts' },
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-adv-mini',
+                disabled: busy,
+                onClick: (ev) => {
+                  ev.stopPropagation();
+                  if (typeof p.onCopy === 'function') p.onCopy(item);
+                },
+              },
+              NW.icon('doc', { size: 11 }),
+              NW.t('复制'),
+            ),
+            applied
+              ? h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'nw-adv-mini',
+                    'data-kind': 'undo',
+                    disabled: busy,
+                    onClick: (ev) => {
+                      ev.stopPropagation();
+                      if (typeof p.onUndoApply === 'function') p.onUndoApply(item);
+                    },
+                  },
+                  NW.icon('refresh', { size: 11 }),
+                  NW.t('撤销替换'),
+                )
+              : h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'nw-adv-mini',
+                    'data-kind': 'apply',
+                    disabled: busy,
+                    onClick: (ev) => {
+                      ev.stopPropagation();
+                      if (typeof p.onApply === 'function') p.onApply(item);
+                    },
+                  },
+                  NW.icon('pencil', { size: 11 }),
+                  NW.t('替换到正文'),
+                ),
+            typeof p.onRegenerate === 'function'
+              ? h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'nw-adv-mini',
+                    disabled: busy,
+                    title: NW.t('拿这一版当起点，再要一版不同的'),
+                    onClick: (ev) => {
+                      ev.stopPropagation();
+                      p.onRegenerate(item);
+                    },
+                  },
+                  NW.icon('sparkle', { size: 11 }),
+                  NW.t('再改一版'),
+                )
+              : null,
+            Number(p.variant) > 1
+              ? h('span', { className: 'nw-adv-ver' }, NW.t('第 {0} 版', p.variant))
+              : null,
+          )
+        : null,
       issue ? h('div', { className: 'nw-adv-issue' }, issue) : null,
       !revised && advice ? h('div', { className: 'nw-adv-why' }, advice) : null,
       why ? h('div', { className: 'nw-adv-why' }, why) : null,
@@ -4283,6 +4602,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [model, setModel] = useState('');
     /** item.id → 'accepted' | 'rejected' for the current read. */
     const [decided, setDecided] = useState({});
+    /** R76: item.id → the span a 替换 created, so it can be undone. */
+    const [applied, setApplied] = useState({});
+    /** R76: the cards on screen came from the cache, not from a new model call. */
+    const [fromCache, setFromCache] = useState(false);
     /** item.id → the stored row id, so 撤销 can remove exactly what it created. */
     const madeRef = useRef({});
     const [savingId, setSavingId] = useState('');
@@ -4333,6 +4656,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         setBusy(true);
         setError('');
         setActiveId('');
+        setFromCache(false);
         try {
           // R34: failover. The advice panel is the surface most likely to sit
           // on an expensive model, so it is also the one most likely to hit a
@@ -4365,8 +4689,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             }
           }
           if (used) setError('');
-          setItems(Array.isArray(data && data.suggestions) ? data.suggestions : []);
+          const finalItems = Array.isArray(data && data.suggestions) ? data.suggestions : [];
+          setItems(finalItems);
           setModel(String((data && data.model) || ''));
+          // R76: remember this read so closing and reopening the column does not
+          // silently bill the same chapter twice.
+          if (finalItems.length) {
+            cachePut('dock|' + chapterId, {
+              items: finalItems,
+              model: String((data && data.model) || ''),
+              fp: textFingerprint(text),
+              at: Date.now(),
+            });
+          }
         } catch (err) {
           if (runRef.current !== token) return;
           setItems(null);
@@ -4378,7 +4713,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       // R74: `focus` is deliberately absent — the payload is read from
       // `focusRef` at call time, so a chip press does not rebuild the whole
       // callback (and, more importantly, does not capture yesterday's set).
-      [p.editorApi, p.settings],
+      // R76: `chapterId` joined the list because the result is cached per chapter.
+      [chapterId, p.editorApi, p.settings],
     );
 
     /**
@@ -4400,8 +4736,21 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       setActiveId('');
       setBusy(false);
       setDecided({});
+      setApplied({});
+      setFromCache(false);
       madeRef.current = {};
       runRef.current += 1;
+      // R76: reopening the column on an unchanged chapter shows the last read
+      // instead of an empty panel that costs another call to refill.
+      const api = p.editorApi && p.editorApi.current;
+      const text = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+      const hit = text ? cacheGet('dock|' + chapterId) : null;
+      if (hit && hit.fp === textFingerprint(text) && Array.isArray(hit.items) && hit.items.length) {
+        setItems(hit.items);
+        setModel(String(hit.model || ''));
+        setFromCache(true);
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [chapterId]);
 
     const reveal = useCallback(
@@ -4570,6 +4919,73 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [p.editorApi],
     );
 
+    // ---- R76: 复制 / 替换 / 撤销替换 -----------------------------------------
+    // Same contract as the selection window: 接受 still only records a decision,
+    // 替换 is an explicit second click that writes and can be undone while that
+    // span still holds what we wrote.
+    const copyItem = useCallback(
+      (item) => {
+        const value = String((item && (item.revised || item.example)) || '');
+        if (!value) return;
+        copyToClipboard(value).then((ok) => {
+          if (typeof p.onToast === 'function') {
+            p.onToast(ok ? NW.t('改后已经复制') : NW.t('复制失败，请手动选中'), ok ? 'ok' : 'warn');
+          }
+        });
+      },
+      [p.onToast],
+    );
+
+    const applyItem = useCallback(
+      (item) => {
+        const api = p.editorApi && p.editorApi.current;
+        if (!api || !item || typeof api.replaceRange !== 'function') return;
+        const revised = String(item.revised || item.example || '');
+        if (!revised) return;
+        const text = typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+        const quote = String(item.quote || '');
+        let s = Number(item.start);
+        let e = Number(item.end);
+        if (!(s >= 0 && e > s && text.slice(s, e) === quote)) {
+          const at = quote ? text.indexOf(quote) : -1;
+          if (at < 0) {
+            if (typeof p.onToast === 'function') p.onToast(NW.t('原文已经改动，替换不了这一处'), 'warn');
+            return;
+          }
+          s = at;
+          e = at + quote.length;
+        }
+        api.replaceRange(s, e, revised);
+        setApplied((prev) =>
+          Object.assign({}, prev, { [item.id]: { start: s, end: s + revised.length, before: quote, after: revised } }),
+        );
+        if (typeof p.onToast === 'function') p.onToast(NW.t('已替换，可以撤销'), 'ok');
+      },
+      [p.editorApi, p.onToast],
+    );
+
+    const undoApply = useCallback(
+      (item) => {
+        if (!item) return;
+        const rec = applied[item.id];
+        const api = p.editorApi && p.editorApi.current;
+        if (!rec || !api || typeof api.replaceRange !== 'function') return;
+        const text = typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+        if (text.slice(rec.start, rec.end) !== rec.after) {
+          if (typeof p.onToast === 'function') p.onToast(NW.t('正文已经改过，这一处撤销不了'), 'warn');
+          return;
+        }
+        api.replaceRange(rec.start, rec.end, rec.before);
+        setApplied((prev) => {
+          const next = Object.assign({}, prev);
+          delete next[item.id];
+          return next;
+        });
+        if (typeof p.onToast === 'function') p.onToast(NW.t('已撤销替换'), 'ok');
+      },
+      [applied, p.editorApi, p.onToast],
+    );
+
     const head = h(
       'div',
       { className: 'nw-suggest-head' },
@@ -4711,10 +5127,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             state: decided[item.id] || 'pending',
             active: activeId === item.id,
             busy: savingId === item.id,
+            applied: !!applied[item.id],
             onReveal: Number(item.start) >= 0 ? () => reveal(item) : null,
             onAccept: acceptItem,
             onReject: rejectItem,
             onUndo: undoItem,
+            onCopy: copyItem,
+            onApply: applyItem,
+            onUndoApply: undoApply,
           }),
         ),
         items.some((item) => Number(item.start) < 0)
@@ -4734,6 +5154,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             { className: 'nw-suggest-foot' },
             NW.ui.btn({ onClick: () => run(focus), disabled: busy, children: NW.t('重新审读') }),
             clearHighlights && activeId ? NW.ui.btn({ kind: 'ghost', onClick: clearHighlights, children: NW.t('取消高亮') }) : null,
+            // R76: the column can reopen with the last read already in it; say
+            // so, or the writer will wonder where the results came from.
+            fromCache ? h('span', { className: 'nw-suggest-cached' }, NW.t('上次的结果 · 没有重新计费')) : null,
             model ? h('span', { style: { fontSize: '11px', opacity: '.65', marginLeft: 'auto' } }, model) : null,
           )
         : null;
@@ -4839,6 +5262,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [decided, setDecided] = useState({});
     const [savingId, setSavingId] = useState('');
     const [model, setModel] = useState('');
+    /** R76: which take these cards are (1 = first read, 2+ = 再改一版). */
+    const [variant, setVariant] = useState(1);
+    /** R76: shows this read came from the local cache, not a new model call. */
+    const [fromCache, setFromCache] = useState(false);
+    /** R76: applied replacements, by item id → the span to undo. */
+    const [applied, setApplied] = useState({});
+    const variantRef = useRef(1);
     const madeRef = useRef({});
     const runRef = useRef(0);
 
@@ -4847,51 +5277,130 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       return api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
     }, [p.editorApi]);
 
-    const run = useCallback(async () => {
-      const token = runRef.current + 1;
-      runRef.current = token;
-      const text = getText();
-      const source = text.slice(selStart, selEnd);
-      if (!source.trim()) {
-        setError(NW.t('选中的文字已经不在这一章里了'));
-        setItems(null);
-        return;
-      }
-      setBusy(true);
-      setError('');
-      setActiveId('');
-      try {
-        const data = await NW.ai.reviseSelectionSafe({
-          text: source,
-          // Context only: the host is told to rewrite the selection, and the
-          // neighbouring sentences are there so the rewrite still joins up.
-          before: text.slice(Math.max(0, selStart - 240), selStart),
-          after: text.slice(selEnd, selEnd + 240),
-          onRetry: (candidate) => {
-            if (runRef.current === token) setError(NW.t('换用 {0} 重试…', candidate.label));
-          },
-        });
-        if (runRef.current !== token) return;
-        const list = Array.isArray(data && data.suggestions) ? data.suggestions : [];
-        // The host locates each quote *inside the selection*, so the offsets it
-        // returns are relative to it; shift them into chapter coordinates here.
-        setItems(
-          list.map((item) =>
-            Object.assign({}, item, {
-              start: Number(item.start) >= 0 ? selStart + Number(item.start) : -1,
-              end: Number(item.end) >= 0 ? selStart + Number(item.end) : -1,
-            }),
-          ),
-        );
-        setModel(String((data && data.model) || ''));
-      } catch (err) {
-        if (runRef.current !== token) return;
-        setItems(null);
-        setError(errText(err, '获取修改建议失败'));
-      } finally {
-        if (runRef.current === token) setBusy(false);
-      }
-    }, [getText, selStart, selEnd]);
+    const cacheKeyFor = useCallback(
+      (source) => `sel|${chapterId}|${selStart}|${selEnd}|${textFingerprint(source)}`,
+      [chapterId, selStart, selEnd],
+    );
+
+    /**
+     * R76: read the selection, painting each card as it lands.
+     *
+     * Three paths, in order: the local cache (no model call at all), the
+     * streaming route (cards appear one by one), and — only when the stream
+     * failed before producing anything — the unary route with model failover.
+     * `opts.previous` asks for a different take on the same words.
+     */
+    const run = useCallback(
+      async (opts) => {
+        const options = opts || {};
+        const token = runRef.current + 1;
+        runRef.current = token;
+        const text = getText();
+        const source = text.slice(selStart, selEnd);
+        if (!source.trim()) {
+          setError(NW.t('选中的文字已经不在这一章里了'));
+          setItems(null);
+          return;
+        }
+        const key = cacheKeyFor(source);
+        const previous = String(options.previous || '');
+
+        // Reopening the same window must not bill the model again.
+        if (!options.force && !previous) {
+          const hit = cacheGet(key);
+          if (hit && Array.isArray(hit.items) && hit.items.length) {
+            setItems(hit.items);
+            setModel(String(hit.model || ''));
+            setError('');
+            setBusy(false);
+            setFromCache(true);
+            return;
+          }
+        }
+
+        setFromCache(false);
+        setBusy(true);
+        setError('');
+        setActiveId('');
+        const nextVariant = previous ? variantRef.current + 1 : 1;
+        variantRef.current = nextVariant;
+        setVariant(nextVariant);
+
+        // Host offsets are relative to the selection; shift them into chapter
+        // coordinates exactly once, here.
+        const shift = (item) =>
+          Object.assign({}, item, {
+            start: Number(item.start) >= 0 ? selStart + Number(item.start) : -1,
+            end: Number(item.end) >= 0 ? selStart + Number(item.end) : -1,
+            variant: nextVariant,
+          });
+
+        const before = text.slice(Math.max(0, selStart - 240), selStart);
+        const after = text.slice(selEnd, selEnd + 240);
+        const streamed = [];
+        let result = null;
+        try {
+          if (typeof NW.ai.reviseSelectionStream === 'function') {
+            try {
+              result = await NW.ai.reviseSelectionStream(
+                { text: source, before: before, after: after, previous: previous },
+                {
+                  onEvent: (event) => {
+                    if (runRef.current !== token) return;
+                    if (!event || event.type !== 'suggestion' || !event.item) return;
+                    streamed.push(shift(event.item));
+                    setItems(streamed.slice());
+                  },
+                },
+              );
+            } catch (streamError) {
+              if (runRef.current !== token) return;
+              if (streamed.length) {
+                // Half a loaf is still bread: keep what already arrived.
+                setError(NW.t('流式读到一半断了，下面是收到的部分'));
+                result = { suggestions: [], model: '', partial: true };
+              } else {
+                result = null;
+              }
+            }
+          }
+          if (!result) {
+            // The unary route is the one with model failover, so a dead default
+            // model still ends with an answer instead of an error card.
+            setItems(null);
+            const fallback = await NW.ai.reviseSelectionSafe({
+              text: source,
+              before: before,
+              after: after,
+              previous: previous,
+              onRetry: (candidate) => {
+                if (runRef.current === token) setError(NW.t('换用 {0} 重试…', candidate.label));
+              },
+            });
+            if (runRef.current !== token) return;
+            const list = Array.isArray(fallback && fallback.suggestions) ? fallback.suggestions : [];
+            result = { suggestions: list, model: String((fallback && fallback.model) || '') };
+          }
+          if (runRef.current !== token) return;
+          const finalList = streamed.length
+            ? streamed
+            : (Array.isArray(result.suggestions) ? result.suggestions : []).map(shift);
+          setItems(finalList);
+          setModel(String(result.model || ''));
+          // Only a first read is a cache candidate: 再改一版 is a different take.
+          if (!previous && finalList.length) {
+            cachePut(key, { items: finalList, model: String(result.model || ''), at: Date.now() });
+          }
+        } catch (err) {
+          if (runRef.current !== token) return;
+          setItems(null);
+          setError(errText(err, '获取修改建议失败'));
+        } finally {
+          if (runRef.current === token) setBusy(false);
+        }
+      },
+      [cacheKeyFor, getText, selStart, selEnd],
+    );
 
     // Opening the window *is* the request: run immediately, and start clean on
     // a new range so yesterday's cards cannot sit under today's selection.
@@ -4902,8 +5411,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       setActiveId('');
       setDecided({});
       setModel('');
+      setApplied({});
+      setFromCache(false);
+      variantRef.current = 1;
+      setVariant(1);
       madeRef.current = {};
-      run();
+      run({});
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selStart, selEnd, chapterId]);
 
@@ -4926,14 +5439,98 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         setActiveId(item.id);
         const api = p.editorApi && p.editorApi.current;
         if (!api) return;
-        const s = Number(item.start);
-        const e = Number(item.end);
+        // R76: after 替换 the original span no longer exists; point at the text
+        // that replaced it instead of at whatever moved into those offsets.
+        const appliedSpan = applied[item.id];
+        const s = appliedSpan ? appliedSpan.start : Number(item.start);
+        const e = appliedSpan ? appliedSpan.end : Number(item.end);
         if (s >= 0 && typeof api.setHighlights === 'function') {
           api.setHighlights([{ start: s, end: e, id: item.id, active: true }]);
         }
         if (s >= 0 && typeof api.centerRange === 'function') api.centerRange(s, e);
       },
-      [p.editorApi],
+      [applied, p.editorApi],
+    );
+
+    /**
+     * R76: 替换到正文 — the one action that writes.
+     *
+     * 接受 still only records a decision. This is an explicit second click, and
+     * it keeps enough state to put the original text back for as long as that
+     * span still holds what we wrote.
+     */
+    const applyItem = useCallback(
+      (item) => {
+        const api = p.editorApi && p.editorApi.current;
+        if (!api || !item) return;
+        const revised = String(item.revised || '');
+        if (!revised || typeof api.replaceRange !== 'function') return;
+        const text = getText();
+        let s = Number(item.start);
+        let e = Number(item.end);
+        const quote = String(item.quote || '');
+        if (!(s >= 0 && e > s && text.slice(s, e) === quote)) {
+          const at = quote ? text.indexOf(quote) : -1;
+          if (at < 0) {
+            if (typeof p.onToast === 'function') p.onToast(NW.t('原文已经改动，替换不了这一处'), 'warn');
+            return;
+          }
+          s = at;
+          e = at + quote.length;
+        }
+        api.replaceRange(s, e, revised);
+        setApplied((prev) =>
+          Object.assign({}, prev, { [item.id]: { start: s, end: s + revised.length, before: quote, after: revised } }),
+        );
+        if (typeof p.onToast === 'function') p.onToast(NW.t('已替换，可以撤销'), 'ok');
+      },
+      [getText, p.editorApi, p.onToast],
+    );
+
+    const undoApply = useCallback(
+      (item) => {
+        if (!item) return;
+        const rec = applied[item.id];
+        const api = p.editorApi && p.editorApi.current;
+        if (!rec || !api || typeof api.replaceRange !== 'function') return;
+        const text = getText();
+        if (text.slice(rec.start, rec.end) !== rec.after) {
+          // The writer edited on top of it: blindly restoring would eat their
+          // work, so say so instead of guessing.
+          if (typeof p.onToast === 'function') p.onToast(NW.t('正文已经改过，这一处撤销不了'), 'warn');
+          return;
+        }
+        api.replaceRange(rec.start, rec.end, rec.before);
+        setApplied((prev) => {
+          const next = Object.assign({}, prev);
+          delete next[item.id];
+          return next;
+        });
+        if (typeof p.onToast === 'function') p.onToast(NW.t('已撤销替换'), 'ok');
+      },
+      [applied, getText, p.editorApi, p.onToast],
+    );
+
+    const copyItem = useCallback(
+      (item) => {
+        const value = String((item && item.revised) || '');
+        if (!value) return;
+        copyToClipboard(value).then((ok) => {
+          if (typeof p.onToast === 'function') {
+            p.onToast(ok ? NW.t('改后已经复制') : NW.t('复制失败，请手动选中'), ok ? 'ok' : 'warn');
+          }
+        });
+      },
+      [p.onToast],
+    );
+
+    // R76: 再改一版 — same words, the version just read as the thing to avoid.
+    const regenerate = useCallback(
+      (item) => {
+        if (!item) return;
+        run({ previous: String(item.revised || item.quote || ''), force: true });
+      },
+      [run],
     );
 
     const revealRow = useCallback(
@@ -5032,8 +5629,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       }),
     );
 
+    const hasCards = Array.isArray(items) && items.length > 0;
     let body;
-    if (busy) {
+    if (busy && !hasCards) {
       body = h(
         'div',
         { className: 'nw-selwin-empty' },
@@ -5041,32 +5639,50 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         h('span', null, NW.t('正在读选中的这段…')),
         h('span', { style: { fontSize: '12px', opacity: '.7' } }, NW.t('只改这一段，前后文只用来保证接得上。')),
       );
-    } else if (error) {
+    } else if (error && !hasCards) {
       body = h(
         'div',
         { className: 'nw-selwin-empty' },
         h('span', { style: { color: 'var(--dsw-alias-state-error-primary)' } }, error),
-        NW.ui.btn({ kind: 'primary', onClick: run, children: NW.t('重试') }),
+        NW.ui.btn({ kind: 'primary', onClick: () => run({ force: true }), children: NW.t('重试') }),
       );
     } else if (!items) {
       body = h(
         'div',
         { className: 'nw-selwin-empty' },
         NW.icon('sparkle', { size: 24 }),
-        NW.ui.btn({ kind: 'primary', onClick: run, children: NW.t('开始改写') }),
+        NW.ui.btn({ kind: 'primary', onClick: () => run({ force: true }), children: NW.t('开始改写') }),
       );
-    } else if (items.length === 0) {
+    } else if (!hasCards && !busy) {
       body = h(
         'div',
         { className: 'nw-selwin-empty' },
         NW.icon('success', { size: 24 }),
         h('span', null, NW.t('这段放着就行，模型没找到值得改的地方。')),
-        NW.ui.btn({ onClick: run, children: NW.t('再读一次') }),
+        NW.ui.btn({ onClick: () => run({ force: true }), children: NW.t('再读一次') }),
       );
     } else {
+      // R76: cards are painted as they stream in, so the body must keep showing
+      // them while the request is still running — the spinner only owns the
+      // empty case above.
       body = h(
         'div',
         { className: 'nw-selwin-body' },
+        busy
+          ? h(
+              'div',
+              { className: 'nw-selwin-progress' },
+              NW.ui.spinner(),
+              h('span', null, NW.t('还在读…后面可能还有')),
+            )
+          : null,
+        error
+          ? h(
+              'div',
+              { className: 'nw-selwin-progress', 'data-kind': 'warn' },
+              h('span', null, error),
+            )
+          : null,
         items.map((item) =>
           h(AdviceCard, {
             key: item.id,
@@ -5074,10 +5690,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             state: decided[item.id] || 'pending',
             active: activeId === item.id,
             busy: savingId === item.id,
+            applied: !!applied[item.id],
+            variant: item.variant,
             onReveal: reveal,
             onAccept: acceptItem,
             onReject: rejectItem,
             onUndo: undoItem,
+            onCopy: copyItem,
+            onApply: applyItem,
+            onUndoApply: undoApply,
+            onRegenerate: regenerate,
           }),
         ),
       );
@@ -5108,8 +5730,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       h(
         'div',
         { className: 'nw-selwin-foot' },
-        items && items.length > 0
-          ? NW.ui.btn({ onClick: run, disabled: busy, children: NW.t('再改一次') })
+        hasCards
+          ? NW.ui.btn({
+              onClick: () => run({ force: true }),
+              disabled: busy,
+              children: NW.t('重新读一次'),
+            })
+          : null,
+        fromCache
+          ? h('span', { className: 'nw-selwin-cached' }, NW.t('上次的结果 · 没有重新计费'))
           : null,
         h('span', { style: { flex: '1 1 auto' } }),
         model ? h('span', null, model) : null,

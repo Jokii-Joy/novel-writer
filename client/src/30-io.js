@@ -1012,7 +1012,106 @@
     if (body.before) payload.before = String(body.before);
     if (body.after) payload.after = String(body.after);
     if (body.note) payload.note = String(body.note);
+    // R76: 「再改一版」 — the version the writer just read, so the model can be
+    // told to come back with something different.
+    if (body.previous) payload.previous = String(body.previous);
     return api('revise.selection', payload);
+  }
+
+  /**
+   * R76: the same rewrite as a stream of NDJSON events.
+   *
+   * `handlers.onEvent` receives `{type:'progress'|'suggestion'|'done'|'error'}`;
+   * the promise resolves with the collected list once the stream ends, so the
+   * caller can cache the result and still paint each card as it arrives.
+   *
+   * A browser without a readable body (or a proxy that buffers it) still works:
+   * the whole response is read and split on newlines.
+   */
+  async function reviseSelectionStream(input, handlers) {
+    const body = input && typeof input === 'object' ? input : {};
+    const onEvent = handlers && typeof handlers.onEvent === 'function' ? handlers.onEvent : function () {};
+    const payload = { text: String(body.text == null ? '' : body.text) };
+    if (body.before) payload.before = String(body.before);
+    if (body.after) payload.after = String(body.after);
+    if (body.note) payload.note = String(body.note);
+    if (body.previous) payload.previous = String(body.previous);
+
+    const url = apiUrl('revise.selection.stream');
+    let response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        credentials: 'same-origin',
+      });
+    } catch (err) {
+      throw new Error('网络请求失败：' + (err && err.message ? err.message : String(err)));
+    }
+    if (!response || !response.ok) throw new Error('接口不可用：HTTP ' + (response ? response.status : '?'));
+
+    const suggestions = [];
+    let model = '';
+    let failure = null;
+    const handleLine = (line) => {
+      const text = String(line || '').trim();
+      if (!text) return;
+      let event = null;
+      try {
+        event = JSON.parse(text);
+      } catch (err) {
+        return;
+      }
+      if (!event || typeof event !== 'object') return;
+      if (event.type === 'suggestion' && event.item) {
+        suggestions.push(event.item);
+        try {
+          onEvent(event);
+        } catch (err) {
+          /* a broken listener must not kill the stream */
+        }
+        return;
+      }
+      if (event.type === 'done') {
+        model = String(event.model || '');
+        return;
+      }
+      if (event.type === 'error') {
+        failure = new Error(String(event.message || '模型调用失败'));
+        return;
+      }
+      try {
+        onEvent(event);
+      } catch (err) {
+        /* ignore */
+      }
+    };
+
+    if (response.body && typeof response.body.getReader === 'function') {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        // eslint-disable-next-line no-await-in-loop
+        const step = await reader.read();
+        if (step.done) break;
+        buffer += decoder.decode(step.value, { stream: true });
+        let nl = buffer.indexOf('\n');
+        while (nl >= 0) {
+          handleLine(buffer.slice(0, nl));
+          buffer = buffer.slice(nl + 1);
+          nl = buffer.indexOf('\n');
+        }
+      }
+      handleLine(buffer);
+    } else {
+      const text = await response.text();
+      String(text).split('\n').forEach(handleLine);
+    }
+
+    if (failure && suggestions.length === 0) throw failure;
+    return { suggestions: suggestions, model: model };
   }
 
   // ---- LAN sync / pairing (R34) ---------------------------------------------
@@ -1150,6 +1249,7 @@
     proofread: proofread,
     revise: revise,
     reviseSelection: reviseSelection,
+    reviseSelectionStream: reviseSelectionStream,
     selftest: selftest,
     // R34: failover-aware variants. `proofread` / `revise` stay bare so the
     // dialogs that manage their own picker keep exact control.

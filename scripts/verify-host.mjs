@@ -78,6 +78,13 @@ const fakeReply = JSON.stringify([
 ]);
 
 // R73: the selection rewrite answers with a replacement instead of a diff.
+// R76: the streaming route asks for JSONL, one object per line.
+const jsonlReply = [
+  JSON.stringify({ quote: '屋子里很安静', revised: '屋里静得能听见自己的心跳', issue: '交代代替画面', why: '声音更近', kind: 'detail', severity: 'high' }),
+  JSON.stringify({ quote: '像在等他回来', revised: '像是他没走时留在那儿的', issue: '比喻顺拐', why: '换成属于屋子的细节', kind: 'diction', severity: 'medium' }),
+].join('\n');
+
+// R73: the unary rewrite route answers with a JSON array.
 const rewriteReply = JSON.stringify([
   { quote: '屋子里很安静', revised: '屋里静得能听见自己的心跳', issue: '交代代替画面', why: '声音更近', kind: 'detail', severity: 'high' },
   { quote: '像在等他回来', revised: '像是他没走时留在那儿的', issue: '比喻顺拐', why: '换成属于屋子的细节', kind: 'diction', severity: 'medium' },
@@ -108,8 +115,13 @@ const fakeLlm = {
     // so this fake also guards the wire-shape normalization.
     const content = messageText(request.messages && request.messages[0]);
     // R73: the rewrite prompt frames the selection between 选中开始/选中结束,
-    // so the same stub can answer both routes.
-    const reply = content.includes('选中开始') ? rewriteReply : fakeReply;
+    // so the same stub can answer both routes. R76: the streaming prompt asks
+    // for JSONL instead of an array.
+    const reply = content.includes('每行一个 JSON 对象')
+      ? jsonlReply
+      : content.includes('选中开始')
+        ? rewriteReply
+        : fakeReply;
     // Two text deltas to prove the collector concatenates them.
     yield { type: 'text-delta', text: '```json\n' };
     yield { type: 'text-delta', text: reply.slice(0, 17) };
@@ -466,6 +478,52 @@ const none = await call('revise', { text: proofreadText, focus: '' });
 void none;
 const nonePrompt = messageText(lastRequest && lastRequest.messages && lastRequest.messages[0]);
 check('不选角度时不带任何角度提示', !nonePrompt.includes('本次只看'));
+
+// ---------------------------------------------------------------------------
+// 3d. revise.selection.stream (R76 流式)
+// ---------------------------------------------------------------------------
+console.log('\n[3d] POST revise.selection.stream');
+const streamRes = await call('revise.selection.stream', {
+  text: '他把门推开，屋子里很安静。桌上那本书还摊着，像在等他回来。',
+  before: '天已经黑了。',
+  after: '',
+});
+const streamLines = String(streamRes.body || '')
+  .split('\n')
+  .map((line) => line.trim())
+  .filter(Boolean)
+  .map((line) => {
+    try {
+      return JSON.parse(line);
+    } catch (err) {
+      return null;
+    }
+  });
+check('200 + NDJSON content-type', streamRes.statusCode === 200 && String(streamRes.headers && streamRes.headers['content-type']).includes('application/x-ndjson'));
+check('每行都是合法 JSON', streamLines.every((row) => row && typeof row === 'object'), streamLines.length + ' 行');
+const streamSuggestions = streamLines.filter((row) => row && row.type === 'suggestion');
+const streamDone = streamLines.filter((row) => row && row.type === 'done');
+check('收到 2 条 suggestion 事件', streamSuggestions.length === 2, `${streamSuggestions.length} 条`);
+check('最后有 done 事件并带 model', streamDone.length === 1 && streamDone[0].model === 'stub-provider/stub-large', JSON.stringify(streamDone));
+check('suggestion 在 done 之前', streamLines.findIndex((row) => row && row.type === 'done') > streamLines.map((row) => row && row.type).lastIndexOf('suggestion'));
+const streamText = '他把门推开，屋子里很安静。桌上那本书还摊着，像在等他回来。';
+check(
+  '流式条目的 start/end 落在选中文字里',
+  streamSuggestions.every((row) => row.item && streamText.slice(row.item.start, row.item.end) === row.item.quote),
+);
+check('流式条目带 revised', streamSuggestions.every((row) => typeof row.item.revised === 'string' && row.item.revised.length > 0));
+
+// ---------------------------------------------------------------------------
+// 3e. 再改一版：previous 进了 prompt
+// ---------------------------------------------------------------------------
+console.log('\n[3e] POST revise.selection {previous}');
+await call('revise.selection', {
+  text: streamText,
+  previous: '屋里静得能听见自己的心跳',
+});
+const prevPrompt = messageText(lastRequest && lastRequest.messages && lastRequest.messages[0]);
+check('prompt 里带上了上一版', prevPrompt.includes('屋里静得能听见自己的心跳'));
+check('并且明确不要重复它', prevPrompt.includes('不要重复它'));
 
 // ---------------------------------------------------------------------------
 // 4. export.build docx
