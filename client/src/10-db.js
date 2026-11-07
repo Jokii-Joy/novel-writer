@@ -17,8 +17,11 @@
   // ---------------------------------------------------------------------------
 
   const DB_NAME = 'novel-writer';
-  const DB_VERSION = 3;
-  const STORES = ['novels', 'chapters', 'versions', 'trash', 'settings', 'notes', 'marks'];
+  // R73: 4 adds `revisions` — the 修改建议 the writer accepted. It is a sibling
+  // of `marks` (a record *about* a range of words, never an edit to the text),
+  // so an old database upgrades in place without touching existing rows.
+  const DB_VERSION = 4;
+  const STORES = ['novels', 'chapters', 'versions', 'trash', 'settings', 'notes', 'marks', 'revisions'];
   const VERSION_LIMIT = 50;
   const SETTINGS_KEY = 'app';
   const ENC_PREFIX = 'enc:v1:';
@@ -215,6 +218,15 @@
           // in place without touching existing rows.
           if (!db.objectStoreNames.contains('marks')) {
             const store = db.createObjectStore('marks', { keyPath: 'id' });
+            store.createIndex('byChapterId', 'chapterId', { unique: false });
+            store.createIndex('byNovelId', 'novelId', { unique: false });
+          }
+          // R73: 已接收的修改建议. Same shape of record as a mark — it points at a
+          // range of the chapter — but it is the *history of advice the writer
+          // said yes to*, so it needs its own store: deleting a mark must not
+          // delete an accepted suggestion, and vice versa.
+          if (!db.objectStoreNames.contains('revisions')) {
+            const store = db.createObjectStore('revisions', { keyPath: 'id' });
             store.createIndex('byChapterId', 'chapterId', { unique: false });
             store.createIndex('byNovelId', 'novelId', { unique: false });
           }
@@ -1512,7 +1524,137 @@
     return ops.length;
   }
 
-  // --------------------------------- public ----------------------------------
+  // ---------------------------------------------------------------------------
+  // 已接收的修改建议 (R73)
+  //
+  // The advice column and the selection window both end with a decision: 接受 or
+  // 拒绝. Only the accepted half is worth a row — a rejected suggestion has
+  // served its purpose the moment the writer says no, and keeping it would turn
+  // the store into a log of everything an editor ever said.
+  //
+  // A row is *not* a replacement: accepting means "this edit is right, I will
+  // make it", so the manuscript is never rewritten behind the writer's back.
+  // The row records the words it talked about, the rewritten text the model
+  // offered, and the advice itself — enough to reopen the case weeks later.
+  // ---------------------------------------------------------------------------
+
+  function cleanRevision(input) {
+    const data = input || {};
+    const chapterId = String(data.chapterId || '');
+    if (!chapterId) return null;
+    const quote = String(data.quote == null ? '' : data.quote).slice(0, 600);
+    if (!quote.trim()) return null;
+    const start = Math.max(0, Math.round(Number(data.start) || 0));
+    const end = Math.max(start, Math.round(Number(data.end) || 0));
+    return {
+      chapterId: chapterId,
+      novelId: data.novelId ? String(data.novelId) : '',
+      start: start,
+      end: end,
+      quote: quote,
+      // 改后的文字. Empty when the model only advised instead of rewriting
+      // ("这一段节奏拖着" has no drop-in replacement); the card renders what it has.
+      revised: String(data.revised == null ? '' : data.revised).slice(0, 600),
+      issue: String(data.issue == null ? '' : data.issue).slice(0, 200),
+      why: String(data.why == null ? '' : data.why).slice(0, 200),
+      advice: String(data.advice == null ? '' : data.advice).slice(0, 400),
+      kind: String(data.kind == null ? '' : data.kind).slice(0, 24),
+      severity: String(data.severity == null ? '' : data.severity).slice(0, 12),
+      // 'selection' = asked for by selecting words, 'chapter' = the dock's
+      // whole-chapter read. Kept because the two read differently in the list.
+      source: String(data.source || 'chapter').slice(0, 16),
+      createdAt: Number(data.createdAt) || now(),
+    };
+  }
+
+  async function listRevisions(chapterId) {
+    let rows;
+    if (chapterId != null && String(chapterId)) {
+      rows = await readIndex('revisions', 'byChapterId', String(chapterId));
+    } else {
+      rows = await readAll('revisions');
+    }
+    return (rows || [])
+      .filter(function (row) {
+        return row && row.id;
+      })
+      .sort(function (a, b) {
+        return (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0);
+      });
+  }
+
+  async function createRevision(input) {
+    const clean = cleanRevision(input);
+    if (!clean) return undefined;
+    const stamp = now();
+    const wanted = input && input.id ? String(input.id) : '';
+    const row = Object.assign({ id: wanted || uid('rev'), updatedAt: stamp }, clean);
+    if (!row.createdAt) row.createdAt = stamp;
+    const ok = await writeBatch([{ store: 'revisions', type: 'put', value: row }]);
+    if (!ok) throw new Error('保存修改建议失败');
+    notify();
+    return row;
+  }
+
+  async function deleteRevision(id) {
+    if (!id) return false;
+    const ok = await writeBatch([{ store: 'revisions', type: 'delete', key: String(id) }]);
+    if (!ok) return false;
+    notify();
+    return true;
+  }
+
+  /**
+   * Keeps accepted suggestions pinned to the words they were accepted on.
+   *
+   * Same contract as `shiftMarksForEdit`: a row wholly inside the replaced
+   * middle is dropped (the sentence it described is gone), a row that merely
+   * moved is shifted, and a row that overlaps an edge keeps whatever survived.
+   */
+  async function shiftRevisionsForEdit(chapterId, diff) {
+    const id = String(chapterId || '');
+    const d = diff || {};
+    if (!id) return 0;
+    const head = Math.max(0, Number(d.head) || 0);
+    const oldMid = Math.max(0, Number(d.oldMid) || 0);
+    const newMid = Math.max(0, Number(d.newMid) || 0);
+    if (!oldMid && !newMid) return 0;
+    const delta = newMid - oldMid;
+    const rows = await listRevisions(id);
+    const ops = [];
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i];
+      const start = Number(row.start) || 0;
+      const end = Number(row.end) || 0;
+      if (end <= head) continue; // wholly before the edit
+      if (start >= head + oldMid) {
+        if (delta) {
+          ops.push({
+            store: 'revisions',
+            type: 'put',
+            value: Object.assign({}, row, { start: start + delta, end: end + delta, updatedAt: now() }),
+          });
+        }
+        continue;
+      }
+      const nextStart = start <= head ? start : head + newMid;
+      const nextEnd = end >= head + oldMid ? end + delta : head + newMid;
+      if (nextEnd <= nextStart) {
+        ops.push({ store: 'revisions', type: 'delete', key: row.id });
+      } else {
+        ops.push({
+          store: 'revisions',
+          type: 'put',
+          value: Object.assign({}, row, { start: nextStart, end: nextEnd, updatedAt: now() }),
+        });
+      }
+    }
+    if (!ops.length) return 0;
+    await writeBatch(ops);
+    notify();
+    return ops.length;
+  }
+
 
   function subscribe(fn) {
     if (typeof fn !== 'function') return function () {};
@@ -1565,6 +1707,9 @@
         : await getSettings();
     const notes = await readAll('notes');
     const marks = await readAll('marks');
+    // R73: accepted advice travels with the backup — it is part of the writer's
+    // thinking about the book, not a transient UI state.
+    const revisions = await readAll('revisions');
     return {
       novels: novels || [],
       chapters: chapters || [],
@@ -1573,6 +1718,7 @@
       settings: settings || {},
       notes: notes || [],
       marks: marks || [],
+      revisions: revisions || [],
     };
   }
 
@@ -1824,6 +1970,10 @@
     updateMark: updateMark,
     deleteMark: deleteMark,
     shiftMarksForEdit: shiftMarksForEdit,
+    listRevisions: listRevisions,
+    createRevision: createRevision,
+    deleteRevision: deleteRevision,
+    shiftRevisionsForEdit: shiftRevisionsForEdit,
     dump: dump,
     replaceAll: replaceAll,
     encryptAll: encryptAll,

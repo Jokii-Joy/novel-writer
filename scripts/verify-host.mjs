@@ -77,6 +77,15 @@ const fakeReply = JSON.stringify([
   { original: '奇怪的书阿', replacement: '奇怪的书啊', reason: '句末语气词应为「啊」', type: 'typo' },
 ]);
 
+// R73: the selection rewrite answers with a replacement instead of a diff.
+const rewriteReply = JSON.stringify([
+  { quote: '屋子里很安静', revised: '屋里静得能听见自己的心跳', issue: '交代代替画面', why: '声音更近', kind: 'detail', severity: 'high' },
+  { quote: '像在等他回来', revised: '像是他没走时留在那儿的', issue: '比喻顺拐', why: '换成属于屋子的细节', kind: 'diction', severity: 'medium' },
+]);
+
+/** Last request the stub model saw — lets a test read the prompt we built. */
+let lastRequest = null;
+
 const fakeLlm = {
   async listProviders() {
     return [{ id: 'stub-provider', name: 'Stub Provider' }];
@@ -94,13 +103,17 @@ const fakeLlm = {
     throw new Error('provider not found');
   },
   async *stream(request) {
+    lastRequest = request;
     // Real Host messages carry content as [{type:'text',text}]; accept both shapes
     // so this fake also guards the wire-shape normalization.
     const content = messageText(request.messages && request.messages[0]);
+    // R73: the rewrite prompt frames the selection between 选中开始/选中结束,
+    // so the same stub can answer both routes.
+    const reply = content.includes('选中开始') ? rewriteReply : fakeReply;
     // Two text deltas to prove the collector concatenates them.
     yield { type: 'text-delta', text: '```json\n' };
-    yield { type: 'text-delta', text: fakeReply.slice(0, 17) };
-    yield { type: 'text-delta', text: fakeReply.slice(17) + '\n```\n以上。' };
+    yield { type: 'text-delta', text: reply.slice(0, 17) };
+    yield { type: 'text-delta', text: reply.slice(17) + '\n```\n以上。' };
     yield { type: 'finish', reason: { kind: 'stop' } };
     void content;
   },
@@ -404,6 +417,55 @@ check(
   '逐对象兜底解析（数组括号被截断）',
   ai.parseSuggestionJson('{"original":"甲","replacement":"乙","reason":"r","type":"punct"}').length === 1,
 );
+
+// ---------------------------------------------------------------------------
+// 3b. revise.selection (R73 选中改写)
+// ---------------------------------------------------------------------------
+console.log('\n[3b] POST revise.selection');
+const selText = '他把门推开，屋子里很安静。桌上那本书还摊着，像在等他回来。';
+const selRes = await call('revise.selection', {
+  text: selText,
+  before: '天已经黑了。',
+  after: '后来他再没提起过那天。',
+});
+check('ok === true', selRes.json && selRes.json.ok === true, JSON.stringify(selRes.json).slice(0, 160));
+const selData = (selRes.json && selRes.json.data) || {};
+check('解析出 2 条改写', Array.isArray(selData.suggestions) && selData.suggestions.length === 2, `实际 ${(selData.suggestions || []).length}`);
+check(
+  '每条都带 revise 成品',
+  (selData.suggestions || []).every((s) => typeof s.revised === 'string' && s.revised.length > 0),
+);
+check(
+  'start/end 落在选中文字的真实位置',
+  (selData.suggestions || []).every((s) => selText.slice(s.start, s.end) === s.quote),
+);
+check('按重要度排序（high 在前）', (selData.suggestions || [])[0] && (selData.suggestions || [])[0].severity === 'high');
+check('回填 model', selData.model === 'stub-provider/stub-large', selData.model);
+check('id 前缀是 s', (selData.suggestions || []).every((s) => /^s\d+$/.test(s.id)));
+const selEmpty = await call('revise.selection', { text: '   ' });
+check(
+  '空选区 → ok:false / bad-request',
+  selEmpty.json && selEmpty.json.ok === false && selEmpty.json.error && selEmpty.json.error.code === 'bad-request',
+  JSON.stringify(selEmpty.json),
+);
+
+// ---------------------------------------------------------------------------
+// 3c. revise 多角度 (R74)
+// ---------------------------------------------------------------------------
+console.log('\n[3c] POST revise {focus:"rhythm,diction"}');
+const multi = await call('revise', { text: proofreadText, focus: 'rhythm,diction' });
+check('ok === true', multi.json && multi.json.ok === true, JSON.stringify(multi.json).slice(0, 160));
+const multiPrompt = messageText(lastRequest && lastRequest.messages && lastRequest.messages[0]);
+check('「节奏」的提示进了 prompt', multiPrompt.includes('本次只看节奏'));
+check('「语言」的提示进了 prompt', multiPrompt.includes('本次只看语言'));
+const single = await call('revise', { text: proofreadText, focus: 'rhythm' });
+void single;
+const singlePrompt = messageText(lastRequest && lastRequest.messages && lastRequest.messages[0]);
+check('单选时只有那一条提示', singlePrompt.includes('本次只看节奏') && !singlePrompt.includes('本次只看语言'));
+const none = await call('revise', { text: proofreadText, focus: '' });
+void none;
+const nonePrompt = messageText(lastRequest && lastRequest.messages && lastRequest.messages[0]);
+check('不选角度时不带任何角度提示', !nonePrompt.includes('本次只看'));
 
 // ---------------------------------------------------------------------------
 // 4. export.build docx

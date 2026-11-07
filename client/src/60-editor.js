@@ -743,6 +743,29 @@
   box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
 }
 
+/* R73：选中文字后浮出的小方钮。一个按钮、一句话，落在指针松开处的右下角。
+   它不压在选中的字上（那正是 R53 撤掉选字弹条的原因），选中一消失就自己走。 */
+.nw-selbtn{
+  position:absolute;z-index:var(--nw-z-float);
+  display:inline-flex;align-items:center;gap:5px;
+  height:28px;padding:0 10px;
+  border-radius:8px;
+  border:1px solid var(--nw-line-strong);
+  background:var(--nw-panel);
+  color:var(--nw-fg);
+  box-shadow:var(--nw-shadow-2);
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);font-weight:600;
+  cursor:pointer;white-space:nowrap;
+  animation:nw-fade-in .1s var(--nw-ease, ease) both;
+  transition:border-color var(--nw-dur) ease, background var(--nw-dur) ease;
+}
+.nw-selbtn:hover{
+  border-color:var(--nw-brand);
+  background:color-mix(in srgb, var(--nw-brand) 8%, var(--nw-panel));
+}
+.nw-selbtn:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
+.nw-selbtn .nw-selbtn-txt{line-height:1;}
+
 /* caret measuring mirror: same box, never painted */
 .nw-caret{
   position:absolute;left:0;top:0;width:100%;height:auto;overflow:visible;
@@ -1120,6 +1143,12 @@
     const [markMenu, setMarkMenu] = React.useState(null);
     const markMenuRef = React.useRef(null);
     markMenuRef.current = markMenu;
+    // R73：「选中文字 → 修改建议」的那颗小钮。R53 之所以把选字弹条撤掉，是因为
+    // 一条三按钮的横条压在正在选的字上面；这一颗只有一个按钮，落在指针松开处的
+    // 右下角，选中一消失它就自己走，所以不需要任何关闭动作。
+    const [selBtn, setSelBtn] = React.useState(null);
+    const selBtnRef = React.useRef(null);
+    selBtnRef.current = selBtn;
     /** 页边批注签的容器（.nw-mark-gutter），由 paintGutter() 直接填 DOM。 */
     const gutterRef = React.useRef(null);
 
@@ -2425,6 +2454,9 @@
       paintFocus(view, focusOrigin);
       rebuildHighlights();
       emitSelection();
+      // R73: the viewport may have just moved (typewriter centring after the
+      // drag-release): keep the 修改建议 button glued to the selected words.
+      reseatSelBtn();
     }
 
     /**
@@ -2948,6 +2980,152 @@
       setMarkMenu((cur) => (cur ? null : cur));
     }
 
+    // ------------------------------------------------- 选中 → 修改建议 (R73) --
+    /**
+     * Where the button should sit for a given character offset: just under the
+     * line that offset is on, inside `.nw-surface` coordinates.
+     *
+     * Measured from the mirror rather than from the pointer because the pointer
+     * is not where the selection ends in a corner case that actually happens —
+     * the typewriter re-centres the page the moment a drag ends, and a button
+     * pinned to the old pointer position would hang over unrelated words.
+     * Returns null when there is nothing to measure (no textarea/mirror).
+     */
+    function selBtnAnchor(offset) {
+      const v = resolveScroller(false);
+      const sc = v && v.el;
+      const mir = caretRef.current;
+      const surf = surfaceRef.current;
+      if (!sc || !mir || !surf) return null;
+      const m = measureCaret(offset, v);
+      if (!m) return null;
+      const mirRect = mir.getBoundingClientRect();
+      const surfRect = surf.getBoundingClientRect();
+      const scrollTop = sc.scrollTop || 0;
+      const vx = mirRect.left + (Number(m.left) || 0);
+      const vy = (v.kind === 'document'
+        ? m.top - scrollTop
+        : m.top - scrollTop + sc.getBoundingClientRect().top) + (Number(m.height) || 18);
+      return { x: vx - surfRect.left + 6, y: vy - surfRect.top + 8, w: surfRect.width, h: surfRect.height };
+    }
+
+    /** Clamps an anchor into the paper and commits it to state. */
+    function applySelBtnAnchor(start, end, anchor) {
+      if (!anchor) return false;
+      const btnW = 110;
+      const btnH = 30;
+      let x = anchor.x;
+      let y = anchor.y;
+      if (x + btnW > anchor.w - 8) x = Math.min(anchor.w - btnW - 8, x);
+      if (y + btnH > anchor.h - 8) y = anchor.y - btnH - 30;
+      x = Math.max(8, x);
+      y = Math.max(8, y);
+      setSelBtn({ start: start, end: end, x: Math.round(x), y: Math.round(y) });
+      return true;
+    }
+
+    /**
+     * Puts the little 「修改建议」 button at the end of the selection.
+     *
+     * Only mouse selections get it (`mouseup` is the trigger): the user asked
+     * for "用鼠标选中一些文字", and a keyboard selection is usually mid-sentence
+     * navigation rather than a request.
+     */
+    function showSelBtn(ev) {
+      if (typeof propsRef.current.onAdviceSelection !== 'function') return;
+      const ta = taRef.current;
+      if (!ta || composingRef.current) return;
+      const a = Number(ta.selectionStart) || 0;
+      const b = Number(ta.selectionEnd) || 0;
+      const start = Math.min(a, b);
+      const end = Math.max(a, b);
+      // Empty selection, whitespace only, or a whole chapter: nothing to ask
+      // about (the chapter-wide read is what the dock's 修改建议 does).
+      if (end <= start || end - start > 4000) {
+        hideSelBtn();
+        return;
+      }
+      if (!String(ta.value.slice(start, end)).trim()) {
+        hideSelBtn();
+        return;
+      }
+      if (applySelBtnAnchor(start, end, selBtnAnchor(end))) return;
+      // Measurement failed (no mirror yet): fall back to the pointer, clamped.
+      const surf = surfaceRef.current;
+      const surfRect = surf ? surf.getBoundingClientRect() : null;
+      if (!surfRect) return;
+      const cx = ev ? Number(ev.clientX) : NaN;
+      const cy = ev ? Number(ev.clientY) : NaN;
+      if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
+      applySelBtnAnchor(start, end, { x: cx - surfRect.left + 8, y: cy - surfRect.top + 14, w: surfRect.width, h: surfRect.height });
+    }
+
+    /**
+     * Keeps the button on the same words after the page moves under it (the
+     * typewriter re-centres on the release that ends a drag, and every later
+     * write can re-run that centring). Cheap to no-op: it only measures while a
+     * button is actually up.
+     */
+    function reseatSelBtn() {
+      const cur = selBtnRef.current;
+      if (!cur) return;
+      const ta = taRef.current;
+      if (!ta || document.activeElement !== ta) return;
+      const a = Number(ta.selectionStart) || 0;
+      const b = Number(ta.selectionEnd) || 0;
+      if (Math.max(a, b) <= Math.min(a, b) || Math.min(a, b) !== cur.start || Math.max(a, b) !== cur.end) return;
+      const anchor = selBtnAnchor(cur.end);
+      if (!anchor) return;
+      const btnW = 110;
+      const btnH = 30;
+      let x = anchor.x;
+      let y = anchor.y;
+      if (x + btnW > anchor.w - 8) x = anchor.w - btnW - 8;
+      if (y + btnH > anchor.h - 8) y = anchor.y - btnH - 30;
+      x = Math.max(8, Math.round(x));
+      y = Math.max(8, Math.round(y));
+      // Only commit a real move: setState inside the measure pass would
+      // otherwise re-render the whole surface for a sub-pixel difference.
+      if (Math.abs(x - cur.x) < 1 && Math.abs(y - cur.y) < 1) return;
+      setSelBtn({ start: cur.start, end: cur.end, x: x, y: y });
+    }
+
+    function hideSelBtn() {
+      setSelBtn((cur) => (cur ? null : cur));
+    }
+
+    /**
+     * Re-checks the live selection: the button is only valid while the very
+     * same range is still selected in a focused manuscript. Anything else (a
+     * click elsewhere, an arrow key, a cut) means the writer moved on.
+     */
+    function syncSelBtn() {
+      const cur = selBtnRef.current;
+      if (!cur) return;
+      const ta = taRef.current;
+      if (!ta || document.activeElement !== ta) {
+        hideSelBtn();
+        return;
+      }
+      const a = Number(ta.selectionStart) || 0;
+      const b = Number(ta.selectionEnd) || 0;
+      if (Math.max(a, b) <= Math.min(a, b) || Math.min(a, b) !== cur.start || Math.max(a, b) !== cur.end) {
+        hideSelBtn();
+      }
+    }
+
+    /** Hands the frozen range to the app, which owns the suggestion window. */
+    function openSelAdvice() {
+      const cur = selBtnRef.current;
+      if (!cur) return;
+      const api = propsRef.current;
+      const text = (taRef.current ? taRef.current.value : '').slice(cur.start, cur.end);
+      hideSelBtn();
+      if (typeof api.onAdviceSelection === 'function') {
+        api.onAdviceSelection({ start: cur.start, end: cur.end, text: text });
+      }
+    }
+
     /**
      * R53: create (or retype) a mark over the range the menu was opened on.
      *
@@ -3408,6 +3586,9 @@
     function handleInput() {
       const ta = taRef.current;
       if (!ta) return;
+      // R73: typing replaces the selection with a caret; the 修改建议 button
+      // was about the words that no longer exist as a range.
+      hideSelBtn();
       valueRef.current = ta.value;
       dirtyRef.current = true;
       typedAtRef.current = nowMs();
@@ -3698,6 +3879,9 @@
       // R71: and the paragraph fade lifts — an unfocused page is being read, so
       // every line comes back to full strength (paintFocus parks on this ref).
       editorFocusedRef.current = false;
+      // R73: the 修改建议 button belongs to a selection the writer is holding;
+      // leaving the manuscript is the end of that.
+      hideSelBtn();
       scheduleMeasure(false);
       repaintFocusSoon();
     }
@@ -3870,6 +4054,8 @@
       paraBandRef.current = null;
       // R51: so did the card's mark and its offsets.
       setMarkView(null);
+      // R73: and so did the 修改建议 button — its offsets point into the old text.
+      setSelBtn(null);
       composingRef.current = false;
 
       const f = findRef.current;
@@ -4013,6 +4199,12 @@
         const sc = scrollerRef.current;
         const at = sc ? sc.scrollTop || 0 : 0;
         if (Math.abs(at - expectedScrollTopRef.current) <= 2) return;
+        // R73: the 修改建议 button is anchored to viewport pixels, so a *manual*
+        // scroll would leave it next to the wrong words. It is dropped rather
+        // than re-measured; the programmatic scrolls above (typewriter centring
+        // right after the drag ends) must not count, or the button would vanish
+        // the moment it appears.
+        hideSelBtn();
         // R53: the corner menu is anchored to the capsule, not to a line, so a
         // scroll can leave it alone — but the card points at words, so it goes.
         if (markViewRef.current) closeMarkView();
@@ -4030,6 +4222,11 @@
 
       const onSelectionChange = () => {
         const ta = taRef.current;
+        // R73: a selection change is also the only reliable signal that the
+        // 修改建议 button must go — it fires when the range collapses, and
+        // `syncSelBtn` re-checks the exact offsets so a new selection cannot
+        // leave the old button pointing at the previous range.
+        syncSelBtn();
         if (!ta || document.activeElement !== ta) return;
         scheduleMeasure(true);
       };
@@ -4038,6 +4235,7 @@
       // document.activeElement, and reappear when the user comes back.
       const onWindowBlur = () => {
         winFocusedRef.current = false;
+        hideSelBtn();
         scheduleMeasure(false);
       };
       const onWindowFocus = () => {
@@ -4098,6 +4296,10 @@
         ev.stopPropagation();
         openFind(true);
       };
+      // R73: Escape dismisses the 修改建议 button like any other transient popup.
+      const onEscSelBtn = (ev) => {
+        if (ev.key === 'Escape') hideSelBtn();
+      };
 
       // Resolve against the live DOM (the refs are set by the time effects run)
       // and bind the scroll listeners to whatever actually scrolls.
@@ -4116,6 +4318,7 @@
       document.addEventListener('mousedown', onPointerDown);
       // R30: Ctrl/Cmd+F works from anywhere on the surface, not just the textarea.
       window.addEventListener('keydown', onFindShortcut, true);
+      window.addEventListener('keydown', onEscSelBtn, true);
 
       let observer = null;
       const tryObserve = () => {
@@ -4174,6 +4377,7 @@
         document.removeEventListener('mouseup', onMouseUp);
         document.removeEventListener('mousedown', onPointerDown);
         window.removeEventListener('keydown', onFindShortcut, true);
+        window.removeEventListener('keydown', onEscSelBtn, true);
         if (observer) observer.disconnect();
         if (measureRafRef.current) {
           if (typeof window.cancelAnimationFrame === 'function') {
@@ -4496,6 +4700,9 @@
               onKeyDown: handleKeyDown,
               onKeyUp: () => scheduleMeasure(true),
               onMouseDown: (ev) => {
+                // R73: a new press starts a new selection; the previous
+                // button described the old one.
+                hideSelBtn();
                 // Suppress re-centring until mouseup so a drag-selection is not
                 // fought by the script while the pointer is still down.
                 draggingRef.current = true;
@@ -4506,6 +4713,8 @@
                   ? { x: Number(ev.clientX) || 0, y: Number(ev.clientY) || 0 }
                   : null;
               },
+              // R73: the drag ended → offer 修改建议 for exactly what is selected.
+              onMouseUp: (ev) => showSelBtn(ev),
               onBlur: handleBlur,
               onFocus: () => {
                 // R71: focusing the manuscript lights its paragraph again.
@@ -4519,7 +4728,12 @@
               },
               onCompositionStart: handleCompositionStart,
               onCompositionEnd: handleCompositionEnd,
-              onSelect: () => scheduleMeasure(true),
+              onSelect: () => {
+                // R73: `select` fires on keyboard selections too, and it is the
+                // earliest signal that the range the button described is gone.
+                syncSelBtn();
+                scheduleMeasure(true);
+              },
               // R53c：标注的唯一入口。选中一段字再按右键 → 在指针旁弹出小菜单；
               // 没选中就原样放行，浏览器自己的复制/粘贴菜单照旧。这样纸面上不
               // 再需要任何常驻按钮。
@@ -4587,6 +4801,32 @@
             NW.t('Ctrl+F 查找 · Ctrl+S 保存 · Tab 缩进'),
           ),
         );
+
+    // R73: one small button under the selection, not a toolbar. `onMouseDown`
+    // preventDefault keeps the manuscript focused (and the selection alive), so
+    // the click does not collapse the very range it is about.
+    const selBtnBar = selBtn
+      ? h(
+          'button',
+          {
+            type: 'button',
+            className: 'nw-selbtn',
+            style: { left: selBtn.x + 'px', top: selBtn.y + 'px' },
+            title: NW.t('给选中的文字提修改建议'),
+            'aria-label': NW.t('修改建议'),
+            onMouseDown: (ev) => {
+              if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+            },
+            onClick: (ev) => {
+              if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+              if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+              openSelAdvice();
+            },
+          },
+          NW.icon('sparkle', { size: 13 }),
+          h('span', { className: 'nw-selbtn-txt' }, NW.t('修改建议')),
+        )
+      : null;
 
     return h(
       'div',
@@ -4670,6 +4910,7 @@
               : null,
           ),
       markMenuBar,
+      selBtnBar,
     );
   };
 })();

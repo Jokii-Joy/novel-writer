@@ -529,6 +529,40 @@
     throw err;
   }
 
+  /** `reviseSelection` with automatic model failover (same contract as `reviseSafe`). */
+  async function reviseSelectionSafe(input) {
+    const body = input || {};
+    let list = null;
+    try {
+      list = await models();
+    } catch (err) {
+      list = null;
+    }
+    // R73: no preferred model — the writer never picked one here. The harness
+    // default leads, and `withModelFallback` walks the rest when it is down.
+    const preferred = { provider: body.provider, model: body.model };
+    const call = (candidate) => reviseSelection(Object.assign({}, body, { provider: candidate.provider, model: candidate.model }));
+    const result = await withModelFallback(list, preferred, call, {
+      emptyMessage: NW.t('还没有配置可用的模型，请先在 Harness 里登录一个模型提供方。'),
+      onRetry: body.onRetry,
+    });
+    if (result.ok) return Object.assign({}, result.data, { usedModel: result.used, failovers: result.tried });
+    const picked = await askModelForRetry({
+      kind: 'revise',
+      label: '选中改写',
+      tried: result.tried,
+      models: list,
+      preferred: preferred,
+    });
+    if (picked) {
+      const second = await call(picked);
+      return Object.assign({}, second, { usedModel: picked, failovers: result.tried });
+    }
+    const err = result.error || new Error(NW.t('模型调用失败'));
+    err.tried = result.tried;
+    throw err;
+  }
+
   function selftest() {
     return api('selftest', {});
   }
@@ -954,9 +988,31 @@
     const payload = { text: String(body.text == null ? '' : body.text) };
     if (body.provider) payload.provider = String(body.provider);
     if (body.model) payload.model = String(body.model);
-    if (body.focus) payload.focus = String(body.focus);
+    // R74: angles are multi-select — the wire keeps a comma-joined string so an
+    // older host (which only knew one id) still reads the first one.
+    if (Array.isArray(body.focus)) payload.focus = body.focus.join(',');
+    else if (body.focus) payload.focus = String(body.focus);
     if (body.note) payload.note = String(body.note);
     return api('revise', payload);
+  }
+
+  /**
+   * R73: rewrite one selected passage.
+   *
+   * Same default model as every other AI surface — the selection window is a
+   * one-click action, so it deliberately has no model picker of its own; the
+   * failover in `reviseSelectionSafe` is what keeps a dead provider from
+   * turning a two-second action into a settings trip.
+   */
+  function reviseSelection(input) {
+    const body = input && typeof input === 'object' ? input : {};
+    const payload = { text: String(body.text == null ? '' : body.text) };
+    if (body.provider) payload.provider = String(body.provider);
+    if (body.model) payload.model = String(body.model);
+    if (body.before) payload.before = String(body.before);
+    if (body.after) payload.after = String(body.after);
+    if (body.note) payload.note = String(body.note);
+    return api('revise.selection', payload);
   }
 
   // ---- LAN sync / pairing (R34) ---------------------------------------------
@@ -1093,11 +1149,13 @@
     models: models,
     proofread: proofread,
     revise: revise,
+    reviseSelection: reviseSelection,
     selftest: selftest,
     // R34: failover-aware variants. `proofread` / `revise` stay bare so the
     // dialogs that manage their own picker keep exact control.
     proofreadSafe: proofreadSafe,
     reviseSafe: reviseSafe,
+    reviseSelectionSafe: reviseSelectionSafe,
     candidates: modelCandidates,
   };
 

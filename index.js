@@ -21,7 +21,7 @@ import * as lanServer from './lib/lansync-server.js';
 export const name = 'novel-writer';
 // Kept in step with package.json by hand: `ping` reports this, and a stale value
 // makes it impossible to tell which build the running host actually loaded.
-export const version = '1.2.0';
+export const version = '1.4.1';
 
 /** Diagnostic surface read by `selftest` so a broken mount is visible. */
 const state = { registered: false, error: null, mountedAt: 0 };
@@ -59,7 +59,10 @@ export function apply(ctx, config) {
       // Failure is never fatal: a port collision or a firewall just means sync is
       // unavailable, and the settings page reports it from `lan.status()`.
       lanServer
-        .start()
+        // R72: the context rides along so `ai/proofread` can reach the host's
+        // LLM service. Without it the listener still runs — the phone just sees
+        // `ai:false` and keeps the 校对 button disabled.
+        .start({ ctx: hostCtx })
         .then((result) => {
           if (result && result.ok === false) {
             console.warn('[novel-writer] 局域网同步端口不可用:', result.message);

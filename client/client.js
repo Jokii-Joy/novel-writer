@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.0.0',
+      version: '1.4.1',
     };
     NW.ReactDOM = null;
 
@@ -455,8 +455,11 @@ window.__ModuleLoader__.load({
   // ---------------------------------------------------------------------------
 
   const DB_NAME = 'novel-writer';
-  const DB_VERSION = 3;
-  const STORES = ['novels', 'chapters', 'versions', 'trash', 'settings', 'notes', 'marks'];
+  // R73: 4 adds `revisions` — the 修改建议 the writer accepted. It is a sibling
+  // of `marks` (a record *about* a range of words, never an edit to the text),
+  // so an old database upgrades in place without touching existing rows.
+  const DB_VERSION = 4;
+  const STORES = ['novels', 'chapters', 'versions', 'trash', 'settings', 'notes', 'marks', 'revisions'];
   const VERSION_LIMIT = 50;
   const SETTINGS_KEY = 'app';
   const ENC_PREFIX = 'enc:v1:';
@@ -653,6 +656,15 @@ window.__ModuleLoader__.load({
           // in place without touching existing rows.
           if (!db.objectStoreNames.contains('marks')) {
             const store = db.createObjectStore('marks', { keyPath: 'id' });
+            store.createIndex('byChapterId', 'chapterId', { unique: false });
+            store.createIndex('byNovelId', 'novelId', { unique: false });
+          }
+          // R73: 已接收的修改建议. Same shape of record as a mark — it points at a
+          // range of the chapter — but it is the *history of advice the writer
+          // said yes to*, so it needs its own store: deleting a mark must not
+          // delete an accepted suggestion, and vice versa.
+          if (!db.objectStoreNames.contains('revisions')) {
+            const store = db.createObjectStore('revisions', { keyPath: 'id' });
             store.createIndex('byChapterId', 'chapterId', { unique: false });
             store.createIndex('byNovelId', 'novelId', { unique: false });
           }
@@ -1950,7 +1962,137 @@ window.__ModuleLoader__.load({
     return ops.length;
   }
 
-  // --------------------------------- public ----------------------------------
+  // ---------------------------------------------------------------------------
+  // 已接收的修改建议 (R73)
+  //
+  // The advice column and the selection window both end with a decision: 接受 or
+  // 拒绝. Only the accepted half is worth a row — a rejected suggestion has
+  // served its purpose the moment the writer says no, and keeping it would turn
+  // the store into a log of everything an editor ever said.
+  //
+  // A row is *not* a replacement: accepting means "this edit is right, I will
+  // make it", so the manuscript is never rewritten behind the writer's back.
+  // The row records the words it talked about, the rewritten text the model
+  // offered, and the advice itself — enough to reopen the case weeks later.
+  // ---------------------------------------------------------------------------
+
+  function cleanRevision(input) {
+    const data = input || {};
+    const chapterId = String(data.chapterId || '');
+    if (!chapterId) return null;
+    const quote = String(data.quote == null ? '' : data.quote).slice(0, 600);
+    if (!quote.trim()) return null;
+    const start = Math.max(0, Math.round(Number(data.start) || 0));
+    const end = Math.max(start, Math.round(Number(data.end) || 0));
+    return {
+      chapterId: chapterId,
+      novelId: data.novelId ? String(data.novelId) : '',
+      start: start,
+      end: end,
+      quote: quote,
+      // 改后的文字. Empty when the model only advised instead of rewriting
+      // ("这一段节奏拖着" has no drop-in replacement); the card renders what it has.
+      revised: String(data.revised == null ? '' : data.revised).slice(0, 600),
+      issue: String(data.issue == null ? '' : data.issue).slice(0, 200),
+      why: String(data.why == null ? '' : data.why).slice(0, 200),
+      advice: String(data.advice == null ? '' : data.advice).slice(0, 400),
+      kind: String(data.kind == null ? '' : data.kind).slice(0, 24),
+      severity: String(data.severity == null ? '' : data.severity).slice(0, 12),
+      // 'selection' = asked for by selecting words, 'chapter' = the dock's
+      // whole-chapter read. Kept because the two read differently in the list.
+      source: String(data.source || 'chapter').slice(0, 16),
+      createdAt: Number(data.createdAt) || now(),
+    };
+  }
+
+  async function listRevisions(chapterId) {
+    let rows;
+    if (chapterId != null && String(chapterId)) {
+      rows = await readIndex('revisions', 'byChapterId', String(chapterId));
+    } else {
+      rows = await readAll('revisions');
+    }
+    return (rows || [])
+      .filter(function (row) {
+        return row && row.id;
+      })
+      .sort(function (a, b) {
+        return (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0);
+      });
+  }
+
+  async function createRevision(input) {
+    const clean = cleanRevision(input);
+    if (!clean) return undefined;
+    const stamp = now();
+    const wanted = input && input.id ? String(input.id) : '';
+    const row = Object.assign({ id: wanted || uid('rev'), updatedAt: stamp }, clean);
+    if (!row.createdAt) row.createdAt = stamp;
+    const ok = await writeBatch([{ store: 'revisions', type: 'put', value: row }]);
+    if (!ok) throw new Error('保存修改建议失败');
+    notify();
+    return row;
+  }
+
+  async function deleteRevision(id) {
+    if (!id) return false;
+    const ok = await writeBatch([{ store: 'revisions', type: 'delete', key: String(id) }]);
+    if (!ok) return false;
+    notify();
+    return true;
+  }
+
+  /**
+   * Keeps accepted suggestions pinned to the words they were accepted on.
+   *
+   * Same contract as `shiftMarksForEdit`: a row wholly inside the replaced
+   * middle is dropped (the sentence it described is gone), a row that merely
+   * moved is shifted, and a row that overlaps an edge keeps whatever survived.
+   */
+  async function shiftRevisionsForEdit(chapterId, diff) {
+    const id = String(chapterId || '');
+    const d = diff || {};
+    if (!id) return 0;
+    const head = Math.max(0, Number(d.head) || 0);
+    const oldMid = Math.max(0, Number(d.oldMid) || 0);
+    const newMid = Math.max(0, Number(d.newMid) || 0);
+    if (!oldMid && !newMid) return 0;
+    const delta = newMid - oldMid;
+    const rows = await listRevisions(id);
+    const ops = [];
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i];
+      const start = Number(row.start) || 0;
+      const end = Number(row.end) || 0;
+      if (end <= head) continue; // wholly before the edit
+      if (start >= head + oldMid) {
+        if (delta) {
+          ops.push({
+            store: 'revisions',
+            type: 'put',
+            value: Object.assign({}, row, { start: start + delta, end: end + delta, updatedAt: now() }),
+          });
+        }
+        continue;
+      }
+      const nextStart = start <= head ? start : head + newMid;
+      const nextEnd = end >= head + oldMid ? end + delta : head + newMid;
+      if (nextEnd <= nextStart) {
+        ops.push({ store: 'revisions', type: 'delete', key: row.id });
+      } else {
+        ops.push({
+          store: 'revisions',
+          type: 'put',
+          value: Object.assign({}, row, { start: nextStart, end: nextEnd, updatedAt: now() }),
+        });
+      }
+    }
+    if (!ops.length) return 0;
+    await writeBatch(ops);
+    notify();
+    return ops.length;
+  }
+
 
   function subscribe(fn) {
     if (typeof fn !== 'function') return function () {};
@@ -2003,6 +2145,9 @@ window.__ModuleLoader__.load({
         : await getSettings();
     const notes = await readAll('notes');
     const marks = await readAll('marks');
+    // R73: accepted advice travels with the backup — it is part of the writer's
+    // thinking about the book, not a transient UI state.
+    const revisions = await readAll('revisions');
     return {
       novels: novels || [],
       chapters: chapters || [],
@@ -2011,6 +2156,7 @@ window.__ModuleLoader__.load({
       settings: settings || {},
       notes: notes || [],
       marks: marks || [],
+      revisions: revisions || [],
     };
   }
 
@@ -2262,6 +2408,10 @@ window.__ModuleLoader__.load({
     updateMark: updateMark,
     deleteMark: deleteMark,
     shiftMarksForEdit: shiftMarksForEdit,
+    listRevisions: listRevisions,
+    createRevision: createRevision,
+    deleteRevision: deleteRevision,
+    shiftRevisionsForEdit: shiftRevisionsForEdit,
     dump: dump,
     replaceAll: replaceAll,
     encryptAll: encryptAll,
@@ -3773,6 +3923,40 @@ window.__ModuleLoader__.load({
     throw err;
   }
 
+  /** `reviseSelection` with automatic model failover (same contract as `reviseSafe`). */
+  async function reviseSelectionSafe(input) {
+    const body = input || {};
+    let list = null;
+    try {
+      list = await models();
+    } catch (err) {
+      list = null;
+    }
+    // R73: no preferred model — the writer never picked one here. The harness
+    // default leads, and `withModelFallback` walks the rest when it is down.
+    const preferred = { provider: body.provider, model: body.model };
+    const call = (candidate) => reviseSelection(Object.assign({}, body, { provider: candidate.provider, model: candidate.model }));
+    const result = await withModelFallback(list, preferred, call, {
+      emptyMessage: NW.t('还没有配置可用的模型，请先在 Harness 里登录一个模型提供方。'),
+      onRetry: body.onRetry,
+    });
+    if (result.ok) return Object.assign({}, result.data, { usedModel: result.used, failovers: result.tried });
+    const picked = await askModelForRetry({
+      kind: 'revise',
+      label: '选中改写',
+      tried: result.tried,
+      models: list,
+      preferred: preferred,
+    });
+    if (picked) {
+      const second = await call(picked);
+      return Object.assign({}, second, { usedModel: picked, failovers: result.tried });
+    }
+    const err = result.error || new Error(NW.t('模型调用失败'));
+    err.tried = result.tried;
+    throw err;
+  }
+
   function selftest() {
     return api('selftest', {});
   }
@@ -4198,9 +4382,31 @@ window.__ModuleLoader__.load({
     const payload = { text: String(body.text == null ? '' : body.text) };
     if (body.provider) payload.provider = String(body.provider);
     if (body.model) payload.model = String(body.model);
-    if (body.focus) payload.focus = String(body.focus);
+    // R74: angles are multi-select — the wire keeps a comma-joined string so an
+    // older host (which only knew one id) still reads the first one.
+    if (Array.isArray(body.focus)) payload.focus = body.focus.join(',');
+    else if (body.focus) payload.focus = String(body.focus);
     if (body.note) payload.note = String(body.note);
     return api('revise', payload);
+  }
+
+  /**
+   * R73: rewrite one selected passage.
+   *
+   * Same default model as every other AI surface — the selection window is a
+   * one-click action, so it deliberately has no model picker of its own; the
+   * failover in `reviseSelectionSafe` is what keeps a dead provider from
+   * turning a two-second action into a settings trip.
+   */
+  function reviseSelection(input) {
+    const body = input && typeof input === 'object' ? input : {};
+    const payload = { text: String(body.text == null ? '' : body.text) };
+    if (body.provider) payload.provider = String(body.provider);
+    if (body.model) payload.model = String(body.model);
+    if (body.before) payload.before = String(body.before);
+    if (body.after) payload.after = String(body.after);
+    if (body.note) payload.note = String(body.note);
+    return api('revise.selection', payload);
   }
 
   // ---- LAN sync / pairing (R34) ---------------------------------------------
@@ -4337,11 +4543,13 @@ window.__ModuleLoader__.load({
     models: models,
     proofread: proofread,
     revise: revise,
+    reviseSelection: reviseSelection,
     selftest: selftest,
     // R34: failover-aware variants. `proofread` / `revise` stay bare so the
     // dialogs that manage their own picker keep exact control.
     proofreadSafe: proofreadSafe,
     reviseSafe: reviseSafe,
+    reviseSelectionSafe: reviseSelectionSafe,
     candidates: modelCandidates,
   };
 
@@ -9321,6 +9529,29 @@ window.__ModuleLoader__.load({
   box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
 }
 
+/* R73：选中文字后浮出的小方钮。一个按钮、一句话，落在指针松开处的右下角。
+   它不压在选中的字上（那正是 R53 撤掉选字弹条的原因），选中一消失就自己走。 */
+.nw-selbtn{
+  position:absolute;z-index:var(--nw-z-float);
+  display:inline-flex;align-items:center;gap:5px;
+  height:28px;padding:0 10px;
+  border-radius:8px;
+  border:1px solid var(--nw-line-strong);
+  background:var(--nw-panel);
+  color:var(--nw-fg);
+  box-shadow:var(--nw-shadow-2);
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);font-weight:600;
+  cursor:pointer;white-space:nowrap;
+  animation:nw-fade-in .1s var(--nw-ease, ease) both;
+  transition:border-color var(--nw-dur) ease, background var(--nw-dur) ease;
+}
+.nw-selbtn:hover{
+  border-color:var(--nw-brand);
+  background:color-mix(in srgb, var(--nw-brand) 8%, var(--nw-panel));
+}
+.nw-selbtn:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
+.nw-selbtn .nw-selbtn-txt{line-height:1;}
+
 /* caret measuring mirror: same box, never painted */
 .nw-caret{
   position:absolute;left:0;top:0;width:100%;height:auto;overflow:visible;
@@ -9698,6 +9929,12 @@ window.__ModuleLoader__.load({
     const [markMenu, setMarkMenu] = React.useState(null);
     const markMenuRef = React.useRef(null);
     markMenuRef.current = markMenu;
+    // R73：「选中文字 → 修改建议」的那颗小钮。R53 之所以把选字弹条撤掉，是因为
+    // 一条三按钮的横条压在正在选的字上面；这一颗只有一个按钮，落在指针松开处的
+    // 右下角，选中一消失它就自己走，所以不需要任何关闭动作。
+    const [selBtn, setSelBtn] = React.useState(null);
+    const selBtnRef = React.useRef(null);
+    selBtnRef.current = selBtn;
     /** 页边批注签的容器（.nw-mark-gutter），由 paintGutter() 直接填 DOM。 */
     const gutterRef = React.useRef(null);
 
@@ -11003,6 +11240,9 @@ window.__ModuleLoader__.load({
       paintFocus(view, focusOrigin);
       rebuildHighlights();
       emitSelection();
+      // R73: the viewport may have just moved (typewriter centring after the
+      // drag-release): keep the 修改建议 button glued to the selected words.
+      reseatSelBtn();
     }
 
     /**
@@ -11526,6 +11766,152 @@ window.__ModuleLoader__.load({
       setMarkMenu((cur) => (cur ? null : cur));
     }
 
+    // ------------------------------------------------- 选中 → 修改建议 (R73) --
+    /**
+     * Where the button should sit for a given character offset: just under the
+     * line that offset is on, inside `.nw-surface` coordinates.
+     *
+     * Measured from the mirror rather than from the pointer because the pointer
+     * is not where the selection ends in a corner case that actually happens —
+     * the typewriter re-centres the page the moment a drag ends, and a button
+     * pinned to the old pointer position would hang over unrelated words.
+     * Returns null when there is nothing to measure (no textarea/mirror).
+     */
+    function selBtnAnchor(offset) {
+      const v = resolveScroller(false);
+      const sc = v && v.el;
+      const mir = caretRef.current;
+      const surf = surfaceRef.current;
+      if (!sc || !mir || !surf) return null;
+      const m = measureCaret(offset, v);
+      if (!m) return null;
+      const mirRect = mir.getBoundingClientRect();
+      const surfRect = surf.getBoundingClientRect();
+      const scrollTop = sc.scrollTop || 0;
+      const vx = mirRect.left + (Number(m.left) || 0);
+      const vy = (v.kind === 'document'
+        ? m.top - scrollTop
+        : m.top - scrollTop + sc.getBoundingClientRect().top) + (Number(m.height) || 18);
+      return { x: vx - surfRect.left + 6, y: vy - surfRect.top + 8, w: surfRect.width, h: surfRect.height };
+    }
+
+    /** Clamps an anchor into the paper and commits it to state. */
+    function applySelBtnAnchor(start, end, anchor) {
+      if (!anchor) return false;
+      const btnW = 110;
+      const btnH = 30;
+      let x = anchor.x;
+      let y = anchor.y;
+      if (x + btnW > anchor.w - 8) x = Math.min(anchor.w - btnW - 8, x);
+      if (y + btnH > anchor.h - 8) y = anchor.y - btnH - 30;
+      x = Math.max(8, x);
+      y = Math.max(8, y);
+      setSelBtn({ start: start, end: end, x: Math.round(x), y: Math.round(y) });
+      return true;
+    }
+
+    /**
+     * Puts the little 「修改建议」 button at the end of the selection.
+     *
+     * Only mouse selections get it (`mouseup` is the trigger): the user asked
+     * for "用鼠标选中一些文字", and a keyboard selection is usually mid-sentence
+     * navigation rather than a request.
+     */
+    function showSelBtn(ev) {
+      if (typeof propsRef.current.onAdviceSelection !== 'function') return;
+      const ta = taRef.current;
+      if (!ta || composingRef.current) return;
+      const a = Number(ta.selectionStart) || 0;
+      const b = Number(ta.selectionEnd) || 0;
+      const start = Math.min(a, b);
+      const end = Math.max(a, b);
+      // Empty selection, whitespace only, or a whole chapter: nothing to ask
+      // about (the chapter-wide read is what the dock's 修改建议 does).
+      if (end <= start || end - start > 4000) {
+        hideSelBtn();
+        return;
+      }
+      if (!String(ta.value.slice(start, end)).trim()) {
+        hideSelBtn();
+        return;
+      }
+      if (applySelBtnAnchor(start, end, selBtnAnchor(end))) return;
+      // Measurement failed (no mirror yet): fall back to the pointer, clamped.
+      const surf = surfaceRef.current;
+      const surfRect = surf ? surf.getBoundingClientRect() : null;
+      if (!surfRect) return;
+      const cx = ev ? Number(ev.clientX) : NaN;
+      const cy = ev ? Number(ev.clientY) : NaN;
+      if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
+      applySelBtnAnchor(start, end, { x: cx - surfRect.left + 8, y: cy - surfRect.top + 14, w: surfRect.width, h: surfRect.height });
+    }
+
+    /**
+     * Keeps the button on the same words after the page moves under it (the
+     * typewriter re-centres on the release that ends a drag, and every later
+     * write can re-run that centring). Cheap to no-op: it only measures while a
+     * button is actually up.
+     */
+    function reseatSelBtn() {
+      const cur = selBtnRef.current;
+      if (!cur) return;
+      const ta = taRef.current;
+      if (!ta || document.activeElement !== ta) return;
+      const a = Number(ta.selectionStart) || 0;
+      const b = Number(ta.selectionEnd) || 0;
+      if (Math.max(a, b) <= Math.min(a, b) || Math.min(a, b) !== cur.start || Math.max(a, b) !== cur.end) return;
+      const anchor = selBtnAnchor(cur.end);
+      if (!anchor) return;
+      const btnW = 110;
+      const btnH = 30;
+      let x = anchor.x;
+      let y = anchor.y;
+      if (x + btnW > anchor.w - 8) x = anchor.w - btnW - 8;
+      if (y + btnH > anchor.h - 8) y = anchor.y - btnH - 30;
+      x = Math.max(8, Math.round(x));
+      y = Math.max(8, Math.round(y));
+      // Only commit a real move: setState inside the measure pass would
+      // otherwise re-render the whole surface for a sub-pixel difference.
+      if (Math.abs(x - cur.x) < 1 && Math.abs(y - cur.y) < 1) return;
+      setSelBtn({ start: cur.start, end: cur.end, x: x, y: y });
+    }
+
+    function hideSelBtn() {
+      setSelBtn((cur) => (cur ? null : cur));
+    }
+
+    /**
+     * Re-checks the live selection: the button is only valid while the very
+     * same range is still selected in a focused manuscript. Anything else (a
+     * click elsewhere, an arrow key, a cut) means the writer moved on.
+     */
+    function syncSelBtn() {
+      const cur = selBtnRef.current;
+      if (!cur) return;
+      const ta = taRef.current;
+      if (!ta || document.activeElement !== ta) {
+        hideSelBtn();
+        return;
+      }
+      const a = Number(ta.selectionStart) || 0;
+      const b = Number(ta.selectionEnd) || 0;
+      if (Math.max(a, b) <= Math.min(a, b) || Math.min(a, b) !== cur.start || Math.max(a, b) !== cur.end) {
+        hideSelBtn();
+      }
+    }
+
+    /** Hands the frozen range to the app, which owns the suggestion window. */
+    function openSelAdvice() {
+      const cur = selBtnRef.current;
+      if (!cur) return;
+      const api = propsRef.current;
+      const text = (taRef.current ? taRef.current.value : '').slice(cur.start, cur.end);
+      hideSelBtn();
+      if (typeof api.onAdviceSelection === 'function') {
+        api.onAdviceSelection({ start: cur.start, end: cur.end, text: text });
+      }
+    }
+
     /**
      * R53: create (or retype) a mark over the range the menu was opened on.
      *
@@ -11986,6 +12372,9 @@ window.__ModuleLoader__.load({
     function handleInput() {
       const ta = taRef.current;
       if (!ta) return;
+      // R73: typing replaces the selection with a caret; the 修改建议 button
+      // was about the words that no longer exist as a range.
+      hideSelBtn();
       valueRef.current = ta.value;
       dirtyRef.current = true;
       typedAtRef.current = nowMs();
@@ -12276,6 +12665,9 @@ window.__ModuleLoader__.load({
       // R71: and the paragraph fade lifts — an unfocused page is being read, so
       // every line comes back to full strength (paintFocus parks on this ref).
       editorFocusedRef.current = false;
+      // R73: the 修改建议 button belongs to a selection the writer is holding;
+      // leaving the manuscript is the end of that.
+      hideSelBtn();
       scheduleMeasure(false);
       repaintFocusSoon();
     }
@@ -12448,6 +12840,8 @@ window.__ModuleLoader__.load({
       paraBandRef.current = null;
       // R51: so did the card's mark and its offsets.
       setMarkView(null);
+      // R73: and so did the 修改建议 button — its offsets point into the old text.
+      setSelBtn(null);
       composingRef.current = false;
 
       const f = findRef.current;
@@ -12591,6 +12985,12 @@ window.__ModuleLoader__.load({
         const sc = scrollerRef.current;
         const at = sc ? sc.scrollTop || 0 : 0;
         if (Math.abs(at - expectedScrollTopRef.current) <= 2) return;
+        // R73: the 修改建议 button is anchored to viewport pixels, so a *manual*
+        // scroll would leave it next to the wrong words. It is dropped rather
+        // than re-measured; the programmatic scrolls above (typewriter centring
+        // right after the drag ends) must not count, or the button would vanish
+        // the moment it appears.
+        hideSelBtn();
         // R53: the corner menu is anchored to the capsule, not to a line, so a
         // scroll can leave it alone — but the card points at words, so it goes.
         if (markViewRef.current) closeMarkView();
@@ -12608,6 +13008,11 @@ window.__ModuleLoader__.load({
 
       const onSelectionChange = () => {
         const ta = taRef.current;
+        // R73: a selection change is also the only reliable signal that the
+        // 修改建议 button must go — it fires when the range collapses, and
+        // `syncSelBtn` re-checks the exact offsets so a new selection cannot
+        // leave the old button pointing at the previous range.
+        syncSelBtn();
         if (!ta || document.activeElement !== ta) return;
         scheduleMeasure(true);
       };
@@ -12616,6 +13021,7 @@ window.__ModuleLoader__.load({
       // document.activeElement, and reappear when the user comes back.
       const onWindowBlur = () => {
         winFocusedRef.current = false;
+        hideSelBtn();
         scheduleMeasure(false);
       };
       const onWindowFocus = () => {
@@ -12676,6 +13082,10 @@ window.__ModuleLoader__.load({
         ev.stopPropagation();
         openFind(true);
       };
+      // R73: Escape dismisses the 修改建议 button like any other transient popup.
+      const onEscSelBtn = (ev) => {
+        if (ev.key === 'Escape') hideSelBtn();
+      };
 
       // Resolve against the live DOM (the refs are set by the time effects run)
       // and bind the scroll listeners to whatever actually scrolls.
@@ -12694,6 +13104,7 @@ window.__ModuleLoader__.load({
       document.addEventListener('mousedown', onPointerDown);
       // R30: Ctrl/Cmd+F works from anywhere on the surface, not just the textarea.
       window.addEventListener('keydown', onFindShortcut, true);
+      window.addEventListener('keydown', onEscSelBtn, true);
 
       let observer = null;
       const tryObserve = () => {
@@ -12752,6 +13163,7 @@ window.__ModuleLoader__.load({
         document.removeEventListener('mouseup', onMouseUp);
         document.removeEventListener('mousedown', onPointerDown);
         window.removeEventListener('keydown', onFindShortcut, true);
+        window.removeEventListener('keydown', onEscSelBtn, true);
         if (observer) observer.disconnect();
         if (measureRafRef.current) {
           if (typeof window.cancelAnimationFrame === 'function') {
@@ -13074,6 +13486,9 @@ window.__ModuleLoader__.load({
               onKeyDown: handleKeyDown,
               onKeyUp: () => scheduleMeasure(true),
               onMouseDown: (ev) => {
+                // R73: a new press starts a new selection; the previous
+                // button described the old one.
+                hideSelBtn();
                 // Suppress re-centring until mouseup so a drag-selection is not
                 // fought by the script while the pointer is still down.
                 draggingRef.current = true;
@@ -13084,6 +13499,8 @@ window.__ModuleLoader__.load({
                   ? { x: Number(ev.clientX) || 0, y: Number(ev.clientY) || 0 }
                   : null;
               },
+              // R73: the drag ended → offer 修改建议 for exactly what is selected.
+              onMouseUp: (ev) => showSelBtn(ev),
               onBlur: handleBlur,
               onFocus: () => {
                 // R71: focusing the manuscript lights its paragraph again.
@@ -13097,7 +13514,12 @@ window.__ModuleLoader__.load({
               },
               onCompositionStart: handleCompositionStart,
               onCompositionEnd: handleCompositionEnd,
-              onSelect: () => scheduleMeasure(true),
+              onSelect: () => {
+                // R73: `select` fires on keyboard selections too, and it is the
+                // earliest signal that the range the button described is gone.
+                syncSelBtn();
+                scheduleMeasure(true);
+              },
               // R53c：标注的唯一入口。选中一段字再按右键 → 在指针旁弹出小菜单；
               // 没选中就原样放行，浏览器自己的复制/粘贴菜单照旧。这样纸面上不
               // 再需要任何常驻按钮。
@@ -13165,6 +13587,32 @@ window.__ModuleLoader__.load({
             NW.t('Ctrl+F 查找 · Ctrl+S 保存 · Tab 缩进'),
           ),
         );
+
+    // R73: one small button under the selection, not a toolbar. `onMouseDown`
+    // preventDefault keeps the manuscript focused (and the selection alive), so
+    // the click does not collapse the very range it is about.
+    const selBtnBar = selBtn
+      ? h(
+          'button',
+          {
+            type: 'button',
+            className: 'nw-selbtn',
+            style: { left: selBtn.x + 'px', top: selBtn.y + 'px' },
+            title: NW.t('给选中的文字提修改建议'),
+            'aria-label': NW.t('修改建议'),
+            onMouseDown: (ev) => {
+              if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+            },
+            onClick: (ev) => {
+              if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+              if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+              openSelAdvice();
+            },
+          },
+          NW.icon('sparkle', { size: 13 }),
+          h('span', { className: 'nw-selbtn-txt' }, NW.t('修改建议')),
+        )
+      : null;
 
     return h(
       'div',
@@ -13248,6 +13696,7 @@ window.__ModuleLoader__.load({
               : null,
           ),
       markMenuBar,
+      selBtnBar,
     );
   };
 })();
@@ -15098,6 +15547,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    between the two columns. */
 .nw-bench[data-advice="1"]{justify-content:center;}
 .nw-bench[data-advice="1"] .nw-bench-paper{flex:0 1 auto;width:calc(min(var(--nw-page,760px),100%) + 32px);}
+/* R73: 选中改写窗口是同一套并排逻辑——窗口开着的时候正文钉在版面宽度上，
+   剩下的宽度给窗口，两边始终看得见。 */
+.nw-bench[data-selwin="1"]{justify-content:center;}
+.nw-bench[data-selwin="1"] .nw-bench-paper{flex:0 1 auto;width:calc(min(var(--nw-page,760px),100%) + 32px);}
+/* 窄面板上两个都开着就都挤没了：窗口优先，正文保住最小可读宽度。 */
+@media (max-width:820px){
+  .nw-selwin{flex-basis:300px;}
+}
 /* R28 ①: the note card no longer takes a lane, so this branch is gone. With the
    advice column open the paper is pinned to the page measure and centred as a
    pair — the card simply rides along inside that paper's left margin. */
@@ -15159,6 +15616,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-suggest-title{font-size:14px;font-weight:600;color:var(--dsw-alias-label-primary);}
 .nw-suggest-count{font-size:12px;color:var(--dsw-alias-label-secondary);}
 .nw-suggest-body{flex:1 1 auto;min-height:0;overflow:auto;padding:var(--nw-sp-2);display:flex;flex-direction:column;gap:var(--nw-sp-1);}
+/* R73: the column is now body + a pinned 已接收 section under it. The main
+   wrapper owns the leftover height so the folded directory never floats. */
+.nw-suggest-main{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;}
+.nw-suggest-acceptedwrap{flex:0 0 auto;padding:0 12px 10px;max-height:46%;overflow:auto;}
+.nw-suggest-acceptedwrap:empty{display:none;}
 .nw-advice{
   display:flex;flex-direction:column;gap:var(--nw-sp-0);padding:11px 12px;
   border-radius:var(--nw-r-card);border:1px solid var(--dsw-alias-border-l1);
@@ -15270,6 +15732,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-advice-note textarea::placeholder{color:var(--nw-fg-soft);opacity:.85;}
 .nw-advice-notebar{display:flex;align-items:center;gap:var(--nw-sp-0);margin-top:var(--nw-sp-0);}
 .nw-advice-notehint{font-size:var(--nw-fs-tiny);color:var(--nw-fg-soft);opacity:.85;}
+/* R73：角度是可选的。这行小字把「不选也行」说在明面上，否则十颗药丸默认全灭
+   只会让人以为加载失败。 */
+.nw-advice-focus-hint{
+  flex:1 1 100%;font-size:10.5px;line-height:1.5;color:var(--nw-fg-soft);opacity:.75;
+}
 .nw-suggest-empty{
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--nw-sp-2);
   flex:1 1 auto;padding:24px 18px;text-align:center;
@@ -15279,6 +15746,176 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   flex:0 0 auto;display:flex;align-items:center;gap:var(--nw-sp-1);flex-wrap:wrap;
   padding:9px 12px;border-top:1px solid var(--dsw-alias-border-l1);
 }
+/* ======================= R73：选中改写 / 接受 / 已接收 =======================
+
+   选中一段字 → 纸面上浮出一个小方钮 → 在正文右侧开一扇并排的窗口。窗口是
+   .nw-bench 的第三个 flex 子项（和 修改建议 栏同一个位置逻辑），所以它**把正文
+   挤窄**而不是盖在正文上：要看懂一条修改，原文和改后必须同时在视野里。
+
+   卡片三态靠边框颜色区分：待定 / 已接受（绿）/ 已拒绝（红）。颜色读的是主题
+   变量，所以换阅读主题时这三种状态不会有一格对不上。 */
+.nw-selwin{
+  position:relative;
+  display:flex;flex-direction:column;min-height:0;min-width:0;
+  flex:0 0 clamp(330px,31vw,440px);
+  margin:12px 12px 12px 0;
+  border:1px solid var(--nw-line-strong);
+  border-radius:16px;
+  background:var(--nw-panel);
+  box-shadow:var(--nw-shadow-2,0 18px 40px rgba(0,0,0,.18));
+  overflow:hidden;
+  animation:nw-slide-in var(--nw-dur) var(--nw-ease,ease);
+}
+.nw-selwin-head{
+  display:flex;align-items:center;gap:var(--nw-sp-1);flex:0 0 auto;
+  padding:11px 10px 9px 14px;border-bottom:1px solid var(--nw-line);
+}
+.nw-selwin-title{font-size:14px;font-weight:600;color:var(--nw-fg);}
+.nw-selwin-count{font-size:12px;color:var(--nw-fg-soft);}
+.nw-selwin-src{
+  flex:0 0 auto;margin:0 12px;padding:8px 10px;
+  border-radius:10px;border:1px dashed var(--nw-line);
+  background:var(--nw-sunken);
+  font-family:var(--nw-reading-font,inherit);font-size:12px;line-height:1.7;color:var(--nw-fg-soft);
+  max-height:5.4em;overflow:auto;white-space:pre-wrap;
+}
+.nw-selwin-body{
+  flex:1 1 auto;min-height:0;overflow:auto;
+  display:flex;flex-direction:column;gap:var(--nw-sp-1);
+  padding:12px;
+}
+.nw-selwin-empty{
+  flex:1 1 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:10px;padding:24px 18px;text-align:center;
+  color:var(--nw-fg-soft);font-size:13px;line-height:1.7;
+}
+.nw-selwin-foot{
+  flex:0 0 auto;display:flex;align-items:center;gap:var(--nw-sp-1);
+  padding:9px 12px;border-top:1px solid var(--nw-line);
+  font-size:11px;color:var(--nw-fg-soft);
+}
+/* R73: 已接收 folded under the cards, capped so it can never eat the窗口. */
+.nw-selwin-accepted{
+  flex:0 0 auto;max-height:46%;overflow:auto;padding:0 12px 10px;
+}
+.nw-selwin-accepted:empty{display:none;}
+
+/* 一张建议卡。整卡可点：点哪一处都把正文里的对应句子滚到视线中线并高亮。 */
+.nw-adv{
+  display:flex;flex-direction:column;gap:7px;
+  padding:11px 12px;border-radius:var(--nw-r-card);
+  border:1px solid var(--nw-line);
+  background:var(--dsw-alias-bg-base);
+  cursor:pointer;text-align:left;
+  transition:border-color var(--nw-dur) ease, box-shadow var(--nw-dur) ease, transform var(--nw-dur) ease;
+}
+.nw-adv:hover{border-color:var(--nw-line-strong);transform:translateY(-1px);}
+.nw-adv:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
+/* 三态：接受=绿，拒绝=红。色块很淡，只做边缘提示，不抢正文。 */
+.nw-adv[data-state="accepted"]{
+  border-color:color-mix(in srgb, var(--nw-ok) 62%, var(--nw-line));
+  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--nw-ok) 30%, transparent);
+  background:color-mix(in srgb, var(--nw-ok) 6%, var(--dsw-alias-bg-base));
+}
+.nw-adv[data-state="rejected"]{
+  border-color:color-mix(in srgb, var(--nw-danger) 55%, var(--nw-line));
+  background:color-mix(in srgb, var(--nw-danger) 5%, var(--dsw-alias-bg-base));
+  opacity:.86;
+}
+.nw-adv[data-active="1"]{border-color:var(--nw-brand);box-shadow:inset 0 0 0 1px var(--nw-brand);}
+.nw-adv-compare{
+  display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:start;
+}
+.nw-adv-side{min-width:0;display:flex;flex-direction:column;gap:3px;}
+.nw-adv-tag{
+  font-size:10px;letter-spacing:.08em;color:var(--nw-fg-soft);text-transform:uppercase;
+}
+.nw-adv-txt{
+  font-family:var(--nw-reading-font,inherit);font-size:12.5px;line-height:1.72;
+  color:var(--nw-fg);white-space:pre-wrap;word-break:break-word;
+  max-height:8.6em;overflow:auto;
+}
+.nw-adv-side[data-kind="old"] .nw-adv-txt{
+  color:var(--nw-fg-soft);
+  text-decoration:underline;text-decoration-color:color-mix(in srgb, var(--nw-danger) 55%, transparent);
+  text-decoration-thickness:1px;text-underline-offset:3px;
+}
+.nw-adv-side[data-kind="new"] .nw-adv-txt{
+  padding:6px 8px;border-radius:8px;
+  background:color-mix(in srgb, var(--nw-ok) 8%, var(--nw-sunken));
+  border:1px dashed color-mix(in srgb, var(--nw-ok) 38%, var(--nw-line));
+}
+.nw-adv-issue{font-size:var(--nw-fs-micro);font-weight:600;line-height:1.55;color:var(--nw-fg);}
+.nw-adv-why{font-size:var(--nw-fs-tiny);line-height:1.65;color:var(--nw-fg-soft);}
+.nw-adv-foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:1px;}
+.nw-adv-kind{
+  font-size:10px;padding:1px 6px;border-radius:999px;
+  border:1px solid var(--nw-line);color:var(--nw-fg-soft);
+}
+.nw-adv-btn{
+  height:24px;padding:0 10px;border-radius:999px;
+  border:1px solid var(--nw-line-strong);background:transparent;
+  color:var(--nw-fg);cursor:pointer;
+  font-family:inherit;font-size:var(--nw-fs-tiny);font-weight:600;
+  transition:background var(--nw-dur) ease,color var(--nw-dur) ease,border-color var(--nw-dur) ease;
+}
+.nw-adv-btn:hover{background:var(--nw-btn-hover,color-mix(in srgb, var(--nw-fg) 6%, transparent));}
+.nw-adv-btn[data-kind="accept"]{color:var(--nw-ok);border-color:color-mix(in srgb, var(--nw-ok) 45%, var(--nw-line-strong));}
+.nw-adv-btn[data-kind="accept"]:hover{background:color-mix(in srgb, var(--nw-ok) 12%, transparent);}
+.nw-adv-btn[data-kind="reject"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 35%, var(--nw-line-strong));}
+.nw-adv-btn[data-kind="reject"]:hover{background:color-mix(in srgb, var(--nw-danger) 10%, transparent);}
+.nw-adv-btn:disabled{opacity:.45;cursor:default;background:transparent;}
+
+/* 已接收：折叠起来的目录。一条区域改了两次以上时，记录按时间顺序排在一起，
+   每条带 ①②③ 的顺序标记，左边一条竖线把它们括成一组。 */
+.nw-accepted{flex:0 0 auto;display:flex;flex-direction:column;gap:0;margin-top:2px;}
+.nw-accepted-head{
+  display:flex;align-items:center;gap:6px;
+  padding:8px 10px;border-radius:var(--nw-r-control);
+  border:1px solid var(--nw-line);background:var(--nw-sunken);
+  color:var(--nw-fg-soft);cursor:pointer;
+  font-family:inherit;font-size:var(--nw-fs-tiny);font-weight:600;text-align:left;
+}
+.nw-accepted-head:hover{color:var(--nw-fg);border-color:var(--nw-line-strong);}
+.nw-accepted-caret{display:inline-flex;transition:transform var(--nw-dur) ease;}
+.nw-accepted[data-open="1"] .nw-accepted-caret{transform:rotate(90deg);}
+.nw-accepted-body{display:none;flex-direction:column;gap:6px;padding:8px 0 2px 4px;}
+.nw-accepted[data-open="1"] .nw-accepted-body{display:flex;}
+.nw-acc-group{
+  display:flex;flex-direction:column;gap:5px;
+  padding-left:9px;border-left:2px solid color-mix(in srgb, var(--nw-ok) 40%, transparent);
+}
+.nw-acc-row{
+  display:flex;align-items:flex-start;gap:7px;
+  padding:7px 9px;border-radius:var(--nw-r-control);
+  border:1px solid var(--nw-line);background:var(--dsw-alias-bg-base);
+  cursor:pointer;text-align:left;font-family:inherit;
+  transition:border-color var(--nw-dur) ease,background var(--nw-dur) ease;
+}
+.nw-acc-row:hover{border-color:var(--nw-line-strong);}
+.nw-acc-row[data-active="1"]{border-color:var(--nw-brand);}
+.nw-acc-ord{
+  flex:0 0 auto;width:18px;height:18px;border-radius:50%;
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:10px;font-weight:700;color:var(--nw-ok);
+  background:color-mix(in srgb, var(--nw-ok) 14%, transparent);
+}
+.nw-acc-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.nw-acc-quote{
+  font-family:var(--nw-reading-font,inherit);font-size:12px;line-height:1.6;color:var(--nw-fg-soft);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.nw-acc-rev{
+  font-family:var(--nw-reading-font,inherit);font-size:12px;line-height:1.6;color:var(--nw-fg);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.nw-acc-meta{flex:0 0 auto;font-size:10px;color:var(--nw-fg-soft);opacity:.8;}
+.nw-acc-drop{
+  flex:0 0 auto;width:20px;height:20px;border:0;border-radius:50%;
+  background:transparent;color:var(--nw-fg-soft);cursor:pointer;line-height:1;
+  font-size:13px;
+}
+.nw-acc-drop:hover{background:color-mix(in srgb, var(--nw-danger) 12%, transparent);color:var(--nw-danger);}
 /* R6: 收起侧栏 曾是一扇单向门 —— 仓库头部的收起按钮随侧栏一起消失，回来只能靠
    浮动坞（先点圆钮再点「显示目录」）。这个把手常驻在写作列左缘，任何时刻一次点击
    就能把目录要回来。沉浸模式不渲染它（沉浸是纯画布，Esc 退出）。 */
@@ -15844,6 +16481,20 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       return Number.isFinite(raw) && raw >= 260 && raw <= 640 ? raw : null;
     });
     /**
+     * R73: 选中改写 — the window opened by the little button that appears when
+     * words are selected. Holds `{start, end, text}` frozen at the click, so the
+     * window keeps describing the same passage even after the selection itself
+     * is gone.
+     */
+    const [selAdvice, setSelAdvice] = useState(null);
+    /**
+     * R73: 已接收的修改建议 for the whole library (rows are per chapter; the open
+     * chapter's slice is derived below). Loaded once on boot and refreshed
+     * whenever a decision is made — the same list feeds the dock's column and the
+     * selection window, so accepting in one place shows up in the other.
+     */
+    const [revisions, setRevisions] = useState([]);
+    /**
      * R44: 读一遍 — the whole book laid out as pages, over the writing surface.
      * It is an overlay rather than a route on purpose: the editor stays mounted
      * underneath, so the caret, the scroll position and any unsaved buffer are
@@ -15983,11 +16634,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // ------------------------------------------------------- data loading ----
     const loadAll = useCallback(async () => {
       await NW.db.init();
-      const [novelRows, chapterRows, stored, markRows] = await Promise.all([
+      const [novelRows, chapterRows, stored, markRows, revisionRows] = await Promise.all([
         NW.db.listNovels(),
         NW.db.listChapters(),
         NW.db.getSettings(),
         NW.db.listMarks ? NW.db.listMarks() : [],
+        NW.db.listRevisions ? NW.db.listRevisions() : [],
       ]);
       if (!aliveRef.current) return null;
       const nextSettings = Object.assign({}, NW.db.DEFAULT_SETTINGS || {}, stored || {});
@@ -16002,6 +16654,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       setNovels(Array.isArray(novelRows) ? novelRows : []);
       setChapters(Array.isArray(chapterRows) ? chapterRows : []);
       setMarks(Array.isArray(markRows) ? markRows : []);
+      setRevisions(Array.isArray(revisionRows) ? revisionRows : []);
       setSettings(nextSettings);
       return { novels: novelRows || [], chapters: chapterRows || [], settings: nextSettings };
     }, []);
@@ -16155,6 +16808,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       // while the column is up.
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [adviceOpen]);
+    /**
+     * R73: the selection window is about one passage of one chapter. Switching
+     * chapters (or leaving the writing screen) must not leave it open quoting
+     * text that is no longer on the paper.
+     */
+    useEffect(() => {
+      setSelAdvice(null);
+    }, [chapter && chapter.id, view]);
     /**
      * R22: remember which screen you were on. Booting straight into 首页 every
      * time meant a writer who had been in the editor all afternoon reopened the
@@ -16853,6 +17514,74 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       return list;
     }, []);
 
+    /** R73: re-read every accepted suggestion (the store is the source of truth). */
+    const refreshRevisions = useCallback(async () => {
+      if (typeof NW.db.listRevisions !== 'function') return [];
+      const list = await NW.db.listRevisions();
+      if (!aliveRef.current) return [];
+      setRevisions(Array.isArray(list) ? list : []);
+      return list;
+    }, []);
+
+    /**
+     * R73: 接受一条修改建议.
+     *
+     * Writes ONE row and nothing else — the manuscript is the writer's, and
+     * "accept" means "this edit is right, I will make it", not "apply it for me".
+     * The offsets are located against the live buffer so the record points at
+     * the words the card was quoting, even if the buffer is ahead of the save.
+     */
+    const acceptRevision = useCallback(
+      async (draft) => {
+        if (!draft || typeof NW.db.createRevision !== 'function') return null;
+        const current = chapterRef.current;
+        if (!current || current.id == null) return null;
+        const api = editorRef.current;
+        const text = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+        const quote = String(draft.quote || '');
+        let start = Math.round(Number(draft.start));
+        let end = Math.round(Number(draft.end));
+        if (!(start >= 0 && end > start && text.slice(start, end) === quote) && quote) {
+          const at = text.indexOf(quote);
+          if (at >= 0) {
+            start = at;
+            end = at + quote.length;
+          }
+        }
+        try {
+          const row = await NW.db.createRevision(
+            Object.assign({}, draft, {
+              chapterId: current.id,
+              novelId: current.novelId || '',
+              start: Number.isFinite(start) ? Math.max(0, start) : 0,
+              end: Number.isFinite(end) ? Math.max(0, end) : 0,
+            }),
+          );
+          if (!aliveRef.current) return null;
+          await refreshRevisions();
+          return row || null;
+        } catch (err) {
+          pushToast(errText(err, '保存修改建议失败'), 'error');
+          return null;
+        }
+      },
+      [pushToast, refreshRevisions],
+    );
+
+    const removeRevision = useCallback(
+      async (row) => {
+        if (!row || row.id == null || typeof NW.db.deleteRevision !== 'function') return;
+        try {
+          await NW.db.deleteRevision(row.id);
+          if (!aliveRef.current) return;
+          await refreshRevisions();
+        } catch (err) {
+          pushToast(errText(err, '删除修改建议失败'), 'error');
+        }
+      },
+      [pushToast, refreshRevisions],
+    );
+
     // ---- 标注：新增 / 删除 / 改批注 -----------------------------------------
     const addMark = useCallback(
       async (draft) => {
@@ -16911,7 +17640,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       async (diff) => {
         const current = chapterRef.current;
         if (!current || current.id == null) return;
-        if (!diff || typeof NW.db.shiftMarksForEdit !== 'function') return;
+        if (!diff) return;
+        // R73: accepted suggestions are pinned to their words by the same diff —
+        // editing the paragraph around them must not leave 「已接收」 pointing at
+        // the neighbours of the sentence it was about.
+        if (typeof NW.db.shiftRevisionsForEdit === 'function') {
+          try {
+            const moved = await NW.db.shiftRevisionsForEdit(current.id, diff);
+            if (aliveRef.current && moved) await refreshRevisions();
+          } catch (err) {
+            /* an accepted suggestion must never break a save */
+          }
+        }
+        if (typeof NW.db.shiftMarksForEdit !== 'function') return;
         try {
           const changed = await NW.db.shiftMarksForEdit(current.id, diff);
           if (!aliveRef.current || !changed) return;
@@ -16920,7 +17661,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           /* annotations are a convenience; never let one break a save */
         }
       },
-      [refreshMarks],
+      [refreshMarks, refreshRevisions],
     );
 
     /**
@@ -17886,6 +18627,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [marks, chapters, activeNovelId],
     );
 
+    // R73: the accepted suggestions of the open chapter. Keyed on the chapter,
+    // because offsets only mean something inside the text they were taken from;
+    // both the dock's column and the selection window read this one slice.
+    const chapterRevisions = useMemo(
+      () => revisions.filter((row) => row && String(row.chapterId) === String(chapter && chapter.id)),
+      [revisions, chapter],
+    );
+
     const wordCounts = useMemo(() => {
       let book = 0;
       let novelWords = 0;
@@ -18026,6 +18775,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // the same row — the toggle is the only affordance that survives
             // after the panel takes a third of the width.
             setDockOpen(false);
+            // R73: the selection window and this column are two views of the same
+            // right-hand lane; opening one closes the other rather than fighting
+            // for the width.
+            setSelAdvice(null);
             setAdviceOpen((v) => !v);
           },
           onSubmit: () => {
@@ -18185,6 +18938,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     // --nw-width is set on .nw-surface (inside the paper), so it
                     // cannot be read from here.
                     'data-advice': adviceOpen && !immersive ? '1' : '0',
+                    // R73: the selection window pins the paper the same way the
+                    // advice column does — 并排 means two columns, not one on top
+                    // of the other.
+                    'data-selwin': selAdvice && !immersive ? '1' : '0',
                     // R43 ③: the bench's idea of the page measure has to match
                     // what the editor actually lays out. Immersive mode raises
                     // --nw-width to at least 880px (60-editor.js:640), so feeding
@@ -18255,6 +19012,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                         });
                       },
                       onSelectionChange: onSelectionChange,
+                      // R73: 选中文字后浮出的小方钮点下去就是这里。开这扇窗口意味着
+                      // 要并排看原文和改写，所以整章的修改建议栏先让位。
+                      onAdviceSelection: (sel) => {
+                        if (!sel || !String(sel.text || '').trim()) return;
+                        setSelAdvice(sel);
+                        setAdviceOpen(false);
+                      },
                       // R47: annotations on the open chapter, and the hook that
                       // keeps them pinned while the writer edits the text.
                       marks: readMarks,
@@ -18290,6 +19054,27 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                         onClose: () => setAdviceOpen(false),
                         // R34: only used to announce a silent model failover.
                         onToast: pushToast,
+                        // R73: 接受/拒绝 and the folded 已接收 directory. Both
+                        // surfaces share one store, so a decision made here is
+                        // already there when the selection window opens.
+                        accepted: chapterRevisions,
+                        onAccept: acceptRevision,
+                        onRemoveAccepted: removeRevision,
+                      })
+                    : null,
+                  // R73: the selection window. Keyed on the range so asking again
+                  // about different words starts a fresh read instead of showing
+                  // the previous selection's cards.
+                  selAdvice && !immersive
+                    ? h(SelectionAdvice, {
+                        key: 'seladvice-' + String(chapter.id) + '-' + String(selAdvice.start) + '-' + String(selAdvice.end),
+                        chapter: chapter,
+                        editorApi: editorRef,
+                        selection: selAdvice,
+                        accepted: chapterRevisions,
+                        onAccept: acceptRevision,
+                        onRemoveAccepted: removeRevision,
+                        onClose: () => setSelAdvice(null),
                       })
                     : null,
                 )
@@ -18648,6 +19433,318 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    * gutter, so the two can be open at the same time. Collapsed it is a single
    * small tab, which is what the writer sees most of the time.
    */
+  /* ========================== R73：修改建议的卡片与已接收 ==================== */
+
+  /** ①②③… — the order the same stretch of text was revised in. */
+  function ordinalMark(n) {
+    const marks = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳';
+    const i = Math.max(0, Math.floor(Number(n) || 0));
+    return i < marks.length ? marks.charAt(i) : String(i + 1);
+  }
+
+  /**
+   * Where an accepted suggestion's words are in the text **right now**.
+   *
+   * The stored offsets are kept honest by db.shiftRevisionsForEdit while this
+   * window edits the chapter, but a rewrite from elseWhere (a phone edit, a
+   * restored version) can leave them pointing at the wrong characters. The quote
+   * is the durable half, so it wins whenever the offsets no longer spell it.
+   */
+  function locateRevision(row, text) {
+    const source = String(text == null ? '' : text);
+    const quote = String((row && row.quote) || '');
+    const start = Math.round(Number(row && row.start));
+    const end = Math.round(Number(row && row.end));
+    if (quote && start >= 0 && end > start && source.slice(start, end) === quote) {
+      return { start: start, end: end, found: true };
+    }
+    if (quote) {
+      const at = source.indexOf(quote);
+      if (at >= 0) return { start: at, end: at + quote.length, found: true };
+    }
+    if (Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end > start) {
+      return { start: start, end: end, found: false };
+    }
+    return { start: -1, end: -1, found: false };
+  }
+
+  /**
+   * 一个区域改了两次以上，就放在一起。
+   *
+   * "The same region" is decided by overlap, not by exact offsets: accepting the
+   * first suggestion does not move a single character (accepting means "this is
+   * right, I will type it"), so the second round lands on the same words and the
+   * two records must read as one story — ① then ②, in the order they happened.
+   */
+  function groupRevisions(rows, text) {
+    const list = (Array.isArray(rows) ? rows : [])
+      .filter(Boolean)
+      .map((row) => Object.assign({}, row, locateRevision(row, text)))
+      .sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0));
+    const groups = [];
+    for (let i = 0; i < list.length; i += 1) {
+      const row = list[i];
+      let hit = null;
+      for (let g = 0; g < groups.length && !hit; g += 1) {
+        const grp = groups[g];
+        for (let r = 0; r < grp.rows.length; r += 1) {
+          const other = grp.rows[r];
+          const overlaps = row.start >= 0 && other.start >= 0
+            && row.start < other.end && other.start < row.end;
+          const sameQuote = row.quote && String(row.quote) === String(other.quote);
+          if (overlaps || sameQuote) {
+            hit = grp;
+            break;
+          }
+        }
+      }
+      if (!hit) {
+        hit = { rows: [] };
+        groups.push(hit);
+      }
+      hit.rows.push(row);
+    }
+    return groups;
+  }
+
+  /**
+   * One suggestion.
+   *
+   * Two shapes, one component: when the model returned a rewrite it is shown as
+   * 原文 | 改后 side by side (that is the whole point of the selection window);
+   * when it only gave advice the card falls back to the editorial layout.
+   *
+   * The frame colour is the decision: pending is the page's own line colour,
+   * accepted is green, rejected is red. Accepting is not applied to the
+   * manuscript — see `onAccept` in the App — so the card has to say out loud
+   * what the writer already decided.
+   */
+  function AdviceCard(props) {
+    const p = props || {};
+    const item = p.item || {};
+    const state = p.state || 'pending';
+    const quote = String(item.quote || '');
+    const revised = String(item.revised || item.example || '');
+    const advice = String(item.advice || '');
+    const issue = String(item.issue || '');
+    const why = String(item.why || '');
+    const busy = !!p.busy;
+    const canDecide = state !== 'accepted' && state !== 'rejected';
+    const KIND = {
+      rhythm: '节奏', diction: '用词', pov: '视角', detail: '画面', dialogue: '对话',
+      structure: '结构', character: '人物', logic: '逻辑', emotion: '情绪', redundancy: '冗余',
+    };
+    return h(
+      'div',
+      {
+        className: 'nw-adv',
+        'data-state': state,
+        'data-active': p.active ? '1' : '0',
+        tabIndex: 0,
+        role: 'group',
+        'aria-label': NW.t('修改建议'),
+        onClick: () => {
+          if (typeof p.onReveal === 'function') p.onReveal(item);
+        },
+        onKeyDown: (ev) => {
+          if (ev.key !== 'Enter' && ev.key !== ' ') return;
+          ev.preventDefault();
+          if (typeof p.onReveal === 'function') p.onReveal(item);
+        },
+        title: NW.t('点击定位到正文'),
+      },
+      revised
+        ? h(
+            'div',
+            { className: 'nw-adv-compare' },
+            h(
+              'div',
+              { className: 'nw-adv-side', 'data-kind': 'old' },
+              h('span', { className: 'nw-adv-tag' }, NW.t('原文')),
+              h('div', { className: 'nw-adv-txt' }, quote),
+            ),
+            h(
+              'div',
+              { className: 'nw-adv-side', 'data-kind': 'new' },
+              h('span', { className: 'nw-adv-tag' }, NW.t('改后')),
+              h('div', { className: 'nw-adv-txt' }, revised),
+            ),
+          )
+        : h(
+            'div',
+            { className: 'nw-adv-side', 'data-kind': 'old' },
+            h('span', { className: 'nw-adv-tag' }, NW.t('原文')),
+            h('div', { className: 'nw-adv-txt' }, quote),
+          ),
+      issue ? h('div', { className: 'nw-adv-issue' }, issue) : null,
+      !revised && advice ? h('div', { className: 'nw-adv-why' }, advice) : null,
+      why ? h('div', { className: 'nw-adv-why' }, why) : null,
+      h(
+        'div',
+        { className: 'nw-adv-foot' },
+        h('span', { className: 'nw-adv-kind' }, KIND[item.kind] || NW.t('表达')),
+        h('span', { style: { flex: '1 1 auto' } }),
+        canDecide && typeof p.onAccept === 'function'
+          ? h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-adv-btn',
+                'data-kind': 'accept',
+                disabled: busy,
+                onClick: (ev) => {
+                  ev.stopPropagation();
+                  p.onAccept(item);
+                },
+              },
+              NW.t('接受'),
+            )
+          : null,
+        canDecide && typeof p.onReject === 'function'
+          ? h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-adv-btn',
+                'data-kind': 'reject',
+                disabled: busy,
+                onClick: (ev) => {
+                  ev.stopPropagation();
+                  p.onReject(item);
+                },
+              },
+              NW.t('拒绝'),
+            )
+          : null,
+        !canDecide
+          ? h(
+              'span',
+              { className: 'nw-adv-btn', 'data-kind': state === 'accepted' ? 'accept' : 'reject', 'aria-live': 'polite' },
+              state === 'accepted' ? NW.t('已接受') : NW.t('已拒绝'),
+            )
+          : null,
+        !canDecide && typeof p.onUndo === 'function'
+          ? h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-adv-btn',
+                disabled: busy,
+                onClick: (ev) => {
+                  ev.stopPropagation();
+                  p.onUndo(item);
+                },
+              },
+              NW.t('撤销'),
+            )
+          : null,
+      ),
+    );
+  }
+
+  /**
+   * 已接收 — a collapsed directory under the new suggestions.
+   *
+   * Folded by default: the writer opened 修改建议 for the *new* read, and a list
+   * of everything they ever accepted would push those off the top of the column.
+   * Inside, records on the same stretch of text are bracketed together and
+   * numbered, so 「这句改过一次」 is visible at a glance.
+   */
+  function AcceptedPanel(props) {
+    const p = props || {};
+    const rows = Array.isArray(p.rows) ? p.rows : [];
+    const [open, setOpen] = useState(false);
+    const [activeId, setActiveId] = useState('');
+    if (!rows.length) return null;
+    const text = typeof p.getText === 'function' ? String(p.getText() || '') : '';
+    const groups = groupRevisions(rows, text);
+    return h(
+      'div',
+      { className: 'nw-accepted', 'data-open': open ? '1' : '0' },
+      h(
+        'button',
+        {
+          type: 'button',
+          className: 'nw-accepted-head',
+          'aria-expanded': open ? 'true' : 'false',
+          onClick: () => setOpen((v) => !v),
+        },
+        h(
+          'span',
+          { className: 'nw-accepted-caret', 'aria-hidden': 'true' },
+          NW.icon('chevright', { size: 12 }),
+        ),
+        h('span', null, NW.t('已接收')),
+        h('span', { className: 'nw-suggest-count' }, String(rows.length) + ' 条'),
+        h('span', { style: { flex: '1 1 auto' } }),
+        groups.length > 1
+          ? h('span', { className: 'nw-suggest-count' }, String(groups.length) + ' 处')
+          : null,
+      ),
+      h(
+        'div',
+        { className: 'nw-accepted-body' },
+        groups.map((grp, gi) =>
+          h(
+            'div',
+            { className: 'nw-acc-group', key: 'g' + String(gi) },
+            grp.rows.map((row, ri) =>
+              h(
+                'div',
+                {
+                  key: String(row.id),
+                  className: 'nw-acc-row',
+                  'data-active': activeId === String(row.id) ? '1' : '0',
+                  role: 'button',
+                  tabIndex: 0,
+                  onClick: () => {
+                    setActiveId(String(row.id));
+                    if (typeof p.onReveal === 'function') p.onReveal(row);
+                  },
+                  onKeyDown: (ev) => {
+                    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+                    ev.preventDefault();
+                    setActiveId(String(row.id));
+                    if (typeof p.onReveal === 'function') p.onReveal(row);
+                  },
+                  title: row.found ? NW.t('点击定位到正文') : NW.t('原文已改动，定位可能不准'),
+                },
+                // The order badge only carries information when this region was
+                // revised more than once; a single record needs no ①.
+                grp.rows.length > 1
+                  ? h('span', { className: 'nw-acc-ord' }, ordinalMark(ri))
+                  : null,
+                h(
+                  'div',
+                  { className: 'nw-acc-main' },
+                  h('div', { className: 'nw-acc-quote' }, String(row.quote || '')),
+                  row.revised ? h('div', { className: 'nw-acc-rev' }, String(row.revised)) : null,
+                ),
+                h('span', { className: 'nw-acc-meta' }, NW.fmtDate(row.createdAt)),
+                typeof p.onRemove === 'function'
+                  ? h(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'nw-acc-drop',
+                        title: NW.t('从已接收里删掉'),
+                        'aria-label': NW.t('从已接收里删掉'),
+                        onClick: (ev) => {
+                          ev.stopPropagation();
+                          p.onRemove(row);
+                        },
+                      },
+                      '\u00d7',
+                    )
+                  : null,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   /**
    * 修改建议 (R12 ②) — an editorial column beside the manuscript.
    *
@@ -18656,20 +19753,37 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    * being discussed. So this renders as a flex sibling of the editing surface
    * inside `.nw-bench`, with its own scrollbar.
    *
-   * The suggestions are advice, not replacements ("这一段节奏拖着"), so there is
-   * no accept/reject here — clicking one scrolls the manuscript to the quoted
-   * passage and selects it, which is the only mechanical action that makes
-   * sense for prose-level critique.
+   * R73/R74 changed two things the writer asked for:
+   *   - the 修改角度 chips are **optional and multi-select**. Nothing is selected
+   *     by default; any number can be on at once ("节奏 + 用词" is a normal
+   *     request), and leaving them all off means "just follow whatever I typed in
+   *     the box" (and with no box either, a general read). Pressing a chip no
+   *     longer fires a model call on its own — the run waits for the last press.
+   *   - each suggestion can be 接受 or 拒绝. Accepted ones are remembered in
+   *     IndexedDB and reappear folded under 已接收; rejected ones are never
+   *     stored. Neither touches the manuscript — accepting records the decision,
+   *     it does not rewrite the book.
    */
   function Advice(props) {
     const p = props || {};
-    const [focus, setFocus] = useState('all');
+    // R74: 角度是多选的. An empty array means "no angle picked" — the old `''`
+    // could only carry one value, so picking a second angle silently dropped the
+    // first, and 「只看节奏 + 用词」 was impossible to ask for.
+    const [focus, setFocus] = useState([]);
+    const focusRef = useRef(focus);
+    focusRef.current = focus;
+    const focusTimer = useRef(0);
     const [note, setNote] = useState('');
     const [items, setItems] = useState(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
     const [activeId, setActiveId] = useState('');
     const [model, setModel] = useState('');
+    /** item.id → 'accepted' | 'rejected' for the current read. */
+    const [decided, setDecided] = useState({});
+    /** item.id → the stored row id, so 撤销 can remove exactly what it created. */
+    const madeRef = useRef({});
+    const [savingId, setSavingId] = useState('');
     const runRef = useRef(0);
     const noteRef = useRef('');
     noteRef.current = note;
@@ -18723,7 +19837,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // provider that is down; walking the list beats a dead-end error.
           const data = await NW.ai.reviseSafe({
             text,
-            focus: nextFocus || focus,
+            // R74: several angles travel as one comma-joined string, which is
+            // what the host's prompt builder splits on. `null`/undefined still
+            // means "keep whatever is ticked now" — read through a ref so the
+            // callback does not go stale between two chip presses.
+            focus: (Array.isArray(nextFocus) ? nextFocus : focusRef.current).join(','),
             // `undefined` rather than '' so a stale caller cannot wipe a note
             // the writer typed after pressing Enter.
             note: nextNote == null ? noteRef.current : nextNote,
@@ -18755,7 +19873,38 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           if (runRef.current === token) setBusy(false);
         }
       },
-      [focus, p.editorApi, p.settings],
+      // R74: `focus` is deliberately absent — the payload is read from
+      // `focusRef` at call time, so a chip press does not rebuild the whole
+      // callback (and, more importantly, does not capture yesterday's set).
+      [p.editorApi, p.settings],
+    );
+
+    /**
+     * R74: ticking three angles must cost ONE model call, not three.
+     *
+     * The chips used to run on every click. Multi-select makes that actively
+     * wrong ("节奏" then "用词" = two whole-chapter reads before the writer has
+     * finished choosing), so the run is debounced behind the last press.
+     */
+    const scheduleFocusRun = useCallback(
+      (next) => {
+        if (focusTimer.current) {
+          clearTimeout(focusTimer.current);
+          focusTimer.current = 0;
+        }
+        focusTimer.current = setTimeout(() => {
+          focusTimer.current = 0;
+          run(next);
+        }, 420);
+      },
+      [run],
+    );
+
+    React.useEffect(
+      () => () => {
+        if (focusTimer.current) clearTimeout(focusTimer.current);
+      },
+      [],
     );
 
     // A fresh chapter starts blank: advice about the previous one is worse than
@@ -18765,6 +19914,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       setError('');
       setActiveId('');
       setBusy(false);
+      setDecided({});
+      madeRef.current = {};
       runRef.current += 1;
     }, [chapterId]);
 
@@ -18796,7 +19947,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         // the scrolling body instead, which sits below the panel header and the
         // focus chips, so the pair ended up ~60px apart.
         window.setTimeout(() => {
-          const node = document.querySelector('.nw-advice[data-active="1"]');
+          // R73: the cards are `.nw-adv` now; the old `.nw-advice` selector is
+          // kept so a stale panel from an older build still lines up.
+          const node = document.querySelector('.nw-adv[data-active="1"], .nw-advice[data-active="1"]');
           const body = document.querySelector('.nw-suggest-body');
           if (!node || !body) return;
           // Both sides are measured against the same line: the vertical middle
@@ -18827,21 +19980,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       if (api && typeof api.setHighlights === 'function') api.setHighlights([]);
     }, [p.editorApi]);
 
-    const KIND_LABEL = {
-      rhythm: '节奏',
-      diction: '用词',
-      pov: '视角',
-      detail: '画面',
-      dialogue: '对话',
-      structure: '结构',
-      character: '人物',
-      logic: '逻辑',
-      emotion: '情绪',
-      redundancy: '冗余',
-    };
-    const SEVERITY_LABEL = { high: '重要', medium: '', low: '可改可不改' };
+    // R73: no 全部 chip and nothing preselected. "No angle" means the read is
+    // driven by what the writer typed in the box, which is what they asked for.
     const FOCUS_OPTIONS = [
-      { value: 'all', label: '全部' },
       { value: 'rhythm', label: '节奏' },
       { value: 'diction', label: '用词' },
       { value: 'pov', label: '视角' },
@@ -18853,6 +19994,96 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       { value: 'emotion', label: '情绪' },
       { value: 'redundancy', label: '冗余' },
     ];
+
+    // ---- 接受 / 拒绝 / 撤销 (R73) -------------------------------------------
+    // Accepting writes one row to IndexedDB and nothing else: the manuscript is
+    // the writer's, and a suggestion is a proposal. Rejecting writes nothing at
+    // all — a "no" is not history worth keeping.
+    const acceptItem = useCallback(
+      async (item) => {
+        if (!item || !chapterId || typeof p.onAccept !== 'function') return;
+        setDecided((prev) => Object.assign({}, prev, { [item.id]: 'accepted' }));
+        setSavingId(item.id);
+        try {
+          const row = await p.onAccept({
+            quote: item.quote,
+            // In the dock's card the rewrite lives in `example`; that IS the
+            // 改后 text, so it is what gets stored.
+            revised: String(item.example || item.revised || ''),
+            issue: item.issue,
+            why: item.why,
+            advice: item.advice,
+            kind: item.kind,
+            severity: item.severity,
+            start: item.start,
+            end: item.end,
+            source: 'chapter',
+          });
+          if (row && row.id) {
+            madeRef.current = Object.assign({}, madeRef.current, { [item.id]: String(row.id) });
+          }
+        } catch (err) {
+          // The row did not land: the card must not claim it did.
+          setDecided((prev) => {
+            const next = Object.assign({}, prev);
+            delete next[item.id];
+            return next;
+          });
+        } finally {
+          setSavingId('');
+        }
+      },
+      [chapterId, p.onAccept],
+    );
+
+    const rejectItem = useCallback((item) => {
+      if (!item) return;
+      setDecided((prev) => Object.assign({}, prev, { [item.id]: 'rejected' }));
+    }, []);
+
+    const undoItem = useCallback(
+      async (item) => {
+        if (!item) return;
+        const was = decided[item.id];
+        const rowId = madeRef.current[item.id];
+        setDecided((prev) => {
+          const next = Object.assign({}, prev);
+          delete next[item.id];
+          return next;
+        });
+        if (rowId) {
+          const rest = Object.assign({}, madeRef.current);
+          delete rest[item.id];
+          madeRef.current = rest;
+        }
+        // Undoing an accept must remove the row too, otherwise 已接收 keeps a
+        // record of a decision the writer just took back.
+        if (was === 'accepted' && rowId && typeof p.onRemoveAccepted === 'function') {
+          try {
+            await p.onRemoveAccepted({ id: rowId });
+          } catch (err) {
+            /* the list refreshes from the store; a failure leaves it honest */
+          }
+        }
+      },
+      [decided, p.onRemoveAccepted],
+    );
+
+    /** Accepted rows are located against the live buffer, not the saved one. */
+    const revealRow = useCallback(
+      (row) => {
+        const api = p.editorApi && p.editorApi.current;
+        if (!api || !row) return;
+        const text = typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+        const span = locateRevision(row, text);
+        if (span.start < 0) return;
+        if (typeof api.setHighlights === 'function') {
+          api.setHighlights([{ start: span.start, end: span.end, id: row.id, active: true }]);
+        }
+        if (typeof api.centerRange === 'function') api.centerRange(span.start, span.end);
+      },
+      [p.editorApi],
+    );
 
     const head = h(
       'div',
@@ -18870,28 +20101,45 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       ),
     );
 
-    // Focus chips: eleven dimensions as wrapping pills. A segmented control was
-    // the previous shape and it silently cut the list at five.
+    // Focus chips (R74): a real multi-select. Any number can be on at once —
+    // 「只看节奏 + 用词」 is a perfectly normal request — and clicking a lit one
+    // removes just that one. A press no longer fires a model call by itself:
+    // `scheduleFocusRun` waits for the last press (see above), so choosing three
+    // angles costs one read instead of three.
     const focusRow = h(
       'div',
       { className: 'nw-advice-focus', role: 'group', 'aria-label': NW.t('建议重点') },
-      FOCUS_OPTIONS.map((opt) =>
-        h(
+      FOCUS_OPTIONS.map((opt) => {
+        const on = focus.indexOf(opt.value) >= 0;
+        return h(
           'button',
           {
             key: opt.value,
             type: 'button',
             className: 'nw-advice-chip',
-            'data-on': focus === opt.value ? '1' : '0',
-            'aria-pressed': focus === opt.value ? 'true' : 'false',
+            'data-on': on ? '1' : '0',
+            'aria-pressed': on ? 'true' : 'false',
             disabled: busy,
+            title: on ? NW.t('再点一次取消') : NW.t('加上这个角度（可多选）'),
             onClick: () => {
-              setFocus(opt.value);
-              run(opt.value);
+              const next = on
+                ? focus.filter((value) => value !== opt.value)
+                : focus.concat([opt.value]);
+              setFocus(next);
+              scheduleFocusRun(next);
             },
           },
           opt.label,
-        ),
+        );
+      }),
+      // R74: says out loud that the chips are optional *and* multi-select — the
+      // writer asked for both, and ten unlit pills read as "nothing works".
+      h(
+        'span',
+        { className: 'nw-advice-focus-hint' },
+        focus.length
+          ? NW.t('已选 {0} 个角度 · 可多选，再点一次取消', focus.length)
+          : NW.t('角度可多选、也可以不选 · 不选就按下面的要求来'),
       ),
     );
 
@@ -18950,7 +20198,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         { className: 'nw-suggest-empty' },
         NW.icon('sparkle', { size: 24 }),
         h('span', null, NW.t('让模型通读这一章，指出最值得改的地方。')),
-        h('span', { style: { fontSize: '12px', opacity: '.7' } }, NW.t('建议是意见，不是自动替换；点一条会把原文滚到那一段。')),
+        h(
+          'span',
+          { style: { fontSize: '12px', opacity: '.7' } },
+          NW.t('接受会记进「已接收」，拒绝的不保存；点一条会把原文滚到那一段。'),
+        ),
         NW.ui.btn({ kind: 'primary', onClick: () => run(focus), children: NW.t('开始审读') }),
       );
     } else if (items.length === 0) {
@@ -18966,40 +20218,25 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         'div',
         { className: 'nw-suggest-body' },
         items.map((item) =>
-          h(
-            'button',
-            {
-              key: item.id,
-              type: 'button',
-              className: 'nw-advice',
-              'data-active': activeId === item.id ? '1' : '0',
-              'data-sev': item.severity || 'medium',
-              onClick: () => reveal(item),
-            },
-            h('span', { className: 'nw-advice-quote' }, '「' + String(item.quote || '') + '」'),
-            h('span', { className: 'nw-advice-issue' }, String(item.issue || '')),
-            item.why ? h('span', { className: 'nw-advice-why' }, String(item.why)) : null,
-            h('span', { className: 'nw-advice-do' }, String(item.advice || '')),
-            item.example
-              ? h('span', { className: 'nw-advice-example' }, String(item.example))
-              : null,
-            h(
-              'span',
-              { className: 'nw-advice-foot' },
-              h(
-                'span',
-                { className: 'nw-advice-kind', 'data-sev': item.severity || 'medium' },
-                KIND_LABEL[item.kind] || '表达',
-              ),
-              SEVERITY_LABEL[item.severity || 'medium']
-                ? h('span', { className: 'nw-advice-notehint' }, SEVERITY_LABEL[item.severity || 'medium'])
-                : null,
-              Number(item.start) >= 0
-                ? null
-                : h('span', { style: { fontSize: '11px', opacity: '.7' } }, NW.t('原文已改动，定位不到')),
-            ),
-          ),
+          h(AdviceCard, {
+            key: item.id,
+            item: item,
+            state: decided[item.id] || 'pending',
+            active: activeId === item.id,
+            busy: savingId === item.id,
+            onReveal: Number(item.start) >= 0 ? () => reveal(item) : null,
+            onAccept: acceptItem,
+            onReject: rejectItem,
+            onUndo: undoItem,
+          }),
         ),
+        items.some((item) => Number(item.start) < 0)
+          ? h(
+              'div',
+              { className: 'nw-advice-notehint' },
+              NW.t('「原文已改动，定位不到」：那段文字已经不在这一章里了。'),
+            )
+          : null,
       );
     }
 
@@ -19065,8 +20302,331 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       head,
       focusRow,
       noteBox,
-      body,
+      // R73: 已接收 sits under whatever the column is currently showing — the
+      // new read, the busy state or the empty state. It is the same store the
+      // selection window reads, so a decision made in one place is in both.
+      h(
+        'div',
+        { className: 'nw-suggest-main' },
+        body,
+        h(
+          'div',
+          { className: 'nw-suggest-acceptedwrap' },
+          h(AcceptedPanel, {
+            rows: p.accepted,
+            getText: () => {
+              const api = p.editorApi && p.editorApi.current;
+              return api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+            },
+            onReveal: revealRow,
+            onRemove: p.onRemoveAccepted,
+          }),
+        ),
+      ),
       foot,
+    );
+  }
+
+  /**
+   * 选中改写 (R73) — the window the little 修改建议 button opens.
+   *
+   * A window *beside* the manuscript, not a dialog on top of it: every card
+   * compares 原文 with 改后, and the writer has to keep both in view while
+   * deciding. It is a flex sibling of the paper inside `.nw-bench`, so opening
+   * it squeezes the text column instead of covering it.
+   *
+   * Deliberately opinionated about scope: no model picker, no 修改角度 chips, no
+   * note box. The writer already said what they want by selecting those words;
+   * a second form would only ask them to say it again.
+   */
+  function SelectionAdvice(props) {
+    const p = props || {};
+    const chapterId = p.chapter ? String(p.chapter.id) : '';
+    const selection = p.selection || {};
+    const selStart = Math.max(0, Number(selection.start) || 0);
+    const selEnd = Math.max(selStart, Number(selection.end) || 0);
+    const [items, setItems] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+    const [activeId, setActiveId] = useState('');
+    const [decided, setDecided] = useState({});
+    const [savingId, setSavingId] = useState('');
+    const [model, setModel] = useState('');
+    const madeRef = useRef({});
+    const runRef = useRef(0);
+
+    const getText = useCallback(() => {
+      const api = p.editorApi && p.editorApi.current;
+      return api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+    }, [p.editorApi]);
+
+    const run = useCallback(async () => {
+      const token = runRef.current + 1;
+      runRef.current = token;
+      const text = getText();
+      const source = text.slice(selStart, selEnd);
+      if (!source.trim()) {
+        setError(NW.t('选中的文字已经不在这一章里了'));
+        setItems(null);
+        return;
+      }
+      setBusy(true);
+      setError('');
+      setActiveId('');
+      try {
+        const data = await NW.ai.reviseSelectionSafe({
+          text: source,
+          // Context only: the host is told to rewrite the selection, and the
+          // neighbouring sentences are there so the rewrite still joins up.
+          before: text.slice(Math.max(0, selStart - 240), selStart),
+          after: text.slice(selEnd, selEnd + 240),
+          onRetry: (candidate) => {
+            if (runRef.current === token) setError(NW.t('换用 {0} 重试…', candidate.label));
+          },
+        });
+        if (runRef.current !== token) return;
+        const list = Array.isArray(data && data.suggestions) ? data.suggestions : [];
+        // The host locates each quote *inside the selection*, so the offsets it
+        // returns are relative to it; shift them into chapter coordinates here.
+        setItems(
+          list.map((item) =>
+            Object.assign({}, item, {
+              start: Number(item.start) >= 0 ? selStart + Number(item.start) : -1,
+              end: Number(item.end) >= 0 ? selStart + Number(item.end) : -1,
+            }),
+          ),
+        );
+        setModel(String((data && data.model) || ''));
+      } catch (err) {
+        if (runRef.current !== token) return;
+        setItems(null);
+        setError(errText(err, '获取修改建议失败'));
+      } finally {
+        if (runRef.current === token) setBusy(false);
+      }
+    }, [getText, selStart, selEnd]);
+
+    // Opening the window *is* the request: run immediately, and start clean on
+    // a new range so yesterday's cards cannot sit under today's selection.
+    React.useEffect(() => {
+      runRef.current += 1;
+      setItems(null);
+      setError('');
+      setActiveId('');
+      setDecided({});
+      setModel('');
+      madeRef.current = {};
+      run();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selStart, selEnd, chapterId]);
+
+    // Esc closes the window — the same contract as every other transient surface
+    // in the studio.
+    React.useEffect(() => {
+      const onKey = (ev) => {
+        if (ev.key !== 'Escape') return;
+        const target = ev.target;
+        if (target && typeof target.closest === 'function' && target.closest('.nw-modal-mask')) return;
+        if (typeof p.onClose === 'function') p.onClose();
+      };
+      window.addEventListener('keydown', onKey, true);
+      return () => window.removeEventListener('keydown', onKey, true);
+    }, [p.onClose]);
+
+    const reveal = useCallback(
+      (item) => {
+        if (!item) return;
+        setActiveId(item.id);
+        const api = p.editorApi && p.editorApi.current;
+        if (!api) return;
+        const s = Number(item.start);
+        const e = Number(item.end);
+        if (s >= 0 && typeof api.setHighlights === 'function') {
+          api.setHighlights([{ start: s, end: e, id: item.id, active: true }]);
+        }
+        if (s >= 0 && typeof api.centerRange === 'function') api.centerRange(s, e);
+      },
+      [p.editorApi],
+    );
+
+    const revealRow = useCallback(
+      (row) => {
+        const api = p.editorApi && p.editorApi.current;
+        if (!api || !row) return;
+        const span = locateRevision(row, getText());
+        if (span.start < 0) return;
+        if (typeof api.setHighlights === 'function') {
+          api.setHighlights([{ start: span.start, end: span.end, id: row.id, active: true }]);
+        }
+        if (typeof api.centerRange === 'function') api.centerRange(span.start, span.end);
+      },
+      [getText, p.editorApi],
+    );
+
+    // Same decision flow as the dock's column; see Advice for the reasoning.
+    const acceptItem = useCallback(
+      async (item) => {
+        if (!item || !chapterId || typeof p.onAccept !== 'function') return;
+        setDecided((prev) => Object.assign({}, prev, { [item.id]: 'accepted' }));
+        setSavingId(item.id);
+        try {
+          const row = await p.onAccept({
+            quote: item.quote,
+            revised: String(item.revised || ''),
+            issue: item.issue,
+            why: item.why,
+            advice: item.advice,
+            kind: item.kind,
+            severity: item.severity,
+            start: item.start,
+            end: item.end,
+            source: 'selection',
+          });
+          if (row && row.id) {
+            madeRef.current = Object.assign({}, madeRef.current, { [item.id]: String(row.id) });
+          }
+        } catch (err) {
+          setDecided((prev) => {
+            const next = Object.assign({}, prev);
+            delete next[item.id];
+            return next;
+          });
+        } finally {
+          setSavingId('');
+        }
+      },
+      [chapterId, p.onAccept],
+    );
+
+    const rejectItem = useCallback((item) => {
+      if (!item) return;
+      setDecided((prev) => Object.assign({}, prev, { [item.id]: 'rejected' }));
+    }, []);
+
+    const undoItem = useCallback(
+      async (item) => {
+        if (!item) return;
+        const was = decided[item.id];
+        const rowId = madeRef.current[item.id];
+        setDecided((prev) => {
+          const next = Object.assign({}, prev);
+          delete next[item.id];
+          return next;
+        });
+        if (rowId) {
+          const rest = Object.assign({}, madeRef.current);
+          delete rest[item.id];
+          madeRef.current = rest;
+        }
+        if (was === 'accepted' && rowId && typeof p.onRemoveAccepted === 'function') {
+          try {
+            await p.onRemoveAccepted({ id: rowId });
+          } catch (err) {
+            /* the store is the source of truth; a failed undo leaves the row */
+          }
+        }
+      },
+      [decided, p.onRemoveAccepted],
+    );
+
+    const selectedText = String(selection.text || '').trim();
+    const selectedCount = selEnd - selStart;
+
+    const head = h(
+      'div',
+      { className: 'nw-selwin-head' },
+      h('span', { className: 'nw-selwin-title' }, NW.t('修改建议')),
+      h('span', { className: 'nw-selwin-count' }, NW.t('选中 {0} 字', selectedCount)),
+      h('span', { style: { flex: '1 1 auto' } }),
+      NW.ui.iconBtn(NW.icon('x', { size: 16 }), NW.t('关闭'), () => {
+        const api = p.editorApi && p.editorApi.current;
+        if (api && typeof api.setHighlights === 'function') api.setHighlights([]);
+        if (typeof p.onClose === 'function') p.onClose();
+      }),
+    );
+
+    let body;
+    if (busy) {
+      body = h(
+        'div',
+        { className: 'nw-selwin-empty' },
+        NW.ui.spinner(),
+        h('span', null, NW.t('正在读选中的这段…')),
+        h('span', { style: { fontSize: '12px', opacity: '.7' } }, NW.t('只改这一段，前后文只用来保证接得上。')),
+      );
+    } else if (error) {
+      body = h(
+        'div',
+        { className: 'nw-selwin-empty' },
+        h('span', { style: { color: 'var(--dsw-alias-state-error-primary)' } }, error),
+        NW.ui.btn({ kind: 'primary', onClick: run, children: NW.t('重试') }),
+      );
+    } else if (!items) {
+      body = h(
+        'div',
+        { className: 'nw-selwin-empty' },
+        NW.icon('sparkle', { size: 24 }),
+        NW.ui.btn({ kind: 'primary', onClick: run, children: NW.t('开始改写') }),
+      );
+    } else if (items.length === 0) {
+      body = h(
+        'div',
+        { className: 'nw-selwin-empty' },
+        NW.icon('success', { size: 24 }),
+        h('span', null, NW.t('这段放着就行，模型没找到值得改的地方。')),
+        NW.ui.btn({ onClick: run, children: NW.t('再读一次') }),
+      );
+    } else {
+      body = h(
+        'div',
+        { className: 'nw-selwin-body' },
+        items.map((item) =>
+          h(AdviceCard, {
+            key: item.id,
+            item: item,
+            state: decided[item.id] || 'pending',
+            active: activeId === item.id,
+            busy: savingId === item.id,
+            onReveal: reveal,
+            onAccept: acceptItem,
+            onReject: rejectItem,
+            onUndo: undoItem,
+          }),
+        ),
+      );
+    }
+
+    return h(
+      'aside',
+      { className: 'nw-selwin', 'aria-label': NW.t('选中文字的修改建议') },
+      head,
+      selectedText
+        ? h('div', { className: 'nw-selwin-src' }, selectedText)
+        : null,
+      body,
+      // The accepted list is the same component the dock uses, folded under the
+      // new suggestions — "these are the ones I already said yes to". It shows
+      // even while the new read is running, so the writer can look back at the
+      // earlier decisions instead of waiting.
+      h(
+        'div',
+        { className: 'nw-selwin-accepted' },
+        h(AcceptedPanel, {
+          rows: p.accepted,
+          getText: getText,
+          onReveal: revealRow,
+          onRemove: p.onRemoveAccepted,
+        }),
+      ),
+      h(
+        'div',
+        { className: 'nw-selwin-foot' },
+        items && items.length > 0
+          ? NW.ui.btn({ onClick: run, disabled: busy, children: NW.t('再改一次') })
+          : null,
+        h('span', { style: { flex: '1 1 auto' } }),
+        model ? h('span', null, model) : null,
+      ),
     );
   }
 

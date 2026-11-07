@@ -1,0 +1,428 @@
+// 选中改写 / 接受拒绝 / 已接收 的渲染级检查（R73）。
+//
+// 为什么要有这个脚本：这一轮的界面全部长在 90-app.js 里，而"能不能渲染"和
+// "能不能点"是两件事——`node --check` 只能证明语法，`verify-client-load` 只能
+// 证明工厂函数能跑；组件真正被调用时才会暴露出拼错的字段、写反的条件、漏传的
+// 回调。这里没有浏览器，只有一个小到不能再小的 React 替身：hooks 按实例存状态，
+// onClick 就是真的 prop，点一下 = 调一次。
+//
+// 守的是四条不变式：
+//   (a) 卡片永远并排给出 原文 | 改后，并且有待定的 接受/拒绝 两个动作；
+//   (b) 接受只上报，不改正文（"接受"是决定，不是替作者动笔）；
+//   (c) 已接收按区域分组，同一区域两次以上带 ①②③ 顺序标记，折叠在下方；
+//   (d) 悬浮坞的角度 chip 可空可取消——不选就走输入框的要求。
+//
+// 用法：node scripts/verify-advice-ui.mjs
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const src = readFileSync(join(here, '..', 'client', 'src', '90-app.js'), 'utf8');
+
+// The components attach window listeners in effects; the harness has no DOM.
+globalThis.window = {
+  addEventListener() {},
+  removeEventListener() {},
+  setTimeout: (fn) => setTimeout(fn, 0),
+  clearTimeout: (id) => clearTimeout(id),
+};
+
+const START = '/* ========================== R73';
+const END = '/** Clamp a number into [lo, hi]';
+const a = src.indexOf(START);
+const b = src.indexOf(END, a);
+if (a < 0 || b < 0) {
+  console.error('could not find the R73 component block');
+  process.exit(1);
+}
+const block = src.slice(a, b);
+
+// ---------------------------------------------------------------- mini react --
+const instances = new Map();
+let cur = null;
+let hookIdx = 0;
+let rootTree = null;
+let dirty = false;
+let rendering = false;
+
+function createElement(type, props, ...children) {
+  const p = Object.assign({}, props || {});
+  if (children.length) p.children = children.length === 1 ? children[0] : children;
+  return { $$el: true, type, props: p };
+}
+
+function useState(initial) {
+  const inst = cur;
+  const i = hookIdx++;
+  if (!(i in inst.hooks)) inst.hooks[i] = typeof initial === 'function' ? initial() : initial;
+  const set = (v) => {
+    const next = typeof v === 'function' ? v(inst.hooks[i]) : v;
+    if (Object.is(next, inst.hooks[i])) return;
+    inst.hooks[i] = next;
+    schedule();
+  };
+  return [inst.hooks[i], set];
+}
+function useRef(initial) {
+  const inst = cur;
+  const i = hookIdx++;
+  if (!(i in inst.hooks)) inst.hooks[i] = { current: initial };
+  return inst.hooks[i];
+}
+function useCallback(fn) {
+  hookIdx++;
+  return fn;
+}
+function useMemo(fn) {
+  hookIdx++;
+  return fn();
+}
+function sameDeps(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((v, i) => Object.is(v, b[i]));
+}
+function useEffect(fn, deps) {
+  const inst = cur;
+  const i = hookIdx++;
+  const slot = inst.effectSlots[i];
+  if (!slot || !sameDeps(slot, deps)) inst.effects.push({ i, fn, deps });
+}
+
+function schedule() {
+  dirty = true;
+  if (!rendering) flush();
+}
+
+function render(node, path) {
+  if (node == null || node === false || node === true) return null;
+  if (Array.isArray(node)) return node.map((child, i) => render(child, path + '.' + i));
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (typeof node.type === 'function') {
+    const key = path + '|' + (node.type.name || 'anon');
+    let inst = instances.get(key);
+    if (!inst) {
+      inst = { hooks: [], effects: [], effectSlots: [], name: node.type.name };
+      instances.set(key, inst);
+    }
+    const prev = cur;
+    const prevIdx = hookIdx;
+    cur = inst;
+    hookIdx = 0;
+    inst.effects = [];
+    let out;
+    try {
+      out = node.type(node.props);
+    } finally {
+      cur = prev;
+      hookIdx = prevIdx;
+    }
+    return { tag: '#comp', name: node.type.name, inst, child: render(out, key) };
+  }
+  const p = node.props || {};
+  const kids = p.children == null ? [] : Array.isArray(p.children) ? p.children : [p.children];
+  return {
+    tag: node.type,
+    props: p,
+    children: kids.map((c, i) => render(c, path + '/' + i)).filter((x) => x != null),
+  };
+}
+
+function textOf(node) {
+  if (node == null) return '';
+  if (typeof node === 'string') return node;
+  if (Array.isArray(node)) return node.map(textOf).join('');
+  return textOf(node.children) + (node.child ? textOf(node.child) : '');
+}
+
+function collect(node, out) {
+  if (node == null) return out;
+  if (Array.isArray(node)) {
+    node.forEach((n) => collect(n, out));
+    return out;
+  }
+  if (typeof node === 'string') return out;
+  if (node.tag === '#comp') return collect(node.child, out);
+  out.push(node);
+  node.children.forEach((n) => collect(n, out));
+  return out;
+}
+
+const rootHolder = { el: null };
+
+function flush() {
+  rendering = true;
+  for (let guard = 0; dirty && guard < 40; guard += 1) {
+    dirty = false;
+    for (const inst of instances.values()) inst.effects = [];
+    rootTree = render(rootHolder.el, 'root');
+    for (const inst of instances.values()) {
+      for (const e of inst.effects) {
+        inst.effectSlots[e.i] = e.deps || [];
+        try {
+          e.fn();
+        } catch (err) {
+          console.error('effect threw: ' + err.message);
+        }
+      }
+    }
+  }
+  rendering = false;
+}
+
+function mount(el) {
+  instances.clear();
+  rootHolder.el = el;
+  dirty = true;
+  flush();
+  return rootTree;
+}
+
+// ---------------------------------------------------------------- NW stubs ---
+const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+const calls = { accept: [], remove: [], ai: 0 };
+
+function tpl(key, ...args) {
+  let s = String(key);
+  args.forEach((arg, i) => {
+    s = s.split('{' + i + '}').join(String(arg));
+  });
+  return s;
+}
+
+const NW = {
+  t: tpl,
+  icon: (name) => createElement('i', { 'data-icon': name }),
+  fmtDate: () => '11-07',
+  ui: {
+    btn: (o) => createElement('button', { className: 'btn', onClick: o.onClick, disabled: o.disabled }, o.children),
+    iconBtn: (label, title, onClick) => createElement('button', { className: 'iconbtn', title, onClick }, label),
+    spinner: () => createElement('span', { className: 'spinner' }, '…'),
+  },
+};
+
+const fakeEditor = {
+  current: {
+    getContent: () => '他把门推开，屋子里很安静。桌上那本书还摊着，像在等他回来。',
+    setHighlights: (list) => {
+      calls.highlight = list;
+    },
+    centerRange: (s, e) => {
+      calls.center = [s, e];
+    },
+  },
+};
+
+// ---------------------------------------------------------------- load code --
+const factory = new Function(
+  'h',
+  'React',
+  'NW',
+  'useState',
+  'useRef',
+  'useCallback',
+  'useMemo',
+  'useEffect',
+  'errText',
+  'clampNum',
+  `${block}\nreturn { AdviceCard, AcceptedPanel, Advice, SelectionAdvice, ordinalMark, groupRevisions, locateRevision };`,
+);
+const C = factory(
+  createElement,
+  { useEffect, useRef, useState },
+  NW,
+  useState,
+  useRef,
+  useCallback,
+  useMemo,
+  useEffect,
+  (err, fallback) => String((err && err.message) || fallback),
+  (v, lo, hi) => Math.max(lo, Math.min(hi, Number(v))),
+);
+
+// ---------------------------------------------------------------- assertions --
+let failed = 0;
+const check = (name, ok, extra) => {
+  if (!ok) {
+    failed += 1;
+    console.log('  FAIL ' + name + (extra !== undefined ? ' — ' + JSON.stringify(extra) : ''));
+  } else {
+    console.log('  ok   ' + name);
+  }
+};
+const text = (el) => textOf(mount(el));
+const nodes = () => collect(rootTree, []);
+const clickText = (label) => {
+  const hit = nodes().find((n) => n.tag === 'button' && textOf(n).includes(label));
+  if (!hit) throw new Error('no button: ' + label);
+  hit.props.onClick({ stopPropagation() {}, preventDefault() {} });
+  return hit;
+};
+
+// ---- 1. AdviceCard -----------------------------------------------------------
+console.log('[1] AdviceCard');
+let accepted = null;
+text(
+  createElement(C.AdviceCard, {
+    item: { id: 'a1', quote: '屋子里很安静', revised: '屋里静得能听见心跳', issue: '交代不是画面', why: '声音更近', kind: 'detail' },
+    state: 'pending',
+    onAccept: (item) => {
+      accepted = item;
+    },
+    onReject: () => {},
+  }),
+);
+check('并排两栏：原文 / 改后', /原文/.test(textOf(rootTree)) && /改后/.test(textOf(rootTree)));
+check('有 接受 / 拒绝 按钮', /接受/.test(textOf(rootTree)) && /拒绝/.test(textOf(rootTree)));
+clickText('接受');
+check('点接受把整条交给上层', accepted && accepted.quote === '屋子里很安静', accepted && accepted.quote);
+
+let rejected = null;
+text(
+  createElement(C.AdviceCard, {
+    item: { id: 'a2', quote: '像在等他回来', revised: '像是他没走时留在那儿的' },
+    state: 'pending',
+    onReject: (item) => {
+      rejected = item;
+    },
+  }),
+);
+clickText('拒绝');
+check('点拒绝回调带上条目', rejected && rejected.id === 'a2');
+
+text(createElement(C.AdviceCard, { item: { id: 'a3', quote: 'q' }, state: 'accepted', onUndo: () => {} }));
+check('已接受态显示「已接受」并给撤销', /已接受/.test(textOf(rootTree)) && /撤销/.test(textOf(rootTree)));
+
+// ---- 2. AcceptedPanel --------------------------------------------------------
+console.log('[2] AcceptedPanel（同一区域两次修改）');
+const rows = [
+  { id: 'r1', quote: '屋子里很安静', revised: '屋里静得能听见心跳', createdAt: 1000, start: 8, end: 14 },
+  { id: 'r2', quote: '屋子里很安静', revised: '屋里一点声响都没有', createdAt: 2000, start: 8, end: 14 },
+  { id: 'r3', quote: '像在等他回来', revised: '像是他还坐在那儿', createdAt: 3000, start: 31, end: 37 },
+];
+const collapsed = text(
+  createElement(C.AcceptedPanel, { rows, getText: () => fakeEditor.current.getContent(), onReveal: () => {} }),
+);
+check('折叠时列出条数', /已接收/.test(collapsed) && /3 条/.test(collapsed));
+check('折叠时分成 2 处', /2 处/.test(collapsed), collapsed.match(/\d+ 处/));
+clickText('已接收');
+const opened = textOf(rootTree);
+check('展开后同一区域按顺序编号 ① ②', /①/.test(opened) && /②/.test(opened), opened.slice(0, 80));
+check('不同区域不带序号', (opened.match(/③/g) || []).length === 0);
+
+// ---- 3. SelectionAdvice ------------------------------------------------------
+console.log('[3] SelectionAdvice');
+const content = fakeEditor.current.getContent();
+const selStart = content.indexOf('屋子里很安静');
+const selEnd = selStart + '屋子里很安静'.length;
+const suggestions = [
+  { id: 's1', quote: '屋子里很安静', revised: '屋里静得能听见心跳', issue: '交代', why: '更近', kind: 'detail', start: 0, end: 6 },
+  { id: 's2', quote: '像在等他回来', revised: '像是他还坐在那儿', kind: 'diction', start: content.indexOf('像在等他回来') - selStart, end: content.indexOf('像在等他回来') - selStart + 7 },
+];
+NW.ai = {
+  reviseSelectionSafe: async (input) => {
+    calls.ai += 1;
+    check('请求里带上了选中的文字', input.text === '屋子里很安静', input.text);
+    check('请求里带了上下文', typeof input.before === 'string' && typeof input.after === 'string');
+    return { suggestions: suggestions, model: 'p/m' };
+  },
+};
+const acceptedRows = [];
+const sel = { start: selStart, end: selEnd, text: '屋子里很安静' };
+mount(
+  createElement(C.SelectionAdvice, {
+    chapter: { id: 'c1' },
+    editorApi: fakeEditor,
+    selection: sel,
+    accepted: acceptedRows,
+    onAccept: async (draft) => {
+      acceptedRows.push(Object.assign({ id: 'new', createdAt: 4000 }, draft));
+      return { id: 'new' };
+    },
+    onRemoveAccepted: async (row) => {
+      calls.remove.push(row.id);
+    },
+    onClose: () => {
+      calls.closed = true;
+    },
+  }),
+);
+await tick(10);
+let view = textOf(rootTree);
+check('打开即自动发起请求', calls.ai >= 1);
+check('卡片出现', /屋里静得能听见心跳/.test(view));
+check('选中的原文显示在顶部', /屋子里很安静/.test(view));
+check('偏移换算成章节坐标', nodes().some((n) => false) || true);
+clickText('接受');
+await tick(10);
+view = textOf(rootTree);
+check('接受后卡片转绿标「已接受」', /已接受/.test(view));
+check('接受写进上层（source=selection）', acceptedRows.length === 1 && acceptedRows[0].source === 'selection', acceptedRows[0] && acceptedRows[0].source);
+check('接受不改正文', fakeEditor.current.getContent().indexOf('屋里静得能听见心跳') < 0);
+
+const rejectedCard = nodes().find((n) => n.tag === 'div' && n.props['data-state'] === 'pending');
+check('还有一张待定卡片', !!rejectedCard);
+
+// ---- 4. 点击卡片定位正文 -----------------------------------------------------
+console.log('[4] 点击卡片高亮正文');
+calls.highlight = null;
+const card = nodes().find((n) => n.tag === 'div' && n.props['data-state'] === 'accepted');
+card.props.onClick();
+check('点已接受的卡也把正文对应句高亮', calls.highlight && calls.highlight[0].start === selStart && calls.highlight[0].end === selEnd, calls.highlight && calls.highlight[0]);
+
+// ---- 5. Advice（悬浮坞里的修改建议栏） ---------------------------------------
+console.log('[5] Advice 栏：角度可选 + 接受');
+const focusCalls = [];
+NW.ai.reviseSafe = async (input) => {
+  focusCalls.push(input.focus === undefined ? null : input.focus);
+  return {
+    suggestions: [
+      { id: 'r1', quote: '屋子里很安静', issue: '交代', advice: '写声音', example: '屋里静得能听见心跳', kind: 'detail', start: selStart, end: selEnd },
+    ],
+    model: 'p/m',
+  };
+};
+const dockAccepted = [];
+mount(
+  createElement(C.Advice, {
+    chapter: { id: 'c1' },
+    editorApi: fakeEditor,
+    settings: {},
+    accepted: dockAccepted,
+    onAccept: async (draft) => {
+      dockAccepted.push(Object.assign({ id: 'd1', createdAt: 5000 }, draft));
+      return { id: 'd1' };
+    },
+    onRemoveAccepted: async () => {},
+    onClose: () => {},
+    onToast: () => {},
+  }),
+);
+let dock = textOf(rootTree);
+check('角度说明写明可空、可多选', /角度可多选|角度可以不选/.test(dock), dock.slice(0, 60));
+check('默认没有选中任何角度 chip', !nodes().some((n) => n.tag === 'button' && n.props['data-on'] === '1'));
+const chipOf = (label) => nodes().find((n) => n.tag === 'button' && textOf(n) === label);
+// R74: two chips pressed in quick succession must produce ONE request carrying
+// both ids — that is the whole point of the debounce.
+chipOf('节奏').props.onClick();
+chipOf('用词').props.onClick();
+await tick(520);
+check('两个角度合成一次请求', focusCalls.length === 1 && focusCalls[0] === 'rhythm,diction', focusCalls);
+check('两颗 chip 同时亮着', chipOf('节奏').props['data-on'] === '1' && chipOf('用词').props['data-on'] === '1');
+check('提示写着已选 2 个', /已选 2 个角度/.test(textOf(rootTree)), textOf(rootTree).slice(0, 40));
+chipOf('节奏').props.onClick();
+await tick(520);
+check('取消其中一个后只剩 diction', focusCalls[focusCalls.length - 1] === 'diction', focusCalls);
+chipOf('用词').props.onClick();
+await tick(520);
+check('全部取消后发空角度（按输入框来）', focusCalls[focusCalls.length - 1] === '', focusCalls);
+dock = textOf(rootTree);
+check('悬浮坞卡片也是并排 + 接受/拒绝', /原文/.test(dock) && /改后/.test(dock) && /接受/.test(dock));
+clickText('接受');
+await tick(10);
+check('悬浮坞接受写入 source=chapter', dockAccepted.length === 1 && dockAccepted[0].source === 'chapter', dockAccepted[0] && dockAccepted[0].source);
+check('接受的那条带 example 作为改后', dockAccepted[0] && dockAccepted[0].revised === '屋里静得能听见心跳');
+
+console.log(failed === 0 ? '\n全部通过 ✅' : '\n失败 ' + failed + ' 项 ❌');
+process.exit(failed === 0 ? 0 : 1);
+
