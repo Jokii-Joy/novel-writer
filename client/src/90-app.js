@@ -58,6 +58,20 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 @media (max-width:820px){
   .nw-selwin{flex-basis:300px;}
 }
+/* R77 (B1): 面板窄到放不下「正文 + 320px 窗口」时，窗口改成浮层盖在右边，
+   而不是把稿纸压成一条。判据跟侧栏浮层一样是面板宽度（container query），
+   不是窗口宽度。 */
+@container nw (max-width: 900px){
+  .nw-selwin{
+    position:absolute;right:10px;top:10px;bottom:10px;z-index:var(--nw-z-float);
+    margin:0;width:min(420px,92%);flex:0 0 auto;
+    box-shadow:0 18px 48px rgba(0,0,0,.28);
+  }
+  .nw-bench[data-selwin="1"] .nw-bench-paper{width:auto;flex:1 1 auto;}
+}
+/* R77 (B4): 卡片进场跟着全站时长，不再「啪」地出现。key 是条目 id，所以重绘
+   不会重播，只有真的新增一张卡时才播一次。 */
+.nw-adv{animation:nw-fade-in var(--nw-dur) var(--nw-ease,ease) both;}
 /* R28 ①: the note card no longer takes a lane, so this branch is gone. With the
    advice column open the paper is pinned to the page measure and centred as a
    pair — the card simply rides along inside that paper's left margin. */
@@ -1050,6 +1064,45 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * selection window, so accepting in one place shows up in the other.
      */
     const [revisions, setRevisions] = useState([]);
+    const revisionsRef = useRef(revisions);
+    revisionsRef.current = revisions;
+    /**
+     * R77: 「今天写了多少」 —— 按天的净字数，落在 settings.dailyStats 里
+     * （`{ 'YYYY-MM-DD': number }`）。不算别的：切换章节时编辑器会 flush，
+     * 一次 flush 的字数差就是这一笔。
+     */
+    const [dailyStats, setDailyStats] = useState({});
+    const dailyStatsRef = useRef(dailyStats);
+    dailyStatsRef.current = dailyStats;
+    const dailyWordsRef = useRef({});
+    const dailyTimerRef = useRef(0);
+    /**
+     * R77 (B2): 跟随系统深浅色。`prefers-color-scheme` 是唯一可靠的信号；
+     * 老浏览器没有 matchMedia 时永远算「亮」，行为退回手动主题。
+     */
+    const [systemDark, setSystemDark] = useState(() => {
+      try {
+        return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      } catch (err) {
+        return false;
+      }
+    });
+    useEffect(() => {
+      if (typeof window.matchMedia !== 'function') return undefined;
+      let mq = null;
+      try {
+        mq = window.matchMedia('(prefers-color-scheme: dark)');
+      } catch (err) {
+        return undefined;
+      }
+      const onChange = (ev) => setSystemDark(!!(ev && ev.matches));
+      if (mq.addEventListener) mq.addEventListener('change', onChange);
+      else if (mq.addListener) mq.addListener(onChange);
+      return () => {
+        if (mq.removeEventListener) mq.removeEventListener('change', onChange);
+        else if (mq.removeListener) mq.removeListener(onChange);
+      };
+    }, []);
     /**
      * R44: 读一遍 — the whole book laid out as pages, over the writing surface.
      * It is an overlay rather than a route on purpose: the editor stays mounted
@@ -1212,6 +1265,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       setMarks(Array.isArray(markRows) ? markRows : []);
       setRevisions(Array.isArray(revisionRows) ? revisionRows : []);
       setSettings(nextSettings);
+      // R77: 今日字数 / 连续天数从这里起步；老库没有这个键就是一本空账。
+      setDailyStats(nextSettings.dailyStats && typeof nextSettings.dailyStats === 'object' ? nextSettings.dailyStats : {});
       return { novels: novelRows || [], chapters: chapterRows || [], settings: nextSettings };
     }, []);
 
@@ -1884,6 +1939,34 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       });
     }, []);
 
+    // ---- R77: 按天的字数账 ----------------------------------------------------
+    // A local-date key. `toISOString()` would flip days at 08:00 Beijing time.
+    const dayKeyOf = (ms) => {
+      const d = new Date(ms);
+      const pad = (n) => String(n).padStart(2, '0');
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    };
+
+    /** Write the ledger at most every couple of seconds — a save is every 1.2s. */
+    const persistDailyStats = () => {
+      if (dailyTimerRef.current) clearTimeout(dailyTimerRef.current);
+      dailyTimerRef.current = window.setTimeout(() => {
+        dailyTimerRef.current = 0;
+        NW.db.saveSettings({ dailyStats: dailyStatsRef.current }).catch(() => {});
+      }, 2000);
+    };
+
+    const bumpDailyWords = (delta) => {
+      const value = Math.round(Number(delta) || 0);
+      if (!value) return;
+      const key = dayKeyOf(Date.now());
+      const next = Object.assign({}, dailyStatsRef.current);
+      next[key] = (Number(next[key]) || 0) + value;
+      dailyStatsRef.current = next;
+      setDailyStats(next);
+      persistDailyStats();
+    };
+
     const saveChapter = useCallback(
       async (content, chapterId) => {
         const current = chapterRef.current;
@@ -1900,6 +1983,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           await NW.db.saveChapterContent(targetId, text);
           if (!aliveRef.current) return;
           const words = NW.format.wordCount(text);
+          // R77: 今日字数 = this save's word delta. The first save of a chapter in
+          // this session only records the baseline (no delta), so opening a book
+          // never counts as writing it. Swings above 30k are restores or imports,
+          // not typing — counting them would fake a heroic day.
+          const prevWords = dailyWordsRef.current[String(targetId)];
+          if (typeof prevWords === 'number') {
+            const delta = words - prevWords;
+            if (Math.abs(delta) <= 30000) bumpDailyWords(delta);
+          }
+          dailyWordsRef.current[String(targetId)] = words;
           setSaveState(dirtyDuringSaveRef.current ? 'dirty' : 'saved');
           setSavedAt(Date.now());
           patchChapterInList(targetId, { content: text, wordCount: words });
@@ -2200,7 +2293,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         // R73: accepted suggestions are pinned to their words by the same diff —
         // editing the paragraph around them must not leave 「已接收」 pointing at
         // the neighbours of the sentence it was about.
-        if (typeof NW.db.shiftRevisionsForEdit === 'function') {
+        // R77: but only when this chapter actually has accepted rows. Reading the
+        // index on every save for a chapter that never had one is a wasted IDB
+        // round trip on the typing path.
+        const hasRevisionsHere = revisionsRef.current.some(
+          (row) => row && String(row.chapterId) === String(current.id),
+        );
+        if (hasRevisionsHere && typeof NW.db.shiftRevisionsForEdit === 'function') {
           try {
             const moved = await NW.db.shiftRevisionsForEdit(current.id, diff);
             if (aliveRef.current && moved) await refreshRevisions();
@@ -3205,6 +3304,34 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     }, [chapters, activeNovelId]);
 
     const chapterWords = chapter ? Number(chapter.wordCount) || 0 : 0;
+    // R77 (B2): 主题最终落到哪一套。手动时就是 settings.theme，自动时按系统亮暗取。
+    const autoTheme = settings.themeAuto === true;
+    const effectiveTheme = autoTheme
+      ? String(settings[systemDark ? 'themeDark' : 'themeLight'] || (systemDark ? 'night' : 'claude'))
+      : String(settings.theme || 'claude');
+    // Hand the editor/read view a settings object whose `theme` is the resolved
+    // one. Identity is stable while nothing changes, so panels do not re-render
+    // on every tick.
+    const themeSettings = useMemo(
+      () => (settings.theme === effectiveTheme ? settings : Object.assign({}, settings, { theme: effectiveTheme })),
+      [settings, effectiveTheme],
+    );
+    // R77: 今日进度。一条记录都没有时显示「今日 0 字」，不编数字。
+    const todayWords = Number(dailyStats[dayKeyOf(Date.now())]) || 0;
+    const streakDays = (() => {
+      const DAY = 86400000;
+      const keyOf = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      let probe = new Date();
+      probe = new Date(probe.getFullYear(), probe.getMonth(), probe.getDate());
+      if (!(Number(dailyStats[keyOf(probe)]) > 0)) probe = new Date(probe.getTime() - DAY);
+      let days = 0;
+      for (let i = 0; i < 400; i += 1) {
+        if (!(Number(dailyStats[keyOf(probe)]) > 0)) break;
+        days += 1;
+        probe = new Date(probe.getTime() - DAY);
+      }
+      return days;
+    })();
 
     const openDialog = useCallback(
       (kind, extra) => {
@@ -3365,7 +3492,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         'data-immersive': immersive ? '1' : undefined,
         // The shell follows the reading theme (see 98-shell-theme.js) so the
         // sidebar and toolbar never frame a page in a contradicting palette.
-        'data-theme': settings.theme || 'claude',
+        'data-theme': themeSettings.theme || 'claude',
         onPointerMove: onRootPointerMove,
         onKeyDown: touchActivity,
         onWheel: touchActivity,
@@ -3392,6 +3519,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 onRename: renameNode,
                 onDelete: deleteNode,
                 onMove: moveNode,
+                // R77: 章节信息（状态 / 简介 / 目标字数）。
+                onChapterInfo: (id, title) => openDialog('chapterInfo', { chapterId: id, title: title }),
+                // R77: 设定集（人物 / 地点 / 道具 / 设定），按书打开。
+                onLore: (id) => openDialog('lore', { novelId: id }),
                 onSearch: () => {},
                 onImport: importNow,
                 onExport: exportTarget,
@@ -3525,7 +3656,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     h(NW.Editor, {
                       key: String(chapter.id),
                       chapter: chapter,
-                      settings: settings,
+                      // R77: the editor follows the resolved theme, not the raw
+                      // setting — that is what makes 跟随系统 actually switch.
+                      settings: themeSettings,
                       immersive: immersive,
                       // R13: the notes card floats over the paper without a
                       // reserved lane, so the manuscript keeps its full measure
@@ -3668,7 +3801,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // The editor buffer can be ahead of the last autosave, so the open
             // chapter is read from the live text, not from the stored row.
             currentText: getEditorText(),
-            settings: settings,
+            settings: themeSettings,
             // R47: reading is also when a writer notices — so this is where an
             // annotation can be drawn. The marks are the shell's, not the view's:
             // the same array feeds the editor underneath, so a line underlined
@@ -3708,6 +3841,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               h('span', null, '本章 ' + NW.fmtWords(chapterWords) + ' 字'),
               h('span', null, '本书 ' + NW.fmtWords(wordCounts.novel) + ' 字'),
               h('span', null, '全部 ' + NW.fmtWords(wordCounts.book) + ' 字'),
+              // R77: 今日 + 连续。负数也照实说（改稿删字也是当天的账）。
+              h(
+                'span',
+                { className: 'nw-status-today', 'data-sign': todayWords < 0 ? 'down' : 'up' },
+                '今日 ' + (todayWords > 0 ? '+' : '') + NW.fmtWords(todayWords) + ' 字'
+                  + (streakDays > 1 ? ' · 连续 ' + streakDays + ' 天' : ''),
+              ),
             ),
             syncText: syncText,
             wordText: '',
@@ -4986,6 +5126,43 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [applied, p.editorApi, p.onToast],
     );
 
+    // R77 (B3): 键盘 —— J/K 上下、A 接受、R 拒绝。输入框/文本域里不抢键。
+    React.useEffect(() => {
+      const onKey = (ev) => {
+        const target = ev.target;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+        if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+        const list = Array.isArray(items) ? items : [];
+        if (!list.length) return;
+        const at = list.findIndex((row) => row.id === activeId);
+        const pick = (index) => list[Math.max(0, Math.min(list.length - 1, index))];
+        const key = String(ev.key || '');
+        if (key === 'j' || key === 'J' || key === 'ArrowDown') {
+          ev.preventDefault();
+          reveal(pick(at < 0 ? 0 : at + 1));
+          return;
+        }
+        if (key === 'k' || key === 'K' || key === 'ArrowUp') {
+          ev.preventDefault();
+          reveal(pick(at < 0 ? 0 : at - 1));
+          return;
+        }
+        const current = at >= 0 ? list[at] : null;
+        if (!current) return;
+        if (key === 'a' || key === 'A') {
+          ev.preventDefault();
+          acceptItem(current);
+          return;
+        }
+        if (key === 'r' || key === 'R') {
+          ev.preventDefault();
+          rejectItem(current);
+        }
+      };
+      window.addEventListener('keydown', onKey, true);
+      return () => window.removeEventListener('keydown', onKey, true);
+    }, [items, activeId, reveal, acceptItem, rejectItem]);
+
     const head = h(
       'div',
       { className: 'nw-suggest-head' },
@@ -5433,6 +5610,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       return () => window.removeEventListener('keydown', onKey, true);
     }, [p.onClose]);
 
+    // R77 (B3): 键盘走一遍 —— J/K 上下、A 接受、R 拒绝。输入框里打字时不抢键。
+    // 这个 effect 放在 reveal / acceptItem 之后：deps 数组在渲染时求值，
+    // 放在前面会撞上 const 的暂时性死区。
+
     const reveal = useCallback(
       (item) => {
         if (!item) return;
@@ -5612,6 +5793,43 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       },
       [decided, p.onRemoveAccepted],
     );
+
+    // R77 (B3): 键盘走一遍 —— J/K 上下、A 接受、R 拒绝。输入框里不抢键。
+    React.useEffect(() => {
+      const onKey = (ev) => {
+        const target = ev.target;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+        if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+        const list = Array.isArray(items) ? items : [];
+        if (!list.length) return;
+        const at = list.findIndex((row) => row.id === activeId);
+        const pick = (index) => list[Math.max(0, Math.min(list.length - 1, index))];
+        const key = String(ev.key || '');
+        if (key === 'j' || key === 'J' || key === 'ArrowDown') {
+          ev.preventDefault();
+          reveal(pick(at < 0 ? 0 : at + 1));
+          return;
+        }
+        if (key === 'k' || key === 'K' || key === 'ArrowUp') {
+          ev.preventDefault();
+          reveal(pick(at < 0 ? 0 : at - 1));
+          return;
+        }
+        const current = at >= 0 ? list[at] : null;
+        if (!current) return;
+        if (key === 'a' || key === 'A') {
+          ev.preventDefault();
+          acceptItem(current);
+          return;
+        }
+        if (key === 'r' || key === 'R') {
+          ev.preventDefault();
+          rejectItem(current);
+        }
+      };
+      window.addEventListener('keydown', onKey, true);
+      return () => window.removeEventListener('keydown', onKey, true);
+    }, [items, activeId, reveal, acceptItem, rejectItem]);
 
     const selectedText = String(selection.text || '').trim();
     const selectedCount = selEnd - selStart;

@@ -20,8 +20,9 @@
   // R73: 4 adds `revisions` — the 修改建议 the writer accepted. It is a sibling
   // of `marks` (a record *about* a range of words, never an edit to the text),
   // so an old database upgrades in place without touching existing rows.
-  const DB_VERSION = 4;
-  const STORES = ['novels', 'chapters', 'versions', 'trash', 'settings', 'notes', 'marks', 'revisions'];
+  // R77: 5 adds `lore` — 设定集（人物 / 地点 / 道具 / 随手设定），按书存。
+  const DB_VERSION = 5;
+  const STORES = ['novels', 'chapters', 'versions', 'trash', 'settings', 'notes', 'marks', 'revisions', 'lore'];
   const VERSION_LIMIT = 50;
   const SETTINGS_KEY = 'app';
   const ENC_PREFIX = 'enc:v1:';
@@ -228,6 +229,12 @@
           if (!db.objectStoreNames.contains('revisions')) {
             const store = db.createObjectStore('revisions', { keyPath: 'id' });
             store.createIndex('byChapterId', 'chapterId', { unique: false });
+            store.createIndex('byNovelId', 'novelId', { unique: false });
+          }
+          // R77: 设定集. One row per card, scoped to a book (not a chapter) —
+          // a character exists across the whole novel, not inside one scene.
+          if (!db.objectStoreNames.contains('lore')) {
+            const store = db.createObjectStore('lore', { keyPath: 'id' });
             store.createIndex('byNovelId', 'novelId', { unique: false });
           }
         } catch (err) {
@@ -755,6 +762,23 @@
     if (Object.prototype.hasOwnProperty.call(patch, 'order')) {
       const order = Number(patch.order);
       if (Number.isFinite(order)) next.order = order;
+    }
+    // R77: 写作状态 / 一句话简介 / 本章目标. All three are optional and unknown
+    // values are ignored rather than stored, so an older row keeps behaving.
+    if (Object.prototype.hasOwnProperty.call(patch, 'status')) {
+      const status = String(patch.status || '');
+      if (status === 'draft' || status === 'revising' || status === 'done') next.status = status;
+      else delete next.status;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'summary')) {
+      const summary = String(patch.summary == null ? '' : patch.summary).trim().slice(0, 200);
+      if (summary) next.summary = summary;
+      else delete next.summary;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'targetWords')) {
+      const target = Math.round(Number(patch.targetWords) || 0);
+      if (target > 0) next.targetWords = Math.min(target, 1000000);
+      else delete next.targetWords;
     }
     next.updatedAt = now();
     const ok = await writeBatch([{ store: 'chapters', type: 'put', value: next }]);
@@ -1655,6 +1679,75 @@
     return ops.length;
   }
 
+  // ---------------------------------------------------------------------------
+  // 设定集 (R77)
+  //
+  // 人物 / 地点 / 道具 / 随手设定，按**书**存：一个角色活在整本书里，不属于某一章。
+  // 它是写作时的备忘，不进正文、不进导出，删掉也不影响稿子。
+  // ---------------------------------------------------------------------------
+  const LORE_KINDS = { character: 1, place: 1, item: 1, note: 1 };
+
+  function cleanLore(input) {
+    const data = input || {};
+    const novelId = String(data.novelId || '');
+    const name = String(data.name == null ? '' : data.name).trim().slice(0, 80);
+    if (!novelId || !name) return null;
+    const kind = LORE_KINDS[String(data.kind || '')] ? String(data.kind) : 'character';
+    return {
+      novelId: novelId,
+      kind: kind,
+      name: name,
+      body: String(data.body == null ? '' : data.body).slice(0, 4000),
+    };
+  }
+
+  async function listLore(novelId) {
+    const rows = novelId != null && String(novelId)
+      ? await readIndex('lore', 'byNovelId', String(novelId))
+      : await readAll('lore');
+    return (rows || [])
+      .filter(function (row) {
+        return row && row.id && row.name;
+      })
+      .sort(function (a, b) {
+        const ka = String(a.kind || '');
+        const kb = String(b.kind || '');
+        if (ka !== kb) return ka < kb ? -1 : 1;
+        return String(a.name).localeCompare(String(b.name), 'zh-Hans-CN');
+      });
+  }
+
+  async function createLore(input) {
+    const clean = cleanLore(input);
+    if (!clean) return undefined;
+    const stamp = now();
+    const row = Object.assign({ id: uid('lore'), createdAt: stamp, updatedAt: stamp }, clean);
+    const ok = await writeBatch([{ store: 'lore', type: 'put', value: row }]);
+    if (!ok) throw new Error('保存设定失败');
+    notify();
+    return row;
+  }
+
+  async function updateLore(id, patch) {
+    if (!id) return undefined;
+    const current = await readOne('lore', id);
+    if (!current) return undefined;
+    const merged = cleanLore(Object.assign({}, current, patch || {}));
+    if (!merged) return undefined;
+    const next = Object.assign({}, current, merged, { updatedAt: now() });
+    const ok = await writeBatch([{ store: 'lore', type: 'put', value: next }]);
+    if (!ok) throw new Error('保存设定失败');
+    notify();
+    return next;
+  }
+
+  async function deleteLore(id) {
+    if (!id) return false;
+    const ok = await writeBatch([{ store: 'lore', type: 'delete', key: String(id) }]);
+    if (!ok) return false;
+    notify();
+    return true;
+  }
 
   function subscribe(fn) {
     if (typeof fn !== 'function') return function () {};
@@ -1710,6 +1803,7 @@
     // R73: accepted advice travels with the backup — it is part of the writer's
     // thinking about the book, not a transient UI state.
     const revisions = await readAll('revisions');
+    const lore = await readAll('lore');
     return {
       novels: novels || [],
       chapters: chapters || [],
@@ -1719,6 +1813,7 @@
       notes: notes || [],
       marks: marks || [],
       revisions: revisions || [],
+      lore: lore || [],
     };
   }
 
@@ -1974,6 +2069,10 @@
     createRevision: createRevision,
     deleteRevision: deleteRevision,
     shiftRevisionsForEdit: shiftRevisionsForEdit,
+    listLore: listLore,
+    createLore: createLore,
+    updateLore: updateLore,
+    deleteLore: deleteLore,
     dump: dump,
     replaceAll: replaceAll,
     encryptAll: encryptAll,

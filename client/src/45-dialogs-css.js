@@ -423,6 +423,36 @@
 .nw-diff-row[data-type="del"]{background:color-mix(in srgb, var(--nw-danger) 12%, transparent);}
 .nw-diff-mark{flex:0 0 auto;width:12px;opacity:.7;text-align:center;}
 .nw-diff-text{min-width:0;}
+/* R77: 版本对比用同一个 diff 渲染，但要能滚——一章几百行，弹窗不能无限长。 */
+.nw-diff-list{max-height:52vh;overflow:auto;padding:4px;border-radius:var(--nw-r-control);background:var(--nw-sunken);}
+/* R77: 设定集 — 左列表右编辑，窄屏堆成一列。 */
+.nw-lore{display:grid;grid-template-columns:280px 1fr;gap:14px;min-height:380px;max-height:62vh;}
+.nw-lore-list{display:flex;flex-direction:column;gap:8px;min-height:0;padding-right:12px;border-right:1px solid var(--nw-line);}
+.nw-lore-listhead{display:flex;align-items:center;gap:6px;}
+.nw-lore-listhead .nw-input{flex:1 1 auto;min-width:0;}
+.nw-lore-items{flex:1 1 auto;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:2px;}
+.nw-lore-item{
+  display:flex;align-items:center;gap:6px;width:100%;padding:7px 8px;
+  border:0;border-radius:8px;background:transparent;color:var(--nw-fg);
+  cursor:pointer;text-align:left;font-family:inherit;font-size:13px;
+}
+.nw-lore-item:hover{background:var(--nw-surface-2);}
+.nw-lore-item.is-active{background:color-mix(in srgb, var(--nw-brand) 12%, transparent);color:var(--nw-brand);}
+.nw-lore-itemname{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.nw-lore-kind{flex:0 0 auto;font-size:10px;padding:1px 6px;border-radius:999px;border:1px solid var(--nw-line);opacity:.85;}
+.nw-lore-kind[data-kind="character"]{color:var(--nw-brand);}
+.nw-lore-kind[data-kind="place"]{color:var(--nw-ok);}
+.nw-lore-kind[data-kind="item"]{color:var(--nw-warn);}
+.nw-lore-editor{display:flex;flex-direction:column;gap:10px;min-height:0;overflow:auto;}
+.nw-lore-editor .nw-textarea{min-height:200px;}
+.nw-lore-empty{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+  color:var(--nw-fg-soft);font-size:13px;text-align:center;
+}
+@container nw (max-width: 720px){
+  .nw-lore{grid-template-columns:1fr;}
+  .nw-lore-list{border-right:0;border-bottom:1px solid var(--nw-line);padding-right:0;padding-bottom:10px;max-height:200px;}
+}
 
 /* ----------------------------------------------------------- cloud login -- */
 .nw-login-box{

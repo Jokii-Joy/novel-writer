@@ -247,8 +247,27 @@
             icon('caret'),
           )
         : h('span', { className: 'nw-shelf-caret is-empty', 'aria-hidden': 'true' }),
+      // R77: 写作状态是一枚小圆点（草稿不画，省得整棵树都是灰点），
+      // 有目标字数时把「已写/目标」并进右侧那行小字。
+      String(ch.status || '')
+        ? h('span', {
+            className: 'nw-shelf-dot',
+            'data-status': String(ch.status),
+            'aria-label': ch.status === 'done' ? tr('已定稿') : tr('修改中'),
+            title: ch.status === 'done' ? tr('已定稿') : tr('修改中'),
+          })
+        : null,
       h('span', { className: 'nw-shelf-row-title' }, title),
-      h('span', { className: 'nw-shelf-row-meta' }, fmtWords(ch.wordCount || 0)),
+      Number(ch.targetWords) > 0
+        ? h(
+            'span',
+            {
+              className: 'nw-shelf-row-meta',
+              'data-done': (Number(ch.wordCount) || 0) >= Number(ch.targetWords) ? '1' : '0',
+            },
+            fmtWords(ch.wordCount || 0) + '/' + fmtWords(ch.targetWords),
+          )
+        : h('span', { className: 'nw-shelf-row-meta' }, fmtWords(ch.wordCount || 0)),
       showActions
         ? h(
             'span',
@@ -1076,6 +1095,30 @@
           },
           false,
         ),
+        // R77: 设定集（人物 / 地点 / 道具 / 设定），按书存。
+        menu.kind === 'novel'
+          ? menuItem(
+              'book',
+              tr('设定集'),
+              () => {
+                if (typeof P.onLore === 'function') P.onLore(menu.id, title);
+                else toast(tr('设定集入口尚未接入'));
+              },
+              false,
+            )
+          : null,
+        // R77: 状态 / 简介 / 目标字数——「这一章写到哪了」是长篇每天都要看一眼的东西。
+        menu.kind === 'chapter'
+          ? menuItem(
+              'doc',
+              tr('章节信息'),
+              () => {
+                if (typeof P.onChapterInfo === 'function') P.onChapterInfo(menu.id, title);
+                else toast(tr('章节信息入口尚未接入'));
+              },
+              false,
+            )
+          : null,
         menuItem(
           'trash',
           tr('删除'),
@@ -1488,6 +1531,15 @@
 }
 /* 悬停时动作条浮在行右侧，字数先淡出让位，避免被按钮压住。 */
 .nw-shelf-row:hover .nw-shelf-row-meta{opacity:0;}
+/* R77: 状态点 —— 修改中（琥珀）/ 已定稿（绿）。草稿不画点，免得整棵树都是灰的。 */
+.nw-shelf-dot{
+  flex:0 0 auto;width:6px;height:6px;border-radius:50%;
+  margin-right:5px;background:var(--nw-fg-soft);opacity:.85;
+}
+.nw-shelf-dot[data-status="revising"]{background:var(--nw-warn);}
+.nw-shelf-dot[data-status="done"]{background:var(--nw-ok);}
+/* 到了目标字数，那一串「1200/3000」转成绿色。 */
+.nw-shelf-row-meta[data-done="1"]{color:var(--nw-ok);}
 
 /* --------------------------------------------- 行内动作按钮（悬停显示） ---- */
 .nw-row-actions{

@@ -2242,6 +2242,39 @@
                 THEME_OPTIONS.map((entry) => themeChoice(entry, (draft.theme || 'claude') === entry.value, (value) => set('theme', value))),
               ),
             }),
+            // R77 (B2): 跟随系统深浅色。开着时主题由系统决定，两个下拉决定
+            // 「系统亮用哪套、系统暗用哪套」——九套主题里主观上最像白天/黑夜的那两套。
+            NW.ui.field({
+              label: NW.t('跟随系统深浅色'),
+              hint: NW.t('开着时：系统是浅色用下面第一套，系统切到深色自动换第二套。'),
+              children: NW.ui.toggle({
+                checked: draft.themeAuto === true,
+                label: NW.t('跟随系统'),
+                onChange: (value) => set('themeAuto', !!value),
+              }),
+            }),
+            draft.themeAuto
+              ? h(
+                  'div',
+                  { className: 'nw-grid2' },
+                  NW.ui.field({
+                    label: NW.t('系统为浅色时用'),
+                    children: NW.ui.select({
+                      value: draft.themeLight || 'claude',
+                      onChange: (value) => set('themeLight', value),
+                      options: THEME_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label })),
+                    }),
+                  }),
+                  NW.ui.field({
+                    label: NW.t('系统为深色时用'),
+                    children: NW.ui.select({
+                      value: draft.themeDark || 'night',
+                      onChange: (value) => set('themeDark', value),
+                      options: THEME_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label })),
+                    }),
+                  }),
+                )
+              : null,
             NW.ui.field({
               label: NW.t('字体'),
               children: NW.ui.select({
@@ -4838,6 +4871,9 @@
     const [busy, setBusy] = useState('');
     const [error, setError] = useState('');
     const [preview, setPreview] = useState(null);
+    // R77: 恢复是不可逆的一步，光看「预览」等于让人在赌。对比把这一版和当前
+    // 正文逐行摊开，先看清改了什么再决定要不要恢复。
+    const [compare, setCompare] = useState(null);
 
     useEffect(() => {
       let alive = true;
@@ -4916,10 +4952,63 @@
               h(
                 'span',
                 { style: { display: 'inline-flex', gap: '6px' } },
+                NW.ui.btn({ onClick: () => setCompare(row), children: NW.t('对比当前') }),
                 NW.ui.btn({ onClick: () => setPreview(row), children: NW.t('预览') }),
                 NW.ui.btn({ kind: 'primary', onClick: () => restore(row), disabled: !!busy, children: NW.t('恢复') }),
               ),
             ),
+          ),
+        ),
+      );
+    }
+    if (compare) {
+      // R77: the diff is computed against the *live* buffer, not the saved row,
+      // so unsaved typing shows up as part of the comparison.
+      const api = p.editorApi && p.editorApi.current;
+      const liveText = api && typeof api.getContent === 'function'
+        ? String(api.getContent() || '')
+        : String((p.chapter && p.chapter.content) || '');
+      let diffRows = [];
+      try {
+        diffRows = NW.format.diffPreview(String(compare.content || ''), liveText);
+      } catch (err) {
+        diffRows = [];
+      }
+      const added = diffRows.filter((row) => row.type === 'add').length;
+      const removed = diffRows.filter((row) => row.type === 'del').length;
+      const LIMIT = 800;
+      const shown = diffRows.slice(0, LIMIT);
+      body.push(
+        h(
+          'div',
+          { className: 'nw-preview-box' },
+          h(
+            'div',
+            { className: 'nw-inline', style: { justifyContent: 'space-between', marginBottom: '6px' } },
+            h('strong', null, '对比 ' + NW.fmtDate(compare.createdAt) + ' ↔ 当前'),
+            h(
+              'span',
+              { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } },
+              h('span', { className: 'nw-dim' }, '+' + added + ' / −' + removed),
+              NW.ui.btn({ kind: 'ghost', onClick: () => setCompare(null), children: NW.t('关闭') }),
+            ),
+          ),
+          h(
+            'div',
+            { className: 'nw-diff-list', role: 'list' },
+            shown.length === 0
+              ? h('div', { className: 'nw-dim', style: { padding: '10px' } }, '这一版和当前正文一模一样。')
+              : shown.map((row, index) =>
+                  h(
+                    'div',
+                    { key: 'v' + index, className: 'nw-diff-row', 'data-type': row.type, role: 'listitem' },
+                    h('span', { className: 'nw-diff-mark', 'aria-hidden': 'true' }, row.type === 'add' ? '+' : row.type === 'del' ? '−' : ' '),
+                    h('span', { className: 'nw-diff-text' }, row.text || ' '),
+                  ),
+                ),
+            diffRows.length > LIMIT
+              ? h('div', { className: 'nw-dim', style: { padding: '8px 10px' } }, '只显示了前 ' + LIMIT + ' 行；整章太长，恢复前建议直接预览。')
+              : null,
           ),
         ),
       );
@@ -4947,6 +5036,310 @@
         closeBtn(p),
       ),
       '620px',
+      p.onClose,
+    );
+  };
+
+  // ================================================================ Lore ====
+  /**
+   * R77: 设定集 —— 人物 / 地点 / 道具 / 随手设定，按书存。
+   *
+   * 长篇写到三十万字，谁在第几章死过、这个城在哪个方向，靠脑子是记不住的。
+   * 它刻意不做成"知识库"：一栏、一张卡、四类，写完就关。正文永远不引用它，
+   * 所以删掉也不会碰稿子。
+   */
+  NW.dialogs.Lore = function Lore(props) {
+    const p = props || {};
+    const novelId = String((p.dialog && p.dialog.novelId) || (p.novel && p.novel.id) || '');
+    const [rows, setRows] = useState(null);
+    const [activeId, setActiveId] = useState('');
+    const [draft, setDraft] = useState(null);
+    const [query, setQuery] = useState('');
+    const [busy, setBusy] = useState('');
+    const [error, setError] = useState('');
+
+    const reload = useCallback(async () => {
+      if (!novelId) {
+        setRows([]);
+        return;
+      }
+      try {
+        const list = await NW.db.listLore(novelId);
+        setRows(Array.isArray(list) ? list : []);
+      } catch (err) {
+        setRows([]);
+        setError(errText(err, '读取设定失败'));
+      }
+    }, [novelId]);
+
+    useEffect(() => {
+      reload();
+    }, [reload]);
+
+    const filtered = useMemo(() => {
+      const list = Array.isArray(rows) ? rows : [];
+      const q = query.trim().toLowerCase();
+      if (!q) return list;
+      return list.filter(
+        (row) =>
+          String(row.name || '').toLowerCase().includes(q)
+          || String(row.body || '').toLowerCase().includes(q),
+      );
+    }, [rows, query]);
+
+    const openRow = (row) => {
+      setActiveId(row.id);
+      setDraft({ id: row.id, name: row.name, kind: row.kind, body: row.body || '' });
+      setError('');
+    };
+
+    const startNew = () => {
+      setActiveId('');
+      setDraft({ id: '', name: '', kind: 'character', body: '' });
+      setError('');
+    };
+
+    const save = async () => {
+      if (!draft) return;
+      const name = String(draft.name || '').trim();
+      if (!name) {
+        setError('先给这张卡起个名字');
+        return;
+      }
+      setBusy('保存中…');
+      setError('');
+      try {
+        if (draft.id) {
+          await NW.db.updateLore(draft.id, { name: name, kind: draft.kind, body: draft.body });
+        } else {
+          const created = await NW.db.createLore({ novelId: novelId, name: name, kind: draft.kind, body: draft.body });
+          if (created && created.id) setActiveId(created.id);
+        }
+        await reload();
+        if (typeof p.onToast === 'function') p.onToast('设定已保存', 'ok');
+      } catch (err) {
+        setError(errText(err, '保存失败'));
+      } finally {
+        setBusy('');
+      }
+    };
+
+    const remove = async () => {
+      if (!draft || !draft.id) {
+        setDraft(null);
+        setActiveId('');
+        return;
+      }
+      const ok = await NW.ui.confirm('删掉这张设定？删掉不影响正文。', { title: NW.t('删除设定') });
+      if (!ok) return;
+      try {
+        await NW.db.deleteLore(draft.id);
+        setDraft(null);
+        setActiveId('');
+        await reload();
+      } catch (err) {
+        setError(errText(err, '删除失败'));
+      }
+    };
+
+    const KIND_LABELS = { character: '人物', place: '地点', item: '道具', note: '设定' };
+
+    const list = h(
+      'div',
+      { className: 'nw-lore-list' },
+      h(
+        'div',
+        { className: 'nw-lore-listhead' },
+        NW.ui.input({
+          value: query,
+          placeholder: '搜名字或内容…',
+          ariaLabel: NW.t('搜索设定'),
+          onChange: (value) => setQuery(value),
+        }),
+        NW.ui.btn({ kind: 'primary', onClick: startNew, children: NW.t('新建') }),
+      ),
+      rows == null
+        ? NW.ui.spinner('读取…')
+        : filtered.length === 0
+          ? h('div', { className: 'nw-dim', style: { padding: '14px 6px' } }, query ? '没有匹配的设定' : '还没有设定。新建一个人物或地点。')
+          : h(
+              'div',
+              { className: 'nw-lore-items', role: 'list' },
+              filtered.map((row) =>
+                h(
+                  'button',
+                  {
+                    key: row.id,
+                    type: 'button',
+                    className: 'nw-lore-item' + (activeId === row.id ? ' is-active' : ''),
+                    role: 'listitem',
+                    onClick: () => openRow(row),
+                  },
+                  h('span', { className: 'nw-lore-itemname' }, String(row.name || '')),
+                  h('span', { className: 'nw-lore-kind', 'data-kind': row.kind }, KIND_LABELS[row.kind] || '设定'),
+                ),
+              ),
+            ),
+    );
+
+    const editor = draft
+      ? h(
+          'div',
+          { className: 'nw-lore-editor' },
+          NW.ui.field({
+            label: NW.t('名字'),
+            children: NW.ui.input({
+              value: draft.name,
+              placeholder: '例如：沈砚秋',
+              ariaLabel: NW.t('设定名字'),
+              onChange: (value) => setDraft(Object.assign({}, draft, { name: value })),
+            }),
+          }),
+          NW.ui.field({
+            label: NW.t('类型'),
+            children: NW.ui.seg({
+              value: draft.kind,
+              ariaLabel: NW.t('设定类型'),
+              options: [
+                { value: 'character', label: '人物' },
+                { value: 'place', label: '地点' },
+                { value: 'item', label: '道具' },
+                { value: 'note', label: '设定' },
+              ],
+              onChange: (value) => setDraft(Object.assign({}, draft, { kind: value })),
+            }),
+          }),
+          NW.ui.field({
+            label: NW.t('记下要知道的事'),
+            children: NW.ui.textarea({
+              value: draft.body,
+              rows: 10,
+              placeholder: '身份、说话方式、和谁有旧账、第一次出场的章节…',
+              ariaLabel: NW.t('设定内容'),
+              onChange: (value) => setDraft(Object.assign({}, draft, { body: value })),
+            }),
+          }),
+          error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
+          h(
+            'div',
+            { style: { display: 'flex', gap: '8px' } },
+            NW.ui.btn({ kind: 'primary', onClick: save, disabled: !!busy, children: busy ? '保存中…' : NW.t('保存') }),
+            NW.ui.btn({ kind: 'danger', onClick: remove, disabled: !!busy, children: NW.t('删除') }),
+          ),
+        )
+      : h(
+          'div',
+          { className: 'nw-lore-empty' },
+          NW.icon('book', { size: 26 }),
+          h('span', null, '左边选一张卡，或者新建一张。'),
+          h('span', { className: 'nw-dim' }, '设定只给自己看，不进正文、不进导出。'),
+        );
+
+    return modal(
+      NW.t('设定集'),
+      h('div', { className: 'nw-lore' }, list, editor),
+      h('div', null, closeBtn(p)),
+      '900px',
+      p.onClose,
+    );
+  };
+
+  // ========================================================== Chapter info ====
+  /**
+   * R77: 章节信息 —— 状态、一句话简介、本章目标字数。
+   *
+   * "这一章写到哪了" 是长篇每天都会问一次的问题；目录树上的一枚小圆点 +
+   * 「1200/3000」比在正文里数行要快得多。三个字段都可选：不填就是一本没有
+   * 进度管理的书，和以前完全一样。
+   */
+  NW.dialogs.ChapterInfo = function ChapterInfo(props) {
+    const p = props || {};
+    const wantedId = (p.dialog && p.dialog.chapterId) || (p.chapter && p.chapter.id) || '';
+    const list = Array.isArray(p.chapters) ? p.chapters : [];
+    const seed =
+      list.filter((row) => row && String(row.id) === String(wantedId))[0]
+      || (p.chapter && String(p.chapter.id) === String(wantedId) ? p.chapter : null)
+      || {};
+    const [status, setStatus] = useState(String(seed.status || 'draft'));
+    const [summary, setSummary] = useState(String(seed.summary || ''));
+    const [target, setTarget] = useState(seed.targetWords ? String(seed.targetWords) : '');
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+    const chapterId = seed.id != null ? seed.id : wantedId;
+
+    const save = async () => {
+      if (!chapterId) return;
+      setBusy(true);
+      setError('');
+      try {
+        await NW.db.updateChapter(chapterId, {
+          status: status,
+          summary: summary,
+          targetWords: Number(target) || 0,
+        });
+        if (typeof p.onRefreshData === 'function') await p.onRefreshData();
+        if (typeof p.onToast === 'function') p.onToast('章节信息已保存', 'ok');
+        if (typeof p.onClose === 'function') p.onClose();
+      } catch (err) {
+        setError(errText(err, '保存失败'));
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    const body = [
+      h(
+        'div',
+        { className: 'nw-field' },
+        h('span', { className: 'nw-field-label' }, NW.t('写作状态')),
+        NW.ui.seg({
+          value: status,
+          ariaLabel: NW.t('写作状态'),
+          options: [
+            { value: 'draft', label: NW.t('草稿') },
+            { value: 'revising', label: NW.t('修改中') },
+            { value: 'done', label: NW.t('已定稿') },
+          ],
+          onChange: setStatus,
+        }),
+      ),
+      h(
+        'div',
+        { className: 'nw-field' },
+        h('span', { className: 'nw-field-label' }, NW.t('本章目标字数')),
+        NW.ui.input({
+          value: target,
+          type: 'number',
+          placeholder: '留空表示不设目标',
+          ariaLabel: NW.t('本章目标字数'),
+          onChange: (value) => setTarget(value),
+        }),
+      ),
+      h(
+        'div',
+        { className: 'nw-field' },
+        h('span', { className: 'nw-field-label' }, NW.t('一句话简介')),
+        NW.ui.textarea({
+          value: summary,
+          rows: 3,
+          placeholder: '这一章发生了什么（只给自己看）',
+          ariaLabel: NW.t('一句话简介'),
+          onChange: (value) => setSummary(value),
+        }),
+      ),
+      error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
+    ];
+
+    return modal(
+      NW.t('章节信息'),
+      h('div', null, body),
+      h(
+        'div',
+        { style: { display: 'flex', gap: '8px' } },
+        NW.ui.btn({ kind: 'primary', onClick: save, disabled: busy, children: busy ? '保存中…' : NW.t('保存') }),
+        closeBtn(p),
+      ),
+      '520px',
       p.onClose,
     );
   };

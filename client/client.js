@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.4.3',
+      version: '1.5.0',
     };
     NW.ReactDOM = null;
 
@@ -458,8 +458,9 @@ window.__ModuleLoader__.load({
   // R73: 4 adds `revisions` — the 修改建议 the writer accepted. It is a sibling
   // of `marks` (a record *about* a range of words, never an edit to the text),
   // so an old database upgrades in place without touching existing rows.
-  const DB_VERSION = 4;
-  const STORES = ['novels', 'chapters', 'versions', 'trash', 'settings', 'notes', 'marks', 'revisions'];
+  // R77: 5 adds `lore` — 设定集（人物 / 地点 / 道具 / 随手设定），按书存。
+  const DB_VERSION = 5;
+  const STORES = ['novels', 'chapters', 'versions', 'trash', 'settings', 'notes', 'marks', 'revisions', 'lore'];
   const VERSION_LIMIT = 50;
   const SETTINGS_KEY = 'app';
   const ENC_PREFIX = 'enc:v1:';
@@ -666,6 +667,12 @@ window.__ModuleLoader__.load({
           if (!db.objectStoreNames.contains('revisions')) {
             const store = db.createObjectStore('revisions', { keyPath: 'id' });
             store.createIndex('byChapterId', 'chapterId', { unique: false });
+            store.createIndex('byNovelId', 'novelId', { unique: false });
+          }
+          // R77: 设定集. One row per card, scoped to a book (not a chapter) —
+          // a character exists across the whole novel, not inside one scene.
+          if (!db.objectStoreNames.contains('lore')) {
+            const store = db.createObjectStore('lore', { keyPath: 'id' });
             store.createIndex('byNovelId', 'novelId', { unique: false });
           }
         } catch (err) {
@@ -1193,6 +1200,23 @@ window.__ModuleLoader__.load({
     if (Object.prototype.hasOwnProperty.call(patch, 'order')) {
       const order = Number(patch.order);
       if (Number.isFinite(order)) next.order = order;
+    }
+    // R77: 写作状态 / 一句话简介 / 本章目标. All three are optional and unknown
+    // values are ignored rather than stored, so an older row keeps behaving.
+    if (Object.prototype.hasOwnProperty.call(patch, 'status')) {
+      const status = String(patch.status || '');
+      if (status === 'draft' || status === 'revising' || status === 'done') next.status = status;
+      else delete next.status;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'summary')) {
+      const summary = String(patch.summary == null ? '' : patch.summary).trim().slice(0, 200);
+      if (summary) next.summary = summary;
+      else delete next.summary;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'targetWords')) {
+      const target = Math.round(Number(patch.targetWords) || 0);
+      if (target > 0) next.targetWords = Math.min(target, 1000000);
+      else delete next.targetWords;
     }
     next.updatedAt = now();
     const ok = await writeBatch([{ store: 'chapters', type: 'put', value: next }]);
@@ -2093,6 +2117,75 @@ window.__ModuleLoader__.load({
     return ops.length;
   }
 
+  // ---------------------------------------------------------------------------
+  // 设定集 (R77)
+  //
+  // 人物 / 地点 / 道具 / 随手设定，按**书**存：一个角色活在整本书里，不属于某一章。
+  // 它是写作时的备忘，不进正文、不进导出，删掉也不影响稿子。
+  // ---------------------------------------------------------------------------
+  const LORE_KINDS = { character: 1, place: 1, item: 1, note: 1 };
+
+  function cleanLore(input) {
+    const data = input || {};
+    const novelId = String(data.novelId || '');
+    const name = String(data.name == null ? '' : data.name).trim().slice(0, 80);
+    if (!novelId || !name) return null;
+    const kind = LORE_KINDS[String(data.kind || '')] ? String(data.kind) : 'character';
+    return {
+      novelId: novelId,
+      kind: kind,
+      name: name,
+      body: String(data.body == null ? '' : data.body).slice(0, 4000),
+    };
+  }
+
+  async function listLore(novelId) {
+    const rows = novelId != null && String(novelId)
+      ? await readIndex('lore', 'byNovelId', String(novelId))
+      : await readAll('lore');
+    return (rows || [])
+      .filter(function (row) {
+        return row && row.id && row.name;
+      })
+      .sort(function (a, b) {
+        const ka = String(a.kind || '');
+        const kb = String(b.kind || '');
+        if (ka !== kb) return ka < kb ? -1 : 1;
+        return String(a.name).localeCompare(String(b.name), 'zh-Hans-CN');
+      });
+  }
+
+  async function createLore(input) {
+    const clean = cleanLore(input);
+    if (!clean) return undefined;
+    const stamp = now();
+    const row = Object.assign({ id: uid('lore'), createdAt: stamp, updatedAt: stamp }, clean);
+    const ok = await writeBatch([{ store: 'lore', type: 'put', value: row }]);
+    if (!ok) throw new Error('保存设定失败');
+    notify();
+    return row;
+  }
+
+  async function updateLore(id, patch) {
+    if (!id) return undefined;
+    const current = await readOne('lore', id);
+    if (!current) return undefined;
+    const merged = cleanLore(Object.assign({}, current, patch || {}));
+    if (!merged) return undefined;
+    const next = Object.assign({}, current, merged, { updatedAt: now() });
+    const ok = await writeBatch([{ store: 'lore', type: 'put', value: next }]);
+    if (!ok) throw new Error('保存设定失败');
+    notify();
+    return next;
+  }
+
+  async function deleteLore(id) {
+    if (!id) return false;
+    const ok = await writeBatch([{ store: 'lore', type: 'delete', key: String(id) }]);
+    if (!ok) return false;
+    notify();
+    return true;
+  }
 
   function subscribe(fn) {
     if (typeof fn !== 'function') return function () {};
@@ -2148,6 +2241,7 @@ window.__ModuleLoader__.load({
     // R73: accepted advice travels with the backup — it is part of the writer's
     // thinking about the book, not a transient UI state.
     const revisions = await readAll('revisions');
+    const lore = await readAll('lore');
     return {
       novels: novels || [],
       chapters: chapters || [],
@@ -2157,6 +2251,7 @@ window.__ModuleLoader__.load({
       notes: notes || [],
       marks: marks || [],
       revisions: revisions || [],
+      lore: lore || [],
     };
   }
 
@@ -2412,6 +2507,10 @@ window.__ModuleLoader__.load({
     createRevision: createRevision,
     deleteRevision: deleteRevision,
     shiftRevisionsForEdit: shiftRevisionsForEdit,
+    listLore: listLore,
+    createLore: createLore,
+    updateLore: updateLore,
+    deleteLore: deleteLore,
     dump: dump,
     replaceAll: replaceAll,
     encryptAll: encryptAll,
@@ -5769,6 +5868,36 @@ window.__ModuleLoader__.load({
 .nw-diff-row[data-type="del"]{background:color-mix(in srgb, var(--nw-danger) 12%, transparent);}
 .nw-diff-mark{flex:0 0 auto;width:12px;opacity:.7;text-align:center;}
 .nw-diff-text{min-width:0;}
+/* R77: 版本对比用同一个 diff 渲染，但要能滚——一章几百行，弹窗不能无限长。 */
+.nw-diff-list{max-height:52vh;overflow:auto;padding:4px;border-radius:var(--nw-r-control);background:var(--nw-sunken);}
+/* R77: 设定集 — 左列表右编辑，窄屏堆成一列。 */
+.nw-lore{display:grid;grid-template-columns:280px 1fr;gap:14px;min-height:380px;max-height:62vh;}
+.nw-lore-list{display:flex;flex-direction:column;gap:8px;min-height:0;padding-right:12px;border-right:1px solid var(--nw-line);}
+.nw-lore-listhead{display:flex;align-items:center;gap:6px;}
+.nw-lore-listhead .nw-input{flex:1 1 auto;min-width:0;}
+.nw-lore-items{flex:1 1 auto;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:2px;}
+.nw-lore-item{
+  display:flex;align-items:center;gap:6px;width:100%;padding:7px 8px;
+  border:0;border-radius:8px;background:transparent;color:var(--nw-fg);
+  cursor:pointer;text-align:left;font-family:inherit;font-size:13px;
+}
+.nw-lore-item:hover{background:var(--nw-surface-2);}
+.nw-lore-item.is-active{background:color-mix(in srgb, var(--nw-brand) 12%, transparent);color:var(--nw-brand);}
+.nw-lore-itemname{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.nw-lore-kind{flex:0 0 auto;font-size:10px;padding:1px 6px;border-radius:999px;border:1px solid var(--nw-line);opacity:.85;}
+.nw-lore-kind[data-kind="character"]{color:var(--nw-brand);}
+.nw-lore-kind[data-kind="place"]{color:var(--nw-ok);}
+.nw-lore-kind[data-kind="item"]{color:var(--nw-warn);}
+.nw-lore-editor{display:flex;flex-direction:column;gap:10px;min-height:0;overflow:auto;}
+.nw-lore-editor .nw-textarea{min-height:200px;}
+.nw-lore-empty{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+  color:var(--nw-fg-soft);font-size:13px;text-align:center;
+}
+@container nw (max-width: 720px){
+  .nw-lore{grid-template-columns:1fr;}
+  .nw-lore-list{border-right:0;border-bottom:1px solid var(--nw-line);padding-right:0;padding-bottom:10px;max-height:200px;}
+}
 
 /* ----------------------------------------------------------- cloud login -- */
 .nw-login-box{
@@ -6494,8 +6623,27 @@ window.__ModuleLoader__.load({
             icon('caret'),
           )
         : h('span', { className: 'nw-shelf-caret is-empty', 'aria-hidden': 'true' }),
+      // R77: 写作状态是一枚小圆点（草稿不画，省得整棵树都是灰点），
+      // 有目标字数时把「已写/目标」并进右侧那行小字。
+      String(ch.status || '')
+        ? h('span', {
+            className: 'nw-shelf-dot',
+            'data-status': String(ch.status),
+            'aria-label': ch.status === 'done' ? tr('已定稿') : tr('修改中'),
+            title: ch.status === 'done' ? tr('已定稿') : tr('修改中'),
+          })
+        : null,
       h('span', { className: 'nw-shelf-row-title' }, title),
-      h('span', { className: 'nw-shelf-row-meta' }, fmtWords(ch.wordCount || 0)),
+      Number(ch.targetWords) > 0
+        ? h(
+            'span',
+            {
+              className: 'nw-shelf-row-meta',
+              'data-done': (Number(ch.wordCount) || 0) >= Number(ch.targetWords) ? '1' : '0',
+            },
+            fmtWords(ch.wordCount || 0) + '/' + fmtWords(ch.targetWords),
+          )
+        : h('span', { className: 'nw-shelf-row-meta' }, fmtWords(ch.wordCount || 0)),
       showActions
         ? h(
             'span',
@@ -7323,6 +7471,30 @@ window.__ModuleLoader__.load({
           },
           false,
         ),
+        // R77: 设定集（人物 / 地点 / 道具 / 设定），按书存。
+        menu.kind === 'novel'
+          ? menuItem(
+              'book',
+              tr('设定集'),
+              () => {
+                if (typeof P.onLore === 'function') P.onLore(menu.id, title);
+                else toast(tr('设定集入口尚未接入'));
+              },
+              false,
+            )
+          : null,
+        // R77: 状态 / 简介 / 目标字数——「这一章写到哪了」是长篇每天都要看一眼的东西。
+        menu.kind === 'chapter'
+          ? menuItem(
+              'doc',
+              tr('章节信息'),
+              () => {
+                if (typeof P.onChapterInfo === 'function') P.onChapterInfo(menu.id, title);
+                else toast(tr('章节信息入口尚未接入'));
+              },
+              false,
+            )
+          : null,
         menuItem(
           'trash',
           tr('删除'),
@@ -7735,6 +7907,15 @@ window.__ModuleLoader__.load({
 }
 /* 悬停时动作条浮在行右侧，字数先淡出让位，避免被按钮压住。 */
 .nw-shelf-row:hover .nw-shelf-row-meta{opacity:0;}
+/* R77: 状态点 —— 修改中（琥珀）/ 已定稿（绿）。草稿不画点，免得整棵树都是灰的。 */
+.nw-shelf-dot{
+  flex:0 0 auto;width:6px;height:6px;border-radius:50%;
+  margin-right:5px;background:var(--nw-fg-soft);opacity:.85;
+}
+.nw-shelf-dot[data-status="revising"]{background:var(--nw-warn);}
+.nw-shelf-dot[data-status="done"]{background:var(--nw-ok);}
+/* 到了目标字数，那一串「1200/3000」转成绿色。 */
+.nw-shelf-row-meta[data-done="1"]{color:var(--nw-ok);}
 
 /* --------------------------------------------- 行内动作按钮（悬停显示） ---- */
 .nw-row-actions{
@@ -9652,6 +9833,44 @@ window.__ModuleLoader__.load({
 .nw-selbtn:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
 .nw-selbtn .nw-selbtn-txt{line-height:1;}
 
+/* R77：段落导航。盖在纸面左上角，不往正文里插任何东西，所以滚动、排版都不受影响。 */
+.nw-paranav{
+  position:absolute;left:14px;top:52px;width:272px;max-height:62%;
+  display:flex;flex-direction:column;z-index:var(--nw-z-float);
+  border:1px solid var(--nw-line-strong);border-radius:12px;
+  background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
+  overflow:hidden;animation:nw-fade-in .12s var(--nw-ease,ease) both;
+}
+.nw-paranav-head{
+  display:flex;align-items:center;gap:6px;flex:0 0 auto;
+  padding:8px 10px;border-bottom:1px solid var(--nw-line);
+  font-size:12px;color:var(--nw-fg-soft);
+}
+.nw-paranav-title{font-weight:600;color:var(--nw-fg);}
+.nw-paranav-count{font-size:10px;opacity:.7;font-variant-numeric:tabular-nums;}
+.nw-paranav-x{
+  display:inline-flex;padding:2px;border:0;border-radius:6px;
+  background:transparent;color:var(--nw-fg-soft);cursor:pointer;
+}
+.nw-paranav-x:hover{background:var(--nw-btn-hover,color-mix(in srgb,var(--nw-fg) 6%,transparent));color:var(--nw-fg);}
+.nw-paranav-list{flex:1 1 auto;min-height:0;overflow:auto;padding:4px;}
+.nw-paranav-row{
+  display:flex;gap:7px;width:100%;padding:5px 7px;
+  border:0;border-radius:7px;background:transparent;color:var(--nw-fg);
+  cursor:pointer;text-align:left;font-family:inherit;font-size:12px;
+}
+.nw-paranav-row:hover{background:var(--nw-btn-hover,color-mix(in srgb,var(--nw-fg) 6%,transparent));}
+.nw-paranav-n{
+  flex:0 0 auto;width:18px;text-align:right;padding-top:2px;
+  font-size:10px;opacity:.55;font-variant-numeric:tabular-nums;
+}
+.nw-paranav-t{
+  flex:1 1 auto;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-family:var(--nw-reading-font,inherit);
+}
+.nw-paranav-empty{padding:14px 10px;font-size:12px;color:var(--nw-fg-soft);text-align:center;}
+
 /* caret measuring mirror: same box, never painted */
 .nw-caret{
   position:absolute;left:0;top:0;width:100%;height:auto;overflow:visible;
@@ -10035,6 +10254,9 @@ window.__ModuleLoader__.load({
     const [selBtn, setSelBtn] = React.useState(null);
     const selBtnRef = React.useRef(null);
     selBtnRef.current = selBtn;
+    // R77: 本章段落导航。长章里「跳到第五段」比滚轮可靠得多；列表只在打开时
+    // 扫一遍正文，不跟着每次按键重算。
+    const [paraNav, setParaNav] = React.useState(null);
     /** 页边批注签的容器（.nw-mark-gutter），由 paintGutter() 直接填 DOM。 */
     const gutterRef = React.useRef(null);
 
@@ -12012,6 +12234,54 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // ------------------------------------------------------ 段落导航 (R77) --
+    /**
+     * One row per non-empty line. A chapter of 3000 characters is 10–30 of them,
+     * which is exactly the size a writer can scan; splitting on blank lines
+     * instead would show one row for a whole scene.
+     */
+    function openParaNav() {
+      const ta = taRef.current;
+      if (!ta) {
+        setParaNav((cur) => (cur ? null : cur));
+        return;
+      }
+      const items = [];
+      const source = ta.value;
+      const re = /[^\n]+/g;
+      let match = re.exec(source);
+      while (match && items.length < 500) {
+        const raw = match[0];
+        const trimmed = raw.trim();
+        if (trimmed) {
+          items.push({ start: match.index, length: raw.length, text: trimmed.slice(0, 26) });
+        }
+        match = re.exec(source);
+      }
+      setParaNav({ items: items });
+    }
+
+    function jumpPara(item) {
+      const api = apiRef.current;
+      if (api && item) {
+        const start = Math.max(0, Number(item.start) || 0);
+        const end = start + Math.max(1, Number(item.length) || 1);
+        if (typeof api.centerRange === 'function') api.centerRange(start, end);
+        if (typeof api.setHighlights === 'function') {
+          api.setHighlights([{ start: start, end: end, id: 'para-anchor', active: true }]);
+        }
+      }
+      setParaNav(null);
+      const ta = taRef.current;
+      if (ta) {
+        try {
+          ta.focus();
+        } catch (err) {
+          /* the editor may be gone */
+        }
+      }
+    }
+
     /**
      * R53: create (or retype) a mark over the range the menu was opened on.
      *
@@ -13685,6 +13955,10 @@ window.__ModuleLoader__.load({
             'div',
             { className: 'nw-empty-sub' },
             NW.t('Ctrl+F 查找 · Ctrl+S 保存 · Tab 缩进'),
+            h('br'),
+            // R77 (B5): 两个「看不见的入口」写在空状态里——它们是这一轮之前
+            // 最容易没人发现的功能。
+            NW.t('选中文字：右键标注，或点浮出的「修改建议」'),
           ),
         );
 
@@ -13711,6 +13985,50 @@ window.__ModuleLoader__.load({
           },
           NW.icon('sparkle', { size: 13 }),
           h('span', { className: 'nw-selbtn-txt' }, NW.t('修改建议')),
+        )
+      : null;
+
+    // R77: 段落导航面板。盖在纸面左上，不在正文里插任何元素。
+    const paraPanel = paraNav
+      ? h(
+          'div',
+          { className: 'nw-paranav', role: 'dialog', 'aria-label': NW.t('段落导航') },
+          h(
+            'div',
+            { className: 'nw-paranav-head' },
+            h('span', { className: 'nw-paranav-title' }, NW.t('段落')),
+            h('span', { className: 'nw-paranav-count' }, String(paraNav.items.length)),
+            h('span', { style: { flex: '1 1 auto' } }),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-paranav-x',
+                'aria-label': NW.t('关闭段落导航'),
+                onClick: () => setParaNav(null),
+              },
+              NW.icon('x', { size: 13 }),
+            ),
+          ),
+          h(
+            'div',
+            { className: 'nw-paranav-list' },
+            paraNav.items.length === 0
+              ? h('div', { className: 'nw-paranav-empty' }, NW.t('这一章还没有正文'))
+              : paraNav.items.map((item, index) =>
+                  h(
+                    'button',
+                    {
+                      key: 'p' + index,
+                      type: 'button',
+                      className: 'nw-paranav-row',
+                      onClick: () => jumpPara(item),
+                    },
+                    h('span', { className: 'nw-paranav-n' }, String(index + 1)),
+                    h('span', { className: 'nw-paranav-t' }, item.text),
+                  ),
+                ),
+          ),
         )
       : null;
 
@@ -13747,6 +14065,23 @@ window.__ModuleLoader__.load({
       h(
             'div',
             { className: 'nw-surface-acts' },
+            // R77: 段落导航。长章里「跳到第五段」比滚轮可靠。
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-actbtn',
+                title: NW.t('段落导航'),
+                'aria-label': NW.t('段落导航'),
+                'aria-expanded': paraNav ? 'true' : 'false',
+                onClick: (ev) => {
+                  if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+                  openParaNav();
+                },
+              },
+              NW.icon('list', { size: 16 }),
+            ),
+            h('span', { className: 'nw-acts-div', 'aria-hidden': 'true' }),
             onHome
               ? h(
                   'button',
@@ -13797,6 +14132,7 @@ window.__ModuleLoader__.load({
           ),
       markMenuBar,
       selBtnBar,
+      paraPanel,
     );
   };
 })();
@@ -15655,6 +15991,20 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 @media (max-width:820px){
   .nw-selwin{flex-basis:300px;}
 }
+/* R77 (B1): 面板窄到放不下「正文 + 320px 窗口」时，窗口改成浮层盖在右边，
+   而不是把稿纸压成一条。判据跟侧栏浮层一样是面板宽度（container query），
+   不是窗口宽度。 */
+@container nw (max-width: 900px){
+  .nw-selwin{
+    position:absolute;right:10px;top:10px;bottom:10px;z-index:var(--nw-z-float);
+    margin:0;width:min(420px,92%);flex:0 0 auto;
+    box-shadow:0 18px 48px rgba(0,0,0,.28);
+  }
+  .nw-bench[data-selwin="1"] .nw-bench-paper{width:auto;flex:1 1 auto;}
+}
+/* R77 (B4): 卡片进场跟着全站时长，不再「啪」地出现。key 是条目 id，所以重绘
+   不会重播，只有真的新增一张卡时才播一次。 */
+.nw-adv{animation:nw-fade-in var(--nw-dur) var(--nw-ease,ease) both;}
 /* R28 ①: the note card no longer takes a lane, so this branch is gone. With the
    advice column open the paper is pinned to the page measure and centred as a
    pair — the card simply rides along inside that paper's left margin. */
@@ -16647,6 +16997,45 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * selection window, so accepting in one place shows up in the other.
      */
     const [revisions, setRevisions] = useState([]);
+    const revisionsRef = useRef(revisions);
+    revisionsRef.current = revisions;
+    /**
+     * R77: 「今天写了多少」 —— 按天的净字数，落在 settings.dailyStats 里
+     * （`{ 'YYYY-MM-DD': number }`）。不算别的：切换章节时编辑器会 flush，
+     * 一次 flush 的字数差就是这一笔。
+     */
+    const [dailyStats, setDailyStats] = useState({});
+    const dailyStatsRef = useRef(dailyStats);
+    dailyStatsRef.current = dailyStats;
+    const dailyWordsRef = useRef({});
+    const dailyTimerRef = useRef(0);
+    /**
+     * R77 (B2): 跟随系统深浅色。`prefers-color-scheme` 是唯一可靠的信号；
+     * 老浏览器没有 matchMedia 时永远算「亮」，行为退回手动主题。
+     */
+    const [systemDark, setSystemDark] = useState(() => {
+      try {
+        return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      } catch (err) {
+        return false;
+      }
+    });
+    useEffect(() => {
+      if (typeof window.matchMedia !== 'function') return undefined;
+      let mq = null;
+      try {
+        mq = window.matchMedia('(prefers-color-scheme: dark)');
+      } catch (err) {
+        return undefined;
+      }
+      const onChange = (ev) => setSystemDark(!!(ev && ev.matches));
+      if (mq.addEventListener) mq.addEventListener('change', onChange);
+      else if (mq.addListener) mq.addListener(onChange);
+      return () => {
+        if (mq.removeEventListener) mq.removeEventListener('change', onChange);
+        else if (mq.removeListener) mq.removeListener(onChange);
+      };
+    }, []);
     /**
      * R44: 读一遍 — the whole book laid out as pages, over the writing surface.
      * It is an overlay rather than a route on purpose: the editor stays mounted
@@ -16809,6 +17198,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       setMarks(Array.isArray(markRows) ? markRows : []);
       setRevisions(Array.isArray(revisionRows) ? revisionRows : []);
       setSettings(nextSettings);
+      // R77: 今日字数 / 连续天数从这里起步；老库没有这个键就是一本空账。
+      setDailyStats(nextSettings.dailyStats && typeof nextSettings.dailyStats === 'object' ? nextSettings.dailyStats : {});
       return { novels: novelRows || [], chapters: chapterRows || [], settings: nextSettings };
     }, []);
 
@@ -17481,6 +17872,34 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       });
     }, []);
 
+    // ---- R77: 按天的字数账 ----------------------------------------------------
+    // A local-date key. `toISOString()` would flip days at 08:00 Beijing time.
+    const dayKeyOf = (ms) => {
+      const d = new Date(ms);
+      const pad = (n) => String(n).padStart(2, '0');
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    };
+
+    /** Write the ledger at most every couple of seconds — a save is every 1.2s. */
+    const persistDailyStats = () => {
+      if (dailyTimerRef.current) clearTimeout(dailyTimerRef.current);
+      dailyTimerRef.current = window.setTimeout(() => {
+        dailyTimerRef.current = 0;
+        NW.db.saveSettings({ dailyStats: dailyStatsRef.current }).catch(() => {});
+      }, 2000);
+    };
+
+    const bumpDailyWords = (delta) => {
+      const value = Math.round(Number(delta) || 0);
+      if (!value) return;
+      const key = dayKeyOf(Date.now());
+      const next = Object.assign({}, dailyStatsRef.current);
+      next[key] = (Number(next[key]) || 0) + value;
+      dailyStatsRef.current = next;
+      setDailyStats(next);
+      persistDailyStats();
+    };
+
     const saveChapter = useCallback(
       async (content, chapterId) => {
         const current = chapterRef.current;
@@ -17497,6 +17916,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           await NW.db.saveChapterContent(targetId, text);
           if (!aliveRef.current) return;
           const words = NW.format.wordCount(text);
+          // R77: 今日字数 = this save's word delta. The first save of a chapter in
+          // this session only records the baseline (no delta), so opening a book
+          // never counts as writing it. Swings above 30k are restores or imports,
+          // not typing — counting them would fake a heroic day.
+          const prevWords = dailyWordsRef.current[String(targetId)];
+          if (typeof prevWords === 'number') {
+            const delta = words - prevWords;
+            if (Math.abs(delta) <= 30000) bumpDailyWords(delta);
+          }
+          dailyWordsRef.current[String(targetId)] = words;
           setSaveState(dirtyDuringSaveRef.current ? 'dirty' : 'saved');
           setSavedAt(Date.now());
           patchChapterInList(targetId, { content: text, wordCount: words });
@@ -17797,7 +18226,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         // R73: accepted suggestions are pinned to their words by the same diff —
         // editing the paragraph around them must not leave 「已接收」 pointing at
         // the neighbours of the sentence it was about.
-        if (typeof NW.db.shiftRevisionsForEdit === 'function') {
+        // R77: but only when this chapter actually has accepted rows. Reading the
+        // index on every save for a chapter that never had one is a wasted IDB
+        // round trip on the typing path.
+        const hasRevisionsHere = revisionsRef.current.some(
+          (row) => row && String(row.chapterId) === String(current.id),
+        );
+        if (hasRevisionsHere && typeof NW.db.shiftRevisionsForEdit === 'function') {
           try {
             const moved = await NW.db.shiftRevisionsForEdit(current.id, diff);
             if (aliveRef.current && moved) await refreshRevisions();
@@ -18802,6 +19237,34 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     }, [chapters, activeNovelId]);
 
     const chapterWords = chapter ? Number(chapter.wordCount) || 0 : 0;
+    // R77 (B2): 主题最终落到哪一套。手动时就是 settings.theme，自动时按系统亮暗取。
+    const autoTheme = settings.themeAuto === true;
+    const effectiveTheme = autoTheme
+      ? String(settings[systemDark ? 'themeDark' : 'themeLight'] || (systemDark ? 'night' : 'claude'))
+      : String(settings.theme || 'claude');
+    // Hand the editor/read view a settings object whose `theme` is the resolved
+    // one. Identity is stable while nothing changes, so panels do not re-render
+    // on every tick.
+    const themeSettings = useMemo(
+      () => (settings.theme === effectiveTheme ? settings : Object.assign({}, settings, { theme: effectiveTheme })),
+      [settings, effectiveTheme],
+    );
+    // R77: 今日进度。一条记录都没有时显示「今日 0 字」，不编数字。
+    const todayWords = Number(dailyStats[dayKeyOf(Date.now())]) || 0;
+    const streakDays = (() => {
+      const DAY = 86400000;
+      const keyOf = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      let probe = new Date();
+      probe = new Date(probe.getFullYear(), probe.getMonth(), probe.getDate());
+      if (!(Number(dailyStats[keyOf(probe)]) > 0)) probe = new Date(probe.getTime() - DAY);
+      let days = 0;
+      for (let i = 0; i < 400; i += 1) {
+        if (!(Number(dailyStats[keyOf(probe)]) > 0)) break;
+        days += 1;
+        probe = new Date(probe.getTime() - DAY);
+      }
+      return days;
+    })();
 
     const openDialog = useCallback(
       (kind, extra) => {
@@ -18962,7 +19425,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         'data-immersive': immersive ? '1' : undefined,
         // The shell follows the reading theme (see 98-shell-theme.js) so the
         // sidebar and toolbar never frame a page in a contradicting palette.
-        'data-theme': settings.theme || 'claude',
+        'data-theme': themeSettings.theme || 'claude',
         onPointerMove: onRootPointerMove,
         onKeyDown: touchActivity,
         onWheel: touchActivity,
@@ -18989,6 +19452,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 onRename: renameNode,
                 onDelete: deleteNode,
                 onMove: moveNode,
+                // R77: 章节信息（状态 / 简介 / 目标字数）。
+                onChapterInfo: (id, title) => openDialog('chapterInfo', { chapterId: id, title: title }),
+                // R77: 设定集（人物 / 地点 / 道具 / 设定），按书打开。
+                onLore: (id) => openDialog('lore', { novelId: id }),
                 onSearch: () => {},
                 onImport: importNow,
                 onExport: exportTarget,
@@ -19122,7 +19589,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     h(NW.Editor, {
                       key: String(chapter.id),
                       chapter: chapter,
-                      settings: settings,
+                      // R77: the editor follows the resolved theme, not the raw
+                      // setting — that is what makes 跟随系统 actually switch.
+                      settings: themeSettings,
                       immersive: immersive,
                       // R13: the notes card floats over the paper without a
                       // reserved lane, so the manuscript keeps its full measure
@@ -19265,7 +19734,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // The editor buffer can be ahead of the last autosave, so the open
             // chapter is read from the live text, not from the stored row.
             currentText: getEditorText(),
-            settings: settings,
+            settings: themeSettings,
             // R47: reading is also when a writer notices — so this is where an
             // annotation can be drawn. The marks are the shell's, not the view's:
             // the same array feeds the editor underneath, so a line underlined
@@ -19305,6 +19774,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               h('span', null, '本章 ' + NW.fmtWords(chapterWords) + ' 字'),
               h('span', null, '本书 ' + NW.fmtWords(wordCounts.novel) + ' 字'),
               h('span', null, '全部 ' + NW.fmtWords(wordCounts.book) + ' 字'),
+              // R77: 今日 + 连续。负数也照实说（改稿删字也是当天的账）。
+              h(
+                'span',
+                { className: 'nw-status-today', 'data-sign': todayWords < 0 ? 'down' : 'up' },
+                '今日 ' + (todayWords > 0 ? '+' : '') + NW.fmtWords(todayWords) + ' 字'
+                  + (streakDays > 1 ? ' · 连续 ' + streakDays + ' 天' : ''),
+              ),
             ),
             syncText: syncText,
             wordText: '',
@@ -20583,6 +21059,43 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [applied, p.editorApi, p.onToast],
     );
 
+    // R77 (B3): 键盘 —— J/K 上下、A 接受、R 拒绝。输入框/文本域里不抢键。
+    React.useEffect(() => {
+      const onKey = (ev) => {
+        const target = ev.target;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+        if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+        const list = Array.isArray(items) ? items : [];
+        if (!list.length) return;
+        const at = list.findIndex((row) => row.id === activeId);
+        const pick = (index) => list[Math.max(0, Math.min(list.length - 1, index))];
+        const key = String(ev.key || '');
+        if (key === 'j' || key === 'J' || key === 'ArrowDown') {
+          ev.preventDefault();
+          reveal(pick(at < 0 ? 0 : at + 1));
+          return;
+        }
+        if (key === 'k' || key === 'K' || key === 'ArrowUp') {
+          ev.preventDefault();
+          reveal(pick(at < 0 ? 0 : at - 1));
+          return;
+        }
+        const current = at >= 0 ? list[at] : null;
+        if (!current) return;
+        if (key === 'a' || key === 'A') {
+          ev.preventDefault();
+          acceptItem(current);
+          return;
+        }
+        if (key === 'r' || key === 'R') {
+          ev.preventDefault();
+          rejectItem(current);
+        }
+      };
+      window.addEventListener('keydown', onKey, true);
+      return () => window.removeEventListener('keydown', onKey, true);
+    }, [items, activeId, reveal, acceptItem, rejectItem]);
+
     const head = h(
       'div',
       { className: 'nw-suggest-head' },
@@ -21030,6 +21543,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       return () => window.removeEventListener('keydown', onKey, true);
     }, [p.onClose]);
 
+    // R77 (B3): 键盘走一遍 —— J/K 上下、A 接受、R 拒绝。输入框里打字时不抢键。
+    // 这个 effect 放在 reveal / acceptItem 之后：deps 数组在渲染时求值，
+    // 放在前面会撞上 const 的暂时性死区。
+
     const reveal = useCallback(
       (item) => {
         if (!item) return;
@@ -21209,6 +21726,43 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       },
       [decided, p.onRemoveAccepted],
     );
+
+    // R77 (B3): 键盘走一遍 —— J/K 上下、A 接受、R 拒绝。输入框里不抢键。
+    React.useEffect(() => {
+      const onKey = (ev) => {
+        const target = ev.target;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+        if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+        const list = Array.isArray(items) ? items : [];
+        if (!list.length) return;
+        const at = list.findIndex((row) => row.id === activeId);
+        const pick = (index) => list[Math.max(0, Math.min(list.length - 1, index))];
+        const key = String(ev.key || '');
+        if (key === 'j' || key === 'J' || key === 'ArrowDown') {
+          ev.preventDefault();
+          reveal(pick(at < 0 ? 0 : at + 1));
+          return;
+        }
+        if (key === 'k' || key === 'K' || key === 'ArrowUp') {
+          ev.preventDefault();
+          reveal(pick(at < 0 ? 0 : at - 1));
+          return;
+        }
+        const current = at >= 0 ? list[at] : null;
+        if (!current) return;
+        if (key === 'a' || key === 'A') {
+          ev.preventDefault();
+          acceptItem(current);
+          return;
+        }
+        if (key === 'r' || key === 'R') {
+          ev.preventDefault();
+          rejectItem(current);
+        }
+      };
+      window.addEventListener('keydown', onKey, true);
+      return () => window.removeEventListener('keydown', onKey, true);
+    }, [items, activeId, reveal, acceptItem, rejectItem]);
 
     const selectedText = String(selection.text || '').trim();
     const selectedCount = selEnd - selStart;
@@ -24105,6 +24659,39 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 THEME_OPTIONS.map((entry) => themeChoice(entry, (draft.theme || 'claude') === entry.value, (value) => set('theme', value))),
               ),
             }),
+            // R77 (B2): 跟随系统深浅色。开着时主题由系统决定，两个下拉决定
+            // 「系统亮用哪套、系统暗用哪套」——九套主题里主观上最像白天/黑夜的那两套。
+            NW.ui.field({
+              label: NW.t('跟随系统深浅色'),
+              hint: NW.t('开着时：系统是浅色用下面第一套，系统切到深色自动换第二套。'),
+              children: NW.ui.toggle({
+                checked: draft.themeAuto === true,
+                label: NW.t('跟随系统'),
+                onChange: (value) => set('themeAuto', !!value),
+              }),
+            }),
+            draft.themeAuto
+              ? h(
+                  'div',
+                  { className: 'nw-grid2' },
+                  NW.ui.field({
+                    label: NW.t('系统为浅色时用'),
+                    children: NW.ui.select({
+                      value: draft.themeLight || 'claude',
+                      onChange: (value) => set('themeLight', value),
+                      options: THEME_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label })),
+                    }),
+                  }),
+                  NW.ui.field({
+                    label: NW.t('系统为深色时用'),
+                    children: NW.ui.select({
+                      value: draft.themeDark || 'night',
+                      onChange: (value) => set('themeDark', value),
+                      options: THEME_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label })),
+                    }),
+                  }),
+                )
+              : null,
             NW.ui.field({
               label: NW.t('字体'),
               children: NW.ui.select({
@@ -26701,6 +27288,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [busy, setBusy] = useState('');
     const [error, setError] = useState('');
     const [preview, setPreview] = useState(null);
+    // R77: 恢复是不可逆的一步，光看「预览」等于让人在赌。对比把这一版和当前
+    // 正文逐行摊开，先看清改了什么再决定要不要恢复。
+    const [compare, setCompare] = useState(null);
 
     useEffect(() => {
       let alive = true;
@@ -26779,10 +27369,63 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               h(
                 'span',
                 { style: { display: 'inline-flex', gap: '6px' } },
+                NW.ui.btn({ onClick: () => setCompare(row), children: NW.t('对比当前') }),
                 NW.ui.btn({ onClick: () => setPreview(row), children: NW.t('预览') }),
                 NW.ui.btn({ kind: 'primary', onClick: () => restore(row), disabled: !!busy, children: NW.t('恢复') }),
               ),
             ),
+          ),
+        ),
+      );
+    }
+    if (compare) {
+      // R77: the diff is computed against the *live* buffer, not the saved row,
+      // so unsaved typing shows up as part of the comparison.
+      const api = p.editorApi && p.editorApi.current;
+      const liveText = api && typeof api.getContent === 'function'
+        ? String(api.getContent() || '')
+        : String((p.chapter && p.chapter.content) || '');
+      let diffRows = [];
+      try {
+        diffRows = NW.format.diffPreview(String(compare.content || ''), liveText);
+      } catch (err) {
+        diffRows = [];
+      }
+      const added = diffRows.filter((row) => row.type === 'add').length;
+      const removed = diffRows.filter((row) => row.type === 'del').length;
+      const LIMIT = 800;
+      const shown = diffRows.slice(0, LIMIT);
+      body.push(
+        h(
+          'div',
+          { className: 'nw-preview-box' },
+          h(
+            'div',
+            { className: 'nw-inline', style: { justifyContent: 'space-between', marginBottom: '6px' } },
+            h('strong', null, '对比 ' + NW.fmtDate(compare.createdAt) + ' ↔ 当前'),
+            h(
+              'span',
+              { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } },
+              h('span', { className: 'nw-dim' }, '+' + added + ' / −' + removed),
+              NW.ui.btn({ kind: 'ghost', onClick: () => setCompare(null), children: NW.t('关闭') }),
+            ),
+          ),
+          h(
+            'div',
+            { className: 'nw-diff-list', role: 'list' },
+            shown.length === 0
+              ? h('div', { className: 'nw-dim', style: { padding: '10px' } }, '这一版和当前正文一模一样。')
+              : shown.map((row, index) =>
+                  h(
+                    'div',
+                    { key: 'v' + index, className: 'nw-diff-row', 'data-type': row.type, role: 'listitem' },
+                    h('span', { className: 'nw-diff-mark', 'aria-hidden': 'true' }, row.type === 'add' ? '+' : row.type === 'del' ? '−' : ' '),
+                    h('span', { className: 'nw-diff-text' }, row.text || ' '),
+                  ),
+                ),
+            diffRows.length > LIMIT
+              ? h('div', { className: 'nw-dim', style: { padding: '8px 10px' } }, '只显示了前 ' + LIMIT + ' 行；整章太长，恢复前建议直接预览。')
+              : null,
           ),
         ),
       );
@@ -26810,6 +27453,310 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         closeBtn(p),
       ),
       '620px',
+      p.onClose,
+    );
+  };
+
+  // ================================================================ Lore ====
+  /**
+   * R77: 设定集 —— 人物 / 地点 / 道具 / 随手设定，按书存。
+   *
+   * 长篇写到三十万字，谁在第几章死过、这个城在哪个方向，靠脑子是记不住的。
+   * 它刻意不做成"知识库"：一栏、一张卡、四类，写完就关。正文永远不引用它，
+   * 所以删掉也不会碰稿子。
+   */
+  NW.dialogs.Lore = function Lore(props) {
+    const p = props || {};
+    const novelId = String((p.dialog && p.dialog.novelId) || (p.novel && p.novel.id) || '');
+    const [rows, setRows] = useState(null);
+    const [activeId, setActiveId] = useState('');
+    const [draft, setDraft] = useState(null);
+    const [query, setQuery] = useState('');
+    const [busy, setBusy] = useState('');
+    const [error, setError] = useState('');
+
+    const reload = useCallback(async () => {
+      if (!novelId) {
+        setRows([]);
+        return;
+      }
+      try {
+        const list = await NW.db.listLore(novelId);
+        setRows(Array.isArray(list) ? list : []);
+      } catch (err) {
+        setRows([]);
+        setError(errText(err, '读取设定失败'));
+      }
+    }, [novelId]);
+
+    useEffect(() => {
+      reload();
+    }, [reload]);
+
+    const filtered = useMemo(() => {
+      const list = Array.isArray(rows) ? rows : [];
+      const q = query.trim().toLowerCase();
+      if (!q) return list;
+      return list.filter(
+        (row) =>
+          String(row.name || '').toLowerCase().includes(q)
+          || String(row.body || '').toLowerCase().includes(q),
+      );
+    }, [rows, query]);
+
+    const openRow = (row) => {
+      setActiveId(row.id);
+      setDraft({ id: row.id, name: row.name, kind: row.kind, body: row.body || '' });
+      setError('');
+    };
+
+    const startNew = () => {
+      setActiveId('');
+      setDraft({ id: '', name: '', kind: 'character', body: '' });
+      setError('');
+    };
+
+    const save = async () => {
+      if (!draft) return;
+      const name = String(draft.name || '').trim();
+      if (!name) {
+        setError('先给这张卡起个名字');
+        return;
+      }
+      setBusy('保存中…');
+      setError('');
+      try {
+        if (draft.id) {
+          await NW.db.updateLore(draft.id, { name: name, kind: draft.kind, body: draft.body });
+        } else {
+          const created = await NW.db.createLore({ novelId: novelId, name: name, kind: draft.kind, body: draft.body });
+          if (created && created.id) setActiveId(created.id);
+        }
+        await reload();
+        if (typeof p.onToast === 'function') p.onToast('设定已保存', 'ok');
+      } catch (err) {
+        setError(errText(err, '保存失败'));
+      } finally {
+        setBusy('');
+      }
+    };
+
+    const remove = async () => {
+      if (!draft || !draft.id) {
+        setDraft(null);
+        setActiveId('');
+        return;
+      }
+      const ok = await NW.ui.confirm('删掉这张设定？删掉不影响正文。', { title: NW.t('删除设定') });
+      if (!ok) return;
+      try {
+        await NW.db.deleteLore(draft.id);
+        setDraft(null);
+        setActiveId('');
+        await reload();
+      } catch (err) {
+        setError(errText(err, '删除失败'));
+      }
+    };
+
+    const KIND_LABELS = { character: '人物', place: '地点', item: '道具', note: '设定' };
+
+    const list = h(
+      'div',
+      { className: 'nw-lore-list' },
+      h(
+        'div',
+        { className: 'nw-lore-listhead' },
+        NW.ui.input({
+          value: query,
+          placeholder: '搜名字或内容…',
+          ariaLabel: NW.t('搜索设定'),
+          onChange: (value) => setQuery(value),
+        }),
+        NW.ui.btn({ kind: 'primary', onClick: startNew, children: NW.t('新建') }),
+      ),
+      rows == null
+        ? NW.ui.spinner('读取…')
+        : filtered.length === 0
+          ? h('div', { className: 'nw-dim', style: { padding: '14px 6px' } }, query ? '没有匹配的设定' : '还没有设定。新建一个人物或地点。')
+          : h(
+              'div',
+              { className: 'nw-lore-items', role: 'list' },
+              filtered.map((row) =>
+                h(
+                  'button',
+                  {
+                    key: row.id,
+                    type: 'button',
+                    className: 'nw-lore-item' + (activeId === row.id ? ' is-active' : ''),
+                    role: 'listitem',
+                    onClick: () => openRow(row),
+                  },
+                  h('span', { className: 'nw-lore-itemname' }, String(row.name || '')),
+                  h('span', { className: 'nw-lore-kind', 'data-kind': row.kind }, KIND_LABELS[row.kind] || '设定'),
+                ),
+              ),
+            ),
+    );
+
+    const editor = draft
+      ? h(
+          'div',
+          { className: 'nw-lore-editor' },
+          NW.ui.field({
+            label: NW.t('名字'),
+            children: NW.ui.input({
+              value: draft.name,
+              placeholder: '例如：沈砚秋',
+              ariaLabel: NW.t('设定名字'),
+              onChange: (value) => setDraft(Object.assign({}, draft, { name: value })),
+            }),
+          }),
+          NW.ui.field({
+            label: NW.t('类型'),
+            children: NW.ui.seg({
+              value: draft.kind,
+              ariaLabel: NW.t('设定类型'),
+              options: [
+                { value: 'character', label: '人物' },
+                { value: 'place', label: '地点' },
+                { value: 'item', label: '道具' },
+                { value: 'note', label: '设定' },
+              ],
+              onChange: (value) => setDraft(Object.assign({}, draft, { kind: value })),
+            }),
+          }),
+          NW.ui.field({
+            label: NW.t('记下要知道的事'),
+            children: NW.ui.textarea({
+              value: draft.body,
+              rows: 10,
+              placeholder: '身份、说话方式、和谁有旧账、第一次出场的章节…',
+              ariaLabel: NW.t('设定内容'),
+              onChange: (value) => setDraft(Object.assign({}, draft, { body: value })),
+            }),
+          }),
+          error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
+          h(
+            'div',
+            { style: { display: 'flex', gap: '8px' } },
+            NW.ui.btn({ kind: 'primary', onClick: save, disabled: !!busy, children: busy ? '保存中…' : NW.t('保存') }),
+            NW.ui.btn({ kind: 'danger', onClick: remove, disabled: !!busy, children: NW.t('删除') }),
+          ),
+        )
+      : h(
+          'div',
+          { className: 'nw-lore-empty' },
+          NW.icon('book', { size: 26 }),
+          h('span', null, '左边选一张卡，或者新建一张。'),
+          h('span', { className: 'nw-dim' }, '设定只给自己看，不进正文、不进导出。'),
+        );
+
+    return modal(
+      NW.t('设定集'),
+      h('div', { className: 'nw-lore' }, list, editor),
+      h('div', null, closeBtn(p)),
+      '900px',
+      p.onClose,
+    );
+  };
+
+  // ========================================================== Chapter info ====
+  /**
+   * R77: 章节信息 —— 状态、一句话简介、本章目标字数。
+   *
+   * "这一章写到哪了" 是长篇每天都会问一次的问题；目录树上的一枚小圆点 +
+   * 「1200/3000」比在正文里数行要快得多。三个字段都可选：不填就是一本没有
+   * 进度管理的书，和以前完全一样。
+   */
+  NW.dialogs.ChapterInfo = function ChapterInfo(props) {
+    const p = props || {};
+    const wantedId = (p.dialog && p.dialog.chapterId) || (p.chapter && p.chapter.id) || '';
+    const list = Array.isArray(p.chapters) ? p.chapters : [];
+    const seed =
+      list.filter((row) => row && String(row.id) === String(wantedId))[0]
+      || (p.chapter && String(p.chapter.id) === String(wantedId) ? p.chapter : null)
+      || {};
+    const [status, setStatus] = useState(String(seed.status || 'draft'));
+    const [summary, setSummary] = useState(String(seed.summary || ''));
+    const [target, setTarget] = useState(seed.targetWords ? String(seed.targetWords) : '');
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+    const chapterId = seed.id != null ? seed.id : wantedId;
+
+    const save = async () => {
+      if (!chapterId) return;
+      setBusy(true);
+      setError('');
+      try {
+        await NW.db.updateChapter(chapterId, {
+          status: status,
+          summary: summary,
+          targetWords: Number(target) || 0,
+        });
+        if (typeof p.onRefreshData === 'function') await p.onRefreshData();
+        if (typeof p.onToast === 'function') p.onToast('章节信息已保存', 'ok');
+        if (typeof p.onClose === 'function') p.onClose();
+      } catch (err) {
+        setError(errText(err, '保存失败'));
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    const body = [
+      h(
+        'div',
+        { className: 'nw-field' },
+        h('span', { className: 'nw-field-label' }, NW.t('写作状态')),
+        NW.ui.seg({
+          value: status,
+          ariaLabel: NW.t('写作状态'),
+          options: [
+            { value: 'draft', label: NW.t('草稿') },
+            { value: 'revising', label: NW.t('修改中') },
+            { value: 'done', label: NW.t('已定稿') },
+          ],
+          onChange: setStatus,
+        }),
+      ),
+      h(
+        'div',
+        { className: 'nw-field' },
+        h('span', { className: 'nw-field-label' }, NW.t('本章目标字数')),
+        NW.ui.input({
+          value: target,
+          type: 'number',
+          placeholder: '留空表示不设目标',
+          ariaLabel: NW.t('本章目标字数'),
+          onChange: (value) => setTarget(value),
+        }),
+      ),
+      h(
+        'div',
+        { className: 'nw-field' },
+        h('span', { className: 'nw-field-label' }, NW.t('一句话简介')),
+        NW.ui.textarea({
+          value: summary,
+          rows: 3,
+          placeholder: '这一章发生了什么（只给自己看）',
+          ariaLabel: NW.t('一句话简介'),
+          onChange: (value) => setSummary(value),
+        }),
+      ),
+      error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
+    ];
+
+    return modal(
+      NW.t('章节信息'),
+      h('div', null, body),
+      h(
+        'div',
+        { style: { display: 'flex', gap: '8px' } },
+        NW.ui.btn({ kind: 'primary', onClick: save, disabled: busy, children: busy ? '保存中…' : NW.t('保存') }),
+        closeBtn(p),
+      ),
+      '520px',
       p.onClose,
     );
   };
