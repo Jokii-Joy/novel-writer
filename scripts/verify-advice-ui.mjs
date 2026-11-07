@@ -402,20 +402,31 @@ let dock = textOf(rootTree);
 check('角度说明写明可空、可多选', /角度可多选|角度可以不选/.test(dock), dock.slice(0, 60));
 check('默认没有选中任何角度 chip', !nodes().some((n) => n.tag === 'button' && n.props['data-on'] === '1'));
 const chipOf = (label) => nodes().find((n) => n.tag === 'button' && textOf(n) === label);
-// R74: two chips pressed in quick succession must produce ONE request carrying
-// both ids — that is the whole point of the debounce.
+// R75: a chip press must ONLY toggle. R74 fired the request 420ms after the
+// last press — shorter than the time it takes to decide on a second angle, so
+// the chapter was already being read and the pills were disabled by then. The
+// read now starts only from 「开始审读」 / 「重新审读」 / Enter.
 chipOf('节奏').props.onClick();
 chipOf('用词').props.onClick();
 await tick(520);
-check('两个角度合成一次请求', focusCalls.length === 1 && focusCalls[0] === 'rhythm,diction', focusCalls);
+check('点角度不发请求', focusCalls.length === 0, focusCalls);
 check('两颗 chip 同时亮着', chipOf('节奏').props['data-on'] === '1' && chipOf('用词').props['data-on'] === '1');
 check('提示写着已选 2 个', /已选 2 个角度/.test(textOf(rootTree)), textOf(rootTree).slice(0, 40));
+clickText('开始审读');
+await tick(10);
+check('开始审读才发一次请求，带两个角度', focusCalls.length === 1 && focusCalls[0] === 'rhythm,diction', focusCalls);
 chipOf('节奏').props.onClick();
 await tick(520);
-check('取消其中一个后只剩 diction', focusCalls[focusCalls.length - 1] === 'diction', focusCalls);
+check('取消一个角度不发请求', focusCalls.length === 1, focusCalls);
+clickText('重新审读');
+await tick(10);
+check('重新审读带上剩下的 diction', focusCalls[1] === 'diction', focusCalls);
 chipOf('用词').props.onClick();
 await tick(520);
-check('全部取消后发空角度（按输入框来）', focusCalls[focusCalls.length - 1] === '', focusCalls);
+check('全部取消也不发请求', focusCalls.length === 2, focusCalls);
+clickText('重新审读');
+await tick(10);
+check('全部取消后发空角度（按输入框来）', focusCalls[2] === '', focusCalls);
 dock = textOf(rootTree);
 check('悬浮坞卡片也是并排 + 接受/拒绝', /原文/.test(dock) && /改后/.test(dock) && /接受/.test(dock));
 clickText('接受');

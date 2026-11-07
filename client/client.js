@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.4.1',
+      version: '1.4.2',
     };
     NW.ReactDOM = null;
 
@@ -19772,7 +19772,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [focus, setFocus] = useState([]);
     const focusRef = useRef(focus);
     focusRef.current = focus;
-    const focusTimer = useRef(0);
     const [note, setNote] = useState('');
     const [items, setItems] = useState(null);
     const [busy, setBusy] = useState(false);
@@ -19880,32 +19879,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     );
 
     /**
-     * R74: ticking three angles must cost ONE model call, not three.
+     * R75: a chip press only changes the selection — it must never start a read.
      *
-     * The chips used to run on every click. Multi-select makes that actively
-     * wrong ("节奏" then "用词" = two whole-chapter reads before the writer has
-     * finished choosing), so the run is debounced behind the last press.
+     * R74 tried to be clever and fired the request 420ms after the last press.
+     * The writer presses 「节奏」, thinks for a second about 「用词」, and the 420ms
+     * has long passed: the chapter is already being read, the chips are disabled,
+     * and the second angle can no longer be added. That is the exact complaint
+     * that killed the round. So the run now happens only where it is asked for —
+     * 「开始审读」, 「重新审读」, 「重试」 and Enter.
      */
-    const scheduleFocusRun = useCallback(
-      (next) => {
-        if (focusTimer.current) {
-          clearTimeout(focusTimer.current);
-          focusTimer.current = 0;
-        }
-        focusTimer.current = setTimeout(() => {
-          focusTimer.current = 0;
-          run(next);
-        }, 420);
-      },
-      [run],
-    );
-
-    React.useEffect(
-      () => () => {
-        if (focusTimer.current) clearTimeout(focusTimer.current);
-      },
-      [],
-    );
 
     // A fresh chapter starts blank: advice about the previous one is worse than
     // no advice, because it quotes text that is no longer on screen.
@@ -20101,11 +20083,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       ),
     );
 
-    // Focus chips (R74): a real multi-select. Any number can be on at once —
+    // Focus chips (R74/R75): a real multi-select. Any number can be on at once —
     // 「只看节奏 + 用词」 is a perfectly normal request — and clicking a lit one
-    // removes just that one. A press no longer fires a model call by itself:
-    // `scheduleFocusRun` waits for the last press (see above), so choosing three
-    // angles costs one read instead of three.
+    // removes just that one. A press changes nothing but the selection: the read
+    // starts from 「开始审读」 (see the R75 note above), so the writer can line up
+    // three angles at their own pace.
     const focusRow = h(
       'div',
       { className: 'nw-advice-focus', role: 'group', 'aria-label': NW.t('建议重点') },
@@ -20125,8 +20107,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               const next = on
                 ? focus.filter((value) => value !== opt.value)
                 : focus.concat([opt.value]);
+              // R75: selection only. Starting the read from here is what made
+              // the second angle impossible to add.
               setFocus(next);
-              scheduleFocusRun(next);
             },
           },
           opt.label,
@@ -20134,11 +20117,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       }),
       // R74: says out loud that the chips are optional *and* multi-select — the
       // writer asked for both, and ten unlit pills read as "nothing works".
+      // R75: and it says what to do next, now that pressing a pill does not run.
       h(
         'span',
         { className: 'nw-advice-focus-hint' },
         focus.length
-          ? NW.t('已选 {0} 个角度 · 可多选，再点一次取消', focus.length)
+          ? NW.t('已选 {0} 个角度 · 再点一次取消，选好后点下方按钮', focus.length)
           : NW.t('角度可多选、也可以不选 · 不选就按下面的要求来'),
       ),
     );

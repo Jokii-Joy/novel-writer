@@ -1,6 +1,6 @@
 {
   "name": "@local/novel-writer",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "private": true,
   "description": "精神空间 — 沉浸式小说写作工作台 for DeepSeek Harness: chapter tree, distraction-free editor with typewriter mode and configurable caret, nine reading themes, AI proofreading, one-click typesetting, import/export (txt/md/docx/epub/pdf), journal submission wizard with editable journal library, IMAP inbox and encrypted local auto-save.",
   "type": "module",
