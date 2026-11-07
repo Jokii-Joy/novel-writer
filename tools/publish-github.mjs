@@ -5,6 +5,11 @@
 // fail at random; the REST API can create blobs / a tree / a commit / a ref
 // directly, which is the same result as a push and never touches github.com.
 //
+// R77: the commit is now built from the **local HEAD** — same message, author,
+// committer and dates — so the sha the API creates is the same sha git already
+// has. That keeps the two histories converging: the next `git push` is still a
+// fast-forward instead of a force-push, and the log stops saying "v1.2.0".
+//
 // Input:
 //   .tools\gh-token.txt  (created by setup-github.cmd)
 //   or NW_TOKEN_FILE=<path>, or the GITHUB_TOKEN environment variable.
@@ -124,51 +129,156 @@ if (probe.status === 404) {
   await halt();
 }
 
-// Upload only what git tracks: .tools/ and other ignored paths stay local.
+// Upload only what git tracks — and upload it **from the git object store**, not
+// from the working tree.
+//
+// R77b: reading files off disk uploaded the checked-out bytes (with CRLF, on this
+// machine) instead of the blobs git actually stores, so the tree sha differed and
+// the API commit could never match local HEAD. `ls-tree -r HEAD` hands us the
+// blob shas that are already canonical; the content-addressed API returns the
+// same sha back, and the rebuilt tree is byte-identical to the local one.
 const GIT = path.join(ROOT, '.tools', 'git', 'cmd', 'git.exe');
 const gitEnv = {
   ...process.env,
   PATH: path.join(ROOT, '.tools', 'git', 'cmd') + ';' + path.join(ROOT, '.tools', 'bin') + ';' + process.env.PATH,
 };
-const files = execFileSync(GIT, ['ls-files', '-z'], { cwd: ROOT, env: gitEnv, encoding: 'utf8' })
+const lsTree = execFileSync(GIT, ['ls-tree', '-r', '-z', 'HEAD'], {
+  cwd: ROOT,
+  env: gitEnv,
+  encoding: 'utf8',
+  maxBuffer: 64 * 1024 * 1024,
+})
   .split('\u0000')
   .filter(Boolean);
-console.log(`共 ${files.length} 个文件`);
+console.log(`共 ${lsTree.length} 个文件`);
 
-const entries = [];
-for (const rel of files) {
-  const data = fs.readFileSync(path.join(ROOT, rel));
-  const blob = await api('POST', `https://api.github.com/repos/${full}/git/blobs`, {
-    content: data.toString('base64'),
-    encoding: 'base64',
-  });
-  if (blob.status !== 201) {
-    console.error(`上传失败 ${rel}：`, blob.status, JSON.stringify(blob.json).slice(0, 200));
+const localTree = execFileSync(GIT, ['rev-parse', 'HEAD^{tree}'], { cwd: ROOT, env: gitEnv, encoding: 'utf8' }).trim();
+// The tree is content-addressed: if GitHub already has it, the whole upload can
+// be skipped. That turns a re-publish from "100 API calls" into three.
+let treeSha = localTree;
+const existingTree = await api('GET', `https://api.github.com/repos/${full}/git/trees/${localTree}`);
+if (existingTree.status === 200) {
+  console.log('远端已有这棵树，跳过上传：' + localTree.slice(0, 7));
+} else {
+  const entries = [];
+  for (const line of lsTree) {
+    // "<mode> SP <type> SP <sha> TAB <path>"
+    const tab = line.indexOf('\t');
+    if (tab < 0) continue;
+    const meta = line.slice(0, tab).split(' ');
+    const rel = line.slice(tab + 1);
+    const mode = meta[0] === '100755' ? '100755' : '100644';
+    const blobSha = meta[2];
+    const data = execFileSync(GIT, ['cat-file', 'blob', blobSha], {
+      cwd: ROOT,
+      env: gitEnv,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    const blob = await api('POST', `https://api.github.com/repos/${full}/git/blobs`, {
+      content: data.toString('base64'),
+      encoding: 'base64',
+    });
+    if (blob.status !== 201) {
+      console.error(`上传失败 ${rel}：`, blob.status, JSON.stringify(blob.json).slice(0, 200));
+      await halt();
+    }
+    entries.push({ path: rel, mode, type: 'blob', sha: blob.json.sha });
+    console.log(`  ${rel} (${data.length}B)`);
+  }
+  const tree = await api('POST', `https://api.github.com/repos/${full}/git/trees`, { tree: entries });
+  if (tree.status !== 201) {
+    console.error('创建目录树失败：', tree.status, JSON.stringify(tree.json).slice(0, 300));
     await halt();
   }
-  entries.push({ path: rel.split(path.sep).join('/'), mode: '100644', type: 'blob', sha: blob.json.sha });
-  console.log(`  ${rel} (${data.length}B)`);
+  treeSha = tree.json.sha;
+}
+if (treeSha !== localTree) {
+  console.warn('注意：重建的目录树与本地不同（' + String(treeSha).slice(0, 7) + ' vs ' + localTree.slice(0, 7) + '）');
 }
 
-const tree = await api('POST', `https://api.github.com/repos/${full}/git/trees`, { tree: entries });
-if (tree.status !== 201) {
-  console.error('创建目录树失败：', tree.status, JSON.stringify(tree.json).slice(0, 300));
-  await halt();
-}
-
-// Keep history when the branch already exists.
+// Keep history when the branch already exists. `git/commits` takes an array of
+// SHAs (not objects) — the trees endpoint is the one that wants objects.
+// R77b: walk back from the local HEAD's parent and use the first commit GitHub
+// already has. That is what makes the rebuilt commit hash equal to local HEAD
+// (tree + parent + author + committer + message are all the local ones).
 let parents = [];
 const ref = await api('GET', `https://api.github.com/repos/${full}/git/ref/heads/${BRANCH}`);
-if (ref.status === 200) parents = [{ sha: ref.json.object.sha }];
+try {
+  let cursor = execFileSync(GIT, ['rev-parse', 'HEAD^'], { cwd: ROOT, env: gitEnv, encoding: 'utf8' }).trim();
+  for (let i = 0; i < 50 && cursor; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const known = await api('GET', `https://api.github.com/repos/${full}/git/commits/${cursor}`);
+    if (known.status === 200) break;
+    try {
+      cursor = execFileSync(GIT, ['rev-parse', cursor + '^'], { cwd: ROOT, env: gitEnv, encoding: 'utf8' }).trim();
+    } catch (error) {
+      cursor = '';
+    }
+  }
+  if (cursor) parents = [cursor];
+} catch (error) {
+  /* a root commit has no parent */
+}
+if (parents.length === 0 && ref.status === 200) parents = [ref.json.object.sha];
 
-const commit = await api('POST', `https://api.github.com/repos/${full}/git/commits`, {
-  message: '精神空间 v1.2.0 — DeepSeek Harness 沉浸式小说写作插件',
-  tree: tree.json.sha,
+/**
+ * Local HEAD, in the shape the API needs.
+ *
+ * The point is the sha: a commit is a pure function of tree + parents + author +
+ * committer + message. Sending the local values back makes the API produce the
+ * very commit git already has, so `git push` stays a fast-forward afterwards.
+ */
+function git(args) {
+  return execFileSync(GIT, args, { cwd: ROOT, env: gitEnv, encoding: 'utf8' });
+}
+
+function localHead() {
+  let raw = '';
+  try {
+    raw = git(['cat-file', '-p', 'HEAD']);
+  } catch (error) {
+    return null;
+  }
+  const lines = raw.split('\n');
+  const field = (prefix) => {
+    const line = lines.find((item) => item.startsWith(prefix + ' '));
+    return line ? line.slice(prefix.length + 1) : '';
+  };
+  const person = (value) => {
+    const m = /^(.*?) <(.*?)> (\d+) ([+-])(\d{2})(\d{2})$/.exec(String(value).trim());
+    if (!m) return null;
+    const ts = Number(m[3]);
+    const sign = m[4] === '-' ? -1 : 1;
+    const offsetMin = sign * (Number(m[5]) * 60 + Number(m[6]));
+    const local = new Date((ts + offsetMin * 60) * 1000).toISOString().slice(0, 19);
+    return { name: m[1], email: m[2], date: local + m[4] + m[5] + ':' + m[6] };
+  };
+  const split = raw.indexOf('\n\n');
+  return {
+    sha: git(['rev-parse', 'HEAD']).trim(),
+    author: person(field('author')),
+    committer: person(field('committer')),
+    message: split >= 0 ? raw.slice(split + 2) : '',
+  };
+}
+
+const head = localHead();
+const commitBody = {
+  message: (head && head.message) || '精神空间 — 更新',
+  tree: treeSha,
   parents,
-});
+};
+if (head && head.author) commitBody.author = head.author;
+if (head && head.committer) commitBody.committer = head.committer;
+const commit = await api('POST', `https://api.github.com/repos/${full}/git/commits`, commitBody);
 if (commit.status !== 201) {
   console.error('创建提交失败：', commit.status, JSON.stringify(commit.json).slice(0, 300));
   await halt();
+}
+if (head && head.sha && commit.json.sha !== head.sha) {
+  console.warn('注意：远端提交与本地 HEAD 不同（' + String(commit.json.sha).slice(0, 7) + ' vs ' + head.sha.slice(0, 7) + '），下次 git push 需要 force 或先 fetch。');
+} else if (head && head.sha) {
+  console.log('远端提交与本地 HEAD 一致：' + head.sha.slice(0, 7));
 }
 
 if (parents.length === 0) {
