@@ -8835,28 +8835,29 @@ window.__ModuleLoader__.load({
   }
 
   /**
-   * R95: 今天 / 近 7 天 come from the per-day ledger, not from "which chapter was
-   * touched today". The old heuristic counted a whole chapter's wordCount as
+   * R95/R96: 今天 / 近 7 天 come from the per-day ledger, not from "which chapter
+   * was touched today". The old heuristic counted a whole chapter's wordCount as
    * today's work, so re-opening an old chapter (or a sync that restamped every
-   * chapter) made the day look enormous. The ledger records the actual delta of
-   * each save. Installs that predate R77 have no ledger at all — for those we
-   * keep the old estimate rather than reporting zero.
+   * chapter) made the day look enormous — opening two chapters literally added
+   * both chapters' lengths. The ledger records the actual delta of each save.
+   *
+   * R96: an empty ledger now means "nothing recorded", i.e. zero — not a licence
+   * to fall back to the heuristic, which is exactly the wrong number the writer
+   * complained about. The estimate survives only for callers that pass no ledger
+   * at all (the app always passes one).
    */
   function ledgerWindow(dailyStats, today) {
     const ledger = dailyStats && typeof dailyStats === 'object' ? dailyStats : null;
     if (!ledger) return null;
-    let entries = 0;
     let todayWords = 0;
     let weekWords = 0;
     const DAY = 24 * 60 * 60 * 1000;
     for (let i = 0; i < 7; i += 1) {
-      const value = Number(ledger[dayKeyOf(today - i * DAY)]);
-      if (Number.isFinite(value)) entries += 1;
-      const words = Number(value) || 0;
+      const words = Number(ledger[dayKeyOf(today - i * DAY)]) || 0;
       weekWords += words;
       if (i === 0) todayWords = words;
     }
-    return entries > 0 ? { todayWords: todayWords, weekWords: weekWords } : null;
+    return { todayWords: todayWords, weekWords: weekWords };
   }
 
   /** Aggregate the numbers the stats card shows from the live chapter list. */
@@ -19052,11 +19053,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     /** Write the ledger at most every couple of seconds — a save is every 1.2s. */
     const persistDailyStats = () => {
-      if (dailyTimerRef.current) clearTimeout(dailyTimerRef.current);
-      dailyTimerRef.current = window.setTimeout(() => {
+      // R96: write on every bump instead of waiting out a 2s debounce. Autosave
+      // fires every 1.2s, and each save used to reset the timer, so a long
+      // typing run could end without the ledger ever reaching IndexedDB — the
+      // home screen then had no record for today and fell back to its estimate.
+      // `saveSettings` is serialised in 10-db.js, so back-to-back writes are safe.
+      if (dailyTimerRef.current) {
+        clearTimeout(dailyTimerRef.current);
         dailyTimerRef.current = 0;
-        NW.db.saveSettings({ dailyStats: dailyStatsRef.current }).catch(() => {});
-      }, 2000);
+      }
+      NW.db.saveSettings({ dailyStats: dailyStatsRef.current }).catch(() => {});
     };
 
     const bumpDailyWords = (delta) => {
@@ -22901,6 +22907,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [pasteText, setPasteText] = useState('');
     const [pasteError, setPasteError] = useState('');
     const [busy, setBusy] = useState(false);
+    /** R96: seconds the current read has been running — a reasoning model can
+        think for minutes before its first card, and a silent panel looks dead. */
+    const [elapsed, setElapsed] = useState(0);
+    /** R96: cards received so far in the current stream. */
+    const [streamCount, setStreamCount] = useState(0);
     const [error, setError] = useState('');
     const [activeId, setActiveId] = useState('');
     const [model, setModel] = useState('');
@@ -22943,6 +22954,23 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       },
       [],
     );
+
+    /* R96: a live counter. The advice model may spend a minute or more thinking
+       before it emits its first JSON object, and the panel used to sit on one
+       static line for that whole time — indistinguishable from a hung request.
+       A one-second tick proves the read is still alive. */
+    React.useEffect(() => {
+      if (!busy) {
+        setElapsed(0);
+        return undefined;
+      }
+      const started = Date.now();
+      setElapsed(0);
+      const timer = setInterval(() => {
+        setElapsed(Math.max(1, Math.round((Date.now() - started) / 1000)));
+      }, 1000);
+      return () => clearInterval(timer);
+    }, [busy]);
 
     React.useEffect(() => {
       if (!dragging) return undefined;
@@ -22990,6 +23018,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const controller = typeof AbortController === 'function' ? new AbortController() : null;
         runAbortRef.current = controller;
         setBusy(true);
+        setStreamCount(0);
         setError('');
         setActiveId('');
         setFromCache(false);
@@ -23020,6 +23049,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     if (runRef.current !== token) return;
                     if (!event || event.type !== 'suggestion' || !event.item) return;
                     streamed.push(event.item);
+                    setStreamCount(streamed.length);
                     setItems(imported.concat(streamed));
                   },
                 },
@@ -23872,7 +23902,23 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           NW.t('接受会移到下面的「已接收」，拒绝的直接丢掉；点一条会把原文滚到那一段。'),
         ),
         busy
-          ? h('span', { className: 'nw-inline' }, NW.ui.spinner(), h('span', null, NW.t('正在通读这一章…')))
+          ? h(
+              'span',
+              { className: 'nw-inline' },
+              NW.ui.spinner(),
+              // R96: prove the read is alive. A reasoning model can think for
+              // minutes before the first card; a frozen "正在通读" looked like a
+              // dead request.
+              h(
+                'span',
+                null,
+                streamCount > 0
+                  ? NW.t('已读到 {0} 条，继续往下读… {1}s', streamCount, elapsed)
+                  : elapsed >= 20
+                    ? NW.t('模型正在思考… {0}s', elapsed)
+                    : NW.t('正在通读这一章… {0}s', elapsed),
+              ),
+            )
           : NW.ui.btn({ kind: 'primary', onClick: () => run(focus), children: NW.t('开始审读') }),
       );
     } else if (items.length === 0) {
@@ -23933,7 +23979,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               'div',
               { className: 'nw-suggest-reading' },
               NW.ui.spinner(),
-              h('span', null, NW.t('还在往下读…')),
+              h('span', null, NW.t('还在往下读… 已 {0} 条 · {1}s', streamCount, elapsed)),
             )
           : null,
       );

@@ -735,6 +735,11 @@
     const [pasteText, setPasteText] = useState('');
     const [pasteError, setPasteError] = useState('');
     const [busy, setBusy] = useState(false);
+    /** R96: seconds the current read has been running — a reasoning model can
+        think for minutes before its first card, and a silent panel looks dead. */
+    const [elapsed, setElapsed] = useState(0);
+    /** R96: cards received so far in the current stream. */
+    const [streamCount, setStreamCount] = useState(0);
     const [error, setError] = useState('');
     const [activeId, setActiveId] = useState('');
     const [model, setModel] = useState('');
@@ -777,6 +782,23 @@
       },
       [],
     );
+
+    /* R96: a live counter. The advice model may spend a minute or more thinking
+       before it emits its first JSON object, and the panel used to sit on one
+       static line for that whole time — indistinguishable from a hung request.
+       A one-second tick proves the read is still alive. */
+    React.useEffect(() => {
+      if (!busy) {
+        setElapsed(0);
+        return undefined;
+      }
+      const started = Date.now();
+      setElapsed(0);
+      const timer = setInterval(() => {
+        setElapsed(Math.max(1, Math.round((Date.now() - started) / 1000)));
+      }, 1000);
+      return () => clearInterval(timer);
+    }, [busy]);
 
     React.useEffect(() => {
       if (!dragging) return undefined;
@@ -824,6 +846,7 @@
         const controller = typeof AbortController === 'function' ? new AbortController() : null;
         runAbortRef.current = controller;
         setBusy(true);
+        setStreamCount(0);
         setError('');
         setActiveId('');
         setFromCache(false);
@@ -854,6 +877,7 @@
                     if (runRef.current !== token) return;
                     if (!event || event.type !== 'suggestion' || !event.item) return;
                     streamed.push(event.item);
+                    setStreamCount(streamed.length);
                     setItems(imported.concat(streamed));
                   },
                 },
@@ -1706,7 +1730,23 @@
           NW.t('接受会移到下面的「已接收」，拒绝的直接丢掉；点一条会把原文滚到那一段。'),
         ),
         busy
-          ? h('span', { className: 'nw-inline' }, NW.ui.spinner(), h('span', null, NW.t('正在通读这一章…')))
+          ? h(
+              'span',
+              { className: 'nw-inline' },
+              NW.ui.spinner(),
+              // R96: prove the read is alive. A reasoning model can think for
+              // minutes before the first card; a frozen "正在通读" looked like a
+              // dead request.
+              h(
+                'span',
+                null,
+                streamCount > 0
+                  ? NW.t('已读到 {0} 条，继续往下读… {1}s', streamCount, elapsed)
+                  : elapsed >= 20
+                    ? NW.t('模型正在思考… {0}s', elapsed)
+                    : NW.t('正在通读这一章… {0}s', elapsed),
+              ),
+            )
           : NW.ui.btn({ kind: 'primary', onClick: () => run(focus), children: NW.t('开始审读') }),
       );
     } else if (items.length === 0) {
@@ -1767,7 +1807,7 @@
               'div',
               { className: 'nw-suggest-reading' },
               NW.ui.spinner(),
-              h('span', null, NW.t('还在往下读…')),
+              h('span', null, NW.t('还在往下读… 已 {0} 条 · {1}s', streamCount, elapsed)),
             )
           : null,
       );

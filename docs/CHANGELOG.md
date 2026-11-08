@@ -6,8 +6,26 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.17 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.18 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第九十六轮（R96）今日字数不再等于「打开的那一章」，审读等待不再像死机。
+  ① **今日字数**：R95 把首页的「今天 / 近 7 天」切到 `settings.dailyStats` 账本，但账本里
+  没有记录时仍回退到 `updatedAt` 估算——打开一章就把整章算进今天，打开两章就是两者相加。
+  现在只要有账本对象（App 总会传）就只认账本：没有记录就是 0，估算只在调用方完全不传账本时保留。
+  ② **账本落盘**：`persistDailyStats()` 原来是 2 秒防抖，而自动保存每 1.2 秒就 bump 一次并重置计时器，
+  连续写作时账本可以一直不写进 IndexedDB（实测宿主 `client-state.json` 里根本没有 `dailyStats` 键）。
+  现在每次 bump 立即 `saveSettings({ dailyStats })`（`10-db.js` 已串行化），不再有防抖窗口。
+  ③ **审读等待**：建议面板在模型思考期间只显示一行静止的「正在通读这一章…」。实测同一段 118 字：
+  默认模型 `opencode-go/deepseek-v4.1-flash` 首条建议 **41s**，作者的
+  `commondcode/deepseek/deepseek-v4-pro` 要 **139s**（`revise.stream` 本身 72ms 就发头、
+  首条 `progress` 立刻到，慢的是模型思考）。面板现在每秒刷新等待秒数：20s 后改为
+  「模型正在思考… Ns」，流式卡片到达后显示「已读到 N 条，继续往下读… Ns」，列表底部
+  「还在往下读… 已 N 条 · Ns」。流式协议没有改动，只是让等待可见。
+  ④ **验收**：`verify-welcome-stats` 12 → **14** 项（空账=0、脏值=0、记账立即落盘、面板等待文案）；
+  `build-client` 23 parts（1,386,984 bytes），`verify-advice-ui` 84、`verify-host` 300、
+  `verify-docs` 44 及其余闸门全过。版本 **1.6.18**。
+  注意：纯客户端改动，刷新页面即生效，不需要重启 DSH。旧账本里没有今天的记录，所以今天从 0 开始；
+  从现在起每次自动保存都会立即记上。
 - 第九十五轮（R95）首页创作统计不再虚高，也不再是旧数。
   ① **全书 / 本书**：统计卡原来直接汇总 `chapter.wordCount`，而这个数只在保存时重写；切换
   「字数含标点」后旧章节不会重算，`hydrateChapter()` 又原样沿用，于是全书停在旧算法的结果。

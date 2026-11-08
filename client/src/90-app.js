@@ -2355,11 +2355,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     /** Write the ledger at most every couple of seconds — a save is every 1.2s. */
     const persistDailyStats = () => {
-      if (dailyTimerRef.current) clearTimeout(dailyTimerRef.current);
-      dailyTimerRef.current = window.setTimeout(() => {
+      // R96: write on every bump instead of waiting out a 2s debounce. Autosave
+      // fires every 1.2s, and each save used to reset the timer, so a long
+      // typing run could end without the ledger ever reaching IndexedDB — the
+      // home screen then had no record for today and fell back to its estimate.
+      // `saveSettings` is serialised in 10-db.js, so back-to-back writes are safe.
+      if (dailyTimerRef.current) {
+        clearTimeout(dailyTimerRef.current);
         dailyTimerRef.current = 0;
-        NW.db.saveSettings({ dailyStats: dailyStatsRef.current }).catch(() => {});
-      }, 2000);
+      }
+      NW.db.saveSettings({ dailyStats: dailyStatsRef.current }).catch(() => {});
     };
 
     const bumpDailyWords = (delta) => {

@@ -84,28 +84,29 @@
   }
 
   /**
-   * R95: 今天 / 近 7 天 come from the per-day ledger, not from "which chapter was
-   * touched today". The old heuristic counted a whole chapter's wordCount as
+   * R95/R96: 今天 / 近 7 天 come from the per-day ledger, not from "which chapter
+   * was touched today". The old heuristic counted a whole chapter's wordCount as
    * today's work, so re-opening an old chapter (or a sync that restamped every
-   * chapter) made the day look enormous. The ledger records the actual delta of
-   * each save. Installs that predate R77 have no ledger at all — for those we
-   * keep the old estimate rather than reporting zero.
+   * chapter) made the day look enormous — opening two chapters literally added
+   * both chapters' lengths. The ledger records the actual delta of each save.
+   *
+   * R96: an empty ledger now means "nothing recorded", i.e. zero — not a licence
+   * to fall back to the heuristic, which is exactly the wrong number the writer
+   * complained about. The estimate survives only for callers that pass no ledger
+   * at all (the app always passes one).
    */
   function ledgerWindow(dailyStats, today) {
     const ledger = dailyStats && typeof dailyStats === 'object' ? dailyStats : null;
     if (!ledger) return null;
-    let entries = 0;
     let todayWords = 0;
     let weekWords = 0;
     const DAY = 24 * 60 * 60 * 1000;
     for (let i = 0; i < 7; i += 1) {
-      const value = Number(ledger[dayKeyOf(today - i * DAY)]);
-      if (Number.isFinite(value)) entries += 1;
-      const words = Number(value) || 0;
+      const words = Number(ledger[dayKeyOf(today - i * DAY)]) || 0;
       weekWords += words;
       if (i === 0) todayWords = words;
     }
-    return entries > 0 ? { todayWords: todayWords, weekWords: weekWords } : null;
+    return { todayWords: todayWords, weekWords: weekWords };
   }
 
   /** Aggregate the numbers the stats card shows from the live chapter list. */

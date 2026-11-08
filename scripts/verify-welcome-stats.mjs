@@ -128,16 +128,16 @@ check('今天 / 近 7 天取按天账，不再把整章算进今天', () => {
   assert.equal(stats.weekWords, 230);
 });
 
-check('没有账本（旧安装）时回退到按 updatedAt 的估算', () => {
+check('空账就是零：打开章节不再把整章算进今天', () => {
   const stats = T.computeStats(chapters, 'n1', {}, true);
-  assert.equal(stats.todayWords, 56); // c1 6 + c3 50
+  assert.equal(stats.todayWords, 0);
   assert.equal(stats.weekWords, 0);
 });
 
-check('账本里的脏值不会变成 NaN，回退到估算', () => {
+check('账本里的脏值不会变成 NaN，按 0 计', () => {
   const stats = T.computeStats(chapters, 'n1', { [dayKey(today)]: 'abc' }, true);
   assert.ok(Number.isFinite(stats.todayWords), 'today stays a number');
-  assert.equal(stats.todayWords, 56); // no usable ledger entry → old estimate
+  assert.equal(stats.todayWords, 0);
   assert.equal(stats.weekWords, 0);
 });
 
@@ -176,6 +176,26 @@ check('开章时播种每日字数基线，首次自动保存不再丢字', () =
     'baseline is seeded from the opened chapter with the live counting rule',
   );
   assert.ok(appSrc.includes('dailyWordsRuleRef'), 'toggling 字数含标点 drops the stale baselines');
+});
+
+check('记账立即落盘，不再被 1.2s 自动保存重置 2s 防抖', () => {
+  const appSrc = read('90-app.js');
+  assert.ok(
+    appSrc.includes('NW.db.saveSettings({ dailyStats: dailyStatsRef.current })'),
+    'the ledger is written on every bump',
+  );
+  const block = appSrc.slice(
+    appSrc.indexOf('const persistDailyStats = () => {'),
+    appSrc.indexOf('const bumpDailyWords = (delta) => {'),
+  );
+  assert.ok(!block.includes('setTimeout'), 'no debounce timer left between bump and write');
+});
+
+check('建议面板显示等待秒数与已到条数', () => {
+  const adviceSrc = read('92-advice.js');
+  assert.ok(adviceSrc.includes('模型正在思考… {0}s'), 'long thinking shows an explicit message');
+  assert.ok(adviceSrc.includes('已读到 {0} 条'), 'streamed cards are counted');
+  assert.ok(adviceSrc.includes('const [elapsed, setElapsed] = useState(0)'), 'elapsed state exists');
 });
 
 // --- summary ---------------------------------------------------------------
