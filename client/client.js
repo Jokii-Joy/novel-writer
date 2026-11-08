@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.4',
+      version: '1.6.5',
     };
     NW.ReactDOM = null;
 
@@ -17427,6 +17427,21 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     return { theme: mapped };
   }
 
+  /**
+   * R83: the dock's expanded state as it survives a remount of the panel.
+   *
+   * `dockOpen` used to be pure component state. The host can re-render (and in
+   * some flows remount) the slot the panel lives in — for example when the
+   * writer clicks another part of the shell — and a remount re-initialised the
+   * state to `false`. On screen that is a menu that "collapses by itself when
+   * you click anywhere else", which is exactly the report this fixes.
+   *
+   * Deliberately module scope, not localStorage: a remount inside the same page
+   * keeps the menu open, while a real reload still starts collapsed (an expanded
+   * dock after restart would cover the last paragraphs of the chapter).
+   */
+  let dockOpenMemory = false;
+
   NW.App = function App() {
     const [ready, setReady] = useState(false);
     const [bootError, setBootError] = useState('');
@@ -17482,10 +17497,21 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     /**
      * R60: the dock is collapsed by default. R57 had no such state because the
      * five rows were always laid out; now that the shape is a FAB again, this is
-     * what the button toggles. Not persisted on purpose — a dock that reopens
-     * itself on restart would cover the last paragraphs of the chapter.
+     * what the button toggles. Not persisted on disk on purpose — a dock that
+     * reopens itself on restart would cover the last paragraphs of the chapter.
+     *
+     * R83: it does survive a remount inside the same page (see dockOpenMemory
+     * above). Only the page's own state should decide that the menu closes, not
+     * the host re-rendering the slot around it.
      */
-    const [dockOpen, setDockOpen] = useState(false);
+    const [dockOpen, setDockOpenState] = useState(() => dockOpenMemory);
+    const setDockOpen = useCallback((next) => {
+      setDockOpenState((prev) => {
+        const value = typeof next === 'function' ? next(prev) : next;
+        dockOpenMemory = !!value;
+        return !!value;
+      });
+    }, []);
     /**
      * R25: null = auto. The column measures itself from the bench (see
      * .nw-suggest in the CSS above) so it always hugs the page instead of
@@ -17871,7 +17897,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     }, [notesOpen]);
     useEffect(() => {
       lsSet(LS_ADVICE_OPEN, adviceOpen ? '1' : '0');
-    }, [adviceOpen]);
+      // R83: the column owns the right lane; a floating dock on top of it both
+      // covers suggestions and steals the close click. Whatever opened the
+      // column (dock row, shortcut, restored session), collapse the dock.
+      if (adviceOpen) setDockOpen(false);
+    }, [adviceOpen, setDockOpen]);
     useEffect(() => {
       /* null means auto — clear the key so a fresh session keeps measuring. */
       lsSet(LS_ADVICE_WIDTH, adviceWidth == null ? null : adviceWidth);
@@ -20375,7 +20405,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // 这几个按钮浮在了首页右下角 —— 那些动作在首页没有一个可用（`chapter`
           // 为空时全部 disabled），只剩下一枚关不掉的圆按钮压在快捷入口上。
           // 首页有自己的卡片和操作行，不需要这块坞。
-          view === 'write' || immersive ? dock : null,
+          //
+          // R83: 修改建议栏展开时整块坞不渲染。栏占着右侧车道，圆钮正好压在
+          // 建议卡片的下沿；收起状态下它也没有一个动作可点（修改建议正是打开
+          // 这一栏的入口），先让位，关掉栏再回来。沉浸模式下栏不出现，坞照旧。
+          view === 'write' || immersive
+            ? adviceOpen && !immersive
+              ? null
+              : dock
+            : null,
         ),
       ),
       // R44: 读一遍 — the book laid out as pages, covering the whole panel.

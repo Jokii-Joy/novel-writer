@@ -428,6 +428,46 @@ if (appFiles.length) {
   problems.push(...local);
 }
 
+// ---- 9. R83: the dock follows the page, not the host's re-render ----------
+// Two reports, two invariants:
+//   * clicking anywhere else in the plugin must not collapse the menu. The
+//     state lives in component state, so a host re-render / slot remount used
+//     to re-initialise it to false. It now also lives at module scope, and the
+//     setter keeps both in sync.
+//   * while the 修改建议 column is open, the whole dock must not render — the
+//     column owns the right lane and the FAB sat on top of its cards.
+{
+  const local = [];
+  const src = appFiles.length ? readFileSync(join(srcDir, appFiles[0]), 'utf8') : '';
+  const appAt = src.indexOf('NW.App = function App()');
+  const memoryAt = src.search(/let\s+dockOpenMemory\s*=\s*false\s*;/);
+  if (memoryAt < 0 || appAt < 0 || memoryAt > appAt) {
+    local.push(
+      'dockOpenMemory — missing (or declared inside App); a host remount would re-initialise ' +
+      'dockOpen to false and the menu would "collapse when you click elsewhere"',
+    );
+  }
+  if (!/useState\s*\(\s*\(\s*\)\s*=>\s*dockOpenMemory\s*\)/.test(src)) {
+    local.push('dockOpen — state is not seeded from dockOpenMemory; an expanded menu still collapses on remount');
+  }
+  if (!/dockOpenMemory\s*=\s*!!value/.test(src)) {
+    local.push('dockOpen — setter does not write dockOpenMemory; the module-scope copy goes stale');
+  }
+  if (!/adviceOpen\s*&&\s*!immersive\s*\?\s*null\s*:\s*dock/.test(src)) {
+    local.push(
+      'dock render — not hidden while the 修改建议 column is open; the FAB covers the column\'s ' +
+      'suggestions and swallows the close click',
+    );
+  }
+  if (!/if\s*\(\s*adviceOpen\s*\)\s*setDockOpen\s*\(\s*false\s*\)/.test(src)) {
+    local.push('advice effect — opening the column does not collapse dockOpen; the hidden dock would pop back expanded');
+  }
+  problems.push(...local);
+  if (!local.length) {
+    notes.push('R83 — dockOpen survives a remount, and the dock is not rendered while the advice column is open');
+  }
+}
+
 console.log('verify-dock-hit: dock hit-area audit');
 console.log('');
 for (const n of notes) console.log('  ok   ' + n);

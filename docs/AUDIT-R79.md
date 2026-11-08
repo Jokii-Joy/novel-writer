@@ -584,6 +584,16 @@ const target = hasChapter ? defaultTarget : { kind: 'novel', id: String(novel.id
 
 ---
 
+## G3. R83 用户反馈修复（编辑页悬浮坞）
+
+| 条目 | 落地方式 |
+| --- | --- |
+| 展开后点插件其它地方自动收起 | 调查确认没有外层 `pointerdown` 监听；收起来自宿主重渲染/重挂载 slot 时组件状态被重新初始化。`dockOpen` 现由模块级 `dockOpenMemory` 播种，`setDockOpen` 同步写回；同页重挂载保持展开，刷新仍回到收起（不盖章末）。 |
+| 修改建议栏被坞遮挡 | 栏展开且非沉浸时整块坞不渲染（`adviceOpen && !immersive ? null : dock`）；打开栏时显式 `setDockOpen(false)`，关栏后回到收起态。 |
+| 回归 | `verify-dock-hit` 第 9 节 5 条静态断言钉住以上两条；`build-client`、`verify-host` 283、`verify-advice-ui` 42 全过。 |
+
+---
+
 ## H. 核对过、判定「不是问题」的点（避免下一轮重复排查）
 
 - 宿主合并规则（书级 LWW、墓碑、同毫秒平手、密文让位于可读副本）与 `withStateLock` 串行化：
