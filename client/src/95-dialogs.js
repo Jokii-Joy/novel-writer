@@ -1327,9 +1327,16 @@
     const restoreSnapshot = async (res) => {
       const snapshot = res && res.snapshot;
       if (!snapshot) throw new Error('备份文件里没有可恢复的内容');
-      const novels = Array.isArray(snapshot.novels) ? snapshot.novels.length : 0;
-      const chapters = Array.isArray(snapshot.chapters) ? snapshot.chapters.length : 0;
-      const notes = Array.isArray(snapshot.notes) ? snapshot.notes.length : 0;
+      const countOf = (key) => (Array.isArray(snapshot[key]) ? snapshot[key].length : 0);
+      const novels = countOf('novels');
+      const chapters = countOf('chapters');
+      const notes = countOf('notes');
+      // R79: annotations / 设定集 / accepted advice now ride in the snapshot too.
+      // Report them like the notes — a restore that quietly drops them reads as
+      // data loss to the writer.
+      const marks = countOf('marks');
+      const lore = countOf('lore');
+      const revisions = countOf('revisions');
       // R34: statuses live on the host, so the merge result — not the snapshot —
       // is what actually happened. Report it instead of implying a full restore.
       const merged = res && res.submissions && Number(res.submissions.imported) > 0
@@ -1341,6 +1348,9 @@
         '已恢复 ' + novels + ' 部小说',
         chapters + ' 章',
         notes > 0 ? notes + ' 条灵感' : '',
+        marks > 0 ? marks + ' 处标注' : '',
+        lore > 0 ? lore + ' 条设定' : '',
+        revisions > 0 ? revisions + ' 条已接收建议' : '',
         merged > 0 ? merged + ' 条投稿状态' : '',
       ].filter(Boolean);
       if (!snapshot.novels || !snapshot.novels.length) {
@@ -1352,12 +1362,19 @@
       return res;
     };
 
+    // R79: the wording now matches what actually happens. A store the snapshot
+    // does not mention is preserved (10-db.js `planRestore`), so 「覆盖全部」 was
+    // both scary and inaccurate; and the things that *are* replaced deserve to be
+    // named instead of hidden behind 「小说与章节」.
     const confirmRestore = () =>
-      NW.ui.confirm('恢复会用备份内容覆盖当前全部小说与章节，且无法撤销。确定继续？', {
-        title: '确认恢复',
-        danger: true,
-        okText: '覆盖恢复',
-      });
+      NW.ui.confirm(
+        '恢复会用备份里的内容覆盖小说、章节、便签、标注、设定与已接收建议；备份里没有的部分会保留，不会清空。确定继续？',
+        {
+          title: '确认恢复',
+          danger: true,
+          okText: '覆盖恢复',
+        },
+      );
 
     // ---- actions -------------------------------------------------------
     const chooseDir = () =>
@@ -1606,6 +1623,10 @@
       secure: true,
       user: '',
       password: '',
+      // R80: unsafe opt-ins, off by default. Only surfaced for the rare corporate
+      // proxy / plaintext relay; every other send stays certificate-verified.
+      allowInsecureTls: false,
+      allowPlaintextAuth: false,
       configured: false,
       hasPassword: false,
       busy: '',
@@ -1629,6 +1650,9 @@
       user: '',
       password: '',
       useSmtp: true,
+      // R80: same two opt-ins as SMTP, default off.
+      allowInsecureTls: false,
+      allowPlaintextAuth: false,
       configured: false,
       hasPassword: false,
       busy: '',
@@ -1686,6 +1710,8 @@
               user: String(data.user || prev.user || ''),
               configured: data.configured === true,
               hasPassword: data.hasPassword === true,
+              allowInsecureTls: data.allowInsecureTls === true,
+              allowPlaintextAuth: data.allowPlaintextAuth === true,
             }),
           );
         })
@@ -1771,6 +1797,8 @@
               useSmtp: data.useSmtp !== false,
               configured: data.configured === true,
               hasPassword: data.hasPassword === true,
+              allowInsecureTls: data.allowInsecureTls === true,
+              allowPlaintextAuth: data.allowPlaintextAuth === true,
             }),
           );
           setImapPresets(Array.isArray(data.presets) ? data.presets : []);
@@ -1932,6 +1960,8 @@
           secure: smtp.secure,
           user: smtp.user,
           password: smtp.password,
+          allowInsecureTls: smtp.allowInsecureTls === true,
+          allowPlaintextAuth: smtp.allowPlaintextAuth === true,
         });
         setSmtp((prev) =>
           Object.assign({}, prev, {
@@ -2079,6 +2109,8 @@
           user: imap.user,
           password: imap.password,
           useSmtp: imap.useSmtp,
+          allowInsecureTls: imap.allowInsecureTls === true,
+          allowPlaintextAuth: imap.allowPlaintextAuth === true,
         });
         setImap((prev) =>
           Object.assign({}, prev, {
@@ -2700,6 +2732,18 @@
                 onChange: (v) => setSmtp((prev) => Object.assign({}, prev, { password: v, error: '', hint: '' })),
               }),
             }),
+            rowToggle(
+              '允许跳过证书校验（不推荐）',
+              smtp.allowInsecureTls === true,
+              (v) => setSmtp((prev) => Object.assign({}, prev, { allowInsecureTls: !!v })),
+              'R80 起默认拒绝：证书错误可能意味着中间人正在截取授权码。只有确认是公司代理 / 杀毒软件时才打开。',
+            ),
+            rowToggle(
+              '允许明文登录（不推荐）',
+              smtp.allowPlaintextAuth === true,
+              (v) => setSmtp((prev) => Object.assign({}, prev, { allowPlaintextAuth: !!v })),
+              '服务器不提供 STARTTLS 时默认中止发送；只有可信的内网中继才需要打开。',
+            ),
             h(
               'div',
               { className: 'nw-inline', style: { gap: '6px', flexWrap: 'wrap' } },
@@ -2830,6 +2874,18 @@
                 onChange: (v) => setImap((prev) => Object.assign({}, prev, { password: v, error: '', hint: '' })),
               }),
             }),
+            rowToggle(
+              '允许跳过证书校验（不推荐）',
+              imap.allowInsecureTls === true,
+              (v) => setImap((prev) => Object.assign({}, prev, { allowInsecureTls: !!v })),
+              'R80 起默认拒绝：证书错误可能意味着中间人正在截取授权码。',
+            ),
+            rowToggle(
+              '允许明文登录（不推荐）',
+              imap.allowPlaintextAuth === true,
+              (v) => setImap((prev) => Object.assign({}, prev, { allowPlaintextAuth: !!v })),
+              '服务器不提供 STARTTLS 时默认中止登录；只有可信的内网中继才需要打开。',
+            ),
             h(
               'div',
               { className: 'nw-inline', style: { gap: '6px', flexWrap: 'wrap' } },

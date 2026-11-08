@@ -6,8 +6,68 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.3 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第八十一轮（R81）审计收尾：**把 §B3 与 §C 的并发、取消、导入/解压上限逐条落地**。
+  ① **跨站守卫（§B3）**：`createHandler` 现在要求写操作带 `application/json`（浏览器对
+  `text/plain` 的跨站 POST 不预检），并且 `Origin` 与 `Host` 不一致直接 `forbidden-origin`。
+  ② **文件夹写盘原子化 + 串行（§C1）**：`library.writeBytesFile` 改成临时文件 + rename；
+  `mirrorLibrary` 与 `writeSettings` 各加一条模块级队列，自动保存 / 立即保存 / 换目录三种写不再互相删文件；
+  `settings.json` 的读-改-写也不会再丢补丁（§C3）。
+  ③ **手机侧并发（§C8）**：`deviceIdentity()` 单飞（冷启动不再各铸一把钥匙），
+  `peers.json` 的配对 / 解绑 / lastSeen 写入统一走队列（解绑不会被在途同步写回来）。
+  ④ **AI 取消与超时（§C5）**：客户端 `api()` 有 60 秒默认超时（AI 调用 10 分钟），
+  流式改写用 `AbortController`，关窗 / 换选区会中止 HTTP；宿主把 `res.on('close')` 接到
+  `AbortController` 并一路传到 `llm.stream`，`reviseSelectionStream` 补上 `signal`（§C6 的单飞闸门
+  也改成在 try/finally 内设置，`res.writeHead` 抛错不会再永久 429）。
+  ⑤ **数据与自愈**：`updateChapter` / `saveChapterContent` 接进章节队列（§C4，改名不再把正文写回旧版）；
+  `onMarksShift` 带 `chapterId`（§C9）；新建批注 pending 期间的最后一句不再丢（§C10）；
+  自动保存签名纳入便签与投稿记录（§C2）；导入改成单事务 `createChapters`（§E7，1000 章不再 O(n²)）；
+  隐藏页暂停 6 秒同步轮询；读视图的段落偏移按真实换行符推进（§D1）；ZIP 解压加 256MB 输出上限（§C7）。
+  ⑥ **脚本**：`verify-e2e.mjs` 删除已移除的云备份死代码、改成 `.docx` 断言、
+  保存目录一段改为 `NOVEL_WRITER_E2E_WRITE=1` 显式开启并在 `finally` 恢复用户设置（§C11）。
+  ⑦ 验收：`verify-host.mjs` **283 项 0 失败**（新增 [8f] 跨站守卫 4 项）；其余脚本全部通过。版本 **1.6.3**。
+- 第八十轮（R80）修复：**重装宿主后密码与设置不再丢失**。
+  ① 起因：密码的盐/校验值、面板布局偏好都放在 `localStorage`，主题/字号等设置行放在 IndexedDB——
+  两者都属于 Harness 的 WebView 配置目录（Windows 是 `%APPDATA%\@deepseek-ai\dsh-desktop`），
+  重装宿主会把整份配置换掉。书稿还能从局域网同步镜像拉回来，于是用户看到的是「书回来了、密码和设置没了」。
+  ② 宿主新增 `lib/client-state.js`，把三样东西镜像到 `DSH_HOME/novel-writer/client-state.json`
+  （`DSH_HOME` 重装不删）：`crypto`（盐 + 迭代次数 + 校验值，**不存密码本身**）、
+  `settings`（IndexedDB 设置行）、`prefs`（`nw.*` 布局键）。带形状/大小校验与原子写。
+  ③ 客户端：`15-crypto.js` 增加 `hydrate()`——localStorage 里有就推给宿主，没有就从宿主恢复并强制置为锁定
+  （派生密钥从不落盘，恢复后必须重输密码才能真正解密）；`90-app.js` 启动时先 hydrate 再判断锁定，
+  随后 `hydratePrefs()` 只补「本地缺失」的布局键；设置行只在「本地根本没有设置行」时采用宿主副本，
+  平时 1.5s 防抖回写宿主，所以线上配置永远以本机为准。
+  ④ 新增路由 `client.state` / `client.saveSettings` / `client.savePrefs` /
+  `crypto.state` / `crypto.save` / `crypto.clear`（后三个只搬运盐与校验值，无法反推密码）。
+  ⑤ 验收：`verify-host.mjs` **279 项 0 失败**（新增 [8d] 12 项、[8e] 9 项）；新增
+  `scripts/verify-crypto-recovery.mjs` **18 项**——在假 localStorage 里完整走一遍
+  「设置密码 → 配置被清空 → 从宿主恢复 → 旧密码通过校验并解锁 → 清除密码同步删掉宿主副本」；
+  两个新脚本都接进 `build-client`。版本 **1.6.2**。
+  ⑥ **顺带修掉审计 §B1/B2（邮件 TLS）**：SMTP / IMAP 证书校验失败**不再自动降级重试**，
+  改由设置页里默认关闭的「允许跳过证书校验」显式授权；服务器不提供 STARTTLS 时
+  **不再把 AUTH / LOGIN 明文发出去**（`smtp-tls-required` / `imap-tls-required`），
+  同样要显式打开「允许明文登录」。两条策略都做成纯函数（`smtp.requiresTls` /
+  `imap.requiresTls`）并由 `[8e]` 钉住。
+- 第七十九轮（R79）审计修复：**两处静默故障 + 一条会毁数据的恢复路径**。详见
+  [`docs/AUDIT-R79.md`](AUDIT-R79.md)（逐条证据与待办清单）。
+  ① **同步推送恢复（A1）**：`syncLibrary` 的守卫把 async 的 `hasPassword()` 当布尔用，
+  Promise 恒真、`isUnlocked()` 在没有密码时恒假，于是未设密码的安装每次都在第一行 `return null`
+  ——`sync.push` **从未执行**，手机只收到过它自己推上去的东西。现在 `await` 了它；并新增
+  `scripts/verify-async-guards.mjs`（接进 `build-client`）静态拦截「async 助手当布尔」的写法，
+  用一条故意写坏的探针验证过它确实会失败。
+  ② **写失败不再假装成功（A3）**：`saveChapterContent` 在 `writeBatch` 返回 `false`（配额满、
+  连接被另一个标签页关掉、事务中止）时抛错，状态栏落到「保存失败」，而不是亮着「已保存」把正文
+  留在内存里。
+  ③ **恢复不再清空快照里没有的数据（A2）**：`replaceAll` 改成按 `planRestore` 决策——快照里有这个
+  store（且是合法数组）才清空重填，没有就**原样保留**。旧行为先把 9 个 store 全 `clear()`，
+  所以「从保存文件夹恢复」会顺手抹掉标注、版本历史、设定集、已接收建议与回收站。
+  同时文件夹快照补上 **标注 / 设定集 / 已接收建议**（客户端 payload、`30-io` 包装层、宿主 `extra`
+  白名单、`library.mirrorLibrary` 一起改），恢复提示与确认框改成实际清单。版本历史与回收站仍不写进
+  快照（它们可能装着整本稿子，而快照每次自动保存都要重写），靠保留规则保证不被清掉。
+  ④ 验收：新增 `scripts/verify-restore.mjs`（16 项纯函数决策表，接进 `build-client`）；
+  `verify-host.mjs` **258 项 0 失败**（新增 [8c] 7 项与路由级快照断言 5 项）；
+  `verify-advice-ui.mjs` 42 项；`verify-async-guards.mjs` 22 文件。版本 **1.6.1**。
 - 第七十八轮（R78）改造：**自动保存只写变了的书；修改建议整块搬出 90-app.js**。
   ① **增量写盘（C1）**：以前每次自动保存都是 `db.dump()` 之后把**每一本**书重新渲染成 docx 写一遍
   ——一百本书就是每次空闲写十几 MB。现在客户端按「每本书 + 它的章节」算一份签名，与上次成功写盘时
@@ -2075,3 +2135,16 @@ Copyright (C) 2025 Jokii-Joy
 > | 流式进度与取消 | 带 `stream:true` 打真实端点，3 秒后客户端挂断，随即再发一发 | `progress` 0/1 → 1/1 逐行进包；挂断后宿主**立刻**释放单飞闸门，第二发拿到 200（不是 429 busy） |
 > | 真实章节回归 | 从同步镜像取一章 4215 字（两块），用手机同样的签名请求打真实端点 | 额度 2×：**0 条 / 116 s**；额度 4×：**6 条 / 163 s**；同一章换 `opencode-go/deepseek-v4-pro` 为 **8 条 / 40 s** |
 > | 服务落位（静态） | `unzip -p … classes.dex` 找类名；`aapt2 dump xmltree … AndroidManifest.xml` | `com/novelwriter/app/ReviseService` 在 dex 里，manifest 中带 `foregroundServiceType=dataSync`；真机行为未验 |
+
+52. **文件夹快照的内容是「书 + 便签 + 标注 + 设定集 + 已接收建议 + 投稿记录」**（R79 补齐后四项）。
+    **版本历史与回收站不写进快照**：两者都可能装着整本稿子，而快照每次自动保存都要整份重写。
+    恢复时按「快照里没有的 store 原样保留」处理（`10-db.js` 的 `planRestore`），所以从文件夹恢复
+    不会再把标注、版本、设定集、已接收建议和回收站清空；但换一台电脑从文件夹恢复时，
+    版本历史与回收站也不会跟着过来——要搬它们请用设置里的「导出 JSON / 恢复」。
+
+53. **重装宿主能救回密码与设置，救不回书稿以外的 IndexedDB 内容本身**（R80）。密码的盐/校验值、
+    IndexedDB 的设置行、`nw.*` 布局偏好都镜像在 `DSH_HOME/novel-writer/client-state.json`；
+    书稿本来就在 `DSH_HOME` 的同步镜像（`sync-state.json`，加密）和保存文件夹里。所以「重装宿主 →
+    配置目录被换掉」之后：重新打开插件会从宿主恢复密码（**仍需重输**）与设置，书稿由 6 秒一次的
+    同步拉取带回来。但**如果连 `DSH_HOME` 也删了**（或换了一台电脑），这些都不在——
+    真正的异地备份只有「保存文件夹」和设置里的「导出 JSON」两处，请自己定期往外拷。

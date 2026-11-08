@@ -15,6 +15,81 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 const LS_VIEW = 'nw.view';
 const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   const LS_NOTES_OPEN = 'nw.notesOpen';
+  // R80: every localStorage key that is a preference (not the password verifier
+  // and not the lock flag). These are mirrored to the host, because a host
+  // reinstall can replace the whole WebView profile: the books come back from
+  // the sync mirror, but the layout and the password used to be lost.
+  const LS_PREF_KEYS = [
+    LS_NOVEL, LS_CHAPTER, LS_WIDTH, LS_TYPE_SCALE, LS_SIDEBAR_AUTO, LS_SHELF_OPEN,
+    LS_ADVICE_OPEN, LS_ADVICE_WIDTH, LS_VIEW, LS_LAST_CHAPTER, LS_NOTES_OPEN,
+  ];
+  let prefsHydrated = false;
+  let prefsPushTimer = 0;
+  let settingsPushTimer = 0;
+
+  /** Debounced: mirror the layout prefs to the host (best effort). */
+  function pushPrefsSoon() {
+    if (!prefsHydrated || typeof window === 'undefined') return;
+    if (prefsPushTimer) window.clearTimeout(prefsPushTimer);
+    prefsPushTimer = window.setTimeout(() => {
+      prefsPushTimer = 0;
+      const prefs = {};
+      for (let i = 0; i < LS_PREF_KEYS.length; i += 1) {
+        const value = lsGet(LS_PREF_KEYS[i]);
+        if (value != null) prefs[LS_PREF_KEYS[i]] = value;
+      }
+      try {
+        if (NW.io && NW.io.client && typeof NW.io.client.savePrefs === 'function') {
+          NW.io.client.savePrefs(prefs).catch(() => {});
+        }
+      } catch (err) {
+        /* preferences are a convenience, never a blocker */
+      }
+    }, 1500);
+  }
+
+  /** Debounced: mirror the IndexedDB settings row to the host (best effort). */
+  function pushSettingsSoon() {
+    if (typeof window === 'undefined') return;
+    if (settingsPushTimer) window.clearTimeout(settingsPushTimer);
+    settingsPushTimer = window.setTimeout(() => {
+      settingsPushTimer = 0;
+      try {
+        if (!NW.io || !NW.io.client || typeof NW.io.client.saveSettings !== 'function') return;
+        Promise.resolve(NW.db.getSettings())
+          .then((settings) => NW.io.client.saveSettings(settings))
+          .catch(() => {});
+      } catch (err) {
+        /* best effort */
+      }
+    }, 1500);
+  }
+
+  /**
+   * R80: fill in the layout preferences a wiped WebView profile lost.
+   *
+   * Only missing keys are touched — whatever this profile already recorded stays
+   * authoritative, so a stale host copy can never move the panel around under the
+   * writer. Runs once per page load, before `pickInitial()` reads the last
+   * chapter, hence before `prefsHydrated` opens the push gate.
+   */
+  async function hydratePrefs() {
+    try {
+      if (!NW.io || !NW.io.client || typeof NW.io.client.state !== 'function') return;
+      const state = await NW.io.client.state();
+      const prefs = state && state.prefs;
+      if (!prefs || typeof prefs !== 'object') return;
+      for (let i = 0; i < LS_PREF_KEYS.length; i += 1) {
+        const key = LS_PREF_KEYS[i];
+        if (prefs[key] == null) continue;
+        if (lsGet(key) == null) lsSet(key, String(prefs[key]));
+      }
+    } catch (err) {
+      /* best effort */
+    } finally {
+      prefsHydrated = true;
+    }
+  }
   const DEFAULT_WIDTH = 272;
   // Host layout: the shell renders `data-sidebar-collapsed` on its frame and
   // exposes no getter for the rail state, so the attribute is the only signal.
@@ -863,6 +938,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     } catch (err) {
       /* private mode / quota — non fatal */
     }
+    if (LS_PREF_KEYS.indexOf(key) >= 0) pushPrefsSoon();
   }
 
   function toast(message, kind) {
@@ -1083,6 +1159,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      */
     const mirrorSeenRef = useRef(new Map());
     const mirrorEncryptRef = useRef(null);
+    /** R81: last mirrored note/submission signatures (they are snapshot-only). */
+    const mirrorMetaRef = useRef({ note: '', submission: '' });
     /**
      * R77 (B2): 跟随系统深浅色。`prefers-color-scheme` 是唯一可靠的信号；
      * 老浏览器没有 matchMedia 时永远算「亮」，行为退回手动主题。
@@ -1250,7 +1328,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // ------------------------------------------------------- data loading ----
     const loadAll = useCallback(async () => {
       await NW.db.init();
-      const [novelRows, chapterRows, stored, markRows, revisionRows] = await Promise.all([
+      const [novelRows, chapterRows, storedRaw, markRows, revisionRows] = await Promise.all([
         NW.db.listNovels(),
         NW.db.listChapters(),
         NW.db.getSettings(),
@@ -1258,6 +1336,23 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         NW.db.listRevisions ? NW.db.listRevisions() : [],
       ]);
       if (!aliveRef.current) return null;
+      // R80: a wiped WebView profile leaves IndexedDB empty, so `getSettings()`
+      // silently answers with the defaults. The host keeps a copy under DSH_HOME;
+      // adopt it only when this profile has no settings row at all, so a live
+      // profile's own choices always win.
+      let stored = storedRaw;
+      try {
+        const hasLocal = typeof NW.db.hasSettings === 'function' ? await NW.db.hasSettings() : true;
+        if (!hasLocal && NW.io && NW.io.client && typeof NW.io.client.state === 'function') {
+          const host = await NW.io.client.state();
+          if (host && host.settings && typeof host.settings === 'object') {
+            stored = Object.assign({}, host.settings);
+            await NW.db.saveSettings(stored);
+          }
+        }
+      } catch (err) {
+        /* a missing host copy must never block opening the studio */
+      }
       const nextSettings = Object.assign({}, NW.db.DEFAULT_SETTINGS || {}, stored || {});
       const migrated = migrateTypeScale(nextSettings, stored);
       const themePatch = migrateTheme(nextSettings);
@@ -1274,6 +1369,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       setSettings(nextSettings);
       // R77: 今日字数 / 连续天数从这里起步；老库没有这个键就是一本空账。
       setDailyStats(nextSettings.dailyStats && typeof nextSettings.dailyStats === 'object' ? nextSettings.dailyStats : {});
+      // R80: seed / refresh the host copy so a later reinstall can restore it.
+      pushSettingsSoon();
       return { novels: novelRows || [], chapters: chapterRows || [], settings: nextSettings };
     }, []);
 
@@ -1308,6 +1405,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     const boot = useCallback(async () => {
       try {
+        // R80: a host reinstall can replace the WebView profile, which is where
+        // localStorage (password verifier + layout prefs) and IndexedDB (books,
+        // settings) live. The host keeps a copy of the small pieces under
+        // DSH_HOME; pull them back before deciding anything about locking.
+        if (NW.crypto && typeof NW.crypto.hydrate === 'function') await NW.crypto.hydrate();
+        await hydratePrefs();
         // Whether the studio starts locked is decided by the key, not by the
         // persisted flag: the derived key only ever lives in memory, so any
         // reload/restart loses it. Trusting `nw.locked` here would boot the
@@ -1672,7 +1775,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         // rows would be `enc:v1:` ciphertext, and the phone cannot read them. The
         // push effect already skips this state; the guard keeps a future caller
         // from reintroducing the bug the decryption below exists to fix.
-        if (NW.crypto.hasPassword && NW.crypto.hasPassword() && !NW.crypto.isUnlocked()) return null;
+        //
+        // `hasPassword()` is async (15-crypto.js): reading it without `await`
+        // used to make this guard true for everyone, because a Promise is always
+        // truthy and `isUnlocked()` is false on an install that never set a
+        // password. The result was no `sync.push` at all — the phone only ever
+        // received what the phone itself had pushed.
+        const hasPw = NW.crypto && typeof NW.crypto.hasPassword === 'function'
+          ? await NW.crypto.hasPassword()
+          : false;
+        if (hasPw && !NW.crypto.isUnlocked()) return null;
         const snapshot = await NW.db.dump();
         const grouped = new Map();
         for (const row of snapshot.chapters || []) {
@@ -1809,6 +1921,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // from React state (a status changed in 投稿管理 may not have landed in
           // `submissions` yet).
           submissions: log,
+          // R79: 标注 / 设定集 / 已接收建议 have to ride in the snapshot too. They
+          // are small (a few rows per chapter), and without them "restore from
+          // this folder" either dropped them (before R79 the restore cleared every
+          // store) or could not bring them to a new machine. Version history and
+          // the trash stay out on purpose: both can hold whole manuscripts, and a
+          // snapshot is rewritten on every autosave. `replaceAll` now preserves
+          // any store the snapshot does not mention, so leaving them out is safe.
+          marks: snapshot.marks || [],
+          lore: snapshot.lore || [],
+          revisions: snapshot.revisions || [],
           encrypt: cfg.encrypt === true || settings.libraryEncrypt === true,
           // R78: undefined = 「整库重写」(first save of the session, encryption
           // toggled, or an old caller); an array = only these books changed.
@@ -1851,8 +1973,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       const chapterPart = chapters
         .map((row) => [row && row.id, row && row.updatedAt, row && row.wordCount].join(':'))
         .join(',');
-      return novelPart + '|' + chapterPart + '|' + String(settings.libraryEncrypt === true);
-    }, [novels, chapters, settings.libraryEncrypt, library.dir, library.mirror]);
+      // R81: notes and submission statuses ride in the same snapshot (R78/R79),
+      // but the signature ignored them, so "only edited a note" never rang the
+      // bell and the folder kept an older copy. Both are small.
+      const notePart = notes.map((row) => [row && row.id, row && row.updatedAt].join(':')).join(',');
+      const submissionPart = submissions
+        .map((row) => [row && row.id, row && (row.status || row.updatedAt || row.at)].join(':'))
+        .join(',');
+      return (
+        novelPart + '|' + chapterPart + '|' + notePart + '|' + submissionPart
+        + '|' + String(settings.libraryEncrypt === true)
+      );
+    }, [novels, chapters, notes, submissions, settings.libraryEncrypt, library.dir, library.mirror]);
 
     useEffect(() => {
       if (!ready || locked || !autosaveSignature) return undefined;
@@ -1873,6 +2005,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const seen = mirrorSeenRef.current;
         const encryptNow = settings.libraryEncrypt === true;
         const encryptChanged = mirrorEncryptRef.current !== encryptNow;
+        // R81: notes / submissions are part of the snapshot but not of any book,
+        // so they need their own signal. When only they move, `changed` is an
+        // empty array and the host rewrites the snapshot without touching a docx.
+        const noteSig = notes.map((row) => [row && row.id, row && row.updatedAt].join(':')).join(',');
+        const submissionSig = submissions
+          .map((row) => [row && row.id, row && (row.status || row.updatedAt || row.at)].join(':'))
+          .join(',');
+        const metaRef = mirrorMetaRef.current;
+        const metaChanged = metaRef.note !== noteSig || metaRef.submission !== submissionSig;
         let changed = null;
         if (seen.size > 0 && !encryptChanged) {
           // A book disappeared: the host can only clean up its file when it is
@@ -1885,9 +2026,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               if (seen.get(id) !== sig) changed.push(id);
             }
           }
-          // Nothing about any book moved (e.g. only a setting did): the folder
-          // already holds exactly this library, so skip the write entirely.
-          if (Array.isArray(changed) && changed.length === 0) return;
+          // Nothing about any book and neither the notes nor the submission log
+          // moved: the folder already holds exactly this library.
+          if (Array.isArray(changed) && changed.length === 0 && !metaChanged) return;
         }
         const run = mirrorLibrary({ silent: true, changed: changed });
         if (run && typeof run.then === 'function') {
@@ -1897,11 +2038,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             if (!ok) return;
             mirrorSeenRef.current = next;
             mirrorEncryptRef.current = encryptNow;
+            mirrorMetaRef.current = { note: noteSig, submission: submissionSig };
           });
         }
       }, 1200);
       return () => window.clearTimeout(timer);
-    }, [ready, locked, autosaveSignature, mirrorLibrary, novels, chapters, settings.libraryEncrypt]);
+    }, [ready, locked, autosaveSignature, mirrorLibrary, novels, chapters, notes, submissions, settings.libraryEncrypt]);
 
     /**
      * R34 ④: hand the library to the host's sync mirror.
@@ -2340,8 +2482,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * drawn on instead of under whatever happens to sit at those offsets now.
      */
     const shiftMarks = useCallback(
-      async (diff) => {
-        const current = chapterRef.current;
+      async (diff, chapterId) => {
+        // R81: prefer the id the editor handed over. The editor's unmount flush
+        // runs after React has already swapped `chapterRef` to the next chapter,
+        // so reading it here could shift the wrong chapter's marks.
+        const current = chapterId != null ? { id: chapterId } : chapterRef.current;
         if (!current || current.id == null) return;
         if (!diff) return;
         // R73: accepted suggestions are pinned to their words by the same diff —
@@ -2515,6 +2660,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     useEffect(() => {
       if (!ready || locked) return undefined;
       const timer = window.setInterval(() => {
+        // R81: a hidden tab decrypts and merges the whole mirror every 6s for
+        // nothing. Skip the tick; the next visible one catches up.
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
         pullSync();
       }, 6000);
       return () => window.clearInterval(timer);
@@ -2738,6 +2886,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           setSettings((prev) => Object.assign({}, prev, patch || {}));
           const saved = await NW.db.saveSettings(patch || {});
           if (aliveRef.current && saved) setSettings(Object.assign({}, NW.db.DEFAULT_SETTINGS || {}, saved));
+          // R80: keep the host copy current; a host reinstall replaces the WebView
+          // profile, not DSH_HOME, so this is the copy that brings settings back.
+          pushSettingsSoon();
         } catch (err) {
           pushToast(errText(err, '保存设置失败'), 'error');
         }
@@ -3259,10 +3410,20 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           const list = Array.isArray(parsed.chapters) && parsed.chapters.length
             ? parsed.chapters
             : [{ title: '正文', content: '' }];
-          for (let j = 0; j < list.length; j += 1) {
-            const row = list[j] || {};
-            const created = await NW.db.createChapter(novel.id, { title: row.title || '第' + (j + 1) + '章' });
-            await NW.db.saveChapterContent(created.id, String(row.content || ''));
+          // R81: one transaction for the whole book. Per-chapter creation read the
+          // whole chapters table every time, so a long novel made the import screen
+          // freeze (O(n²)).
+          if (typeof NW.db.createChapters === 'function') {
+            await NW.db.createChapters(novel.id, list.map((row, j) => ({
+              title: (row && row.title) || '第' + (j + 1) + '章',
+              content: String((row && row.content) || ''),
+            })));
+          } else {
+            for (let j = 0; j < list.length; j += 1) {
+              const row = list[j] || {};
+              const created = await NW.db.createChapter(novel.id, { title: row.title || '第' + (j + 1) + '章' });
+              await NW.db.saveChapterContent(created.id, String(row.content || ''));
+            }
           }
           lastNovel = novel;
           pushToast('已导入《' + (novel.title || '') + '》', 'ok');

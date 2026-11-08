@@ -8,6 +8,9 @@
   // ---------------------------------------------------------------------------
 
   const API_PREFIX = 'novel-writer/api/';
+  /** Ordinary request deadline. AI calls pass their own, much larger one. */
+  const API_TIMEOUT_MS = 60 * 1000;
+  const AI_TIMEOUT_MS = 10 * 60 * 1000;
 
   // -------------------------------- transport --------------------------------
 
@@ -40,9 +43,24 @@
     return body;
   }
 
-  function api(method, payload) {
+  /**
+   * One request. `options.timeoutMs` guards against a hung host (R81): the old
+   * code had no deadline at all, so a stuck mirror/AI call left the button
+   * spinning forever and the promise never settled. AI calls pass a much larger
+   * budget than ordinary settings/library calls.
+   */
+  function api(method, payload, options) {
     const name = String(method == null ? '' : method).trim();
     if (!name) return Promise.reject(new Error('缺少接口方法名'));
+    const opts = options && typeof options === 'object' ? options : {};
+    const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : API_TIMEOUT_MS;
+    const controller = typeof AbortController === 'function' && timeoutMs > 0 ? new AbortController() : null;
+    let timer = 0;
+    if (controller) timer = setTimeout(() => controller.abort(), timeoutMs);
+    const clear = () => {
+      if (timer) clearTimeout(timer);
+      timer = 0;
+    };
     const url = apiUrl(name);
     let response;
     try {
@@ -51,8 +69,10 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload === undefined ? {} : payload),
         credentials: 'same-origin',
+        ...(controller ? { signal: controller.signal } : {}),
       });
     } catch (err) {
+      clear();
       return Promise.reject(new Error('网络请求失败：' + (err && err.message ? err.message : String(err))));
     }
     return Promise.resolve(response)
@@ -70,8 +90,16 @@
         return parseReply(parsed);
       })
       .catch((err) => {
+        // An abort is indistinguishable from "host hung" for the caller; expose
+        // the code so the AI fallback can stop instead of walking the list.
+        if (controller && controller.signal.aborted) {
+          const aborted = new Error('请求超时或已取消');
+          aborted.code = 'aborted';
+          throw aborted;
+        }
         throw err instanceof Error ? err : new Error('请求失败');
-      });
+      })
+      .finally(clear);
   }
 
   /** GET ping — used for a cheap connectivity probe. */
@@ -440,7 +468,7 @@
     // R29: only send the writer's brief when there is one — the host already
     // knows the shipped default and must not be handed an empty override.
     if (data.rules) payload.rules = String(data.rules);
-    return api('proofread', payload);
+    return api('proofread', payload, { timeoutMs: AI_TIMEOUT_MS });
   }
 
   /**
@@ -682,8 +710,12 @@
     // R78: 便签与投稿记录本来就该跟着快照走 —— 这个包装层上一版把它们丢了，
     // 恢复时看着像数据丢失。同时新增 changed：只报变了的书，宿主就不再重写
     // 其它 .docx。
+    // R79: 标注 / 设定集 / 已接收建议同理，漏在包装层就会「备份看着成功、恢复全没有」。
     if (Array.isArray(input.notes)) body.notes = input.notes;
     if (Array.isArray(input.submissions)) body.submissions = input.submissions;
+    if (Array.isArray(input.marks)) body.marks = input.marks;
+    if (Array.isArray(input.lore)) body.lore = input.lore;
+    if (Array.isArray(input.revisions)) body.revisions = input.revisions;
     if (Array.isArray(input.changed)) body.changed = input.changed.map((id) => String(id));
     return api('library.mirror', body);
   }
@@ -1000,7 +1032,7 @@
     if (Array.isArray(body.focus)) payload.focus = body.focus.join(',');
     else if (body.focus) payload.focus = String(body.focus);
     if (body.note) payload.note = String(body.note);
-    return api('revise', payload);
+    return api('revise', payload, { timeoutMs: AI_TIMEOUT_MS });
   }
 
   /**
@@ -1022,7 +1054,7 @@
     // R76: 「再改一版」 — the version the writer just read, so the model can be
     // told to come back with something different.
     if (body.previous) payload.previous = String(body.previous);
-    return api('revise.selection', payload);
+    return api('revise.selection', payload, { timeoutMs: AI_TIMEOUT_MS });
   }
 
   /**
@@ -1045,6 +1077,10 @@
     if (body.previous) payload.previous = String(body.previous);
 
     const url = apiUrl('revise.selection.stream');
+    // R81: the caller owns an AbortController, so closing the window (or asking
+    // 「再改一版」 again) cuts the HTTP stream and, through it, the host's model
+    // call. Without this the run continued to completion and billed for it.
+    const signal = handlers && handlers.signal ? handlers.signal : undefined;
     let response;
     try {
       response = await fetch(url, {
@@ -1052,9 +1088,13 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
         credentials: 'same-origin',
+        ...(signal ? { signal } : {}),
       });
     } catch (err) {
-      throw new Error('网络请求失败：' + (err && err.message ? err.message : String(err)));
+      const aborted = signal && signal.aborted;
+      const error = new Error(aborted ? '已取消' : '网络请求失败：' + (err && err.message ? err.message : String(err)));
+      if (aborted) error.code = 'aborted';
+      throw error;
     }
     if (!response || !response.ok) throw new Error('接口不可用：HTTP ' + (response ? response.status : '?'));
 
@@ -1181,6 +1221,31 @@
     return api('sync.apply', { books: Array.isArray(books) ? books : [] });
   }
 
+  // ---- client state / password verifier (R80) -------------------------------
+  //
+  // localStorage and IndexedDB both live in the Harness WebView profile, which a
+  // host reinstall can replace; `DSH_HOME` survives. These wrappers mirror the
+  // password verifier, the settings row and the layout prefs there so a wiped
+  // profile can recover them.
+  function clientStateGet() {
+    return api('client.state', {});
+  }
+  function clientSaveSettings(settings) {
+    return api('client.saveSettings', { settings: settings || {} });
+  }
+  function clientSavePrefs(prefs) {
+    return api('client.savePrefs', { prefs: prefs || {} });
+  }
+  function cryptoState() {
+    return api('crypto.state', {});
+  }
+  function cryptoSave(meta) {
+    return api('crypto.save', meta && typeof meta === 'object' ? meta : {});
+  }
+  function cryptoClear() {
+    return api('crypto.clear', {});
+  }
+
   NW.apiUrl = apiUrl;
   NW.api = api;
 
@@ -1196,6 +1261,17 @@
     ping: ping,
     toBase64: toBase64,
     fromBase64: fromBase64,
+    /** R80: durable copies of the client half's small pieces (see 15-crypto). */
+    client: {
+      state: clientStateGet,
+      saveSettings: clientSaveSettings,
+      savePrefs: clientSavePrefs,
+    },
+    crypto: {
+      state: cryptoState,
+      save: cryptoSave,
+      clear: cryptoClear,
+    },
     library: {
       get: libraryGet,
       set: librarySet,

@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.0',
+      version: '1.6.3',
     };
     NW.ReactDOM = null;
 
@@ -1186,7 +1186,70 @@ window.__ModuleLoader__.load({
     await writeBatch([{ store: 'novels', type: 'put', value: next }]);
   }
 
+  /**
+   * R81: create many chapters (with their text) in ONE transaction.
+   *
+   * `importNow` used to call `createChapter` per row, and that function reads the
+   * whole `chapters` table to find the next `order` — a 1000-chapter epub meant
+   * half a million row decodes and a freeze on the import screen. This reads the
+   * table once, seals each body, and writes everything in a single batch.
+   */
+  async function createChapters(novelId, entries) {
+    if (!novelId) throw new Error('缺少小说 ID');
+    const list = Array.isArray(entries) ? entries.filter(Boolean) : [];
+    if (!list.length) return [];
+    return serialise('chapter', async function () {
+      const siblings = (await readAll('chapters')).filter(function (row) {
+        return row && row.novelId === novelId;
+      });
+      let maxOrder = -1;
+      for (let i = 0; i < siblings.length; i += 1) {
+        const value = Number(siblings[i].order);
+        if (Number.isFinite(value) && value > maxOrder) maxOrder = value;
+      }
+      const stamp = now();
+      const created = [];
+      const ops = [];
+      for (let i = 0; i < list.length; i += 1) {
+        const data = list[i] || {};
+        const text = String(data.content == null ? '' : data.content);
+        const words =
+          NW.format && typeof NW.format.wordCount === 'function'
+            ? NW.format.wordCount(text)
+            : text.replace(/\s+/g, '').length;
+        const chapter = {
+          id: uid('chapter'),
+          novelId: novelId,
+          parentId: data.parentId == null ? null : data.parentId,
+          title: String(data.title == null ? '' : data.title).trim() || '未命名章节',
+          content: await sealContent(text),
+          order: maxOrder + 1 + i,
+          createdAt: stamp,
+          updatedAt: stamp,
+          wordCount: words,
+        };
+        created.push(chapter);
+        ops.push({ store: 'chapters', type: 'put', value: chapter });
+      }
+      const ok = await writeBatch(ops);
+      if (!ok) throw new Error('创建章节失败');
+      await touchNovel(novelId);
+      notify();
+      return created;
+    });
+  }
+
   async function updateChapter(id, patch) {
+    // R81: this and `saveChapterContent` both rewrite the whole row, and the
+    // edit→save path runs on a 1.2s debounce. Without the same queue the chapter
+    // creator uses, a rename that read the row before a save could write its old
+    // `content` back afterwards (the audit's 「改名把正文写回旧版本」).
+    return serialise('chapter', function () {
+      return updateChapterUnlocked(id, patch);
+    });
+  }
+
+  async function updateChapterUnlocked(id, patch) {
     if (!id || !patch) return undefined;
     const current = await readOne('chapters', id);
     if (!current) return undefined;
@@ -1369,7 +1432,14 @@ window.__ModuleLoader__.load({
     return trashItem.id;
   }
 
-  async function saveChapterContent(id, content) {
+  function saveChapterContent(id, content) {
+    // R81: serialised with chapter creation / renames / moves (see updateChapter).
+    return serialise('chapter', function () {
+      return saveChapterContentUnlocked(id, content);
+    });
+  }
+
+  async function saveChapterContentUnlocked(id, content) {
     if (!id) return;
     const current = await readOne('chapters', id);
     if (!current) return;
@@ -1418,7 +1488,13 @@ window.__ModuleLoader__.load({
       updatedAt: now(),
     });
     const ok = await writeBatch([{ store: 'chapters', type: 'put', value: next }]);
-    if (!ok) return;
+    // A failed write must not look like a save. The editor and the status bar key
+    // 「已保存」 off this call resolving, and `writeBatch` turns every IndexedDB
+    // failure (quota, a closed connection after `onversionchange`, an aborted
+    // transaction) into `false`. Returning quietly here left the new text in
+    // memory only: switching chapters or reloading lost it while the UI still
+    // said 已保存. Throwing lands in `saveChapter`'s catch, which sets 'error'.
+    if (!ok) throw new Error('保存正文失败：IndexedDB 写入未完成');
     if (next.novelId) await touchNovel(next.novelId);
     notify();
   }
@@ -1572,6 +1648,20 @@ window.__ModuleLoader__.load({
     const row = await readOne('settings', SETTINGS_KEY);
     const stored = row && row.value && typeof row.value === 'object' ? row.value : {};
     return mergeSettings(DEFAULT_SETTINGS, stored);
+  }
+
+  /**
+   * R80: did this profile ever save settings?
+   *
+   * `getSettings()` merges the defaults, so it cannot tell "the writer chose
+   * these" from "the profile was wiped". The boot sequence uses this to decide
+   * whether the host-side copy (`client.state`) should be adopted — losing a
+   * theme or a font size to a host reinstall is exactly the complaint this
+   * answers.
+   */
+  async function hasSettings() {
+    const row = await readOne('settings', SETTINGS_KEY);
+    return Boolean(row && row.value && typeof row.value === 'object');
   }
 
   async function saveSettings(patch) {
@@ -2256,25 +2346,70 @@ window.__ModuleLoader__.load({
   }
 
   /**
-   * Replaces the whole database with a backup snapshot in ONE transaction
-   * ({novels, chapters, versions, trash?, settings}) — a failure rolls back
-   * everything, leaving the previous data intact.
+   * Decide what a restore touches.
+   *
+   * A folder snapshot carries novels / chapters / settings / notes and — since
+   * R79 — marks / lore / revisions. It deliberately does *not* carry versions or
+   * the trash (they would multiply every autosave), and a backup written by an
+   * older release carries even fewer keys.
+   *
+   * The rule that matters: **a store is cleared only when the snapshot actually
+   * carries a well-formed value for it.** A missing or malformed key means "this
+   * backup says nothing trustworthy about it", so the store is left alone; an
+   * empty array is a deliberate "make this empty" and still clears. Before R79
+   * every restore cleared all nine stores, which is how restoring from a folder
+   * silently erased annotations, version history, 设定集, accepted suggestions
+   * and the trash.
+   *
+   * Pure — no IndexedDB here, so `scripts/verify-restore.mjs` can exercise it
+   * without a browser.
+   */
+  function planRestore(snapshot, stores, settingsKey) {
+    const data = snapshot && typeof snapshot === 'object' ? snapshot : {};
+    const plan = [];
+    for (let s = 0; s < stores.length; s += 1) {
+      const store = stores[s];
+      const raw = Object.prototype.hasOwnProperty.call(data, store) ? data[store] : undefined;
+      // Only a well-formed value counts as "the backup speaks about this store".
+      // A malformed one (`marks: null`, `versions: "x"`) must preserve, not wipe.
+      const carried = store === 'settings'
+        ? Array.isArray(raw) || (raw != null && typeof raw === 'object')
+        : Array.isArray(raw);
+      if (!carried) {
+        plan.push({ store: store, carried: false, rows: [] });
+        continue;
+      }
+      let rows;
+      if (store === 'settings') {
+        if (Array.isArray(raw)) rows = raw;
+        else rows = [{ key: settingsKey, value: raw }];
+      } else {
+        rows = raw;
+      }
+      plan.push({ store: store, carried: true, rows: rows });
+    }
+    return plan;
+  }
+
+  /**
+   * Replaces the database with a backup snapshot in ONE transaction.
+   *
+   * Stores the snapshot does not mention are left untouched (see `planRestore`),
+   * so a folder snapshot — which has no `versions` / `trash` — can no longer wipe
+   * them. A full JSON backup (`dump()`) carries all nine keys and therefore still
+   * behaves as a whole-database replace. A failed transaction rolls everything
+   * back, leaving the previous data intact.
    */
   async function replaceAll(snapshot) {
     const data = snapshot || {};
+    const plan = planRestore(data, STORES, SETTINGS_KEY);
     const ops = [];
-    for (let s = 0; s < STORES.length; s += 1) {
-      const store = STORES[s];
+    for (let p = 0; p < plan.length; p += 1) {
+      const entry = plan[p];
+      if (!entry.carried) continue;
+      const store = entry.store;
+      const rows = entry.rows;
       ops.push({ store: store, type: 'clear' });
-      let rows;
-      if (store === 'settings') {
-        const raw = data.settings;
-        if (Array.isArray(raw)) rows = raw;
-        else if (raw && typeof raw === 'object') rows = [{ key: SETTINGS_KEY, value: raw }];
-        else rows = [];
-      } else {
-        rows = Array.isArray(data[store]) ? data[store] : [];
-      }
       for (let i = 0; i < rows.length; i += 1) {
         let value = rows[i];
         if (store === 'settings') {
@@ -2285,6 +2420,7 @@ window.__ModuleLoader__.load({
         ops.push({ store: store, type: 'put', value: value });
       }
     }
+    if (!ops.length) return;
     const ok = await writeBatch(ops);
     if (!ok) throw new Error('恢复备份失败');
     notify();
@@ -2467,6 +2603,7 @@ window.__ModuleLoader__.load({
   NW.db = {
     DB_NAME: DB_NAME,
     DB_VERSION: DB_VERSION,
+    STORES: STORES.slice(),
     DEFAULT_SETTINGS: DEFAULT_SETTINGS,
     applyBooks: applyBooks,
     init: init,
@@ -2481,6 +2618,7 @@ window.__ModuleLoader__.load({
     listAllChapters: listAllChapters,
     getChapter: getChapter,
     createChapter: createChapter,
+    createChapters: createChapters,
     updateChapter: updateChapter,
     deleteChapter: deleteChapter,
     saveChapterContent: saveChapterContent,
@@ -2492,6 +2630,7 @@ window.__ModuleLoader__.load({
     restoreTrash: restoreTrash,
     emptyTrash: emptyTrash,
     getSettings: getSettings,
+    hasSettings: hasSettings,
     saveSettings: saveSettings,
     listNotes: listNotes,
     saveChapterNote: saveChapterNote,
@@ -2513,6 +2652,8 @@ window.__ModuleLoader__.load({
     deleteLore: deleteLore,
     dump: dump,
     replaceAll: replaceAll,
+    /** Exposed for `scripts/verify-restore.mjs`: pure, no IndexedDB involved. */
+    planRestore: planRestore,
     encryptAll: encryptAll,
     decryptAll: decryptAll,
   };
@@ -2545,6 +2686,80 @@ window.__ModuleLoader__.load({
   /** Derived AES-GCM key (CryptoKey) or null. Never persisted. */
   let cachedKey = null;
   let lastTouch = Date.now();
+
+  // R80: the password verifier is mirrored to the host (DSH_HOME survives a host
+  // reinstall; the WebView profile does not). `pushedSignature` keeps boot from
+  // rewriting the same three strings on every reload, and `hydratePromise`
+  // collapses the concurrent calls the boot screen and the settings panel make.
+  let pushedSignature = '';
+  let hydratePromise = null;
+
+  function hostCrypto() {
+    return NW.io && NW.io.crypto ? NW.io.crypto : null;
+  }
+
+  async function pushMeta(salt, iter, verifier) {
+    const io = hostCrypto();
+    if (!io || typeof io.save !== 'function') return false;
+    const signature = `${salt}|${iter}|${verifier}`;
+    if (signature === pushedSignature) return true;
+    try {
+      await io.save({ salt, iterations: iter, verifier });
+      pushedSignature = signature;
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  async function clearHostMeta() {
+    pushedSignature = '';
+    const io = hostCrypto();
+    if (!io || typeof io.clear !== 'function') return;
+    try {
+      await io.clear();
+    } catch (err) {
+      /* the next hydrate would resurrect the password — acceptable only if the
+         clear failed, and the user was told the removal failed too */
+    }
+  }
+
+  /**
+   * Recover the verifier after the WebView profile lost localStorage.
+   *
+   * Order matters: whatever localStorage holds wins (it is the copy the running
+   * session has been using), and it is pushed to the host so the host copy cannot
+   * drift. Only when localStorage is empty does the host copy come back — and the
+   * studio then starts locked, because the derived key was never persisted.
+   */
+  async function hydrate() {
+    if (hydratePromise) return hydratePromise;
+    hydratePromise = (async () => {
+      const io = hostCrypto();
+      let remote = null;
+      try {
+        remote = io && typeof io.state === 'function' ? await io.state() : null;
+      } catch (err) {
+        remote = null;
+      }
+      const localSalt = lsGet(LS_SALT);
+      const localVerifier = lsGet(LS_VERIFIER);
+      if (localSalt && localVerifier) {
+        await pushMeta(localSalt, iterations(), localVerifier);
+        return;
+      }
+      if (remote && remote.salt && remote.verifier) {
+        lsSet(LS_SALT, String(remote.salt));
+        lsSet(LS_ITER, String(Number(remote.iterations) || DEFAULT_ITERATIONS));
+        lsSet(LS_VERIFIER, String(remote.verifier));
+        // The key only ever lives in memory, so a recovered verifier always means
+        // locked: booting unlocked would let the editor read ciphertext as ''.
+        lsSet(LS_LOCKED, '1');
+        pushedSignature = `${remote.salt}|${Number(remote.iterations) || DEFAULT_ITERATIONS}|${remote.verifier}`;
+      }
+    })().catch(() => {});
+    return hydratePromise;
+  }
 
   function localStore() {
     try {
@@ -2706,6 +2921,10 @@ window.__ModuleLoader__.load({
       cachedKey = key;
       lsSet(LS_LOCKED, '0');
       lastTouch = Date.now();
+      // R80: mirror the verifier to the host. localStorage lives in the WebView
+      // profile and a host reinstall can replace it; DSH_HOME survives. Losing
+      // this means the ciphertext can never be opened again.
+      await pushMeta(b64Encode(salt), iter, verifier);
     } catch (err) {
       throw err instanceof Error ? err : new Error('设置密码失败');
     }
@@ -2716,6 +2935,10 @@ window.__ModuleLoader__.load({
       if (!hasPasswordSync()) {
         cachedKey = null;
         lsDel(LS_LOCKED);
+        // Also drop a host copy that may be left over from a password removed in
+        // a session where the clear call failed; otherwise the next boot would
+        // "recover" something the writer already deleted.
+        await clearHostMeta();
         return true;
       }
       if (typeof pw !== 'string' || pw.length === 0) return false;
@@ -2735,6 +2958,9 @@ window.__ModuleLoader__.load({
       lsDel(LS_VERIFIER);
       lsDel(LS_LOCKED);
       cachedKey = null;
+      // R80: drop the host copy too, or the next boot would "recover" a password
+      // the writer just removed.
+      await clearHostMeta();
       return true;
     } catch (err) {
       return false;
@@ -2877,6 +3103,8 @@ window.__ModuleLoader__.load({
     ENC_PREFIX,
     ITERATIONS: DEFAULT_ITERATIONS,
     hasPassword,
+    // R80: recover the verifier from DSH_HOME when the WebView profile lost it.
+    hydrate,
     verifyPassword,
     changePassword,
     setPassword,
@@ -3501,6 +3729,9 @@ window.__ModuleLoader__.load({
   // ---------------------------------------------------------------------------
 
   const API_PREFIX = 'novel-writer/api/';
+  /** Ordinary request deadline. AI calls pass their own, much larger one. */
+  const API_TIMEOUT_MS = 60 * 1000;
+  const AI_TIMEOUT_MS = 10 * 60 * 1000;
 
   // -------------------------------- transport --------------------------------
 
@@ -3533,9 +3764,24 @@ window.__ModuleLoader__.load({
     return body;
   }
 
-  function api(method, payload) {
+  /**
+   * One request. `options.timeoutMs` guards against a hung host (R81): the old
+   * code had no deadline at all, so a stuck mirror/AI call left the button
+   * spinning forever and the promise never settled. AI calls pass a much larger
+   * budget than ordinary settings/library calls.
+   */
+  function api(method, payload, options) {
     const name = String(method == null ? '' : method).trim();
     if (!name) return Promise.reject(new Error('缺少接口方法名'));
+    const opts = options && typeof options === 'object' ? options : {};
+    const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : API_TIMEOUT_MS;
+    const controller = typeof AbortController === 'function' && timeoutMs > 0 ? new AbortController() : null;
+    let timer = 0;
+    if (controller) timer = setTimeout(() => controller.abort(), timeoutMs);
+    const clear = () => {
+      if (timer) clearTimeout(timer);
+      timer = 0;
+    };
     const url = apiUrl(name);
     let response;
     try {
@@ -3544,8 +3790,10 @@ window.__ModuleLoader__.load({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload === undefined ? {} : payload),
         credentials: 'same-origin',
+        ...(controller ? { signal: controller.signal } : {}),
       });
     } catch (err) {
+      clear();
       return Promise.reject(new Error('网络请求失败：' + (err && err.message ? err.message : String(err))));
     }
     return Promise.resolve(response)
@@ -3563,8 +3811,16 @@ window.__ModuleLoader__.load({
         return parseReply(parsed);
       })
       .catch((err) => {
+        // An abort is indistinguishable from "host hung" for the caller; expose
+        // the code so the AI fallback can stop instead of walking the list.
+        if (controller && controller.signal.aborted) {
+          const aborted = new Error('请求超时或已取消');
+          aborted.code = 'aborted';
+          throw aborted;
+        }
         throw err instanceof Error ? err : new Error('请求失败');
-      });
+      })
+      .finally(clear);
   }
 
   /** GET ping — used for a cheap connectivity probe. */
@@ -3933,7 +4189,7 @@ window.__ModuleLoader__.load({
     // R29: only send the writer's brief when there is one — the host already
     // knows the shipped default and must not be handed an empty override.
     if (data.rules) payload.rules = String(data.rules);
-    return api('proofread', payload);
+    return api('proofread', payload, { timeoutMs: AI_TIMEOUT_MS });
   }
 
   /**
@@ -4175,8 +4431,12 @@ window.__ModuleLoader__.load({
     // R78: 便签与投稿记录本来就该跟着快照走 —— 这个包装层上一版把它们丢了，
     // 恢复时看着像数据丢失。同时新增 changed：只报变了的书，宿主就不再重写
     // 其它 .docx。
+    // R79: 标注 / 设定集 / 已接收建议同理，漏在包装层就会「备份看着成功、恢复全没有」。
     if (Array.isArray(input.notes)) body.notes = input.notes;
     if (Array.isArray(input.submissions)) body.submissions = input.submissions;
+    if (Array.isArray(input.marks)) body.marks = input.marks;
+    if (Array.isArray(input.lore)) body.lore = input.lore;
+    if (Array.isArray(input.revisions)) body.revisions = input.revisions;
     if (Array.isArray(input.changed)) body.changed = input.changed.map((id) => String(id));
     return api('library.mirror', body);
   }
@@ -4493,7 +4753,7 @@ window.__ModuleLoader__.load({
     if (Array.isArray(body.focus)) payload.focus = body.focus.join(',');
     else if (body.focus) payload.focus = String(body.focus);
     if (body.note) payload.note = String(body.note);
-    return api('revise', payload);
+    return api('revise', payload, { timeoutMs: AI_TIMEOUT_MS });
   }
 
   /**
@@ -4515,7 +4775,7 @@ window.__ModuleLoader__.load({
     // R76: 「再改一版」 — the version the writer just read, so the model can be
     // told to come back with something different.
     if (body.previous) payload.previous = String(body.previous);
-    return api('revise.selection', payload);
+    return api('revise.selection', payload, { timeoutMs: AI_TIMEOUT_MS });
   }
 
   /**
@@ -4538,6 +4798,10 @@ window.__ModuleLoader__.load({
     if (body.previous) payload.previous = String(body.previous);
 
     const url = apiUrl('revise.selection.stream');
+    // R81: the caller owns an AbortController, so closing the window (or asking
+    // 「再改一版」 again) cuts the HTTP stream and, through it, the host's model
+    // call. Without this the run continued to completion and billed for it.
+    const signal = handlers && handlers.signal ? handlers.signal : undefined;
     let response;
     try {
       response = await fetch(url, {
@@ -4545,9 +4809,13 @@ window.__ModuleLoader__.load({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
         credentials: 'same-origin',
+        ...(signal ? { signal } : {}),
       });
     } catch (err) {
-      throw new Error('网络请求失败：' + (err && err.message ? err.message : String(err)));
+      const aborted = signal && signal.aborted;
+      const error = new Error(aborted ? '已取消' : '网络请求失败：' + (err && err.message ? err.message : String(err)));
+      if (aborted) error.code = 'aborted';
+      throw error;
     }
     if (!response || !response.ok) throw new Error('接口不可用：HTTP ' + (response ? response.status : '?'));
 
@@ -4674,6 +4942,31 @@ window.__ModuleLoader__.load({
     return api('sync.apply', { books: Array.isArray(books) ? books : [] });
   }
 
+  // ---- client state / password verifier (R80) -------------------------------
+  //
+  // localStorage and IndexedDB both live in the Harness WebView profile, which a
+  // host reinstall can replace; `DSH_HOME` survives. These wrappers mirror the
+  // password verifier, the settings row and the layout prefs there so a wiped
+  // profile can recover them.
+  function clientStateGet() {
+    return api('client.state', {});
+  }
+  function clientSaveSettings(settings) {
+    return api('client.saveSettings', { settings: settings || {} });
+  }
+  function clientSavePrefs(prefs) {
+    return api('client.savePrefs', { prefs: prefs || {} });
+  }
+  function cryptoState() {
+    return api('crypto.state', {});
+  }
+  function cryptoSave(meta) {
+    return api('crypto.save', meta && typeof meta === 'object' ? meta : {});
+  }
+  function cryptoClear() {
+    return api('crypto.clear', {});
+  }
+
   NW.apiUrl = apiUrl;
   NW.api = api;
 
@@ -4689,6 +4982,17 @@ window.__ModuleLoader__.load({
     ping: ping,
     toBase64: toBase64,
     fromBase64: fromBase64,
+    /** R80: durable copies of the client half's small pieces (see 15-crypto). */
+    client: {
+      state: clientStateGet,
+      saveSettings: clientSaveSettings,
+      savePrefs: clientSavePrefs,
+    },
+    crypto: {
+      state: cryptoState,
+      save: cryptoSave,
+      clear: cryptoClear,
+    },
     library: {
       get: libraryGet,
       set: librarySet,
@@ -11667,7 +11971,10 @@ window.__ModuleLoader__.load({
         const d = diffEnds(previous, text);
         if (d.oldMid || d.newMid) {
           try {
-            propsRef.current.onMarksShift(d);
+            // R81: the owning chapter travels with the diff. The old unmount-flush
+            // path ran after `chapterRef` had already moved to the next chapter, so
+            // the parent applied this chapter's shift to the wrong one.
+            propsRef.current.onMarksShift(d, chapterIdRef.current);
           } catch (err) {
             /* a broken listener must not lose the save */
           }
@@ -14210,7 +14517,12 @@ window.__ModuleLoader__.load({
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i];
       const trimmed = line.trim();
-      const after = pos + line.length + 1;
+      // R81: advance by the *actual* delimiter. The old `+ 1` assumed LF, so a
+      // chapter imported with CRLF pushed every following paragraph one character
+      // too far and took its annotations with it.
+      const nextChar = raw[pos + line.length];
+      const delimiter = nextChar === '\r' && raw[pos + line.length + 1] === '\n' ? 2 : nextChar ? 1 : 0;
+      const after = pos + line.length + delimiter;
       if (!trimmed) {
         blank += 1;
         pos = after;
@@ -14855,10 +15167,11 @@ window.__ModuleLoader__.load({
       // 第一次落库是异步的（`p.onMark` 走 db 再回来才有 id）。这期间用户还在打字，
       // 700ms 的下一拍会再进来一次——那时 `st.id` 还是空的，会再建一条。db 层按
       // 「同章 + 同起止」会合并，但这里也没必要让它白跑一趟，用一个 pending 挡住。
-      if (st.pending) {
-        st.saved = body;
-        return;
-      }
+      //
+      // R81: 这里**不能**把新文字写进 `st.saved`。写进去就等于告诉后续提交
+      // 「这一版已经存过了」，而真正落库的是第一次那版；用户在这几十毫秒里补的
+      // 最后一句就永远丢了。保持 dirty，等 id 回来再补写一次。
+      if (st.pending) return;
       st.saved = body;
       st.pending = true;
       const draft = st.draft;
@@ -14872,8 +15185,26 @@ window.__ModuleLoader__.load({
           note: body,
         })).then((created) => {
           st.pending = false;
-          if (created && created.id != null) st.id = String(created.id);
-        }).catch(() => { st.pending = false; });
+          if (created && created.id != null) {
+            st.id = String(created.id);
+            // 建行期间又打的字：现在有 id 了，补一次真正的写入。
+            const latest = String(st.body || '').trim();
+            if (latest && latest !== st.saved) {
+              st.saved = latest;
+              if (typeof p.onNote === 'function') p.onNote(st.id, latest);
+            }
+          }
+          // 关闭批注框时请求还在飞：等 id 落地后再丢弃这个会话，否则 id 会写进
+          // 一个已经被换掉的对象，下一次同段批注会重复建行。
+          if (st.closed && composerSaveRef.current === st) {
+            composerSaveRef.current = { id: '', timer: 0, body: '', saved: '', draft: null };
+          }
+        }).catch(() => {
+          st.pending = false;
+          if (st.closed && composerSaveRef.current === st) {
+            composerSaveRef.current = { id: '', timer: 0, body: '', saved: '', draft: null };
+          }
+        });
       } else {
         st.pending = false;
       }
@@ -14922,7 +15253,15 @@ window.__ModuleLoader__.load({
         if (noteSaveRef.current.dirty || noteSaveRef.current.timer) flushNote();
         if (composerSaveRef.current.timer || composerSaveRef.current.body) {
           commitComposer();
-          composerSaveRef.current = { id: '', timer: 0, body: '', saved: '', draft: null };
+          const st = composerSaveRef.current;
+          if (st.pending) {
+            // R81: keep the in-flight object so its id (and the last sentence)
+            // can land; the `.then` resets the ref once it is done.
+            st.closed = true;
+            st.timer = 0;
+          } else {
+            composerSaveRef.current = { id: '', timer: 0, body: '', saved: '', draft: null };
+          }
         }
         setPicked(null);
         setEditing(null);
@@ -15955,6 +16294,81 @@ const LS_ADVICE_WIDTH = 'nw.adviceWidth';
 const LS_VIEW = 'nw.view';
 const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   const LS_NOTES_OPEN = 'nw.notesOpen';
+  // R80: every localStorage key that is a preference (not the password verifier
+  // and not the lock flag). These are mirrored to the host, because a host
+  // reinstall can replace the whole WebView profile: the books come back from
+  // the sync mirror, but the layout and the password used to be lost.
+  const LS_PREF_KEYS = [
+    LS_NOVEL, LS_CHAPTER, LS_WIDTH, LS_TYPE_SCALE, LS_SIDEBAR_AUTO, LS_SHELF_OPEN,
+    LS_ADVICE_OPEN, LS_ADVICE_WIDTH, LS_VIEW, LS_LAST_CHAPTER, LS_NOTES_OPEN,
+  ];
+  let prefsHydrated = false;
+  let prefsPushTimer = 0;
+  let settingsPushTimer = 0;
+
+  /** Debounced: mirror the layout prefs to the host (best effort). */
+  function pushPrefsSoon() {
+    if (!prefsHydrated || typeof window === 'undefined') return;
+    if (prefsPushTimer) window.clearTimeout(prefsPushTimer);
+    prefsPushTimer = window.setTimeout(() => {
+      prefsPushTimer = 0;
+      const prefs = {};
+      for (let i = 0; i < LS_PREF_KEYS.length; i += 1) {
+        const value = lsGet(LS_PREF_KEYS[i]);
+        if (value != null) prefs[LS_PREF_KEYS[i]] = value;
+      }
+      try {
+        if (NW.io && NW.io.client && typeof NW.io.client.savePrefs === 'function') {
+          NW.io.client.savePrefs(prefs).catch(() => {});
+        }
+      } catch (err) {
+        /* preferences are a convenience, never a blocker */
+      }
+    }, 1500);
+  }
+
+  /** Debounced: mirror the IndexedDB settings row to the host (best effort). */
+  function pushSettingsSoon() {
+    if (typeof window === 'undefined') return;
+    if (settingsPushTimer) window.clearTimeout(settingsPushTimer);
+    settingsPushTimer = window.setTimeout(() => {
+      settingsPushTimer = 0;
+      try {
+        if (!NW.io || !NW.io.client || typeof NW.io.client.saveSettings !== 'function') return;
+        Promise.resolve(NW.db.getSettings())
+          .then((settings) => NW.io.client.saveSettings(settings))
+          .catch(() => {});
+      } catch (err) {
+        /* best effort */
+      }
+    }, 1500);
+  }
+
+  /**
+   * R80: fill in the layout preferences a wiped WebView profile lost.
+   *
+   * Only missing keys are touched — whatever this profile already recorded stays
+   * authoritative, so a stale host copy can never move the panel around under the
+   * writer. Runs once per page load, before `pickInitial()` reads the last
+   * chapter, hence before `prefsHydrated` opens the push gate.
+   */
+  async function hydratePrefs() {
+    try {
+      if (!NW.io || !NW.io.client || typeof NW.io.client.state !== 'function') return;
+      const state = await NW.io.client.state();
+      const prefs = state && state.prefs;
+      if (!prefs || typeof prefs !== 'object') return;
+      for (let i = 0; i < LS_PREF_KEYS.length; i += 1) {
+        const key = LS_PREF_KEYS[i];
+        if (prefs[key] == null) continue;
+        if (lsGet(key) == null) lsSet(key, String(prefs[key]));
+      }
+    } catch (err) {
+      /* best effort */
+    } finally {
+      prefsHydrated = true;
+    }
+  }
   const DEFAULT_WIDTH = 272;
   // Host layout: the shell renders `data-sidebar-collapsed` on its frame and
   // exposes no getter for the rail state, so the attribute is the only signal.
@@ -16803,6 +17217,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     } catch (err) {
       /* private mode / quota — non fatal */
     }
+    if (LS_PREF_KEYS.indexOf(key) >= 0) pushPrefsSoon();
   }
 
   function toast(message, kind) {
@@ -17023,6 +17438,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      */
     const mirrorSeenRef = useRef(new Map());
     const mirrorEncryptRef = useRef(null);
+    /** R81: last mirrored note/submission signatures (they are snapshot-only). */
+    const mirrorMetaRef = useRef({ note: '', submission: '' });
     /**
      * R77 (B2): 跟随系统深浅色。`prefers-color-scheme` 是唯一可靠的信号；
      * 老浏览器没有 matchMedia 时永远算「亮」，行为退回手动主题。
@@ -17190,7 +17607,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // ------------------------------------------------------- data loading ----
     const loadAll = useCallback(async () => {
       await NW.db.init();
-      const [novelRows, chapterRows, stored, markRows, revisionRows] = await Promise.all([
+      const [novelRows, chapterRows, storedRaw, markRows, revisionRows] = await Promise.all([
         NW.db.listNovels(),
         NW.db.listChapters(),
         NW.db.getSettings(),
@@ -17198,6 +17615,23 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         NW.db.listRevisions ? NW.db.listRevisions() : [],
       ]);
       if (!aliveRef.current) return null;
+      // R80: a wiped WebView profile leaves IndexedDB empty, so `getSettings()`
+      // silently answers with the defaults. The host keeps a copy under DSH_HOME;
+      // adopt it only when this profile has no settings row at all, so a live
+      // profile's own choices always win.
+      let stored = storedRaw;
+      try {
+        const hasLocal = typeof NW.db.hasSettings === 'function' ? await NW.db.hasSettings() : true;
+        if (!hasLocal && NW.io && NW.io.client && typeof NW.io.client.state === 'function') {
+          const host = await NW.io.client.state();
+          if (host && host.settings && typeof host.settings === 'object') {
+            stored = Object.assign({}, host.settings);
+            await NW.db.saveSettings(stored);
+          }
+        }
+      } catch (err) {
+        /* a missing host copy must never block opening the studio */
+      }
       const nextSettings = Object.assign({}, NW.db.DEFAULT_SETTINGS || {}, stored || {});
       const migrated = migrateTypeScale(nextSettings, stored);
       const themePatch = migrateTheme(nextSettings);
@@ -17214,6 +17648,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       setSettings(nextSettings);
       // R77: 今日字数 / 连续天数从这里起步；老库没有这个键就是一本空账。
       setDailyStats(nextSettings.dailyStats && typeof nextSettings.dailyStats === 'object' ? nextSettings.dailyStats : {});
+      // R80: seed / refresh the host copy so a later reinstall can restore it.
+      pushSettingsSoon();
       return { novels: novelRows || [], chapters: chapterRows || [], settings: nextSettings };
     }, []);
 
@@ -17248,6 +17684,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     const boot = useCallback(async () => {
       try {
+        // R80: a host reinstall can replace the WebView profile, which is where
+        // localStorage (password verifier + layout prefs) and IndexedDB (books,
+        // settings) live. The host keeps a copy of the small pieces under
+        // DSH_HOME; pull them back before deciding anything about locking.
+        if (NW.crypto && typeof NW.crypto.hydrate === 'function') await NW.crypto.hydrate();
+        await hydratePrefs();
         // Whether the studio starts locked is decided by the key, not by the
         // persisted flag: the derived key only ever lives in memory, so any
         // reload/restart loses it. Trusting `nw.locked` here would boot the
@@ -17612,7 +18054,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         // rows would be `enc:v1:` ciphertext, and the phone cannot read them. The
         // push effect already skips this state; the guard keeps a future caller
         // from reintroducing the bug the decryption below exists to fix.
-        if (NW.crypto.hasPassword && NW.crypto.hasPassword() && !NW.crypto.isUnlocked()) return null;
+        //
+        // `hasPassword()` is async (15-crypto.js): reading it without `await`
+        // used to make this guard true for everyone, because a Promise is always
+        // truthy and `isUnlocked()` is false on an install that never set a
+        // password. The result was no `sync.push` at all — the phone only ever
+        // received what the phone itself had pushed.
+        const hasPw = NW.crypto && typeof NW.crypto.hasPassword === 'function'
+          ? await NW.crypto.hasPassword()
+          : false;
+        if (hasPw && !NW.crypto.isUnlocked()) return null;
         const snapshot = await NW.db.dump();
         const grouped = new Map();
         for (const row of snapshot.chapters || []) {
@@ -17749,6 +18200,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // from React state (a status changed in 投稿管理 may not have landed in
           // `submissions` yet).
           submissions: log,
+          // R79: 标注 / 设定集 / 已接收建议 have to ride in the snapshot too. They
+          // are small (a few rows per chapter), and without them "restore from
+          // this folder" either dropped them (before R79 the restore cleared every
+          // store) or could not bring them to a new machine. Version history and
+          // the trash stay out on purpose: both can hold whole manuscripts, and a
+          // snapshot is rewritten on every autosave. `replaceAll` now preserves
+          // any store the snapshot does not mention, so leaving them out is safe.
+          marks: snapshot.marks || [],
+          lore: snapshot.lore || [],
+          revisions: snapshot.revisions || [],
           encrypt: cfg.encrypt === true || settings.libraryEncrypt === true,
           // R78: undefined = 「整库重写」(first save of the session, encryption
           // toggled, or an old caller); an array = only these books changed.
@@ -17791,8 +18252,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       const chapterPart = chapters
         .map((row) => [row && row.id, row && row.updatedAt, row && row.wordCount].join(':'))
         .join(',');
-      return novelPart + '|' + chapterPart + '|' + String(settings.libraryEncrypt === true);
-    }, [novels, chapters, settings.libraryEncrypt, library.dir, library.mirror]);
+      // R81: notes and submission statuses ride in the same snapshot (R78/R79),
+      // but the signature ignored them, so "only edited a note" never rang the
+      // bell and the folder kept an older copy. Both are small.
+      const notePart = notes.map((row) => [row && row.id, row && row.updatedAt].join(':')).join(',');
+      const submissionPart = submissions
+        .map((row) => [row && row.id, row && (row.status || row.updatedAt || row.at)].join(':'))
+        .join(',');
+      return (
+        novelPart + '|' + chapterPart + '|' + notePart + '|' + submissionPart
+        + '|' + String(settings.libraryEncrypt === true)
+      );
+    }, [novels, chapters, notes, submissions, settings.libraryEncrypt, library.dir, library.mirror]);
 
     useEffect(() => {
       if (!ready || locked || !autosaveSignature) return undefined;
@@ -17813,6 +18284,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const seen = mirrorSeenRef.current;
         const encryptNow = settings.libraryEncrypt === true;
         const encryptChanged = mirrorEncryptRef.current !== encryptNow;
+        // R81: notes / submissions are part of the snapshot but not of any book,
+        // so they need their own signal. When only they move, `changed` is an
+        // empty array and the host rewrites the snapshot without touching a docx.
+        const noteSig = notes.map((row) => [row && row.id, row && row.updatedAt].join(':')).join(',');
+        const submissionSig = submissions
+          .map((row) => [row && row.id, row && (row.status || row.updatedAt || row.at)].join(':'))
+          .join(',');
+        const metaRef = mirrorMetaRef.current;
+        const metaChanged = metaRef.note !== noteSig || metaRef.submission !== submissionSig;
         let changed = null;
         if (seen.size > 0 && !encryptChanged) {
           // A book disappeared: the host can only clean up its file when it is
@@ -17825,9 +18305,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               if (seen.get(id) !== sig) changed.push(id);
             }
           }
-          // Nothing about any book moved (e.g. only a setting did): the folder
-          // already holds exactly this library, so skip the write entirely.
-          if (Array.isArray(changed) && changed.length === 0) return;
+          // Nothing about any book and neither the notes nor the submission log
+          // moved: the folder already holds exactly this library.
+          if (Array.isArray(changed) && changed.length === 0 && !metaChanged) return;
         }
         const run = mirrorLibrary({ silent: true, changed: changed });
         if (run && typeof run.then === 'function') {
@@ -17837,11 +18317,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             if (!ok) return;
             mirrorSeenRef.current = next;
             mirrorEncryptRef.current = encryptNow;
+            mirrorMetaRef.current = { note: noteSig, submission: submissionSig };
           });
         }
       }, 1200);
       return () => window.clearTimeout(timer);
-    }, [ready, locked, autosaveSignature, mirrorLibrary, novels, chapters, settings.libraryEncrypt]);
+    }, [ready, locked, autosaveSignature, mirrorLibrary, novels, chapters, notes, submissions, settings.libraryEncrypt]);
 
     /**
      * R34 ④: hand the library to the host's sync mirror.
@@ -18280,8 +18761,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * drawn on instead of under whatever happens to sit at those offsets now.
      */
     const shiftMarks = useCallback(
-      async (diff) => {
-        const current = chapterRef.current;
+      async (diff, chapterId) => {
+        // R81: prefer the id the editor handed over. The editor's unmount flush
+        // runs after React has already swapped `chapterRef` to the next chapter,
+        // so reading it here could shift the wrong chapter's marks.
+        const current = chapterId != null ? { id: chapterId } : chapterRef.current;
         if (!current || current.id == null) return;
         if (!diff) return;
         // R73: accepted suggestions are pinned to their words by the same diff —
@@ -18455,6 +18939,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     useEffect(() => {
       if (!ready || locked) return undefined;
       const timer = window.setInterval(() => {
+        // R81: a hidden tab decrypts and merges the whole mirror every 6s for
+        // nothing. Skip the tick; the next visible one catches up.
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
         pullSync();
       }, 6000);
       return () => window.clearInterval(timer);
@@ -18678,6 +19165,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           setSettings((prev) => Object.assign({}, prev, patch || {}));
           const saved = await NW.db.saveSettings(patch || {});
           if (aliveRef.current && saved) setSettings(Object.assign({}, NW.db.DEFAULT_SETTINGS || {}, saved));
+          // R80: keep the host copy current; a host reinstall replaces the WebView
+          // profile, not DSH_HOME, so this is the copy that brings settings back.
+          pushSettingsSoon();
         } catch (err) {
           pushToast(errText(err, '保存设置失败'), 'error');
         }
@@ -19199,10 +19689,20 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           const list = Array.isArray(parsed.chapters) && parsed.chapters.length
             ? parsed.chapters
             : [{ title: '正文', content: '' }];
-          for (let j = 0; j < list.length; j += 1) {
-            const row = list[j] || {};
-            const created = await NW.db.createChapter(novel.id, { title: row.title || '第' + (j + 1) + '章' });
-            await NW.db.saveChapterContent(created.id, String(row.content || ''));
+          // R81: one transaction for the whole book. Per-chapter creation read the
+          // whole chapters table every time, so a long novel made the import screen
+          // freeze (O(n²)).
+          if (typeof NW.db.createChapters === 'function') {
+            await NW.db.createChapters(novel.id, list.map((row, j) => ({
+              title: (row && row.title) || '第' + (j + 1) + '章',
+              content: String((row && row.content) || ''),
+            })));
+          } else {
+            for (let j = 0; j < list.length; j += 1) {
+              const row = list[j] || {};
+              const created = await NW.db.createChapter(novel.id, { title: row.title || '第' + (j + 1) + '章' });
+              await NW.db.saveChapterContent(created.id, String(row.content || ''));
+            }
           }
           lastNovel = novel;
           pushToast('已导入《' + (novel.title || '') + '》', 'ok');
@@ -22001,6 +22501,22 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const variantRef = useRef(1);
     const madeRef = useRef({});
     const runRef = useRef(0);
+    /** R81: the in-flight stream. Closing the window aborts the host's model call. */
+    const abortRef = useRef(null);
+
+    React.useEffect(
+      () => () => {
+        if (abortRef.current) {
+          try {
+            abortRef.current.abort();
+          } catch (err) {
+            /* already gone */
+          }
+          abortRef.current = null;
+        }
+      },
+      [],
+    );
 
     const getText = useCallback(() => {
       const api = p.editorApi && p.editorApi.current;
@@ -22025,6 +22541,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const options = opts || {};
         const token = runRef.current + 1;
         runRef.current = token;
+        // R81: a new run (or a closed window) cancels the previous stream. The
+        // host ties its model call to the HTTP connection, so this is what makes
+        // 「关掉窗口」 actually stop the spend.
+        if (abortRef.current) {
+          try {
+            abortRef.current.abort();
+          } catch (err) {
+            /* already gone */
+          }
+        }
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        abortRef.current = controller;
         const text = getText();
         const source = text.slice(selStart, selEnd);
         if (!source.trim()) {
@@ -22075,6 +22603,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               result = await NW.ai.reviseSelectionStream(
                 { text: source, before: before, after: after, previous: previous },
                 {
+                  signal: controller ? controller.signal : undefined,
                   onEvent: (event) => {
                     if (runRef.current !== token) return;
                     if (!event || event.type !== 'suggestion' || !event.item) return;
@@ -22085,6 +22614,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               );
             } catch (streamError) {
               if (runRef.current !== token) return;
+              // An explicit cancel is not a failure: don't paint an error card.
+              if (streamError && streamError.code === 'aborted') return;
               if (streamed.length) {
                 // Half a loaf is still bread: keep what already arrived.
                 setError(NW.t('流式读到一半断了，下面是收到的部分'));
@@ -22123,6 +22654,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           }
         } catch (err) {
           if (runRef.current !== token) return;
+          if (err && err.code === 'aborted') return;
           setItems(null);
           setError(errText(err, '获取修改建议失败'));
         } finally {
@@ -23853,9 +24385,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const restoreSnapshot = async (res) => {
       const snapshot = res && res.snapshot;
       if (!snapshot) throw new Error('备份文件里没有可恢复的内容');
-      const novels = Array.isArray(snapshot.novels) ? snapshot.novels.length : 0;
-      const chapters = Array.isArray(snapshot.chapters) ? snapshot.chapters.length : 0;
-      const notes = Array.isArray(snapshot.notes) ? snapshot.notes.length : 0;
+      const countOf = (key) => (Array.isArray(snapshot[key]) ? snapshot[key].length : 0);
+      const novels = countOf('novels');
+      const chapters = countOf('chapters');
+      const notes = countOf('notes');
+      // R79: annotations / 设定集 / accepted advice now ride in the snapshot too.
+      // Report them like the notes — a restore that quietly drops them reads as
+      // data loss to the writer.
+      const marks = countOf('marks');
+      const lore = countOf('lore');
+      const revisions = countOf('revisions');
       // R34: statuses live on the host, so the merge result — not the snapshot —
       // is what actually happened. Report it instead of implying a full restore.
       const merged = res && res.submissions && Number(res.submissions.imported) > 0
@@ -23867,6 +24406,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         '已恢复 ' + novels + ' 部小说',
         chapters + ' 章',
         notes > 0 ? notes + ' 条灵感' : '',
+        marks > 0 ? marks + ' 处标注' : '',
+        lore > 0 ? lore + ' 条设定' : '',
+        revisions > 0 ? revisions + ' 条已接收建议' : '',
         merged > 0 ? merged + ' 条投稿状态' : '',
       ].filter(Boolean);
       if (!snapshot.novels || !snapshot.novels.length) {
@@ -23878,12 +24420,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       return res;
     };
 
+    // R79: the wording now matches what actually happens. A store the snapshot
+    // does not mention is preserved (10-db.js `planRestore`), so 「覆盖全部」 was
+    // both scary and inaccurate; and the things that *are* replaced deserve to be
+    // named instead of hidden behind 「小说与章节」.
     const confirmRestore = () =>
-      NW.ui.confirm('恢复会用备份内容覆盖当前全部小说与章节，且无法撤销。确定继续？', {
-        title: '确认恢复',
-        danger: true,
-        okText: '覆盖恢复',
-      });
+      NW.ui.confirm(
+        '恢复会用备份里的内容覆盖小说、章节、便签、标注、设定与已接收建议；备份里没有的部分会保留，不会清空。确定继续？',
+        {
+          title: '确认恢复',
+          danger: true,
+          okText: '覆盖恢复',
+        },
+      );
 
     // ---- actions -------------------------------------------------------
     const chooseDir = () =>
@@ -24132,6 +24681,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       secure: true,
       user: '',
       password: '',
+      // R80: unsafe opt-ins, off by default. Only surfaced for the rare corporate
+      // proxy / plaintext relay; every other send stays certificate-verified.
+      allowInsecureTls: false,
+      allowPlaintextAuth: false,
       configured: false,
       hasPassword: false,
       busy: '',
@@ -24155,6 +24708,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       user: '',
       password: '',
       useSmtp: true,
+      // R80: same two opt-ins as SMTP, default off.
+      allowInsecureTls: false,
+      allowPlaintextAuth: false,
       configured: false,
       hasPassword: false,
       busy: '',
@@ -24212,6 +24768,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               user: String(data.user || prev.user || ''),
               configured: data.configured === true,
               hasPassword: data.hasPassword === true,
+              allowInsecureTls: data.allowInsecureTls === true,
+              allowPlaintextAuth: data.allowPlaintextAuth === true,
             }),
           );
         })
@@ -24297,6 +24855,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               useSmtp: data.useSmtp !== false,
               configured: data.configured === true,
               hasPassword: data.hasPassword === true,
+              allowInsecureTls: data.allowInsecureTls === true,
+              allowPlaintextAuth: data.allowPlaintextAuth === true,
             }),
           );
           setImapPresets(Array.isArray(data.presets) ? data.presets : []);
@@ -24458,6 +25018,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           secure: smtp.secure,
           user: smtp.user,
           password: smtp.password,
+          allowInsecureTls: smtp.allowInsecureTls === true,
+          allowPlaintextAuth: smtp.allowPlaintextAuth === true,
         });
         setSmtp((prev) =>
           Object.assign({}, prev, {
@@ -24605,6 +25167,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           user: imap.user,
           password: imap.password,
           useSmtp: imap.useSmtp,
+          allowInsecureTls: imap.allowInsecureTls === true,
+          allowPlaintextAuth: imap.allowPlaintextAuth === true,
         });
         setImap((prev) =>
           Object.assign({}, prev, {
@@ -25226,6 +25790,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 onChange: (v) => setSmtp((prev) => Object.assign({}, prev, { password: v, error: '', hint: '' })),
               }),
             }),
+            rowToggle(
+              '允许跳过证书校验（不推荐）',
+              smtp.allowInsecureTls === true,
+              (v) => setSmtp((prev) => Object.assign({}, prev, { allowInsecureTls: !!v })),
+              'R80 起默认拒绝：证书错误可能意味着中间人正在截取授权码。只有确认是公司代理 / 杀毒软件时才打开。',
+            ),
+            rowToggle(
+              '允许明文登录（不推荐）',
+              smtp.allowPlaintextAuth === true,
+              (v) => setSmtp((prev) => Object.assign({}, prev, { allowPlaintextAuth: !!v })),
+              '服务器不提供 STARTTLS 时默认中止发送；只有可信的内网中继才需要打开。',
+            ),
             h(
               'div',
               { className: 'nw-inline', style: { gap: '6px', flexWrap: 'wrap' } },
@@ -25356,6 +25932,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 onChange: (v) => setImap((prev) => Object.assign({}, prev, { password: v, error: '', hint: '' })),
               }),
             }),
+            rowToggle(
+              '允许跳过证书校验（不推荐）',
+              imap.allowInsecureTls === true,
+              (v) => setImap((prev) => Object.assign({}, prev, { allowInsecureTls: !!v })),
+              'R80 起默认拒绝：证书错误可能意味着中间人正在截取授权码。',
+            ),
+            rowToggle(
+              '允许明文登录（不推荐）',
+              imap.allowPlaintextAuth === true,
+              (v) => setImap((prev) => Object.assign({}, prev, { allowPlaintextAuth: !!v })),
+              '服务器不提供 STARTTLS 时默认中止登录；只有可信的内网中继才需要打开。',
+            ),
             h(
               'div',
               { className: 'nw-inline', style: { gap: '6px', flexWrap: 'wrap' } },

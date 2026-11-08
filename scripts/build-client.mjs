@@ -42,3 +42,36 @@ if (check.status !== 0) {
   console.error('build-client: the generated bundle does not load — fix the client half before shipping');
   process.exit(1);
 }
+
+// A parsed, loadable bundle can still be wrong at runtime: an async helper tested
+// as a boolean reads fine and then disables a whole feature (see the guard's own
+// header for the R79 case). Cheap to check, so every build runs it.
+const guards = spawnSync(process.execPath, [join(here, 'verify-async-guards.mjs')], {
+  stdio: 'inherit',
+});
+if (guards.status !== 0) {
+  console.error('build-client: the client half uses an async helper as a boolean — fix it before shipping');
+  process.exit(1);
+}
+
+// The restore planner decides which object stores a backup may overwrite. A
+// wrong answer here deletes work the writer cannot get back, and the decision
+// table is pure (no IndexedDB), so it is cheap to pin on every build.
+const restore = spawnSync(process.execPath, [join(here, 'verify-restore.mjs')], {
+  stdio: 'inherit',
+});
+if (restore.status !== 0) {
+  console.error('build-client: the restore planner regressed — a backup could now wipe a store it does not carry');
+  process.exit(1);
+}
+
+// The password verifier is mirrored to DSH_HOME so a reinstall of the host does
+// not lock the writer out of their own ciphertext. The walk-through runs in a
+// fake localStorage, so it is fast and needs no browser.
+const recovery = spawnSync(process.execPath, [join(here, 'verify-crypto-recovery.mjs')], {
+  stdio: 'inherit',
+});
+if (recovery.status !== 0) {
+  console.error('build-client: password recovery from the host copy regressed');
+  process.exit(1);
+}

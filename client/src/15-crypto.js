@@ -25,6 +25,80 @@
   let cachedKey = null;
   let lastTouch = Date.now();
 
+  // R80: the password verifier is mirrored to the host (DSH_HOME survives a host
+  // reinstall; the WebView profile does not). `pushedSignature` keeps boot from
+  // rewriting the same three strings on every reload, and `hydratePromise`
+  // collapses the concurrent calls the boot screen and the settings panel make.
+  let pushedSignature = '';
+  let hydratePromise = null;
+
+  function hostCrypto() {
+    return NW.io && NW.io.crypto ? NW.io.crypto : null;
+  }
+
+  async function pushMeta(salt, iter, verifier) {
+    const io = hostCrypto();
+    if (!io || typeof io.save !== 'function') return false;
+    const signature = `${salt}|${iter}|${verifier}`;
+    if (signature === pushedSignature) return true;
+    try {
+      await io.save({ salt, iterations: iter, verifier });
+      pushedSignature = signature;
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  async function clearHostMeta() {
+    pushedSignature = '';
+    const io = hostCrypto();
+    if (!io || typeof io.clear !== 'function') return;
+    try {
+      await io.clear();
+    } catch (err) {
+      /* the next hydrate would resurrect the password — acceptable only if the
+         clear failed, and the user was told the removal failed too */
+    }
+  }
+
+  /**
+   * Recover the verifier after the WebView profile lost localStorage.
+   *
+   * Order matters: whatever localStorage holds wins (it is the copy the running
+   * session has been using), and it is pushed to the host so the host copy cannot
+   * drift. Only when localStorage is empty does the host copy come back — and the
+   * studio then starts locked, because the derived key was never persisted.
+   */
+  async function hydrate() {
+    if (hydratePromise) return hydratePromise;
+    hydratePromise = (async () => {
+      const io = hostCrypto();
+      let remote = null;
+      try {
+        remote = io && typeof io.state === 'function' ? await io.state() : null;
+      } catch (err) {
+        remote = null;
+      }
+      const localSalt = lsGet(LS_SALT);
+      const localVerifier = lsGet(LS_VERIFIER);
+      if (localSalt && localVerifier) {
+        await pushMeta(localSalt, iterations(), localVerifier);
+        return;
+      }
+      if (remote && remote.salt && remote.verifier) {
+        lsSet(LS_SALT, String(remote.salt));
+        lsSet(LS_ITER, String(Number(remote.iterations) || DEFAULT_ITERATIONS));
+        lsSet(LS_VERIFIER, String(remote.verifier));
+        // The key only ever lives in memory, so a recovered verifier always means
+        // locked: booting unlocked would let the editor read ciphertext as ''.
+        lsSet(LS_LOCKED, '1');
+        pushedSignature = `${remote.salt}|${Number(remote.iterations) || DEFAULT_ITERATIONS}|${remote.verifier}`;
+      }
+    })().catch(() => {});
+    return hydratePromise;
+  }
+
   function localStore() {
     try {
       if (typeof localStorage === 'undefined' || !localStorage) return null;
@@ -185,6 +259,10 @@
       cachedKey = key;
       lsSet(LS_LOCKED, '0');
       lastTouch = Date.now();
+      // R80: mirror the verifier to the host. localStorage lives in the WebView
+      // profile and a host reinstall can replace it; DSH_HOME survives. Losing
+      // this means the ciphertext can never be opened again.
+      await pushMeta(b64Encode(salt), iter, verifier);
     } catch (err) {
       throw err instanceof Error ? err : new Error('设置密码失败');
     }
@@ -195,6 +273,10 @@
       if (!hasPasswordSync()) {
         cachedKey = null;
         lsDel(LS_LOCKED);
+        // Also drop a host copy that may be left over from a password removed in
+        // a session where the clear call failed; otherwise the next boot would
+        // "recover" something the writer already deleted.
+        await clearHostMeta();
         return true;
       }
       if (typeof pw !== 'string' || pw.length === 0) return false;
@@ -214,6 +296,9 @@
       lsDel(LS_VERIFIER);
       lsDel(LS_LOCKED);
       cachedKey = null;
+      // R80: drop the host copy too, or the next boot would "recover" a password
+      // the writer just removed.
+      await clearHostMeta();
       return true;
     } catch (err) {
       return false;
@@ -356,6 +441,8 @@
     ENC_PREFIX,
     ITERATIONS: DEFAULT_ITERATIONS,
     hasPassword,
+    // R80: recover the verifier from DSH_HOME when the WebView profile lost it.
+    hydrate,
     verifyPassword,
     changePassword,
     setPassword,

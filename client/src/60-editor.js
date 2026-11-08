@@ -2593,7 +2593,10 @@
         const d = diffEnds(previous, text);
         if (d.oldMid || d.newMid) {
           try {
-            propsRef.current.onMarksShift(d);
+            // R81: the owning chapter travels with the diff. The old unmount-flush
+            // path ran after `chapterRef` had already moved to the next chapter, so
+            // the parent applied this chapter's shift to the wrong one.
+            propsRef.current.onMarksShift(d, chapterIdRef.current);
           } catch (err) {
             /* a broken listener must not lose the save */
           }

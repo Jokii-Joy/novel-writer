@@ -1353,6 +1353,22 @@
     const variantRef = useRef(1);
     const madeRef = useRef({});
     const runRef = useRef(0);
+    /** R81: the in-flight stream. Closing the window aborts the host's model call. */
+    const abortRef = useRef(null);
+
+    React.useEffect(
+      () => () => {
+        if (abortRef.current) {
+          try {
+            abortRef.current.abort();
+          } catch (err) {
+            /* already gone */
+          }
+          abortRef.current = null;
+        }
+      },
+      [],
+    );
 
     const getText = useCallback(() => {
       const api = p.editorApi && p.editorApi.current;
@@ -1377,6 +1393,18 @@
         const options = opts || {};
         const token = runRef.current + 1;
         runRef.current = token;
+        // R81: a new run (or a closed window) cancels the previous stream. The
+        // host ties its model call to the HTTP connection, so this is what makes
+        // 「关掉窗口」 actually stop the spend.
+        if (abortRef.current) {
+          try {
+            abortRef.current.abort();
+          } catch (err) {
+            /* already gone */
+          }
+        }
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        abortRef.current = controller;
         const text = getText();
         const source = text.slice(selStart, selEnd);
         if (!source.trim()) {
@@ -1427,6 +1455,7 @@
               result = await NW.ai.reviseSelectionStream(
                 { text: source, before: before, after: after, previous: previous },
                 {
+                  signal: controller ? controller.signal : undefined,
                   onEvent: (event) => {
                     if (runRef.current !== token) return;
                     if (!event || event.type !== 'suggestion' || !event.item) return;
@@ -1437,6 +1466,8 @@
               );
             } catch (streamError) {
               if (runRef.current !== token) return;
+              // An explicit cancel is not a failure: don't paint an error card.
+              if (streamError && streamError.code === 'aborted') return;
               if (streamed.length) {
                 // Half a loaf is still bread: keep what already arrived.
                 setError(NW.t('流式读到一半断了，下面是收到的部分'));
@@ -1475,6 +1506,7 @@
           }
         } catch (err) {
           if (runRef.current !== token) return;
+          if (err && err.code === 'aborted') return;
           setItems(null);
           setError(errText(err, '获取修改建议失败'));
         } finally {

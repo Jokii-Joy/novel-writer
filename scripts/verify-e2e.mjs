@@ -204,155 +204,76 @@ if (models.current && models.current.provider) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. cloud backup over a throwaway local WebDAV server
+// 6. cloud backup — removed in R9
 // ---------------------------------------------------------------------------
-section('[6] 云备份（WebDAV 全链路）');
-const PORT = 18713;
-const USER = 'nw-tester';
-const PASS = 'nw-' + Math.random().toString(36).slice(2, 10);
-const stored = new Map();
-const EXPECTED_AUTH = 'Basic ' + Buffer.from(`${USER}:${PASS}`, 'utf8').toString('base64');
-
-const xmlEscape = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
-
-const dav = http.createServer((req, res) => {
-  if ((req.headers.authorization || '') !== EXPECTED_AUTH) {
-    res.writeHead(401, { 'www-authenticate': 'Basic realm="nw"', 'content-type': 'text/plain' });
-    return res.end('unauthorized');
-  }
-  const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
-  const name = decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() || '');
-
-  if (req.method === 'PROPFIND') {
-    const self = `<d:response><d:href>${xmlEscape(url.pathname)}</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>`;
-    const kids = [...stored.entries()]
-      .map(([n, f]) => {
-        const href = `${url.pathname.replace(/\/?$/, '/')}${encodeURIComponent(n)}`;
-        return `<d:response><d:href>${xmlEscape(href)}</d:href><d:propstat><d:prop><d:resourcetype/><d:getcontentlength>${f.bytes.length}</d:getcontentlength><d:getlastmodified>${new Date(f.modified).toUTCString()}</d:getlastmodified></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>`;
-      })
-      .join('');
-    res.writeHead(207, { 'content-type': 'application/xml; charset=utf-8' });
-    return res.end(`<?xml version="1.0" encoding="utf-8"?><d:multistatus xmlns:d="DAV:">${self}${kids}</d:multistatus>`);
-  }
-  if (req.method === 'PUT') {
-    const chunks = [];
-    req.on('data', (c) => chunks.push(c));
-    req.on('end', () => {
-      stored.set(name, { bytes: Buffer.concat(chunks), modified: Date.now() });
-      res.writeHead(201, { 'content-type': 'text/plain' });
-      res.end('ok');
-    });
-    return;
-  }
-  if (req.method === 'GET') {
-    const hit = stored.get(name);
-    if (!hit) {
-      res.writeHead(404);
-      return res.end('missing');
-    }
-    res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': hit.bytes.length });
-    return res.end(hit.bytes);
-  }
-  res.writeHead(405);
-  res.end('no');
-});
-
-let davUp = false;
+section('[6] 云备份（R9 已移除）');
 try {
-  await new Promise((resolve, reject) => {
-    dav.once('error', reject);
-    dav.listen(PORT, '127.0.0.1', resolve);
-  });
-  davUp = true;
+  await call('cloud.status', {});
+  check('cloud.* 已被移除（应返回 unknown-method）', false, 'cloud.status 仍然存在');
 } catch (error) {
-  console.log('  - 跳过：无法在 127.0.0.1:' + PORT + ' 起本地 WebDAV（' + error.message + '）');
-}
-
-if (davUp) {
-  const baseUrl = `http://127.0.0.1:${PORT}/dav/`;
-  try {
-    await call('cloud.disconnect', {});
-    const beforeState = await call('cloud.status', {});
-    check('初始 cloud.status 为未配置', beforeState.kind === 'none' && beforeState.configured === false, JSON.stringify(beforeState));
-
-    await call('cloud.config', { kind: 'webdav', fields: { baseUrl, username: USER, password: PASS } });
-    const configured = await call('cloud.status', {});
-    check('cloud.config 后 configured=true', configured.configured === true, JSON.stringify(configured));
-    check('cloud.status 脱敏显示账号', String(configured.account).includes('127.0.0.1'), configured.account);
-
-    const login = await call('cloud.login', {});
-    check('cloud.login 连通性探测通过', login.state === 'ok', JSON.stringify(login));
-
-    const backup = Buffer.from(JSON.stringify({ schema: 1, novels: [NOVEL], at: Date.now() }), 'utf8');
-    const name = 'nw-acceptance-backup.json';
-    const up = await call('cloud.upload', { name, base64: backup.toString('base64') });
-    check('cloud.upload 成功', up.size === backup.length, `${up.size} 字节`);
-    check('WebDAV 服务端确实收到同样字节', stored.get(name)?.bytes.length === backup.length);
-
-    const listed = await call('cloud.list', {});
-    const item = (listed.items || []).find((it) => it.name === name);
-    check('cloud.list 能看到上传的文件', Boolean(item), JSON.stringify((listed.items || []).map((i) => i.name)));
-
-    const down = await call('cloud.download', { id: item ? item.id : up.id });
-    const got = Buffer.from(down.base64, 'base64');
-    check('cloud.download 字节完全一致', got.equals(backup), `${got.length} vs ${backup.length}`);
-    const restored = JSON.parse(got.toString('utf8'));
-    check('下载内容可恢复为小说结构', restored.novels?.[0]?.title === NOVEL.title && restored.novels[0].chapters.length === 2);
-
-    const synced = await call('cloud.status', {});
-    check('上传后 lastSync 更新', synced.lastSync > 0, String(synced.lastSync));
-    check('上传后不误报冲突', synced.conflict === false, String(synced.conflict));
-
-    await call('cloud.disconnect', {});
-    const cleared = await call('cloud.status', {});
-    check('cloud.disconnect 清空凭据', cleared.kind === 'none' && cleared.configured === false, JSON.stringify(cleared));
-  } catch (error) {
-    check('云备份全链路', false, error.message);
-  } finally {
-    dav.close();
-  }
+  check('cloud.* 已随 R9 移除（unknown-method）', /unknown-method/.test(String(error && error.message)), String(error && error.message).slice(0, 120));
 }
 
 // ---------------------------------------------------------------------------
 // 6b. library (novel save directory): settings round-trip + Markdown mirror
 // ---------------------------------------------------------------------------
 section('[6b] 小说保存目录');
-const libDir = fs.mkdtempSync(join(os.tmpdir(), 'nw-library-'));
-try {
-  const before = await call('library.get', {});
-  check('library.get 返回目录状态', typeof before.dir === 'string', JSON.stringify(before));
-
-  await call('library.set', { dir: libDir, mirror: true });
-  const after = await call('library.get', {});
-  check('library.set 持久化目录', after.dir === libDir, after.dir);
-  check('library.set 持久化 mirror 开关', after.mirror === true, String(after.mirror));
-  check('library.get 报告目录存在', after.dirExists === true, String(after.dirExists));
-
-  const mirrored = await call('library.mirror', { novels: [{ title: NOVEL.title, author: NOVEL.author, chapters: NOVEL.chapters }] });
-  check('library.mirror 写出 Markdown', (mirrored.files || []).length >= 1, JSON.stringify((mirrored.files || []).map((f) => f.name)));
-  check('library.mirror 更新 lastMirrorAt', mirrored.lastMirrorAt > 0, String(mirrored.lastMirrorAt));
-
-  const mdName = (mirrored.files || []).filter((f) => /\.md$/.test(f.name))[0];
-  const mdText = mdName ? fs.readFileSync(join(libDir, mdName.name), 'utf8') : '';
-  check('镜像 md 含书名标题', mdText.includes('# ' + NOVEL.title), mdText.slice(0, 40));
-  check('镜像 md 含章节正文', mdText.includes(NOVEL.chapters[0].title) && mdText.includes('第一段正文'));
-
-  const snapshot = JSON.parse(fs.readFileSync(join(libDir, 'library.json'), 'utf8'));
-  check('library.json 是完整快照', Array.isArray(snapshot.novels) && snapshot.novels[0].title === NOVEL.title, 'version=' + snapshot.version);
-
-  const listed = await call('library.list', {});
-  check('library.list 列出镜像文件', (listed.files || []).some((f) => f.name === mdName.name), JSON.stringify((listed.files || []).map((f) => f.name)));
-
-  await call('library.set', { dir: '', mirror: false });
-  const cleared = await call('library.get', {});
-  check('library.set 空目录时关闭镜像', cleared.dir === '' && cleared.mirror === false, JSON.stringify(cleared));
-} catch (error) {
-  check('小说保存目录', false, error.message);
-} finally {
+// R81: this section used to overwrite the live host's save directory and clear
+// it afterwards, and it still expected the pre-R10 Markdown mirror. Now it is
+// opt-in, restores the previous settings in `finally`, and checks the format the
+// plugin actually writes (.docx + library.json).
+if (process.env.NOVEL_WRITER_E2E_WRITE !== '1') {
+  console.log('  - 跳过：这一段会改动宿主里的保存目录设置。需要时用 NOVEL_WRITER_E2E_WRITE=1 重跑。');
+} else {
+  const libDir = fs.mkdtempSync(join(os.tmpdir(), 'nw-library-'));
+  let before = null;
   try {
-    fs.rmSync(libDir, { recursive: true, force: true });
+    before = await call('library.get', {});
+    check('library.get 返回目录状态', typeof before.dir === 'string', JSON.stringify(before));
+
+    await call('library.set', { dir: libDir, mirror: true, encrypt: false });
+    const after = await call('library.get', {});
+    check('library.set 持久化目录', after.dir === libDir, after.dir);
+    check('library.set 持久化 mirror 开关', after.mirror === true, String(after.mirror));
+    check('library.get 报告目录存在', after.dirExists === true, String(after.dirExists));
+
+    const mirrored = await call('library.mirror', {
+      novels: [{ title: NOVEL.title, author: NOVEL.author, chapters: NOVEL.chapters }],
+      chapters: [],
+      notes: [],
+      marks: [],
+      lore: [],
+      revisions: [],
+    });
+    check('library.mirror 写出 .docx', (mirrored.files || []).some((f) => /\.docx$/.test(f.name)), JSON.stringify((mirrored.files || []).map((f) => f.name)));
+    check('library.mirror 更新 lastMirrorAt', mirrored.lastMirrorAt > 0, String(mirrored.lastMirrorAt));
+    check('library.mirror 回显快照附加项', mirrored.marks === 0 && mirrored.lore === 0 && mirrored.revisions === 0, JSON.stringify(mirrored).slice(0, 120));
+
+    const docxName = (mirrored.files || []).filter((f) => /\.docx$/.test(f.name))[0];
+    const docxHead = docxName ? fs.readFileSync(join(libDir, docxName.name)).subarray(0, 2).toString('latin1') : '';
+    check('镜像 .docx 是合法 ZIP（PK 头）', docxHead === 'PK', docxHead);
+
+    const snapshot = JSON.parse(fs.readFileSync(join(libDir, 'library.json'), 'utf8'));
+    check('library.json 是完整快照', Array.isArray(snapshot.novels) && snapshot.novels[0].title === NOVEL.title, 'version=' + snapshot.version);
+
+    const listed = await call('library.list', {});
+    check('library.list 列出镜像文件', (listed.files || []).some((f) => f.name === docxName.name), JSON.stringify((listed.files || []).map((f) => f.name)));
   } catch (error) {
-    /* ignore */
+    check('小说保存目录', false, error.message);
+  } finally {
+    // Restore whatever the user had before this run.
+    if (before) {
+      try {
+        await call('library.set', { dir: before.dir || '', mirror: before.mirror === true, encrypt: before.encrypt === true });
+      } catch (error) {
+        console.log('  ! 恢复保存目录设置失败：' + error.message);
+      }
+    }
+    try {
+      fs.rmSync(libDir, { recursive: true, force: true });
+    } catch (error) {
+      /* ignore */
+    }
   }
 }
 
@@ -363,7 +284,7 @@ section('[7] Host 自检');
 try {
   const self = await call('selftest', {});
   const rows = self.results || [];
-  check('selftest 覆盖 6 个子系统', rows.length === 6, rows.map((r) => r.name).join(','));
+  check('selftest 至少覆盖 6 个子系统', rows.length >= 6, rows.map((r) => r.name).join(','));
   const failed = rows.filter((r) => !r.ok);
   check('selftest 全部通过', failed.length === 0, failed.map((r) => r.name + ': ' + r.detail).join('; ') || 'ok');
 } catch (error) {

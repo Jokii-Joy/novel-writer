@@ -63,7 +63,12 @@
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i];
       const trimmed = line.trim();
-      const after = pos + line.length + 1;
+      // R81: advance by the *actual* delimiter. The old `+ 1` assumed LF, so a
+      // chapter imported with CRLF pushed every following paragraph one character
+      // too far and took its annotations with it.
+      const nextChar = raw[pos + line.length];
+      const delimiter = nextChar === '\r' && raw[pos + line.length + 1] === '\n' ? 2 : nextChar ? 1 : 0;
+      const after = pos + line.length + delimiter;
       if (!trimmed) {
         blank += 1;
         pos = after;
@@ -708,10 +713,11 @@
       // 第一次落库是异步的（`p.onMark` 走 db 再回来才有 id）。这期间用户还在打字，
       // 700ms 的下一拍会再进来一次——那时 `st.id` 还是空的，会再建一条。db 层按
       // 「同章 + 同起止」会合并，但这里也没必要让它白跑一趟，用一个 pending 挡住。
-      if (st.pending) {
-        st.saved = body;
-        return;
-      }
+      //
+      // R81: 这里**不能**把新文字写进 `st.saved`。写进去就等于告诉后续提交
+      // 「这一版已经存过了」，而真正落库的是第一次那版；用户在这几十毫秒里补的
+      // 最后一句就永远丢了。保持 dirty，等 id 回来再补写一次。
+      if (st.pending) return;
       st.saved = body;
       st.pending = true;
       const draft = st.draft;
@@ -725,8 +731,26 @@
           note: body,
         })).then((created) => {
           st.pending = false;
-          if (created && created.id != null) st.id = String(created.id);
-        }).catch(() => { st.pending = false; });
+          if (created && created.id != null) {
+            st.id = String(created.id);
+            // 建行期间又打的字：现在有 id 了，补一次真正的写入。
+            const latest = String(st.body || '').trim();
+            if (latest && latest !== st.saved) {
+              st.saved = latest;
+              if (typeof p.onNote === 'function') p.onNote(st.id, latest);
+            }
+          }
+          // 关闭批注框时请求还在飞：等 id 落地后再丢弃这个会话，否则 id 会写进
+          // 一个已经被换掉的对象，下一次同段批注会重复建行。
+          if (st.closed && composerSaveRef.current === st) {
+            composerSaveRef.current = { id: '', timer: 0, body: '', saved: '', draft: null };
+          }
+        }).catch(() => {
+          st.pending = false;
+          if (st.closed && composerSaveRef.current === st) {
+            composerSaveRef.current = { id: '', timer: 0, body: '', saved: '', draft: null };
+          }
+        });
       } else {
         st.pending = false;
       }
@@ -775,7 +799,15 @@
         if (noteSaveRef.current.dirty || noteSaveRef.current.timer) flushNote();
         if (composerSaveRef.current.timer || composerSaveRef.current.body) {
           commitComposer();
-          composerSaveRef.current = { id: '', timer: 0, body: '', saved: '', draft: null };
+          const st = composerSaveRef.current;
+          if (st.pending) {
+            // R81: keep the in-flight object so its id (and the last sentence)
+            // can land; the `.then` resets the ref once it is done.
+            st.closed = true;
+            st.timer = 0;
+          } else {
+            composerSaveRef.current = { id: '', timer: 0, body: '', saved: '', draft: null };
+          }
         }
         setPicked(null);
         setEditing(null);

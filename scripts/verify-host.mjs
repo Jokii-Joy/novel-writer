@@ -33,6 +33,9 @@ const ai = await import(new URL('../lib/ai.js', import.meta.url).href);
 const library = await import(new URL('../lib/library.js', import.meta.url).href);
 const { unzipSync } = await import(new URL('../lib/zip.js', import.meta.url).href);
 const lansync = await import(new URL('../lib/lansync.js', import.meta.url).href);
+const clientState = await import(new URL('../lib/client-state.js', import.meta.url).href);
+const smtp = await import(new URL('../lib/smtp.js', import.meta.url).href);
+const imap = await import(new URL('../lib/imap.js', import.meta.url).href);
 
 let passed = 0;
 let failed = 0;
@@ -161,12 +164,12 @@ const ctx = {
 };
 
 /** Build a fake IncomingMessage that streams `body`. */
-function makeReq({ method = 'POST', url = ROUTE_PREFIX, body = '' } = {}) {
+function makeReq({ method = 'POST', url = ROUTE_PREFIX, body = '', headers } = {}) {
   const buffer = Buffer.isBuffer(body) ? body : Buffer.from(body, 'utf8');
   const stream = Readable.from(buffer.length > 0 ? [buffer] : []);
   stream.method = method;
   stream.url = url;
-  stream.headers = { 'content-type': 'application/json' };
+  stream.headers = Object.assign({ 'content-type': 'application/json' }, headers || {});
   return stream;
 }
 
@@ -980,6 +983,24 @@ check('library.mirror count 正确', libMirror.json.data.count === 2, String(lib
 check('library.mirror 返回 lastMirrorAt', libMirror.json.data.lastMirrorAt > 0);
 check('lastMirrorAt 写进 settings.json', JSON.parse(fs.readFileSync(library.settingsPath(), 'utf8')).lastMirrorAt > 0);
 
+// R79: 标注 / 设定集 / 已接收建议 must ride in the folder snapshot. This goes
+// through the real route so the `extra` whitelist in routes.js is covered too.
+const libMirrorExtras = await call('library.mirror', {
+  novels: [novels[0], novels[2]],
+  marks: [{ id: 'm1', chapterId: 'ch1', kind: 'underline', start: 0, end: 2 }],
+  lore: [{ id: 'l1', novelId: 'n1', name: '甲', kind: 'character' }],
+  revisions: [{ id: 'r1', chapterId: 'ch1', quote: '甲', revised: '甲甲' }],
+});
+check('library.mirror 回显三类计数', libMirrorExtras.json && libMirrorExtras.json.ok === true
+  && libMirrorExtras.json.data.marks === 1
+  && libMirrorExtras.json.data.lore === 1
+  && libMirrorExtras.json.data.revisions === 1, JSON.stringify(libMirrorExtras.json && libMirrorExtras.json.data).slice(0, 200));
+const snapshotOnDisk = JSON.parse(fs.readFileSync(path.join(libDir, 'library.json'), 'utf8'));
+check('快照写入标注', Array.isArray(snapshotOnDisk.marks) && snapshotOnDisk.marks.length === 1);
+check('快照写入设定集', Array.isArray(snapshotOnDisk.lore) && snapshotOnDisk.lore.length === 1);
+check('快照写入已接收建议', Array.isArray(snapshotOnDisk.revisions) && snapshotOnDisk.revisions.length === 1);
+check('快照仍不写版本 / 回收站（体积取舍）', snapshotOnDisk.versions === undefined && snapshotOnDisk.trash === undefined);
+
 const libList = await call('library.list', {});
 check('library.list 成功', libList.json && libList.json.ok === true, JSON.stringify(libList.json).slice(0, 160));
 check('library.list 至少含 library.json', libList.json.data.files.some((f) => f.name === 'library.json'));
@@ -1083,6 +1104,148 @@ console.log('\n[8b] library.mirrorLibrary {changed}');
   check('没变的书没有被重写（mtime 不变）', fs.statSync(otherPath).mtimeMs === before);
   const listed = fs.readdirSync(mirrorDir).filter((name) => name.endsWith('.docx')).sort();
   check('两本书的 docx 都在', listed.length === 2, listed.join(','));
+}
+
+// ---------------------------------------------------------------------------
+// 8c. library.mirrorLibrary 快照扩展 (R79)
+// ---------------------------------------------------------------------------
+console.log('\n[8c] library.mirrorLibrary 快照带上标注 / 设定集 / 已接收');
+{
+  const dir = path.join(tmpHome, 'mirror-extras');
+  const books = [{ id: 'n1', title: '丙', author: '', chapters: [{ title: '一', content: '丙的内容' }] }];
+  const extra = {
+    chapters: [],
+    settings: { theme: 'claude' },
+    notes: [],
+    marks: [{ id: 'm1', chapterId: 'c1', kind: 'comment', start: 0, end: 1, note: '好' }],
+    lore: [{ id: 'l1', novelId: 'n1', name: '阿丙' }],
+    revisions: [{ id: 'r1', chapterId: 'c1', quote: '丙' }],
+    submissions: [],
+  };
+  const written = await library.mirrorLibrary(dir, books, { extra });
+  check('写入成功并报告三类计数', written.ok !== false
+    && written.marks === 1 && written.lore === 1 && written.revisions === 1,
+    JSON.stringify({ marks: written.marks, lore: written.lore, revisions: written.revisions }));
+  const read = await library.readSnapshot(dir);
+  check('readSnapshot 读回成功', read.ok !== false, String(read && (read.code || read.message || 'ok')).slice(0, 80));
+  check('快照读回 1 条标注', read.ok !== false && Array.isArray(read.snapshot.marks) && read.snapshot.marks.length === 1);
+  check('快照读回 1 条设定', read.ok !== false && Array.isArray(read.snapshot.lore) && read.snapshot.lore.length === 1);
+  check('快照读回 1 条已接收', read.ok !== false && Array.isArray(read.snapshot.revisions) && read.snapshot.revisions.length === 1);
+
+  // A client from before R79 does not send these fields. The snapshot must then
+  // have no key at all — an empty array would read as 「make this store empty」 and
+  // wipe the writer's rows on the next restore.
+  const legacyWrite = await library.mirrorLibrary(dir, books, { extra: { chapters: [] } });
+  const legacyRead = await library.readSnapshot(dir);
+  check('旧客户端不传标注时快照不写 marks 键（不会被当成清空）', legacyWrite.ok !== false && legacyRead.ok !== false
+    && !Object.prototype.hasOwnProperty.call(legacyRead.snapshot, 'marks'));
+  check('同一快照也不写 lore / revisions 键', legacyRead.ok !== false
+    && !Object.prototype.hasOwnProperty.call(legacyRead.snapshot, 'lore')
+    && !Object.prototype.hasOwnProperty.call(legacyRead.snapshot, 'revisions'));
+}
+
+// ---------------------------------------------------------------------------
+// 8d. client.state / crypto.* — 重装宿主后恢复密码与设置 (R80)
+// ---------------------------------------------------------------------------
+console.log('\n[8d] client.state / crypto.*（重装宿主后恢复密码与设置）');
+{
+  const initial = await call('client.state', {});
+  check('初始状态为空', initial.json && initial.json.ok === true
+    && !initial.json.data.crypto && !initial.json.data.settings && !initial.json.data.prefs,
+    JSON.stringify(initial.json && initial.json.data).slice(0, 120));
+
+  const salt = 'c2FsdC0xMjM0NTY3ODkw';
+  const verifier = 'aXYtYmFzZTY0LWN0LWN0LWN0LWN0';
+  const savedCrypto = await call('crypto.save', { salt, iterations: 210000, verifier });
+  check('crypto.save 接受合法值', savedCrypto.json && savedCrypto.json.ok === true
+    && savedCrypto.json.data.crypto.salt === salt, JSON.stringify(savedCrypto.json).slice(0, 140));
+
+  const cryptoState = await call('crypto.state', {});
+  check('crypto.state 读回盐 / 迭代 / 校验值', cryptoState.json && cryptoState.json.ok === true
+    && cryptoState.json.data.salt === salt
+    && cryptoState.json.data.verifier === verifier
+    && cryptoState.json.data.iterations === 210000, JSON.stringify(cryptoState.json && cryptoState.json.data).slice(0, 140));
+
+  const badCrypto = await call('crypto.save', { salt: 'x', iterations: 1, verifier: 'y' });
+  check('非法密码元数据被拒', badCrypto.json && badCrypto.json.ok === false
+    && badCrypto.json.error.code === 'crypto-invalid', JSON.stringify(badCrypto.json).slice(0, 120));
+
+  const savedSettings = await call('client.saveSettings', { settings: { theme: 'night', fontSize: 23 } });
+  check('client.saveSettings 成功', savedSettings.json && savedSettings.json.ok === true, JSON.stringify(savedSettings.json).slice(0, 100));
+
+  const savedPrefs = await call('client.savePrefs', { prefs: { 'nw.view': 'write', 'nw.shelfWidth': '272' } });
+  check('client.savePrefs 成功', savedPrefs.json && savedPrefs.json.ok === true && savedPrefs.json.data.prefs === 2,
+    JSON.stringify(savedPrefs.json).slice(0, 100));
+
+  const full = await call('client.state', {});
+  check('三部分在同一份状态里', full.json && full.json.ok === true
+    && full.json.data.crypto.salt === salt
+    && full.json.data.settings.theme === 'night'
+    && full.json.data.prefs['nw.view'] === 'write', JSON.stringify(full.json && full.json.data).slice(0, 160));
+
+  const stateFile = clientState.clientStatePath();
+  check('状态文件落在 DSH_HOME 里（重装宿主不会删）', stateFile.startsWith(tmpHome) && fs.existsSync(stateFile), stateFile);
+
+  const badPrefs = {};
+  for (let i = 0; i < 201; i += 1) badPrefs['k' + i] = 'v';
+  const tooManyPrefs = await call('client.savePrefs', { prefs: badPrefs });
+  check('偏好条目超过上限被拒', tooManyPrefs.json && tooManyPrefs.json.ok === false
+    && tooManyPrefs.json.error.code === 'prefs-too-large', JSON.stringify(tooManyPrefs.json).slice(0, 120));
+
+  const tooBigSettings = await call('client.saveSettings', { settings: { big: 'x'.repeat(140 * 1024) } });
+  check('设置超过 128KB 被拒', tooBigSettings.json && tooBigSettings.json.ok === false
+    && tooBigSettings.json.error.code === 'settings-too-large', JSON.stringify(tooBigSettings.json).slice(0, 120));
+
+  const clearedCrypto = await call('crypto.clear', {});
+  check('crypto.clear 清掉密码校验值', clearedCrypto.json && clearedCrypto.json.ok === true);
+  const afterClear = await call('client.state', {});
+  check('清掉密码后设置与偏好仍在', afterClear.json && afterClear.json.ok === true
+    && !afterClear.json.data.crypto
+    && afterClear.json.data.settings.theme === 'night'
+    && afterClear.json.data.prefs['nw.view'] === 'write', JSON.stringify(afterClear.json && afterClear.json.data).slice(0, 160));
+}
+
+// ---------------------------------------------------------------------------
+// 8e. 邮件 TLS 策略 (R80) — 明文连接不再发送授权码
+// ---------------------------------------------------------------------------
+console.log('\n[8e] SMTP / IMAP TLS 策略');
+{
+  const smtpPlain = smtp.requiresTls({ tls: false, user: 'a@b.com', pass: 'secret' });
+  check('SMTP: 明文连接且带凭据 → 中止', smtpPlain instanceof Error
+    && smtpPlain.code === 'smtp-tls-required', smtpPlain && smtpPlain.code);
+  check('SMTP: TLS 连接放行', smtp.requiresTls({ tls: true, user: 'a@b.com', pass: 'secret' }) === null);
+  check('SMTP: 无凭据的明文连接放行', smtp.requiresTls({ tls: false, user: '', pass: '' }) === null);
+  check('SMTP: 显式允许明文才放行', smtp.requiresTls({ tls: false, user: 'a@b.com', pass: 'secret', allowPlaintextAuth: true }) === null);
+
+  const imapPlain = imap.requiresTls({ tls: false, user: 'a@b.com', pass: 'secret', host: 'imap.example.com', port: 143 });
+  check('IMAP: 明文连接且带凭据 → 中止', imapPlain instanceof Error
+    && imapPlain.code === 'imap-tls-required', imapPlain && imapPlain.code);
+  check('IMAP: TLS 连接放行', imap.requiresTls({ tls: true, user: 'a@b.com', pass: 'secret' }) === null);
+  check('IMAP: 无凭据的明文连接放行', imap.requiresTls({ tls: false, user: '', pass: '' }) === null);
+  check('IMAP: 显式允许明文才放行', imap.requiresTls({ tls: false, user: 'a@b.com', pass: 'secret', allowPlaintextAuth: true }) === null);
+  check('IMAP: 错误信息带主机与端口', String(imapPlain && imapPlain.message).includes('imap.example.com:143'));
+}
+
+// ---------------------------------------------------------------------------
+// 8f. 跨站请求守卫 (R81)
+// ---------------------------------------------------------------------------
+console.log('\n[8f] 跨站请求守卫');
+{
+  const post = async (headers, body = '{}') => {
+    const res = makeRes();
+    await handler(makeReq({ url: `${ROUTE_PREFIX}/models`, body, headers }), res);
+    return res.json;
+  };
+  const evil = await post({ origin: 'https://evil.example', host: '127.0.0.1:1234' });
+  check('跨站 Origin → forbidden-origin', evil && evil.ok === false
+    && evil.error.code === 'forbidden-origin', JSON.stringify(evil).slice(0, 120));
+  const plain = await post({ 'content-type': 'text/plain' });
+  check('text/plain 简单请求 → unsupported-media-type', plain && plain.ok === false
+    && plain.error.code === 'unsupported-media-type', JSON.stringify(plain).slice(0, 120));
+  const same = await post({ origin: 'http://127.0.0.1:1234', host: '127.0.0.1:1234' });
+  check('同源 Origin + JSON → 放行', same && same.ok === true, JSON.stringify(same).slice(0, 120));
+  const bare = await post({});
+  check('无 Origin 的 JSON 请求（非浏览器客户端）→ 放行', bare && bare.ok === true, JSON.stringify(bare).slice(0, 120));
 }
 
 // ---------------------------------------------------------------------------

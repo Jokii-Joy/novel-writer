@@ -748,7 +748,70 @@
     await writeBatch([{ store: 'novels', type: 'put', value: next }]);
   }
 
+  /**
+   * R81: create many chapters (with their text) in ONE transaction.
+   *
+   * `importNow` used to call `createChapter` per row, and that function reads the
+   * whole `chapters` table to find the next `order` — a 1000-chapter epub meant
+   * half a million row decodes and a freeze on the import screen. This reads the
+   * table once, seals each body, and writes everything in a single batch.
+   */
+  async function createChapters(novelId, entries) {
+    if (!novelId) throw new Error('缺少小说 ID');
+    const list = Array.isArray(entries) ? entries.filter(Boolean) : [];
+    if (!list.length) return [];
+    return serialise('chapter', async function () {
+      const siblings = (await readAll('chapters')).filter(function (row) {
+        return row && row.novelId === novelId;
+      });
+      let maxOrder = -1;
+      for (let i = 0; i < siblings.length; i += 1) {
+        const value = Number(siblings[i].order);
+        if (Number.isFinite(value) && value > maxOrder) maxOrder = value;
+      }
+      const stamp = now();
+      const created = [];
+      const ops = [];
+      for (let i = 0; i < list.length; i += 1) {
+        const data = list[i] || {};
+        const text = String(data.content == null ? '' : data.content);
+        const words =
+          NW.format && typeof NW.format.wordCount === 'function'
+            ? NW.format.wordCount(text)
+            : text.replace(/\s+/g, '').length;
+        const chapter = {
+          id: uid('chapter'),
+          novelId: novelId,
+          parentId: data.parentId == null ? null : data.parentId,
+          title: String(data.title == null ? '' : data.title).trim() || '未命名章节',
+          content: await sealContent(text),
+          order: maxOrder + 1 + i,
+          createdAt: stamp,
+          updatedAt: stamp,
+          wordCount: words,
+        };
+        created.push(chapter);
+        ops.push({ store: 'chapters', type: 'put', value: chapter });
+      }
+      const ok = await writeBatch(ops);
+      if (!ok) throw new Error('创建章节失败');
+      await touchNovel(novelId);
+      notify();
+      return created;
+    });
+  }
+
   async function updateChapter(id, patch) {
+    // R81: this and `saveChapterContent` both rewrite the whole row, and the
+    // edit→save path runs on a 1.2s debounce. Without the same queue the chapter
+    // creator uses, a rename that read the row before a save could write its old
+    // `content` back afterwards (the audit's 「改名把正文写回旧版本」).
+    return serialise('chapter', function () {
+      return updateChapterUnlocked(id, patch);
+    });
+  }
+
+  async function updateChapterUnlocked(id, patch) {
     if (!id || !patch) return undefined;
     const current = await readOne('chapters', id);
     if (!current) return undefined;
@@ -931,7 +994,14 @@
     return trashItem.id;
   }
 
-  async function saveChapterContent(id, content) {
+  function saveChapterContent(id, content) {
+    // R81: serialised with chapter creation / renames / moves (see updateChapter).
+    return serialise('chapter', function () {
+      return saveChapterContentUnlocked(id, content);
+    });
+  }
+
+  async function saveChapterContentUnlocked(id, content) {
     if (!id) return;
     const current = await readOne('chapters', id);
     if (!current) return;
@@ -980,7 +1050,13 @@
       updatedAt: now(),
     });
     const ok = await writeBatch([{ store: 'chapters', type: 'put', value: next }]);
-    if (!ok) return;
+    // A failed write must not look like a save. The editor and the status bar key
+    // 「已保存」 off this call resolving, and `writeBatch` turns every IndexedDB
+    // failure (quota, a closed connection after `onversionchange`, an aborted
+    // transaction) into `false`. Returning quietly here left the new text in
+    // memory only: switching chapters or reloading lost it while the UI still
+    // said 已保存. Throwing lands in `saveChapter`'s catch, which sets 'error'.
+    if (!ok) throw new Error('保存正文失败：IndexedDB 写入未完成');
     if (next.novelId) await touchNovel(next.novelId);
     notify();
   }
@@ -1134,6 +1210,20 @@
     const row = await readOne('settings', SETTINGS_KEY);
     const stored = row && row.value && typeof row.value === 'object' ? row.value : {};
     return mergeSettings(DEFAULT_SETTINGS, stored);
+  }
+
+  /**
+   * R80: did this profile ever save settings?
+   *
+   * `getSettings()` merges the defaults, so it cannot tell "the writer chose
+   * these" from "the profile was wiped". The boot sequence uses this to decide
+   * whether the host-side copy (`client.state`) should be adopted — losing a
+   * theme or a font size to a host reinstall is exactly the complaint this
+   * answers.
+   */
+  async function hasSettings() {
+    const row = await readOne('settings', SETTINGS_KEY);
+    return Boolean(row && row.value && typeof row.value === 'object');
   }
 
   async function saveSettings(patch) {
@@ -1818,25 +1908,70 @@
   }
 
   /**
-   * Replaces the whole database with a backup snapshot in ONE transaction
-   * ({novels, chapters, versions, trash?, settings}) — a failure rolls back
-   * everything, leaving the previous data intact.
+   * Decide what a restore touches.
+   *
+   * A folder snapshot carries novels / chapters / settings / notes and — since
+   * R79 — marks / lore / revisions. It deliberately does *not* carry versions or
+   * the trash (they would multiply every autosave), and a backup written by an
+   * older release carries even fewer keys.
+   *
+   * The rule that matters: **a store is cleared only when the snapshot actually
+   * carries a well-formed value for it.** A missing or malformed key means "this
+   * backup says nothing trustworthy about it", so the store is left alone; an
+   * empty array is a deliberate "make this empty" and still clears. Before R79
+   * every restore cleared all nine stores, which is how restoring from a folder
+   * silently erased annotations, version history, 设定集, accepted suggestions
+   * and the trash.
+   *
+   * Pure — no IndexedDB here, so `scripts/verify-restore.mjs` can exercise it
+   * without a browser.
+   */
+  function planRestore(snapshot, stores, settingsKey) {
+    const data = snapshot && typeof snapshot === 'object' ? snapshot : {};
+    const plan = [];
+    for (let s = 0; s < stores.length; s += 1) {
+      const store = stores[s];
+      const raw = Object.prototype.hasOwnProperty.call(data, store) ? data[store] : undefined;
+      // Only a well-formed value counts as "the backup speaks about this store".
+      // A malformed one (`marks: null`, `versions: "x"`) must preserve, not wipe.
+      const carried = store === 'settings'
+        ? Array.isArray(raw) || (raw != null && typeof raw === 'object')
+        : Array.isArray(raw);
+      if (!carried) {
+        plan.push({ store: store, carried: false, rows: [] });
+        continue;
+      }
+      let rows;
+      if (store === 'settings') {
+        if (Array.isArray(raw)) rows = raw;
+        else rows = [{ key: settingsKey, value: raw }];
+      } else {
+        rows = raw;
+      }
+      plan.push({ store: store, carried: true, rows: rows });
+    }
+    return plan;
+  }
+
+  /**
+   * Replaces the database with a backup snapshot in ONE transaction.
+   *
+   * Stores the snapshot does not mention are left untouched (see `planRestore`),
+   * so a folder snapshot — which has no `versions` / `trash` — can no longer wipe
+   * them. A full JSON backup (`dump()`) carries all nine keys and therefore still
+   * behaves as a whole-database replace. A failed transaction rolls everything
+   * back, leaving the previous data intact.
    */
   async function replaceAll(snapshot) {
     const data = snapshot || {};
+    const plan = planRestore(data, STORES, SETTINGS_KEY);
     const ops = [];
-    for (let s = 0; s < STORES.length; s += 1) {
-      const store = STORES[s];
+    for (let p = 0; p < plan.length; p += 1) {
+      const entry = plan[p];
+      if (!entry.carried) continue;
+      const store = entry.store;
+      const rows = entry.rows;
       ops.push({ store: store, type: 'clear' });
-      let rows;
-      if (store === 'settings') {
-        const raw = data.settings;
-        if (Array.isArray(raw)) rows = raw;
-        else if (raw && typeof raw === 'object') rows = [{ key: SETTINGS_KEY, value: raw }];
-        else rows = [];
-      } else {
-        rows = Array.isArray(data[store]) ? data[store] : [];
-      }
       for (let i = 0; i < rows.length; i += 1) {
         let value = rows[i];
         if (store === 'settings') {
@@ -1847,6 +1982,7 @@
         ops.push({ store: store, type: 'put', value: value });
       }
     }
+    if (!ops.length) return;
     const ok = await writeBatch(ops);
     if (!ok) throw new Error('恢复备份失败');
     notify();
@@ -2029,6 +2165,7 @@
   NW.db = {
     DB_NAME: DB_NAME,
     DB_VERSION: DB_VERSION,
+    STORES: STORES.slice(),
     DEFAULT_SETTINGS: DEFAULT_SETTINGS,
     applyBooks: applyBooks,
     init: init,
@@ -2043,6 +2180,7 @@
     listAllChapters: listAllChapters,
     getChapter: getChapter,
     createChapter: createChapter,
+    createChapters: createChapters,
     updateChapter: updateChapter,
     deleteChapter: deleteChapter,
     saveChapterContent: saveChapterContent,
@@ -2054,6 +2192,7 @@
     restoreTrash: restoreTrash,
     emptyTrash: emptyTrash,
     getSettings: getSettings,
+    hasSettings: hasSettings,
     saveSettings: saveSettings,
     listNotes: listNotes,
     saveChapterNote: saveChapterNote,
@@ -2075,6 +2214,8 @@
     deleteLore: deleteLore,
     dump: dump,
     replaceAll: replaceAll,
+    /** Exposed for `scripts/verify-restore.mjs`: pure, no IndexedDB involved. */
+    planRestore: planRestore,
     encryptAll: encryptAll,
     decryptAll: decryptAll,
   };
