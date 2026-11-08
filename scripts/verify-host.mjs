@@ -592,6 +592,53 @@ check('流式提示词带上了关注点', adviceStreamPrompt.includes('本次�
 const adviceStreamEmpty = await call('revise.stream', { text: '   ' });
 check('空正文返回错误信封', adviceStreamEmpty.json && adviceStreamEmpty.json.ok === false);
 
+// R93: a model that returns nothing must not look like a clean chapter. The
+// streamed route emits `error` (so the client falls back to unary failover) and
+// the unary route throws `empty-model` (so reviseSafe tries the next model).
+const silentLlm = {
+  async listProviders() {
+    return [{ id: 'stub-provider', name: 'Stub Provider' }];
+  },
+  async listModels() {
+    return [{ provider: 'stub-provider', id: 'stub-large', name: 'Stub Large' }];
+  },
+  async *stream() {
+    yield { type: 'text-delta', text: '   ' };
+    yield { type: 'finish', reason: { kind: 'stop' } };
+  },
+};
+services.set('llm', silentLlm);
+const silentStreamRes = await call('revise.stream', {
+  text: adviceStreamText,
+  provider: 'stub-provider',
+  model: 'stub-large',
+  focus: 'detail',
+});
+const silentStreamLines = String(silentStreamRes.body || '')
+  .split('\n')
+  .map((line) => line.trim())
+  .filter(Boolean)
+  .map((line) => JSON.parse(line));
+const silentStreamError = silentStreamLines.filter((row) => row && row.type === 'error');
+check('空回复发 error 事件，不发空 done', silentStreamError.length === 1, JSON.stringify(silentStreamLines));
+check(
+  '空回复的错误码是 empty-model',
+  silentStreamError[0] && silentStreamError[0].code === 'empty-model',
+  JSON.stringify(silentStreamError),
+);
+const silentUnary = await call('revise', {
+  text: adviceStreamText,
+  provider: 'stub-provider',
+  model: 'stub-large',
+  focus: 'detail',
+});
+check(
+  'unary 空回复返回 empty-model 错误信封',
+  silentUnary.json && silentUnary.json.ok === false && silentUnary.json.error && silentUnary.json.error.code === 'empty-model',
+  JSON.stringify(silentUnary.json),
+);
+services.set('llm', fakeLlm);
+
 // ---------------------------------------------------------------------------
 // 4. export.build docx
 // ---------------------------------------------------------------------------

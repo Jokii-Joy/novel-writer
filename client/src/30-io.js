@@ -1102,9 +1102,44 @@
     }
     if (!response || !response.ok) throw new Error('接口不可用：HTTP ' + (response ? response.status : '?'));
 
+    // R93: a host older than the streaming route (or a proxy in between) answers
+    // with the unary JSON envelope instead of NDJSON. Parsing that as a stream
+    // produced no suggestions and no error, so the panel confidently reported
+    // "这一章没有被标出的明显问题" without the model ever running. Detect it
+    // here and either use the unary payload or throw, which sends the panel down
+    // its `reviseSafe` fallback.
+    const contentType = String(
+      (response.headers && typeof response.headers.get === 'function' && response.headers.get('content-type')) || '',
+    ).toLowerCase();
+    if (contentType.indexOf('ndjson') < 0 && contentType.indexOf('application/json') >= 0) {
+      const raw = await response.text();
+      let envelope = null;
+      try {
+        envelope = JSON.parse(raw);
+      } catch (err) {
+        /* not JSON after all — fall through to the generic error */
+      }
+      if (envelope && envelope.ok === true && envelope.data) {
+        return {
+          suggestions: Array.isArray(envelope.data.suggestions) ? envelope.data.suggestions : [],
+          model: String(envelope.data.model || ''),
+          usedModel: envelope.data.usedModel || null,
+        };
+      }
+      const message =
+        envelope && envelope.error && envelope.error.message
+          ? String(envelope.error.message)
+          : '审读接口没有返回可读结果';
+      const error = new Error(message);
+      error.code = (envelope && envelope.error && envelope.error.code) || 'stream-unavailable';
+      throw error;
+    }
+
     const suggestions = [];
     let model = '';
     let failure = null;
+    let sawDone = false;
+    let emptyReplies = 0;
     const handleLine = (line) => {
       const text = String(line || '').trim();
       if (!text) return;
@@ -1125,7 +1160,9 @@
         return;
       }
       if (event.type === 'done') {
+        sawDone = true;
         model = String(event.model || '');
+        emptyReplies = Number(event.emptyReplies) || 0;
         return;
       }
       if (event.type === 'error') {
@@ -1203,9 +1240,44 @@
     }
     if (!response || !response.ok) throw new Error('接口不可用：HTTP ' + (response ? response.status : '?'));
 
+    // R93: a host older than the streaming route (or a proxy in between) answers
+    // with the unary JSON envelope instead of NDJSON. Parsing that as a stream
+    // produced no suggestions and no error, so the panel confidently reported
+    // "这一章没有被标出的明显问题" without the model ever running. Detect it
+    // here and either use the unary payload or throw, which sends the panel down
+    // its `reviseSafe` fallback.
+    const contentType = String(
+      (response.headers && typeof response.headers.get === 'function' && response.headers.get('content-type')) || '',
+    ).toLowerCase();
+    if (contentType.indexOf('ndjson') < 0 && contentType.indexOf('application/json') >= 0) {
+      const raw = await response.text();
+      let envelope = null;
+      try {
+        envelope = JSON.parse(raw);
+      } catch (err) {
+        /* not JSON after all — fall through to the generic error */
+      }
+      if (envelope && envelope.ok === true && envelope.data) {
+        return {
+          suggestions: Array.isArray(envelope.data.suggestions) ? envelope.data.suggestions : [],
+          model: String(envelope.data.model || ''),
+          usedModel: envelope.data.usedModel || null,
+        };
+      }
+      const message =
+        envelope && envelope.error && envelope.error.message
+          ? String(envelope.error.message)
+          : '审读接口没有返回可读结果';
+      const error = new Error(message);
+      error.code = (envelope && envelope.error && envelope.error.code) || 'stream-unavailable';
+      throw error;
+    }
+
     const suggestions = [];
     let model = '';
     let failure = null;
+    let sawDone = false;
+    let emptyReplies = 0;
     const handleLine = (line) => {
       const text = String(line || '').trim();
       if (!text) return;
@@ -1226,7 +1298,9 @@
         return;
       }
       if (event.type === 'done') {
+        sawDone = true;
         model = String(event.model || '');
+        emptyReplies = Number(event.emptyReplies) || 0;
         return;
       }
       if (event.type === 'error') {
@@ -1265,7 +1339,23 @@
     // Partial suggestions are still useful; only a stream that produced nothing
     // counts as a failure, which is what lets the panel fall back cleanly.
     if (failure && suggestions.length === 0) throw failure;
-    return { suggestions: suggestions, model: model };
+    // R93: `done` with zero cards can mean the model replied with nothing
+    // (a reasoning model that spent its whole budget thinking, for example).
+    // That is not "this chapter is clean" — throw so the caller can retry on
+    // the unary route, which has model failover.
+    if (!suggestions.length && emptyReplies > 0) {
+      const error = new Error('模型这次没有返回内容，正在换一种方式重试');
+      error.code = 'model-empty';
+      throw error;
+    }
+    // A stream that never even reached `done` (truncated, or a host that does
+    // not speak NDJSON) must not be read as an empty result either.
+    if (!suggestions.length && !sawDone && !failure) {
+      const error = new Error('审读接口没有返回结果');
+      error.code = 'stream-empty';
+      throw error;
+    }
+    return { suggestions: suggestions, model: model, emptyReplies: emptyReplies };
   }
 
   // ---- LAN sync / pairing (R34) ---------------------------------------------

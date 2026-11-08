@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.14',
+      version: '1.6.15',
     };
     NW.ReactDOM = null;
 
@@ -4894,9 +4894,44 @@ window.__ModuleLoader__.load({
     }
     if (!response || !response.ok) throw new Error('接口不可用：HTTP ' + (response ? response.status : '?'));
 
+    // R93: a host older than the streaming route (or a proxy in between) answers
+    // with the unary JSON envelope instead of NDJSON. Parsing that as a stream
+    // produced no suggestions and no error, so the panel confidently reported
+    // "这一章没有被标出的明显问题" without the model ever running. Detect it
+    // here and either use the unary payload or throw, which sends the panel down
+    // its `reviseSafe` fallback.
+    const contentType = String(
+      (response.headers && typeof response.headers.get === 'function' && response.headers.get('content-type')) || '',
+    ).toLowerCase();
+    if (contentType.indexOf('ndjson') < 0 && contentType.indexOf('application/json') >= 0) {
+      const raw = await response.text();
+      let envelope = null;
+      try {
+        envelope = JSON.parse(raw);
+      } catch (err) {
+        /* not JSON after all — fall through to the generic error */
+      }
+      if (envelope && envelope.ok === true && envelope.data) {
+        return {
+          suggestions: Array.isArray(envelope.data.suggestions) ? envelope.data.suggestions : [],
+          model: String(envelope.data.model || ''),
+          usedModel: envelope.data.usedModel || null,
+        };
+      }
+      const message =
+        envelope && envelope.error && envelope.error.message
+          ? String(envelope.error.message)
+          : '审读接口没有返回可读结果';
+      const error = new Error(message);
+      error.code = (envelope && envelope.error && envelope.error.code) || 'stream-unavailable';
+      throw error;
+    }
+
     const suggestions = [];
     let model = '';
     let failure = null;
+    let sawDone = false;
+    let emptyReplies = 0;
     const handleLine = (line) => {
       const text = String(line || '').trim();
       if (!text) return;
@@ -4917,7 +4952,9 @@ window.__ModuleLoader__.load({
         return;
       }
       if (event.type === 'done') {
+        sawDone = true;
         model = String(event.model || '');
+        emptyReplies = Number(event.emptyReplies) || 0;
         return;
       }
       if (event.type === 'error') {
@@ -4995,9 +5032,44 @@ window.__ModuleLoader__.load({
     }
     if (!response || !response.ok) throw new Error('接口不可用：HTTP ' + (response ? response.status : '?'));
 
+    // R93: a host older than the streaming route (or a proxy in between) answers
+    // with the unary JSON envelope instead of NDJSON. Parsing that as a stream
+    // produced no suggestions and no error, so the panel confidently reported
+    // "这一章没有被标出的明显问题" without the model ever running. Detect it
+    // here and either use the unary payload or throw, which sends the panel down
+    // its `reviseSafe` fallback.
+    const contentType = String(
+      (response.headers && typeof response.headers.get === 'function' && response.headers.get('content-type')) || '',
+    ).toLowerCase();
+    if (contentType.indexOf('ndjson') < 0 && contentType.indexOf('application/json') >= 0) {
+      const raw = await response.text();
+      let envelope = null;
+      try {
+        envelope = JSON.parse(raw);
+      } catch (err) {
+        /* not JSON after all — fall through to the generic error */
+      }
+      if (envelope && envelope.ok === true && envelope.data) {
+        return {
+          suggestions: Array.isArray(envelope.data.suggestions) ? envelope.data.suggestions : [],
+          model: String(envelope.data.model || ''),
+          usedModel: envelope.data.usedModel || null,
+        };
+      }
+      const message =
+        envelope && envelope.error && envelope.error.message
+          ? String(envelope.error.message)
+          : '审读接口没有返回可读结果';
+      const error = new Error(message);
+      error.code = (envelope && envelope.error && envelope.error.code) || 'stream-unavailable';
+      throw error;
+    }
+
     const suggestions = [];
     let model = '';
     let failure = null;
+    let sawDone = false;
+    let emptyReplies = 0;
     const handleLine = (line) => {
       const text = String(line || '').trim();
       if (!text) return;
@@ -5018,7 +5090,9 @@ window.__ModuleLoader__.load({
         return;
       }
       if (event.type === 'done') {
+        sawDone = true;
         model = String(event.model || '');
+        emptyReplies = Number(event.emptyReplies) || 0;
         return;
       }
       if (event.type === 'error') {
@@ -5057,7 +5131,23 @@ window.__ModuleLoader__.load({
     // Partial suggestions are still useful; only a stream that produced nothing
     // counts as a failure, which is what lets the panel fall back cleanly.
     if (failure && suggestions.length === 0) throw failure;
-    return { suggestions: suggestions, model: model };
+    // R93: `done` with zero cards can mean the model replied with nothing
+    // (a reasoning model that spent its whole budget thinking, for example).
+    // That is not "this chapter is clean" — throw so the caller can retry on
+    // the unary route, which has model failover.
+    if (!suggestions.length && emptyReplies > 0) {
+      const error = new Error('模型这次没有返回内容，正在换一种方式重试');
+      error.code = 'model-empty';
+      throw error;
+    }
+    // A stream that never even reached `done` (truncated, or a host that does
+    // not speak NDJSON) must not be read as an empty result either.
+    if (!suggestions.length && !sawDone && !failure) {
+      const error = new Error('审读接口没有返回结果');
+      error.code = 'stream-empty';
+      throw error;
+    }
+    return { suggestions: suggestions, model: model, emptyReplies: emptyReplies };
   }
 
   // ---- LAN sync / pairing (R34) ---------------------------------------------
@@ -6105,17 +6195,8 @@ window.__ModuleLoader__.load({
     radial-gradient(680px 380px at 82% 108%, color-mix(in srgb, var(--nw-brand) 6%, transparent), transparent 70%),
     var(--nw-bg);
 }
-/* faint ruled-page texture: the lock screen should read as paper, not a form */
-.nw-lock::before{
-  content:'';position:absolute;inset:0;pointer-events:none;
-  background:repeating-linear-gradient(180deg,
-    transparent 0,transparent 33px,
-    color-mix(in srgb, var(--nw-line) 62%, transparent) 33px,
-    color-mix(in srgb, var(--nw-line) 62%, transparent) 34px);
-  -webkit-mask-image:radial-gradient(640px 480px at 50% 46%, var(--nw-fg) 10%, transparent 74%);
-  mask-image:radial-gradient(640px 480px at 50% 46%, var(--nw-fg) 10%, transparent 74%);
-  opacity:.5;
-}
+/* R93: no ruled/grid texture — the lock screen is a calm, seamless surface.
+   The two soft radial washes on .nw-lock above carry the depth on their own. */
 .nw-lock-card{
   position:relative;display:flex;flex-direction:column;align-items:center;gap:var(--nw-sp-2);
   width:100%;max-width:392px;padding:38px 32px 30px;
@@ -17175,6 +17256,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   font-size:13px;
 }
 .nw-acc-drop:hover{background:color-mix(in srgb, var(--nw-danger) 12%, transparent);color:var(--nw-danger);}
+.nw-acc-undo{
+  flex:0 0 auto;height:20px;padding:0 7px;border:1px solid var(--nw-line-soft);border-radius:999px;
+  background:transparent;color:var(--nw-fg-soft);cursor:pointer;line-height:1;
+  font-size:10px;font-family:var(--nw-ui-font);white-space:nowrap;
+}
+.nw-acc-undo:hover{background:color-mix(in srgb, var(--nw-brand) 10%, transparent);color:var(--nw-brand);border-color:var(--nw-brand);}
 /* R6: 收起侧栏 曾是一扇单向门 —— 仓库头部的收起按钮随侧栏一起消失，回来只能靠
    浮动坞（先点圆钮再点「显示目录」）。这个把手常驻在写作列左缘，任何时刻一次点击
    就能把目录要回来。沉浸模式不渲染它（沉浸是纯画布，Esc 退出）。 */
@@ -20286,7 +20373,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     if (locked) {
       return h(
         'div',
-        { className: 'nw-root', ref: rootRef },
+        {
+          className: 'nw-root',
+          ref: rootRef,
+          // R93: the lock screen must wear the same theme as the app behind
+          // it — without data-theme it fell back to the host palette.
+          'data-theme': themeSettings.theme || 'claude',
+        },
         h(NW.dialogs.Lock, {
           hasPassword: true,
           onUnlock: unlock,
@@ -22144,8 +22237,44 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    * Module scope on purpose: closing the window unmounts the component, and the
    * cache has to outlive that. Small LRU so a long session cannot grow forever.
    */
-  const ADVICE_CACHE = new Map();
+  // R93: the cache used to live only in this module's memory, so reloading the
+  // plugin (or the page) threw away every unaccepted suggestion. Mirror it into
+  // localStorage — same 12-entry LRU, but it now survives a restart.
+  const ADVICE_CACHE_KEY = 'nw.advice.cache.v1';
   const ADVICE_CACHE_MAX = 12;
+
+  function readAdviceStore() {
+    try {
+      if (typeof localStorage === 'undefined') return [];
+      const raw = localStorage.getItem(ADVICE_CACHE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+      return Object.keys(parsed)
+        .map((key) => [key, parsed[key]])
+        .filter((pair) => pair[1] && Array.isArray(pair[1].items));
+    } catch (err) {
+      // Storage disabled or the payload is corrupt: start clean, never break
+      // the panel over a cache.
+      return [];
+    }
+  }
+
+  const ADVICE_CACHE = new Map(readAdviceStore().slice(-ADVICE_CACHE_MAX));
+
+  function persistAdviceCache() {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const out = {};
+      ADVICE_CACHE.forEach((value, key) => {
+        out[key] = value;
+      });
+      localStorage.setItem(ADVICE_CACHE_KEY, JSON.stringify(out));
+    } catch (err) {
+      // Quota exceeded / private mode: the in-memory cache still works for this
+      // session, which is what the old behaviour did all along.
+    }
+  }
 
   function textFingerprint(text) {
     const s = String(text == null ? '' : text);
@@ -22175,10 +22304,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       if (first.done) break;
       ADVICE_CACHE.delete(first.value);
     }
+    persistAdviceCache();
   }
 
   function cacheDel(key) {
-    if (key && ADVICE_CACHE.has(key)) ADVICE_CACHE.delete(key);
+    if (!key || !ADVICE_CACHE.has(key)) return;
+    ADVICE_CACHE.delete(key);
+    persistAdviceCache();
   }
 
   /**
@@ -22525,22 +22657,40 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                   row.revised ? h('div', { className: 'nw-acc-rev' }, String(row.revised)) : null,
                 ),
                 h('span', { className: 'nw-acc-meta' }, NW.fmtDate(row.createdAt)),
-                typeof p.onRemove === 'function'
+                // R93: 撤销接受 — deletes the record *and* puts the suggestion
+                // back in the pending list. The old × only deleted it, so an
+                // accepted card could never be reconsidered.
+                typeof p.onUndo === 'function'
                   ? h(
                       'button',
                       {
                         type: 'button',
-                        className: 'nw-acc-drop',
-                        title: NW.t('从已接收里删掉'),
-                        'aria-label': NW.t('从已接收里删掉'),
+                        className: 'nw-acc-undo',
+                        title: NW.t('撤销接受，把这条放回建议列表'),
+                        'aria-label': NW.t('撤销接受'),
                         onClick: (ev) => {
                           ev.stopPropagation();
-                          p.onRemove(row);
+                          p.onUndo(row);
                         },
                       },
-                      '\u00d7',
+                      NW.t('撤销'),
                     )
-                  : null,
+                  : typeof p.onRemove === 'function'
+                    ? h(
+                        'button',
+                        {
+                          type: 'button',
+                          className: 'nw-acc-drop',
+                          title: NW.t('从已接收里删掉'),
+                          'aria-label': NW.t('从已接收里删掉'),
+                          onClick: (ev) => {
+                            ev.stopPropagation();
+                            p.onRemove(row);
+                          },
+                        },
+                        '\u00d7',
+                      )
+                    : null,
               ),
             ),
           ),
@@ -22906,8 +23056,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       runRef.current += 1;
       // R76: reopening the column on an unchanged chapter shows the last read
       // instead of an empty panel that costs another call to refill.
+      //
+      // R93: after a page/plugin reload the panel can mount before the editor
+      // has hydrated, so `getContent()` is momentarily empty. Fall back to the
+      // chapter row (already loaded from IndexedDB) — otherwise the persistent
+      // cache exists but is never read, which is exactly the "建议消失了" bug.
       const api = p.editorApi && p.editorApi.current;
-      const text = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+      let text = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+      if (!text && p.chapter && typeof p.chapter.content === 'string') text = p.chapter.content;
       const hit = text ? cacheGet('dock|' + chapterId) : null;
       if (hit && hit.fp === textFingerprint(text) && Array.isArray(hit.items) && hit.items.length) {
         setItems(hit.items);
@@ -23127,6 +23283,65 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         if (typeof api.centerRange === 'function') api.centerRange(span.start, span.end);
       },
       [p.editorApi],
+    );
+
+    /**
+     * R93: 撤销接受 — the reverse of `acceptItem`.
+     *
+     * Deletes the IndexedDB record, then rebuilds the card from that record and
+     * puts it back at the top of the pending list. The id gets an `a` prefix so
+     * it can never collide with a model card (`r1…r8`) or a paste (`p…`); the
+     * cache is rewritten in the same step, otherwise a reload would resurrect
+     * the old state.
+     */
+    const undoAccepted = useCallback(
+      async (row) => {
+        if (!row || row.id == null) return;
+        if (typeof p.onRemoveAccepted === 'function') {
+          try {
+            await p.onRemoveAccepted({ id: row.id });
+          } catch (err) {
+            if (typeof p.onToast === 'function') p.onToast(NW.t('撤销失败，请重试'), 'warn');
+            return;
+          }
+        }
+        const api = p.editorApi && p.editorApi.current;
+        const text = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+        const quote = String(row.quote || '');
+        const at = quote ? text.indexOf(quote) : -1;
+        const item = {
+          id: 'a' + String(row.id),
+          quote,
+          issue: row.issue,
+          why: row.why,
+          advice: row.advice,
+          example: String(row.revised || ''),
+          revised: String(row.revised || ''),
+          kind: row.kind,
+          severity: row.severity,
+          start: at,
+          end: at >= 0 ? at + quote.length : -1,
+          restored: true,
+        };
+        const base = Array.isArray(itemsRef.current) ? itemsRef.current.slice() : [];
+        if (!base.some((entry) => String(entry && entry.id) === item.id)) base.unshift(item);
+        setItems(base);
+        setDrained(false);
+        setDecided((prev) => {
+          const next = Object.assign({}, prev);
+          delete next[item.id];
+          return next;
+        });
+        cachePut('dock|' + chapterId, {
+          items: base,
+          model: model,
+          fp: textFingerprint(text),
+          at: Date.now(),
+        });
+        setActiveId(item.id);
+        if (typeof p.onToast === 'function') p.onToast(NW.t('已撤销接受，建议回到列表'), 'ok');
+      },
+      [chapterId, model, p.editorApi, p.onRemoveAccepted, p.onToast],
     );
 
     // ---- R76: 复制 / 替换 / 撤销替换 -----------------------------------------
@@ -23490,7 +23705,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           { style: { fontSize: '12px', opacity: '.7' } },
           NW.t('接受会移到下面的「已接收」，拒绝的直接丢掉；点一条会把原文滚到那一段。'),
         ),
-        NW.ui.btn({ kind: 'primary', onClick: () => run(focus), children: NW.t('开始审读') }),
+        busy
+          ? h('span', { className: 'nw-inline' }, NW.ui.spinner(), h('span', null, NW.t('正在通读这一章…')))
+          : NW.ui.btn({ kind: 'primary', onClick: () => run(focus), children: NW.t('开始审读') }),
       );
     } else if (items.length === 0) {
       body = h(
@@ -23507,9 +23724,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           { style: { fontSize: '12px', opacity: '.7' } },
           NW.t(drained ? '重新审读可以再找一轮，或者回去接着写。' : '换个重点再看看，或写下去。'),
         ),
-        drained
-          ? NW.ui.btn({ kind: 'ghost', onClick: () => run(focus), children: NW.t('重新审读') })
-          : null,
+        // R93: 重新审读 must be here whether the list was drained or the model
+        // found nothing — a writer staring at "没有问题" still needs a way to
+        // ask again without closing the column.
+        NW.ui.btn({
+          kind: drained ? 'ghost' : 'primary',
+          onClick: () => run(focus),
+          disabled: busy,
+          children: NW.t('重新审读'),
+        }),
       );
     } else {
       body = h(
@@ -23634,6 +23857,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             },
             onReveal: revealRow,
             onRemove: p.onRemoveAccepted,
+            // R93: only the dock can put a card back into its own pending list.
+            onUndo: typeof p.onRemoveAccepted === 'function' ? undoAccepted : undefined,
           }),
         ),
       ),

@@ -653,6 +653,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   font-size:13px;
 }
 .nw-acc-drop:hover{background:color-mix(in srgb, var(--nw-danger) 12%, transparent);color:var(--nw-danger);}
+.nw-acc-undo{
+  flex:0 0 auto;height:20px;padding:0 7px;border:1px solid var(--nw-line-soft);border-radius:999px;
+  background:transparent;color:var(--nw-fg-soft);cursor:pointer;line-height:1;
+  font-size:10px;font-family:var(--nw-ui-font);white-space:nowrap;
+}
+.nw-acc-undo:hover{background:color-mix(in srgb, var(--nw-brand) 10%, transparent);color:var(--nw-brand);border-color:var(--nw-brand);}
 /* R6: 收起侧栏 曾是一扇单向门 —— 仓库头部的收起按钮随侧栏一起消失，回来只能靠
    浮动坞（先点圆钮再点「显示目录」）。这个把手常驻在写作列左缘，任何时刻一次点击
    就能把目录要回来。沉浸模式不渲染它（沉浸是纯画布，Esc 退出）。 */
@@ -3764,7 +3770,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     if (locked) {
       return h(
         'div',
-        { className: 'nw-root', ref: rootRef },
+        {
+          className: 'nw-root',
+          ref: rootRef,
+          // R93: the lock screen must wear the same theme as the app behind
+          // it — without data-theme it fell back to the host palette.
+          'data-theme': themeSettings.theme || 'claude',
+        },
         h(NW.dialogs.Lock, {
           hasPassword: true,
           onUnlock: unlock,

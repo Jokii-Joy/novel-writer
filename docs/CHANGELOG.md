@@ -6,8 +6,31 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.14 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.15 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第九十三轮（R93）锁屏主题、审读空回复与建议栏的三个断点。
+  ① **锁屏跟主题走**：locked 早返回的根节点补上 `data-theme`（用已解析的
+  `themeSettings` / `effectiveTheme`），与正常界面共用同一套主题 token；同时删掉
+  `.nw-lock::before` 的横线纹理，锁屏只剩柔和底色，不再出现方格 / 横线纸。
+  ② **空回复不再冒充「没有问题」**：根因是运行中的宿主还停在 1.6.10，没有
+  `revise.stream` 路由，返回的是 HTTP 200 的 `{ok:false,error:{code:'unknown-method'}}`；
+  旧客户端按 NDJSON 解析，既没收到建议也没收到错误，于是秒显「这一章没有被标出的明显问题」。
+  客户端现在先看 content-type：JSON 成功信封直接用 unary 结果，JSON 错误信封抛错，
+  由面板回退到带模型 failover 的 `reviseSafe`；流式 `done` 带 `emptyReplies`，
+  0 条且空回复 > 0 抛 `model-empty`，既无建议也无 `done` 抛 `stream-empty`。
+  宿主 `handleReviseStream` 对空回复发 `error` 事件，`handleRevise` 抛 `empty-model`，
+  让 `reviseSafe` 真的去换下一个模型。
+  ③ **重新审读常驻**：空态不再只在「这些建议都处理完了」时给按钮；模型答 0 条时
+  也常驻一颗可点的「重新审读」，不会卡在死路。
+  ④ **已接收可撤销**：已接收列表每行给「撤销」，删掉记录的同时把这条建议放回待处理列表；
+  选中改写窗口仍保留原来的 ×（那里的语义是删除，不是撤销）。
+  ⑤ **重载不丢建议**：`ADVICE_CACHE` 镜像到 localStorage（`nw.advice.cache.v1`，仍是 12 条 LRU），
+  `cachePut` / `cacheDel` 写穿；页面或插件重载后，挂载 effect 用同一份正文指纹恢复未处理卡片，
+  并标明「上次的结果 · 没有重新计费」。
+  ⑥ **验收**：`verify-advice-ui` 69 → **84**（撤销 4、空结果常驻按钮 4、旧宿主/空回复信封 4、
+  重载恢复 3）；`verify-host` 296 → **299**（空回复发 error 事件、unary 返回 `empty-model`）；
+  `build-client` 23 parts，其余闸门全过。版本 **1.6.15**。
+  注意：客户端刷新页面即加载新 bundle，宿主路由要重启 DSH 才会从 1.6.10 升到 1.6.15。
 - 第九十二轮（R92）写作坞改成鼠标悬停展开、移开收起。
   ① **悬停开关**：Dock 根节点接 `onPointerEnter` / `onPointerLeave`，只有 `pointerType === 'mouse'`
   才驱动；触屏点按仍走原来的圆钮开关，键盘也仍可用 Enter / Space 展开。

@@ -155,17 +155,8 @@
     radial-gradient(680px 380px at 82% 108%, color-mix(in srgb, var(--nw-brand) 6%, transparent), transparent 70%),
     var(--nw-bg);
 }
-/* faint ruled-page texture: the lock screen should read as paper, not a form */
-.nw-lock::before{
-  content:'';position:absolute;inset:0;pointer-events:none;
-  background:repeating-linear-gradient(180deg,
-    transparent 0,transparent 33px,
-    color-mix(in srgb, var(--nw-line) 62%, transparent) 33px,
-    color-mix(in srgb, var(--nw-line) 62%, transparent) 34px);
-  -webkit-mask-image:radial-gradient(640px 480px at 50% 46%, var(--nw-fg) 10%, transparent 74%);
-  mask-image:radial-gradient(640px 480px at 50% 46%, var(--nw-fg) 10%, transparent 74%);
-  opacity:.5;
-}
+/* R93: no ruled/grid texture — the lock screen is a calm, seamless surface.
+   The two soft radial washes on .nw-lock above carry the depth on their own. */
 .nw-lock-card{
   position:relative;display:flex;flex-direction:column;align-items:center;gap:var(--nw-sp-2);
   width:100%;max-width:392px;padding:38px 32px 30px;

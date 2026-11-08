@@ -240,7 +240,7 @@ const factory = new Function(
   'useCallback',
   'useMemo',
   'useEffect',
-  `${block}\nreturn { AdviceCard, AcceptedPanel, Advice, SelectionAdvice, ordinalMark, groupRevisions, locateRevision };`,
+  `${block}\nreturn { AdviceCard, AcceptedPanel, Advice, SelectionAdvice, ordinalMark, groupRevisions, locateRevision, textFingerprint };`,
 );
 const C = factory(
   createElement,
@@ -460,7 +460,11 @@ mount(
       dockAccepted.push(Object.assign({ id: 'd1', createdAt: 5000 }, draft));
       return { id: 'd1' };
     },
-    onRemoveAccepted: async () => {},
+    onRemoveAccepted: async (row) => {
+      calls.remove.push(row && row.id);
+      const at = dockAccepted.findIndex((r) => r.id === (row && row.id));
+      if (at >= 0) dockAccepted.splice(at, 1);
+    },
     onClose: () => {},
     onToast: () => {},
   }),
@@ -512,6 +516,16 @@ clickText('拒绝');
 await tick(10);
 check('拒绝后卡片直接消失', adviceCards().length === 0);
 check('拒绝不写已接收', dockAccepted.length === 1, dockAccepted.length);
+
+// R93: 已接受的记录可以撤销，并且建议回到待处理列表——"接受"不再是单向门。
+clickText('已接收');
+await tick(5);
+check('已接收展开后有撤销入口', /撤销/.test(textOf(rootTree)));
+clickText('撤销');
+await tick(10);
+check('撤销接受会删掉已接收记录', calls.remove.includes('d1'), calls.remove);
+check('撤销后建议回到待处理列表', adviceCards().length === 1, adviceCards().length);
+check('撤销后不再是「都处理完了」', !/这些建议都处理完了/.test(textOf(rootTree)), textOf(rootTree).slice(-120));
 
 // ---- 5b. R91 流式：卡片边到边画 ---------------------------------------------
 console.log('[5b] Advice 栏：整章建议流式到达');
@@ -644,6 +658,173 @@ await tick(10);
 pasted = textOf(rootTree);
 check('重新审读保留粘贴进来的建议', /这一句不在正文里/.test(pasted) && /写一点声音/.test(pasted), pasted.slice(-120));
 check('重新审读仍会换掉模型自己的卡片', /屋里静得能听见心跳/.test(pasted), pasted.slice(-120));
+
+// ---- 7. R93 空结果也要留一条路 ----------------------------------------------
+console.log('[7] 空结果不是死路：常驻「重新审读」');
+let emptyCalls = 0;
+NW.ai.reviseStream = async () => {
+  emptyCalls += 1;
+  return { suggestions: [], model: 'p/empty' };
+};
+mount(
+  createElement(C.Advice, {
+    chapter: { id: 'c3' },
+    editorApi: fakeEditor,
+    settings: {},
+    accepted: [],
+    onAccept: async () => ({ id: 'z1' }),
+    onRemoveAccepted: async () => {},
+    onClose: () => {},
+    onToast: () => {},
+  }),
+);
+clickText('开始审读');
+await tick(20);
+check('空结果给出说明，不是一片空白', /没有被标出的明显问题/.test(textOf(rootTree)), textOf(rootTree).slice(-160));
+const retryEmpty = nodes().find((n) => n.tag === 'button' && textOf(n) === '重新审读');
+check('空结果后仍常驻「重新审读」', !!retryEmpty);
+check('「重新审读」可点，不是禁用', !!retryEmpty && retryEmpty.props.disabled !== true);
+retryEmpty.props.onClick({ stopPropagation() {}, preventDefault() {} });
+await tick(20);
+check('点「重新审读」真的再问一次模型', emptyCalls === 2, emptyCalls);
+
+// ---- 8. R93 旧宿主 / 空回复：客户端必须报错，让面板走 unary 回退 --------------
+// 这里加载真实的 30-io.js（只加载、不启动界面），用假 fetch 喂三种响应。
+console.log('[8] 审读流：旧宿主与空回复不再静默吞掉');
+const ioFactory = new Function(
+  'NW',
+  'document',
+  'fetch',
+  `${readFileSync(join(here, '..', 'client', 'src', '30-io.js'), 'utf8')}\nreturn NW;`,
+);
+const fakeResponse = (contentType, body) => ({
+  ok: true,
+  status: 200,
+  headers: { get: (name) => (String(name).toLowerCase() === 'content-type' ? contentType : null) },
+  text: async () => body,
+});
+const ioNW = { t: tpl };
+const runReviseStream = (response) => {
+  const io = ioFactory(ioNW, { baseURI: 'http://localhost/' }, async () => response);
+  return io.ai.reviseStream({ text: '屋子里很安静' }, { onEvent: () => {} });
+};
+let oldHostError = null;
+try {
+  await runReviseStream(
+    fakeResponse(
+      'application/json',
+      JSON.stringify({ ok: false, error: { code: 'unknown-method', message: '未知的接口方法: revise.stream' } }),
+    ),
+  );
+} catch (err) {
+  oldHostError = err;
+}
+check(
+  '旧宿主返回 JSON 错误信封 → 抛错（面板会回落 unary）',
+  oldHostError && oldHostError.code === 'unknown-method',
+  oldHostError && oldHostError.message,
+);
+const unaryEnvelope = await runReviseStream(
+  fakeResponse(
+    'application/json',
+    JSON.stringify({ ok: true, data: { suggestions: [{ quote: '屋子里很安静' }], model: 'p/m' } }),
+  ),
+);
+check(
+  '旧宿主返回 unary 成功信封 → 直接使用结果',
+  unaryEnvelope.suggestions.length === 1 && unaryEnvelope.model === 'p/m',
+  unaryEnvelope,
+);
+let emptyError = null;
+try {
+  await runReviseStream(
+    fakeResponse(
+      'application/x-ndjson; charset=utf-8',
+      JSON.stringify({ type: 'done', model: 'p/m', emptyReplies: 2 }) + '\n',
+    ),
+  );
+} catch (err) {
+  emptyError = err;
+}
+check(
+  '流式 done 带 emptyReplies 且 0 条 → 抛 model-empty',
+  emptyError && emptyError.code === 'model-empty',
+  emptyError && emptyError.message,
+);
+let truncatedError = null;
+try {
+  await runReviseStream(fakeResponse('application/x-ndjson; charset=utf-8', ''));
+} catch (err) {
+  truncatedError = err;
+}
+check(
+  '流式既无建议也无 done → 抛 stream-empty',
+  truncatedError && truncatedError.code === 'stream-empty',
+  truncatedError && truncatedError.message,
+);
+
+// ---- 9. R93 重载后恢复未处理的建议（localStorage 写穿） ----------------------
+console.log('[9] 重载后恢复未处理的建议');
+const store = { raw: null };
+const fakeLocalStorage = {
+  getItem: () => store.raw,
+  setItem: (_key, value) => {
+    store.raw = String(value);
+  },
+  removeItem: () => {
+    store.raw = null;
+  },
+};
+const fp9 = C.textFingerprint(fakeEditor.current.getContent());
+store.raw = JSON.stringify({
+  'dock|c9': {
+    items: [
+      {
+        id: 'r1',
+        quote: '屋子里很安静',
+        issue: '交代',
+        advice: '写一点声音',
+        example: '屋里静得能听见心跳',
+        kind: 'detail',
+        start: selStart,
+        end: selEnd,
+      },
+    ],
+    model: 'p/cache',
+    fp: fp9,
+    at: Date.now(),
+  },
+});
+Object.defineProperty(globalThis, 'localStorage', { value: fakeLocalStorage, configurable: true });
+const C2 = factory(
+  createElement,
+  { useEffect, useRef, useState },
+  NW,
+  useState,
+  useRef,
+  useCallback,
+  useMemo,
+  useEffect,
+);
+mount(
+  createElement(C2.Advice, {
+    chapter: { id: 'c9' },
+    editorApi: fakeEditor,
+    settings: {},
+    accepted: [],
+    onAccept: async () => ({ id: 'cached' }),
+    onRemoveAccepted: async () => {},
+    onClose: () => {},
+    onToast: () => {},
+  }),
+);
+const restored = textOf(rootTree);
+check('重载后待处理建议还在', /屋里静得能听见心跳/.test(restored), restored.slice(-160));
+check('并且标明「上次的结果」', /上次的结果/.test(restored), restored.slice(-160));
+clickText('拒绝');
+await tick(10);
+check('拒绝后缓存同步清掉这条', !String(store.raw || '').includes('屋里静得能听见心跳'), store.raw);
+delete globalThis.localStorage;
 
 console.log(failed === 0 ? '\n全部通过 ✅' : '\n失败 ' + failed + ' 项 ❌');
 process.exit(failed === 0 ? 0 : 1);

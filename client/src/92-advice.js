@@ -237,8 +237,44 @@
    * Module scope on purpose: closing the window unmounts the component, and the
    * cache has to outlive that. Small LRU so a long session cannot grow forever.
    */
-  const ADVICE_CACHE = new Map();
+  // R93: the cache used to live only in this module's memory, so reloading the
+  // plugin (or the page) threw away every unaccepted suggestion. Mirror it into
+  // localStorage — same 12-entry LRU, but it now survives a restart.
+  const ADVICE_CACHE_KEY = 'nw.advice.cache.v1';
   const ADVICE_CACHE_MAX = 12;
+
+  function readAdviceStore() {
+    try {
+      if (typeof localStorage === 'undefined') return [];
+      const raw = localStorage.getItem(ADVICE_CACHE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+      return Object.keys(parsed)
+        .map((key) => [key, parsed[key]])
+        .filter((pair) => pair[1] && Array.isArray(pair[1].items));
+    } catch (err) {
+      // Storage disabled or the payload is corrupt: start clean, never break
+      // the panel over a cache.
+      return [];
+    }
+  }
+
+  const ADVICE_CACHE = new Map(readAdviceStore().slice(-ADVICE_CACHE_MAX));
+
+  function persistAdviceCache() {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const out = {};
+      ADVICE_CACHE.forEach((value, key) => {
+        out[key] = value;
+      });
+      localStorage.setItem(ADVICE_CACHE_KEY, JSON.stringify(out));
+    } catch (err) {
+      // Quota exceeded / private mode: the in-memory cache still works for this
+      // session, which is what the old behaviour did all along.
+    }
+  }
 
   function textFingerprint(text) {
     const s = String(text == null ? '' : text);
@@ -268,10 +304,13 @@
       if (first.done) break;
       ADVICE_CACHE.delete(first.value);
     }
+    persistAdviceCache();
   }
 
   function cacheDel(key) {
-    if (key && ADVICE_CACHE.has(key)) ADVICE_CACHE.delete(key);
+    if (!key || !ADVICE_CACHE.has(key)) return;
+    ADVICE_CACHE.delete(key);
+    persistAdviceCache();
   }
 
   /**
@@ -618,22 +657,40 @@
                   row.revised ? h('div', { className: 'nw-acc-rev' }, String(row.revised)) : null,
                 ),
                 h('span', { className: 'nw-acc-meta' }, NW.fmtDate(row.createdAt)),
-                typeof p.onRemove === 'function'
+                // R93: 撤销接受 — deletes the record *and* puts the suggestion
+                // back in the pending list. The old × only deleted it, so an
+                // accepted card could never be reconsidered.
+                typeof p.onUndo === 'function'
                   ? h(
                       'button',
                       {
                         type: 'button',
-                        className: 'nw-acc-drop',
-                        title: NW.t('从已接收里删掉'),
-                        'aria-label': NW.t('从已接收里删掉'),
+                        className: 'nw-acc-undo',
+                        title: NW.t('撤销接受，把这条放回建议列表'),
+                        'aria-label': NW.t('撤销接受'),
                         onClick: (ev) => {
                           ev.stopPropagation();
-                          p.onRemove(row);
+                          p.onUndo(row);
                         },
                       },
-                      '\u00d7',
+                      NW.t('撤销'),
                     )
-                  : null,
+                  : typeof p.onRemove === 'function'
+                    ? h(
+                        'button',
+                        {
+                          type: 'button',
+                          className: 'nw-acc-drop',
+                          title: NW.t('从已接收里删掉'),
+                          'aria-label': NW.t('从已接收里删掉'),
+                          onClick: (ev) => {
+                            ev.stopPropagation();
+                            p.onRemove(row);
+                          },
+                        },
+                        '\u00d7',
+                      )
+                    : null,
               ),
             ),
           ),
@@ -999,8 +1056,14 @@
       runRef.current += 1;
       // R76: reopening the column on an unchanged chapter shows the last read
       // instead of an empty panel that costs another call to refill.
+      //
+      // R93: after a page/plugin reload the panel can mount before the editor
+      // has hydrated, so `getContent()` is momentarily empty. Fall back to the
+      // chapter row (already loaded from IndexedDB) — otherwise the persistent
+      // cache exists but is never read, which is exactly the "建议消失了" bug.
       const api = p.editorApi && p.editorApi.current;
-      const text = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+      let text = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+      if (!text && p.chapter && typeof p.chapter.content === 'string') text = p.chapter.content;
       const hit = text ? cacheGet('dock|' + chapterId) : null;
       if (hit && hit.fp === textFingerprint(text) && Array.isArray(hit.items) && hit.items.length) {
         setItems(hit.items);
@@ -1220,6 +1283,65 @@
         if (typeof api.centerRange === 'function') api.centerRange(span.start, span.end);
       },
       [p.editorApi],
+    );
+
+    /**
+     * R93: 撤销接受 — the reverse of `acceptItem`.
+     *
+     * Deletes the IndexedDB record, then rebuilds the card from that record and
+     * puts it back at the top of the pending list. The id gets an `a` prefix so
+     * it can never collide with a model card (`r1…r8`) or a paste (`p…`); the
+     * cache is rewritten in the same step, otherwise a reload would resurrect
+     * the old state.
+     */
+    const undoAccepted = useCallback(
+      async (row) => {
+        if (!row || row.id == null) return;
+        if (typeof p.onRemoveAccepted === 'function') {
+          try {
+            await p.onRemoveAccepted({ id: row.id });
+          } catch (err) {
+            if (typeof p.onToast === 'function') p.onToast(NW.t('撤销失败，请重试'), 'warn');
+            return;
+          }
+        }
+        const api = p.editorApi && p.editorApi.current;
+        const text = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+        const quote = String(row.quote || '');
+        const at = quote ? text.indexOf(quote) : -1;
+        const item = {
+          id: 'a' + String(row.id),
+          quote,
+          issue: row.issue,
+          why: row.why,
+          advice: row.advice,
+          example: String(row.revised || ''),
+          revised: String(row.revised || ''),
+          kind: row.kind,
+          severity: row.severity,
+          start: at,
+          end: at >= 0 ? at + quote.length : -1,
+          restored: true,
+        };
+        const base = Array.isArray(itemsRef.current) ? itemsRef.current.slice() : [];
+        if (!base.some((entry) => String(entry && entry.id) === item.id)) base.unshift(item);
+        setItems(base);
+        setDrained(false);
+        setDecided((prev) => {
+          const next = Object.assign({}, prev);
+          delete next[item.id];
+          return next;
+        });
+        cachePut('dock|' + chapterId, {
+          items: base,
+          model: model,
+          fp: textFingerprint(text),
+          at: Date.now(),
+        });
+        setActiveId(item.id);
+        if (typeof p.onToast === 'function') p.onToast(NW.t('已撤销接受，建议回到列表'), 'ok');
+      },
+      [chapterId, model, p.editorApi, p.onRemoveAccepted, p.onToast],
     );
 
     // ---- R76: 复制 / 替换 / 撤销替换 -----------------------------------------
@@ -1583,7 +1705,9 @@
           { style: { fontSize: '12px', opacity: '.7' } },
           NW.t('接受会移到下面的「已接收」，拒绝的直接丢掉；点一条会把原文滚到那一段。'),
         ),
-        NW.ui.btn({ kind: 'primary', onClick: () => run(focus), children: NW.t('开始审读') }),
+        busy
+          ? h('span', { className: 'nw-inline' }, NW.ui.spinner(), h('span', null, NW.t('正在通读这一章…')))
+          : NW.ui.btn({ kind: 'primary', onClick: () => run(focus), children: NW.t('开始审读') }),
       );
     } else if (items.length === 0) {
       body = h(
@@ -1600,9 +1724,15 @@
           { style: { fontSize: '12px', opacity: '.7' } },
           NW.t(drained ? '重新审读可以再找一轮，或者回去接着写。' : '换个重点再看看，或写下去。'),
         ),
-        drained
-          ? NW.ui.btn({ kind: 'ghost', onClick: () => run(focus), children: NW.t('重新审读') })
-          : null,
+        // R93: 重新审读 must be here whether the list was drained or the model
+        // found nothing — a writer staring at "没有问题" still needs a way to
+        // ask again without closing the column.
+        NW.ui.btn({
+          kind: drained ? 'ghost' : 'primary',
+          onClick: () => run(focus),
+          disabled: busy,
+          children: NW.t('重新审读'),
+        }),
       );
     } else {
       body = h(
@@ -1727,6 +1857,8 @@
             },
             onReveal: revealRow,
             onRemove: p.onRemoveAccepted,
+            // R93: only the dock can put a card back into its own pending list.
+            onUndo: typeof p.onRemoveAccepted === 'function' ? undoAccepted : undefined,
           }),
         ),
       ),
