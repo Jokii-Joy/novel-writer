@@ -526,6 +526,11 @@ check('入口展开后给出可复制的格式说明', /一字不差/.test(textO
 const pasteBox = () =>
   nodes().find((n) => n.tag === 'textarea' && n.props['aria-label'] === '粘贴其他 AI 的建议');
 check('面板里有粘贴输入框', !!pasteBox());
+check(
+  '默认复制入口写明「全文与全部问题」',
+  /复制全文与全部问题/.test(textOf(rootTree)) && /只复制格式/.test(textOf(rootTree)),
+);
+check('说明里告诉作者默认会带上全文', /会把本章全文和已有建议一起复制/.test(textOf(rootTree)));
 
 pasteBox().props.onChange({ target: { value: '原文：屋子里很安静\n问题：太静\n建议：写一点声音' } });
 await tick(5);

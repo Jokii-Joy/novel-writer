@@ -273,8 +273,56 @@
     };
   }
 
+  /**
+   * R86: the copied prompt carries the chapter, not just the empty format.
+   *
+   * 「复制格式说明」 used to copy only the skeleton above, so the writer had to
+   * paste the chapter and the existing suggestions by hand. The default copy
+   * now holds the chapter's full text and every issue already on screen, in
+   * the same labelled shape `parse` reads back — hand it to another model and
+   * its answer can come straight back into the column. The bare template stays
+   * one button away for a writer who only wants to brief a model.
+   */
+  function buildPrompt(source, items) {
+    const text = String(source == null ? '' : source);
+    const list = Array.isArray(items) ? items : [];
+    const lines = [
+      TEMPLATE,
+      '',
+      '===== 本章全文（' + text.length + ' 字）=====',
+      text || '（当前章节没有内容）',
+      '',
+      '===== 已有的问题（' + list.length + ' 条，请勿重复）=====',
+    ];
+    if (!list.length) {
+      lines.push('（暂无）');
+    } else {
+      list.forEach((item, index) => {
+        if (index) lines.push('');
+        const quote = textOf(item && item.quote);
+        const issue = textOf(item && item.issue);
+        const why = textOf(item && item.why);
+        const advice = textOf(item && item.advice);
+        const example = textOf(item && item.example);
+        const kind = textOf(item && item.kind);
+        const severity = textOf(item && item.severity);
+        lines.push('原文：' + quote);
+        if (issue) lines.push('问题：' + issue);
+        if (why) lines.push('理由：' + why);
+        if (advice) lines.push('建议：' + advice);
+        if (example) lines.push('改后：' + example);
+        if (kind) lines.push('类型：' + kind);
+        if (severity) lines.push('严重度：' + severity);
+      });
+    }
+    lines.push('');
+    lines.push('请只补充上面没有的新问题；如果本章已经没有值得改的地方，直接说「没有了」。');
+    return lines.join('\n');
+  }
+
   NW.advicePaste = {
     parse,
+    buildPrompt,
     TEMPLATE,
     /** Exposed for the build gate, which checks aliases without a browser. */
     kinds: Array.from(new Set(KIND_ALIASES.values())).sort(),

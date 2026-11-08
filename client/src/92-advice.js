@@ -834,7 +834,30 @@
       }
     }, [items, pasteText, chapterId, p.onToast]);
 
-    /** R85: the format block doubles as the prompt to give the other model. */
+    /**
+     * R86: the default copy is the whole briefing — format, the chapter's full
+     * text, and every issue already in the column. The other model then sees
+     * both the context and what the writer has already been told, so its answer
+     * can skip straight back into the paste box.
+     */
+    const copyFullPrompt = useCallback(() => {
+      const parser = NW.advicePaste;
+      if (!parser || typeof parser.buildPrompt !== 'function') return;
+      const api = p.editorApi && p.editorApi.current;
+      const text = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+      const list = Array.isArray(items) ? items : [];
+      copyToClipboard(parser.buildPrompt(text, list)).then((ok) => {
+        if (typeof p.onToast !== 'function') return;
+        p.onToast(
+          ok
+            ? NW.t('已复制全文（{0} 字）和 {1} 条问题', text.length, list.length)
+            : NW.t('复制失败，请手动选中'),
+          ok ? 'ok' : 'warn',
+        );
+      });
+    }, [items, p.editorApi, p.onToast]);
+
+    /** The skeleton alone, for a writer who only wants to brief a model. */
     const copyPasteTemplate = useCallback(() => {
       const value = NW.advicePaste ? NW.advicePaste.TEMPLATE : '';
       if (!value) return;
@@ -1278,13 +1301,14 @@
           h(
             'div',
             { className: 'nw-advice-paste-help' },
-            NW.t('把另一个 AI 写好的建议贴进来，格式照着下面。原文要和这一章一字不差，卡片才能定位和高亮。'),
+            NW.t('把另一个 AI 写好的建议贴进来，格式照着下面。点「复制全文与全部问题」会把本章全文和已有建议一起复制，直接发给对方。原文要和这一章一字不差，卡片才能定位和高亮。'),
           ),
           h('pre', { className: 'nw-advice-paste-fmt' }, NW.advicePaste ? NW.advicePaste.TEMPLATE : ''),
           h(
             'div',
             { className: 'nw-advice-paste-tools' },
-            NW.ui.btn({ kind: 'ghost', onClick: copyPasteTemplate, children: NW.t('复制格式说明') }),
+            NW.ui.btn({ kind: 'ghost', onClick: copyFullPrompt, children: NW.t('复制全文与全部问题') }),
+            NW.ui.btn({ kind: 'ghost', onClick: copyPasteTemplate, children: NW.t('只复制格式') }),
             h('span', { className: 'nw-advice-notehint' }, NW.t('也可以直接贴 JSON 数组')),
           ),
           h('textarea', {

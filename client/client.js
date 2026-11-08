@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.7',
+      version: '1.6.8',
     };
     NW.ReactDOM = null;
 
@@ -21629,8 +21629,56 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     };
   }
 
+  /**
+   * R86: the copied prompt carries the chapter, not just the empty format.
+   *
+   * 「复制格式说明」 used to copy only the skeleton above, so the writer had to
+   * paste the chapter and the existing suggestions by hand. The default copy
+   * now holds the chapter's full text and every issue already on screen, in
+   * the same labelled shape `parse` reads back — hand it to another model and
+   * its answer can come straight back into the column. The bare template stays
+   * one button away for a writer who only wants to brief a model.
+   */
+  function buildPrompt(source, items) {
+    const text = String(source == null ? '' : source);
+    const list = Array.isArray(items) ? items : [];
+    const lines = [
+      TEMPLATE,
+      '',
+      '===== 本章全文（' + text.length + ' 字）=====',
+      text || '（当前章节没有内容）',
+      '',
+      '===== 已有的问题（' + list.length + ' 条，请勿重复）=====',
+    ];
+    if (!list.length) {
+      lines.push('（暂无）');
+    } else {
+      list.forEach((item, index) => {
+        if (index) lines.push('');
+        const quote = textOf(item && item.quote);
+        const issue = textOf(item && item.issue);
+        const why = textOf(item && item.why);
+        const advice = textOf(item && item.advice);
+        const example = textOf(item && item.example);
+        const kind = textOf(item && item.kind);
+        const severity = textOf(item && item.severity);
+        lines.push('原文：' + quote);
+        if (issue) lines.push('问题：' + issue);
+        if (why) lines.push('理由：' + why);
+        if (advice) lines.push('建议：' + advice);
+        if (example) lines.push('改后：' + example);
+        if (kind) lines.push('类型：' + kind);
+        if (severity) lines.push('严重度：' + severity);
+      });
+    }
+    lines.push('');
+    lines.push('请只补充上面没有的新问题；如果本章已经没有值得改的地方，直接说「没有了」。');
+    return lines.join('\n');
+  }
+
   NW.advicePaste = {
     parse,
+    buildPrompt,
     TEMPLATE,
     /** Exposed for the build gate, which checks aliases without a browser. */
     kinds: Array.from(new Set(KIND_ALIASES.values())).sort(),
@@ -22474,7 +22522,30 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       }
     }, [items, pasteText, chapterId, p.onToast]);
 
-    /** R85: the format block doubles as the prompt to give the other model. */
+    /**
+     * R86: the default copy is the whole briefing — format, the chapter's full
+     * text, and every issue already in the column. The other model then sees
+     * both the context and what the writer has already been told, so its answer
+     * can skip straight back into the paste box.
+     */
+    const copyFullPrompt = useCallback(() => {
+      const parser = NW.advicePaste;
+      if (!parser || typeof parser.buildPrompt !== 'function') return;
+      const api = p.editorApi && p.editorApi.current;
+      const text = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+      const list = Array.isArray(items) ? items : [];
+      copyToClipboard(parser.buildPrompt(text, list)).then((ok) => {
+        if (typeof p.onToast !== 'function') return;
+        p.onToast(
+          ok
+            ? NW.t('已复制全文（{0} 字）和 {1} 条问题', text.length, list.length)
+            : NW.t('复制失败，请手动选中'),
+          ok ? 'ok' : 'warn',
+        );
+      });
+    }, [items, p.editorApi, p.onToast]);
+
+    /** The skeleton alone, for a writer who only wants to brief a model. */
     const copyPasteTemplate = useCallback(() => {
       const value = NW.advicePaste ? NW.advicePaste.TEMPLATE : '';
       if (!value) return;
@@ -22918,13 +22989,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           h(
             'div',
             { className: 'nw-advice-paste-help' },
-            NW.t('把另一个 AI 写好的建议贴进来，格式照着下面。原文要和这一章一字不差，卡片才能定位和高亮。'),
+            NW.t('把另一个 AI 写好的建议贴进来，格式照着下面。点「复制全文与全部问题」会把本章全文和已有建议一起复制，直接发给对方。原文要和这一章一字不差，卡片才能定位和高亮。'),
           ),
           h('pre', { className: 'nw-advice-paste-fmt' }, NW.advicePaste ? NW.advicePaste.TEMPLATE : ''),
           h(
             'div',
             { className: 'nw-advice-paste-tools' },
-            NW.ui.btn({ kind: 'ghost', onClick: copyPasteTemplate, children: NW.t('复制格式说明') }),
+            NW.ui.btn({ kind: 'ghost', onClick: copyFullPrompt, children: NW.t('复制全文与全部问题') }),
+            NW.ui.btn({ kind: 'ghost', onClick: copyPasteTemplate, children: NW.t('只复制格式') }),
             h('span', { className: 'nw-advice-notehint' }, NW.t('也可以直接贴 JSON 数组')),
           ),
           h('textarea', {

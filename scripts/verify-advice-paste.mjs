@@ -27,8 +27,8 @@ try {
 }
 
 const parser = win.NW && win.NW.advicePaste;
-if (!parser || typeof parser.parse !== 'function') {
-  console.error('verify-advice-paste: window.NW.advicePaste.parse is missing');
+if (!parser || typeof parser.parse !== 'function' || typeof parser.buildPrompt !== 'function') {
+  console.error('verify-advice-paste: window.NW.advicePaste.parse/buildPrompt is missing');
   process.exit(1);
 }
 
@@ -138,6 +138,52 @@ console.log('verify-advice-paste: 从别的 AI 粘贴进来的建议');
   ok('模板是一段可复制的提示词（含原文 / JSON / 一字不差）', /原文/.test(tpl) && /JSON/.test(tpl) && /一字不差/.test(tpl));
   ok('模板自带示例，照着填即可', /问题/.test(tpl) && /建议/.test(tpl));
   ok('十种类型对卡片可见', Array.isArray(parser.kinds) && parser.kinds.length === 10, String(parser.kinds && parser.kinds.length));
+}
+
+// ------------------------------------------------------------- full prompt --
+{
+  const items = [
+    {
+      quote: '她没有回头',
+      issue: '缺反应',
+      why: '读者不知道她怎么想',
+      advice: '补一个动作',
+      example: '她攥紧了伞柄',
+      kind: 'detail',
+      severity: 'high',
+    },
+    { quote: '她把伞收了', issue: '节奏太快' },
+  ];
+  const prompt = parser.buildPrompt(CHAPTER, items);
+  ok('默认复制：正文全文原样带上', prompt.includes(CHAPTER) && prompt.includes('本章全文'));
+  ok('默认复制：标题里写出全文字数', prompt.includes('（' + CHAPTER.length + ' 字）'), String(CHAPTER.length));
+  ok(
+    '默认复制：全部问题的原文和问题都在',
+    items.every((item) => prompt.includes('原文：' + item.quote) && prompt.includes('问题：' + item.issue)),
+  );
+  ok(
+    '默认复制：理由 / 建议 / 改后 / 类型 / 严重度按格式带出',
+    /理由：读者不知道她怎么想/.test(prompt) &&
+      /建议：补一个动作/.test(prompt) &&
+      /改后：她攥紧了伞柄/.test(prompt) &&
+      /类型：detail/.test(prompt) &&
+      /严重度：high/.test(prompt),
+  );
+  ok('默认复制：条数写在标题里', prompt.includes('2 条，请勿重复'));
+  ok('默认复制：后面仍是一份可执行的格式说明', /一字不差/.test(prompt) && /JSON/.test(prompt));
+  ok(
+    '默认复制：复制出去的问题还能解析回卡片',
+    parser.parse(prompt.slice(prompt.indexOf('已有的问题')), CHAPTER).ok,
+  );
+}
+{
+  const bare = parser.buildPrompt('', []);
+  ok('没有正文和问题时仍是一份完整提示词', bare.includes('（当前章节没有内容）') && bare.includes('（暂无）') && bare.includes('0 条，请勿重复'));
+}
+{
+  const long = '长'.repeat(12000);
+  const big = parser.buildPrompt(long, []);
+  ok('默认复制不截断长章', big.includes(long) && big.length > long.length, `len=${big.length}`);
 }
 
 console.log('');
