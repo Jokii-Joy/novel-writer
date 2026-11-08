@@ -350,8 +350,9 @@
 .nw-theme-swatch[data-theme-id="night"]::before,
 .nw-theme-swatch[data-value="night"]::before{
   background:
-    radial-gradient(120% 140% at 18% 0%, rgba(255,255,255,.14), transparent 62%),
-    linear-gradient(160deg,#24241f,#161614);
+    radial-gradient(120% 140% at 18% 0%, rgba(255,255,255,.10), transparent 62%),
+    linear-gradient(160deg,#2c2c2e,#151517);
+  box-shadow:inset 0 -12px 20px -14px rgba(122,170,255,.7);
 }
 /* on a dark chip the default black hairline disappears, so the frame of the
    swatch itself lightens for that palette */

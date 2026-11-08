@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.9',
+      version: '1.6.10',
     };
     NW.ReactDOM = null;
 
@@ -99,6 +99,9 @@ window.__ModuleLoader__.load({
   --nw-line-soft:var(--dsw-alias-border-l1);
   --nw-line-strong:color-mix(in srgb, var(--dsw-alias-label-secondary) 32%, transparent);
   --nw-brand:var(--dsw-alias-brand-primary);
+  /* R88: label colour for filled brand controls. Light palettes keep white;
+     the host-dark palette sets a dark label because its accent is light blue. */
+  --nw-on-brand:#fff;
   --nw-fg:var(--dsw-alias-label-primary);
   --nw-fg-soft:var(--dsw-alias-label-secondary);
   --nw-danger:var(--dsw-alias-state-error-primary);
@@ -5174,7 +5177,7 @@ window.__ModuleLoader__.load({
 .nw-btn:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);}
 .nw-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px;}
 .nw-btn:disabled{opacity:.45;cursor:not-allowed;}
-.nw-btn[data-kind="primary"]{background:var(--dsw-alias-brand-primary);border-color:transparent;color:#fff;}
+.nw-btn[data-kind="primary"]{background:var(--dsw-alias-brand-primary);border-color:transparent;color:var(--nw-on-brand,#fff);}
 .nw-btn[data-kind="primary"]:hover:not(:disabled){filter:brightness(1.08);background:var(--dsw-alias-brand-primary);}
 .nw-btn[data-kind="danger"]{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-border-l1);}
 .nw-btn[data-kind="danger"]:hover:not(:disabled){background:var(--dsw-alias-state-error-primary);color:#fff;}
@@ -6192,8 +6195,9 @@ window.__ModuleLoader__.load({
 .nw-theme-swatch[data-theme-id="night"]::before,
 .nw-theme-swatch[data-value="night"]::before{
   background:
-    radial-gradient(120% 140% at 18% 0%, rgba(255,255,255,.14), transparent 62%),
-    linear-gradient(160deg,#24241f,#161614);
+    radial-gradient(120% 140% at 18% 0%, rgba(255,255,255,.10), transparent 62%),
+    linear-gradient(160deg,#2c2c2e,#151517);
+  box-shadow:inset 0 -12px 20px -14px rgba(122,170,255,.7);
 }
 /* on a dark chip the default black hairline disappears, so the frame of the
    swatch itself lightens for that palette */
@@ -9805,16 +9809,18 @@ window.__ModuleLoader__.load({
   --nw-texture:none;
 }
 .nw-surface[data-theme="night"]{
-  --nw-bg:#1a1a18;--nw-fg:#e8e6dc;--nw-soft:#9c9a90;--nw-rule:#33322d;
-  --nw-caret-color:#e8e6dc;--nw-caret:#e8e6dc;--nw-sel:rgba(232,230,220,.18);
-  --nw-accent:#e08d6f;
-  --nw-scroll-thumb:rgba(232,230,220,.18);--nw-scroll-thumb-hover:rgba(232,230,220,.34);
-  --nw-panel:#221f1d;--nw-panel-border:#33322d;--nw-panel-shadow:0 8px 24px rgba(0,0,0,.46);
-  --nw-btn-bg:#2a2825;--nw-btn-fg:#e8e6dc;--nw-btn-border:#3a3832;--nw-btn-hover:#35322e;
-  --nw-hl-bg:rgba(110,170,255,.30);--nw-hl-active:rgba(90,150,240,.46);
+  /* R88: same host-dark ground as the shell (neutral-bluish-950 paper, 50 ink,
+     deepseek-400 accent, white-alpha rules) so the page and the chrome agree. */
+  --nw-bg:#151517;--nw-fg:#f9fafb;--nw-soft:#adb2b8;--nw-rule:#2c2c2e;
+  --nw-caret-color:#f9fafb;--nw-caret:#f9fafb;--nw-sel:rgba(249,250,251,.16);
+  --nw-accent:#7aaaff;
+  --nw-scroll-thumb:rgba(249,250,251,.18);--nw-scroll-thumb-hover:rgba(249,250,251,.32);
+  --nw-panel:#232324;--nw-panel-border:#ffffff1f;--nw-panel-shadow:0 8px 24px rgba(0,0,0,.5);
+  --nw-btn-bg:#2c2c2e;--nw-btn-fg:#f9fafb;--nw-btn-border:#ffffff1f;--nw-btn-hover:#353638;
+  --nw-hl-bg:rgba(122,170,255,.28);--nw-hl-active:rgba(122,170,255,.46);
   --nw-mark-comment:#f0b46a;
-  --nw-find-bg:rgba(224,141,111,.16);--nw-find-active:rgba(224,141,111,.32);--nw-find-ring:rgba(224,141,111,.86);
-  --nw-empty-glyph:rgba(232,230,220,.16);
+  --nw-find-bg:rgba(122,170,255,.16);--nw-find-active:rgba(122,170,255,.30);--nw-find-ring:rgba(122,170,255,.86);
+  --nw-empty-glyph:rgba(249,250,251,.16);
   --nw-texture:none;
 }
 /* newspaper — 报纸：新闻纸米黄底、全衬线、细墨线，标题用报头红。 */
@@ -17236,7 +17242,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   display:flex;align-items:center;justify-content:center;
   width:52px;height:52px;padding:0;flex:0 0 auto;
   border-radius:0;border:0;background:transparent;
-  color:color-mix(in srgb, #ffffff 94%, var(--nw-bg));
+  color:var(--nw-on-brand,#fff);
   cursor:pointer;
 }
 .nw-dock-fab::before{
@@ -30824,7 +30830,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   // Values (docs/CONTRACT-R5.md section 2):
   //   claude     paper #faf4e9 ink #1b1813 terracotta #c4532f rule #e6dccb
   //   eye        paper #cce8cf ink #1f2a20 accent #2f6b3c
-  //   night      paper #1a1a18 ink #e8e6dc accent #e08d6f (terracotta lifted)
+  //   night      paper #151517 ink #f9fafb accent #7aaaff (host dark palette)
   //   newspaper  paper #ecdfbe ink #1a1913 accent #8c2b22 serif, r2
   //   magazine   paper #ffffff ink #14171a accent #d0021b sans, r14
   // ===========================================================================
@@ -30869,20 +30875,28 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
 /* ============================================================= night ====== */
 .nw-root[data-theme="night"]{
-  --dsw-alias-bg-base:#1a1a18;
-  --dsw-alias-bg-layer-1:#21201d;
-  --dsw-alias-bg-layer-2:#292824;
-  --dsw-alias-bg-overlay:#24231f;
-  --dsw-alias-border-l1:#2c2b26;
-  --dsw-alias-border-l2:#3a382f;
-  --dsw-alias-brand-primary:#e08d6f;
-  --dsw-alias-label-primary:#e8e6dc;
-  --dsw-alias-label-secondary:#9c9a90;
-  --dsw-alias-state-error-primary:#ef8272;
-  --dsw-alias-state-idle-primary:#56554f;
-  --dsw-alias-state-success-primary:#7cbf8f;
-  --dsw-alias-state-warn-primary:#dfb765;
-  --dsw-specific-sidebar-fill:#1f1e1b;
+  /* R88: the dark palette is the host's own dark theme (body[data-ds-dark-theme]
+     in @deepseek-ai/dsh-client-ui-theme), so the plugin reads as a panel of the
+     host instead of a warm-brown island: base neutral-bluish-950, raised layers
+     875/850/800, white-alpha borders, neutral-bluish-50 text and deepseek-400
+     as the interactive accent. */
+  --dsw-alias-bg-base:#151517;
+  --dsw-alias-bg-layer-1:#232324;
+  --dsw-alias-bg-layer-2:#2c2c2e;
+  --dsw-alias-bg-overlay:#232324;
+  --dsw-alias-border-l1:#ffffff0f;
+  --dsw-alias-border-l2:#ffffff1f;
+  --dsw-alias-brand-primary:#7aaaff;
+  --dsw-alias-label-primary:#f9fafb;
+  --dsw-alias-label-secondary:#cfd3d6;
+  --dsw-alias-state-error-primary:#f25a5a;
+  --dsw-alias-state-idle-primary:#81858c;
+  --dsw-alias-state-success-primary:#22c55e;
+  --dsw-alias-state-warn-primary:#f59e0b;
+  --dsw-specific-sidebar-fill:#1b1b1c;
+  /* On the light-blue accent the host pairs a dark label; #fff would drop to
+     ~2:1, so filled controls switch their foreground instead. */
+  --nw-on-brand:#0f1115;
   /* On a dark ground the paper-on-paper shadows vanish unless they deepen. */
   --nw-shadow-1:0 1px 2px rgba(0,0,0,.42);
   --nw-shadow-2:0 8px 26px rgba(0,0,0,.48);
@@ -30891,8 +30905,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 }
 /* The modal is "paper": at night that means slightly *lighter* than the page,
    otherwise the sheet would read as a hole rather than a page. */
-.nw-root[data-theme="night"] .nw-modal{background:#232220;}
-.nw-root[data-theme="night"] .nw-toast{background:#2b2a26;}
+.nw-root[data-theme="night"] .nw-modal{background:#232324;}
+.nw-root[data-theme="night"] .nw-toast{background:#2c2c2e;}
 /* R21/R63/R64/R65: the rows are transparent boxes and each one paints its own
    paper chip through ::before, so at night the chip has to be *lighter* than the
    page to look raised — hence the 7% override instead of the daylight 4%. The

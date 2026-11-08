@@ -81,6 +81,9 @@
   --nw-line-soft:var(--dsw-alias-border-l1);
   --nw-line-strong:color-mix(in srgb, var(--dsw-alias-label-secondary) 32%, transparent);
   --nw-brand:var(--dsw-alias-brand-primary);
+  /* R88: label colour for filled brand controls. Light palettes keep white;
+     the host-dark palette sets a dark label because its accent is light blue. */
+  --nw-on-brand:#fff;
   --nw-fg:var(--dsw-alias-label-primary);
   --nw-fg-soft:var(--dsw-alias-label-secondary);
   --nw-danger:var(--dsw-alias-state-error-primary);

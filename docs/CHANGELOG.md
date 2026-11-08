@@ -6,8 +6,24 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.9 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.10 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第八十八轮（R88）深色主题改用宿主自己的深色盘。
+  ① **取色不再自造**：`night` 的 shell 调色板逐项换成宿主
+  `body[data-ds-dark-theme]` 的值——底 `#151517`（neutral-bluish-950）、层 1/2 `#232324` /
+  `#2c2c2e`、描边 `#ffffff0f` / `#ffffff1f`、主文字 `#f9fafb`、次文字 `#cfd3d6`、强调色
+  `#7aaaff`（deepseek-400），侧栏 `#1b1b1c`；原先的暖褐 `#1a1a18`、米白 `#e8e6dc`、陶土
+  `#e08d6f` 全部退场，插件深色界面与宿主并排时不再是一块「棕色孤岛」。
+  ② **编辑器同步换纸**：`60-editor.js` 的 night 纸色 `#151517`、墨色 `#f9fafb`、光标与选区、
+  浮动面板 `#232324`、按钮 `#2c2c2e`、滚动条、查找底色与高亮洗色全部跟着宿主冷灰重建；
+  批注墨色仍是暖琥珀 `#f0b46a`，在冷灰纸上反而更清楚。
+  ③ **填充控件换前景色**：宿主的强调色是浅蓝，白字压上去只有约 2:1；新增 `--nw-on-brand`
+  （浅色盘默认 `#fff`，night 设 `#0f1115`），主按钮与悬浮坞圆钮改用深色前景，对比度约 7.8:1。
+  ④ **模态、toast、主题缩略图**同步改为宿主层色；`verify-highlight-style` 的五纸对比度与
+  色距断言继续全过。
+  ⑤ 验收：`build-client` 23 parts、`verify-host` 283、`verify-advice-ui` 56、
+  `verify-dock-hit`、`verify-dialog-kinds` 14、`verify-restore` 16、`verify-crypto-recovery` 18、
+  `verify-highlight-style` 全过。版本 **1.6.10**。
 - 第八十七轮（R87）复制真的能用了；粘贴面板整理成一张导入卡。
   ① **复制改走宿主**：WebView 里的 `navigator.clipboard.writeText` 可能被权限策略拒绝，
   `execCommand('copy')` 在文本框没拿到焦点时也会静默失败，结果就是点了没反应。现在复制按

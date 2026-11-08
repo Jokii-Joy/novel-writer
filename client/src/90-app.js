@@ -825,7 +825,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   display:flex;align-items:center;justify-content:center;
   width:52px;height:52px;padding:0;flex:0 0 auto;
   border-radius:0;border:0;background:transparent;
-  color:color-mix(in srgb, #ffffff 94%, var(--nw-bg));
+  color:var(--nw-on-brand,#fff);
   cursor:pointer;
 }
 .nw-dock-fab::before{

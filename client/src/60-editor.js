@@ -341,16 +341,18 @@
   --nw-texture:none;
 }
 .nw-surface[data-theme="night"]{
-  --nw-bg:#1a1a18;--nw-fg:#e8e6dc;--nw-soft:#9c9a90;--nw-rule:#33322d;
-  --nw-caret-color:#e8e6dc;--nw-caret:#e8e6dc;--nw-sel:rgba(232,230,220,.18);
-  --nw-accent:#e08d6f;
-  --nw-scroll-thumb:rgba(232,230,220,.18);--nw-scroll-thumb-hover:rgba(232,230,220,.34);
-  --nw-panel:#221f1d;--nw-panel-border:#33322d;--nw-panel-shadow:0 8px 24px rgba(0,0,0,.46);
-  --nw-btn-bg:#2a2825;--nw-btn-fg:#e8e6dc;--nw-btn-border:#3a3832;--nw-btn-hover:#35322e;
-  --nw-hl-bg:rgba(110,170,255,.30);--nw-hl-active:rgba(90,150,240,.46);
+  /* R88: same host-dark ground as the shell (neutral-bluish-950 paper, 50 ink,
+     deepseek-400 accent, white-alpha rules) so the page and the chrome agree. */
+  --nw-bg:#151517;--nw-fg:#f9fafb;--nw-soft:#adb2b8;--nw-rule:#2c2c2e;
+  --nw-caret-color:#f9fafb;--nw-caret:#f9fafb;--nw-sel:rgba(249,250,251,.16);
+  --nw-accent:#7aaaff;
+  --nw-scroll-thumb:rgba(249,250,251,.18);--nw-scroll-thumb-hover:rgba(249,250,251,.32);
+  --nw-panel:#232324;--nw-panel-border:#ffffff1f;--nw-panel-shadow:0 8px 24px rgba(0,0,0,.5);
+  --nw-btn-bg:#2c2c2e;--nw-btn-fg:#f9fafb;--nw-btn-border:#ffffff1f;--nw-btn-hover:#353638;
+  --nw-hl-bg:rgba(122,170,255,.28);--nw-hl-active:rgba(122,170,255,.46);
   --nw-mark-comment:#f0b46a;
-  --nw-find-bg:rgba(224,141,111,.16);--nw-find-active:rgba(224,141,111,.32);--nw-find-ring:rgba(224,141,111,.86);
-  --nw-empty-glyph:rgba(232,230,220,.16);
+  --nw-find-bg:rgba(122,170,255,.16);--nw-find-active:rgba(122,170,255,.30);--nw-find-ring:rgba(122,170,255,.86);
+  --nw-empty-glyph:rgba(249,250,251,.16);
   --nw-texture:none;
 }
 /* newspaper — 报纸：新闻纸米黄底、全衬线、细墨线，标题用报头红。 */

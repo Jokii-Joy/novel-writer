@@ -17,7 +17,7 @@
   // Values (docs/CONTRACT-R5.md section 2):
   //   claude     paper #faf4e9 ink #1b1813 terracotta #c4532f rule #e6dccb
   //   eye        paper #cce8cf ink #1f2a20 accent #2f6b3c
-  //   night      paper #1a1a18 ink #e8e6dc accent #e08d6f (terracotta lifted)
+  //   night      paper #151517 ink #f9fafb accent #7aaaff (host dark palette)
   //   newspaper  paper #ecdfbe ink #1a1913 accent #8c2b22 serif, r2
   //   magazine   paper #ffffff ink #14171a accent #d0021b sans, r14
   // ===========================================================================
@@ -62,20 +62,28 @@
 
 /* ============================================================= night ====== */
 .nw-root[data-theme="night"]{
-  --dsw-alias-bg-base:#1a1a18;
-  --dsw-alias-bg-layer-1:#21201d;
-  --dsw-alias-bg-layer-2:#292824;
-  --dsw-alias-bg-overlay:#24231f;
-  --dsw-alias-border-l1:#2c2b26;
-  --dsw-alias-border-l2:#3a382f;
-  --dsw-alias-brand-primary:#e08d6f;
-  --dsw-alias-label-primary:#e8e6dc;
-  --dsw-alias-label-secondary:#9c9a90;
-  --dsw-alias-state-error-primary:#ef8272;
-  --dsw-alias-state-idle-primary:#56554f;
-  --dsw-alias-state-success-primary:#7cbf8f;
-  --dsw-alias-state-warn-primary:#dfb765;
-  --dsw-specific-sidebar-fill:#1f1e1b;
+  /* R88: the dark palette is the host's own dark theme (body[data-ds-dark-theme]
+     in @deepseek-ai/dsh-client-ui-theme), so the plugin reads as a panel of the
+     host instead of a warm-brown island: base neutral-bluish-950, raised layers
+     875/850/800, white-alpha borders, neutral-bluish-50 text and deepseek-400
+     as the interactive accent. */
+  --dsw-alias-bg-base:#151517;
+  --dsw-alias-bg-layer-1:#232324;
+  --dsw-alias-bg-layer-2:#2c2c2e;
+  --dsw-alias-bg-overlay:#232324;
+  --dsw-alias-border-l1:#ffffff0f;
+  --dsw-alias-border-l2:#ffffff1f;
+  --dsw-alias-brand-primary:#7aaaff;
+  --dsw-alias-label-primary:#f9fafb;
+  --dsw-alias-label-secondary:#cfd3d6;
+  --dsw-alias-state-error-primary:#f25a5a;
+  --dsw-alias-state-idle-primary:#81858c;
+  --dsw-alias-state-success-primary:#22c55e;
+  --dsw-alias-state-warn-primary:#f59e0b;
+  --dsw-specific-sidebar-fill:#1b1b1c;
+  /* On the light-blue accent the host pairs a dark label; #fff would drop to
+     ~2:1, so filled controls switch their foreground instead. */
+  --nw-on-brand:#0f1115;
   /* On a dark ground the paper-on-paper shadows vanish unless they deepen. */
   --nw-shadow-1:0 1px 2px rgba(0,0,0,.42);
   --nw-shadow-2:0 8px 26px rgba(0,0,0,.48);
@@ -84,8 +92,8 @@
 }
 /* The modal is "paper": at night that means slightly *lighter* than the page,
    otherwise the sheet would read as a hole rather than a page. */
-.nw-root[data-theme="night"] .nw-modal{background:#232220;}
-.nw-root[data-theme="night"] .nw-toast{background:#2b2a26;}
+.nw-root[data-theme="night"] .nw-modal{background:#232324;}
+.nw-root[data-theme="night"] .nw-toast{background:#2c2c2e;}
 /* R21/R63/R64/R65: the rows are transparent boxes and each one paints its own
    paper chip through ::before, so at night the chip has to be *lighter* than the
    page to look raised — hence the 7% override instead of the daylight 4%. The

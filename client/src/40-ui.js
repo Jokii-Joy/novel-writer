@@ -11,7 +11,7 @@
 .nw-btn:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);}
 .nw-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px;}
 .nw-btn:disabled{opacity:.45;cursor:not-allowed;}
-.nw-btn[data-kind="primary"]{background:var(--dsw-alias-brand-primary);border-color:transparent;color:#fff;}
+.nw-btn[data-kind="primary"]{background:var(--dsw-alias-brand-primary);border-color:transparent;color:var(--nw-on-brand,#fff);}
 .nw-btn[data-kind="primary"]:hover:not(:disabled){filter:brightness(1.08);background:var(--dsw-alias-brand-primary);}
 .nw-btn[data-kind="danger"]{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-border-l1);}
 .nw-btn[data-kind="danger"]:hover:not(:disabled){background:var(--dsw-alias-state-error-primary);color:#fff;}
