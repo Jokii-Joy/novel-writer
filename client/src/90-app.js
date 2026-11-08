@@ -329,37 +329,62 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 }
 .nw-advice-paste-toggle:hover{color:var(--nw-brand-strong,var(--nw-brand));}
 .nw-advice-paste-toggle:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;border-radius:2px;}
-/* R85：粘贴面板。格式说明本身就是给另一个模型的提示词，所以等宽、可滚动、
-   选中即可复制；面板整体限高，避免把下面的卡片挤没。 */
+/* R85/R87：粘贴面板是一张独立的导入卡：标题 + 格式说明 + 一个复制入口 +
+   输入框。等宽格式块限高，面板整体限高，避免把下面的建议卡片挤没。 */
 .nw-advice-paste{
-  flex:0 0 auto;display:flex;flex-direction:column;gap:7px;
-  padding:0 12px 10px;max-height:46vh;overflow:auto;
+  flex:0 0 auto;display:flex;flex-direction:column;gap:10px;
+  margin:2px 0 8px;padding:12px;
+  border:1px solid var(--nw-line);border-radius:10px;
+  background:var(--nw-sunken);
+  max-height:52vh;overflow:auto;
 }
-.nw-advice-paste-help{font-size:var(--nw-fs-tiny);line-height:1.65;color:var(--nw-fg-soft);}
+.nw-advice-paste-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;}
+.nw-advice-paste-title{font-size:12px;font-weight:600;color:var(--nw-fg);}
+.nw-advice-paste-tag{
+  font-size:10px;line-height:1.5;color:var(--nw-fg-soft);
+  border:1px solid var(--nw-line);border-radius:999px;padding:1px 7px;
+}
+.nw-advice-paste-help{font-size:var(--nw-fs-tiny);line-height:1.7;color:var(--nw-fg-soft);}
+.nw-advice-paste-fmtbox{
+  display:flex;flex-direction:column;gap:6px;
+  padding:8px 10px;border:1px solid var(--nw-line);border-radius:8px;
+  background:var(--nw-bg,transparent);
+}
+.nw-advice-paste-fmtlabel{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  font-size:10.5px;color:var(--nw-fg-soft);
+}
+.nw-advice-paste-fmtnote{opacity:.8;}
 .nw-advice-paste-fmt{
-  margin:0;padding:8px 10px;border:1px dashed var(--nw-line);border-radius:var(--nw-r-control);
-  background:var(--nw-sunken);color:var(--nw-fg-soft);
+  margin:0;max-height:104px;overflow:auto;
+  padding:0;border:0;background:none;color:var(--nw-fg-soft);
   font-family:var(--nw-ui-font,ui-monospace,monospace);font-size:10.5px;line-height:1.7;
-  white-space:pre-wrap;word-break:break-word;max-height:124px;overflow:auto;
+  white-space:pre-wrap;word-break:break-word;
 }
 .nw-advice-paste-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.nw-advice-paste-copy{flex:0 0 auto;}
+.nw-advice-paste-tip{font-size:10.5px;color:var(--nw-fg-soft);}
 .nw-advice-paste-input{
   display:block;width:100%;box-sizing:border-box;
-  min-height:92px;max-height:180px;resize:vertical;overflow:auto;
-  padding:8px 10px;border-radius:var(--nw-r-control);
+  min-height:104px;max-height:200px;resize:vertical;overflow:auto;
+  padding:9px 11px;border-radius:8px;
   border:1px solid var(--nw-line);
-  background:var(--nw-sunken);color:var(--nw-fg);
+  background:var(--nw-bg,transparent);color:var(--nw-fg);
   font-family:var(--nw-ui-font,ui-monospace,monospace);font-size:11px;line-height:1.7;
 }
 .nw-advice-paste-input:focus{
   outline:none;border-color:var(--nw-brand);
   box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-brand) 18%, transparent);
 }
-.nw-advice-paste-input::placeholder{color:var(--nw-fg-soft);opacity:.85;}
+.nw-advice-paste-input::placeholder{color:var(--nw-fg-soft);opacity:.75;}
 .nw-advice-paste-error{
   font-size:12px;line-height:1.55;color:var(--dsw-alias-state-error-primary);
 }
-.nw-advice-paste-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.nw-advice-paste-actions{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding-top:2px;border-top:1px solid var(--nw-line);
+}
+.nw-advice-paste-actions-hint{margin-left:auto;font-size:10.5px;color:var(--nw-fg-soft);}
 /* R73：角度是可选的。这行小字把「不选也行」说在明面上，否则十颗药丸默认全灭
    只会让人以为加载失败。 */
 .nw-advice-focus-hint{

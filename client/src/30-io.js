@@ -1250,6 +1250,17 @@
     return api('crypto.clear', {});
   }
 
+  /**
+   * R87: asks the host to write the OS clipboard.
+   *
+   * The WebView's async clipboard API can be denied; the host's Electron
+   * clipboard (or the platform's clip/pbcopy) is not. A whole chapter plus the
+   * existing issues is a few tens of KB, hence the generous deadline.
+   */
+  function clipboardWrite(text) {
+    return api('clipboard.write', { text: String(text == null ? '' : text) }, { timeoutMs: 15000 });
+  }
+
   NW.apiUrl = apiUrl;
   NW.api = api;
 
@@ -1275,6 +1286,9 @@
       state: cryptoState,
       save: cryptoSave,
       clear: cryptoClear,
+    },
+    clipboard: {
+      write: clipboardWrite,
     },
     library: {
       get: libraryGet,

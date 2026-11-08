@@ -270,7 +270,15 @@
     }
   }
 
-  /** Copy text to the clipboard; resolves false when the browser refuses. */
+  /**
+   * Copy text to the clipboard; resolves false when every channel refuses.
+   *
+   * R87: the WebView can deny `navigator.clipboard.writeText` (permission
+   * policy) and `execCommand('copy')` can quietly return false when the
+   * textarea never receives focus. So the order is: async clipboard → host
+   * clipboard (Electron / clip.exe / pbcopy) → focused textarea. The host path
+   * is the one that makes a whole-chapter copy dependable.
+   */
   async function copyToClipboard(text) {
     const value = String(text == null ? '' : text);
     try {
@@ -279,16 +287,32 @@
         return true;
       }
     } catch (err) {
-      /* fall through to the textarea trick */
+      /* fall through */
+    }
+    try {
+      if (NW.io && NW.io.clipboard && typeof NW.io.clipboard.write === 'function') {
+        await NW.io.clipboard.write(value);
+        return true;
+      }
+    } catch (err) {
+      /* fall through */
     }
     try {
       const area = document.createElement('textarea');
       area.value = value;
       area.setAttribute('readonly', 'readonly');
       area.style.position = 'fixed';
-      area.style.left = '-9999px';
+      area.style.top = '0';
+      area.style.left = '0';
+      area.style.width = '1px';
+      area.style.height = '1px';
+      area.style.padding = '0';
+      area.style.border = '0';
+      area.style.opacity = '0';
       document.body.appendChild(area);
+      area.focus();
       area.select();
+      area.setSelectionRange(0, value.length);
       const ok = document.execCommand && document.execCommand('copy');
       document.body.removeChild(area);
       return !!ok;
@@ -842,9 +866,20 @@
      */
     const copyFullPrompt = useCallback(() => {
       const parser = NW.advicePaste;
-      if (!parser || typeof parser.buildPrompt !== 'function') return;
-      const api = p.editorApi && p.editorApi.current;
-      const text = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+      if (!parser || typeof parser.buildPrompt !== 'function') {
+        // A stale client (page not refreshed after an update) has no parser.
+        // Returning silently here is how "点了没反应" used to happen.
+        if (typeof p.onToast === 'function') p.onToast(NW.t('复制组件没有加载，请刷新页面后再试'), 'warn');
+        return;
+      }
+      let text = '';
+      try {
+        const api = p.editorApi && p.editorApi.current;
+        text = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+      } catch (err) {
+        if (typeof p.onToast === 'function') p.onToast(NW.t('读不到当前章节，请刷新页面后再试'), 'warn');
+        return;
+      }
       const list = Array.isArray(items) ? items : [];
       copyToClipboard(parser.buildPrompt(text, list)).then((ok) => {
         if (typeof p.onToast !== 'function') return;
@@ -856,17 +891,6 @@
         );
       });
     }, [items, p.editorApi, p.onToast]);
-
-    /** The skeleton alone, for a writer who only wants to brief a model. */
-    const copyPasteTemplate = useCallback(() => {
-      const value = NW.advicePaste ? NW.advicePaste.TEMPLATE : '';
-      if (!value) return;
-      copyToClipboard(value).then((ok) => {
-        if (typeof p.onToast === 'function') {
-          p.onToast(ok ? NW.t('格式说明已经复制') : NW.t('复制失败，请手动选中'), ok ? 'ok' : 'warn');
-        }
-      });
-    }, [p.onToast]);
 
     /**
      * R75: a chip press only changes the selection — it must never start a read.
@@ -1287,29 +1311,49 @@
     );
 
     /**
-     * R85: a paste box that produces the same cards as a model read.
+     * R85/R87: a paste box that produces the same cards as a model read.
      *
-     * The format block is written as a prompt, not as documentation: the
-     * writer copies it to the other model, gets suggestions back, and pastes
-     * the answer here. 「原文」 must be exact or the card cannot locate the
-     * span — that is stated both in the template and in the hint above it.
+     * The panel is framed as a small import card: a title row, the format block
+     * (which doubles as the prompt), one copy button, then the textarea. R87
+     * removed the 「只复制格式」 button — the format block itself is still
+     * selectable, and two copy buttons only made the primary one ambiguous.
      */
     const pastePanel = pasteOpen
       ? h(
           'div',
-          { className: 'nw-advice-paste' },
+          { className: 'nw-advice-paste', role: 'region', 'aria-label': NW.t('粘贴其他 AI 的建议') },
+          h(
+            'div',
+            { className: 'nw-advice-paste-head' },
+            h('strong', { className: 'nw-advice-paste-title' }, NW.t('粘贴其他 AI 的建议')),
+            h('span', { className: 'nw-advice-paste-tag' }, NW.t('与模型建议同一套卡片')),
+          ),
           h(
             'div',
             { className: 'nw-advice-paste-help' },
-            NW.t('把另一个 AI 写好的建议贴进来，格式照着下面。点「复制全文与全部问题」会把本章全文和已有建议一起复制，直接发给对方。原文要和这一章一字不差，卡片才能定位和高亮。'),
+            NW.t('把另一个 AI 写好的建议贴进来。点「复制全文与全部问题」会把本章全文和已有建议一起复制，直接发给对方；原文要和这一章一字不差，卡片才能定位和高亮。'),
           ),
-          h('pre', { className: 'nw-advice-paste-fmt' }, NW.advicePaste ? NW.advicePaste.TEMPLATE : ''),
+          h(
+            'div',
+            { className: 'nw-advice-paste-fmtbox' },
+            h(
+              'div',
+              { className: 'nw-advice-paste-fmtlabel' },
+              h('span', null, NW.t('格式说明')),
+              h('span', { className: 'nw-advice-paste-fmtnote' }, NW.t('可直接整段复制给 AI')),
+            ),
+            h('pre', { className: 'nw-advice-paste-fmt' }, NW.advicePaste ? NW.advicePaste.TEMPLATE : ''),
+          ),
           h(
             'div',
             { className: 'nw-advice-paste-tools' },
-            NW.ui.btn({ kind: 'ghost', onClick: copyFullPrompt, children: NW.t('复制全文与全部问题') }),
-            NW.ui.btn({ kind: 'ghost', onClick: copyPasteTemplate, children: NW.t('只复制格式') }),
-            h('span', { className: 'nw-advice-notehint' }, NW.t('也可以直接贴 JSON 数组')),
+            NW.ui.btn({
+              kind: 'ghost',
+              className: 'nw-advice-paste-copy',
+              onClick: copyFullPrompt,
+              children: NW.t('复制全文与全部问题'),
+            }),
+            h('span', { className: 'nw-advice-paste-tip' }, NW.t('也可以直接贴 JSON 数组')),
           ),
           h('textarea', {
             className: 'nw-advice-paste-input',
@@ -1348,7 +1392,7 @@
               },
               children: NW.t('取消'),
             }),
-            h('span', { className: 'nw-advice-notehint' }, NW.t('Ctrl+Enter 导入')),
+            h('span', { className: 'nw-advice-paste-actions-hint' }, NW.t('Ctrl+Enter 导入')),
           ),
         )
       : null;

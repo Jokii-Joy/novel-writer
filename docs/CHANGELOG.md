@@ -6,8 +6,24 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.8 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.9 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第八十七轮（R87）复制真的能用了；粘贴面板整理成一张导入卡。
+  ① **复制改走宿主**：WebView 里的 `navigator.clipboard.writeText` 可能被权限策略拒绝，
+  `execCommand('copy')` 在文本框没拿到焦点时也会静默失败，结果就是点了没反应。现在复制按
+  三级降级：浏览器异步剪贴板 → 宿主新增的 `clipboard.write` 路由 → 聚焦后的 textarea。
+  宿主侧 `lib/clipboard.js` 优先用 Electron 的 `clipboard.writeText`（主进程内直接写，无权限、
+  无子进程），取不到时按平台调用 `clip.exe` / `pbcopy` / `wl-copy` / `xclip` / `xsel`，8 秒超时，
+  最长 8 MB；文本只写一次、不落盘。这样整章全文加全部问题都能稳定复制到系统剪贴板。
+  页面还停留在旧版本、复制组件没加载时，按钮会提示「请刷新页面后再试」，不再静默无反应。
+  ② **只留一个复制按钮**：删除「只复制格式」。格式说明块本身仍可整段选中，两个复制按钮只会
+  让主按钮变得含糊；需要模板时直接选格式块即可。
+  ③ **面板美化**：粘贴面板从贴边的竖排文字改成独立导入卡——标题行（含「与模型建议同一套卡片」
+  胶囊）、分段说明、带「格式说明 / 可直接整段复制给 AI」标签的等宽格式块、单个复制入口、
+  输入框与底部操作栏；操作栏有分隔线，Ctrl+Enter 提示靠右，整体限高 52vh。
+  ④ 验收：`verify-advice-ui` 的入口断言改为「只有一个复制按钮 + 格式说明单独成块」共 56 项；
+  `build-client` 23 parts、`verify-host` 283、`verify-advice-paste` 29、`verify-dock-hit`、
+  `verify-restore` 16、`verify-crypto-recovery` 18、`verify-highlight-style` 全过。版本 **1.6.9**。
 - 第八十六轮（R86）粘贴面板的默认复制：**格式说明 + 本章全文 + 全部已有问题**。
   ① **默认复制全文与全部问题**：面板里的「复制格式说明」改为「复制全文与全部问题」。点一下
   得到的不再是空模板，而是一份可以直接发给另一个 AI 的完整请求：先是可执行的格式说明，

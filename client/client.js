@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.8',
+      version: '1.6.9',
     };
     NW.ReactDOM = null;
 
@@ -5039,6 +5039,17 @@ window.__ModuleLoader__.load({
     return api('crypto.clear', {});
   }
 
+  /**
+   * R87: asks the host to write the OS clipboard.
+   *
+   * The WebView's async clipboard API can be denied; the host's Electron
+   * clipboard (or the platform's clip/pbcopy) is not. A whole chapter plus the
+   * existing issues is a few tens of KB, hence the generous deadline.
+   */
+  function clipboardWrite(text) {
+    return api('clipboard.write', { text: String(text == null ? '' : text) }, { timeoutMs: 15000 });
+  }
+
   NW.apiUrl = apiUrl;
   NW.api = api;
 
@@ -5064,6 +5075,9 @@ window.__ModuleLoader__.load({
       state: cryptoState,
       save: cryptoSave,
       clear: cryptoClear,
+    },
+    clipboard: {
+      write: clipboardWrite,
     },
     library: {
       get: libraryGet,
@@ -16726,37 +16740,62 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 }
 .nw-advice-paste-toggle:hover{color:var(--nw-brand-strong,var(--nw-brand));}
 .nw-advice-paste-toggle:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;border-radius:2px;}
-/* R85：粘贴面板。格式说明本身就是给另一个模型的提示词，所以等宽、可滚动、
-   选中即可复制；面板整体限高，避免把下面的卡片挤没。 */
+/* R85/R87：粘贴面板是一张独立的导入卡：标题 + 格式说明 + 一个复制入口 +
+   输入框。等宽格式块限高，面板整体限高，避免把下面的建议卡片挤没。 */
 .nw-advice-paste{
-  flex:0 0 auto;display:flex;flex-direction:column;gap:7px;
-  padding:0 12px 10px;max-height:46vh;overflow:auto;
+  flex:0 0 auto;display:flex;flex-direction:column;gap:10px;
+  margin:2px 0 8px;padding:12px;
+  border:1px solid var(--nw-line);border-radius:10px;
+  background:var(--nw-sunken);
+  max-height:52vh;overflow:auto;
 }
-.nw-advice-paste-help{font-size:var(--nw-fs-tiny);line-height:1.65;color:var(--nw-fg-soft);}
+.nw-advice-paste-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;}
+.nw-advice-paste-title{font-size:12px;font-weight:600;color:var(--nw-fg);}
+.nw-advice-paste-tag{
+  font-size:10px;line-height:1.5;color:var(--nw-fg-soft);
+  border:1px solid var(--nw-line);border-radius:999px;padding:1px 7px;
+}
+.nw-advice-paste-help{font-size:var(--nw-fs-tiny);line-height:1.7;color:var(--nw-fg-soft);}
+.nw-advice-paste-fmtbox{
+  display:flex;flex-direction:column;gap:6px;
+  padding:8px 10px;border:1px solid var(--nw-line);border-radius:8px;
+  background:var(--nw-bg,transparent);
+}
+.nw-advice-paste-fmtlabel{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  font-size:10.5px;color:var(--nw-fg-soft);
+}
+.nw-advice-paste-fmtnote{opacity:.8;}
 .nw-advice-paste-fmt{
-  margin:0;padding:8px 10px;border:1px dashed var(--nw-line);border-radius:var(--nw-r-control);
-  background:var(--nw-sunken);color:var(--nw-fg-soft);
+  margin:0;max-height:104px;overflow:auto;
+  padding:0;border:0;background:none;color:var(--nw-fg-soft);
   font-family:var(--nw-ui-font,ui-monospace,monospace);font-size:10.5px;line-height:1.7;
-  white-space:pre-wrap;word-break:break-word;max-height:124px;overflow:auto;
+  white-space:pre-wrap;word-break:break-word;
 }
 .nw-advice-paste-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.nw-advice-paste-copy{flex:0 0 auto;}
+.nw-advice-paste-tip{font-size:10.5px;color:var(--nw-fg-soft);}
 .nw-advice-paste-input{
   display:block;width:100%;box-sizing:border-box;
-  min-height:92px;max-height:180px;resize:vertical;overflow:auto;
-  padding:8px 10px;border-radius:var(--nw-r-control);
+  min-height:104px;max-height:200px;resize:vertical;overflow:auto;
+  padding:9px 11px;border-radius:8px;
   border:1px solid var(--nw-line);
-  background:var(--nw-sunken);color:var(--nw-fg);
+  background:var(--nw-bg,transparent);color:var(--nw-fg);
   font-family:var(--nw-ui-font,ui-monospace,monospace);font-size:11px;line-height:1.7;
 }
 .nw-advice-paste-input:focus{
   outline:none;border-color:var(--nw-brand);
   box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-brand) 18%, transparent);
 }
-.nw-advice-paste-input::placeholder{color:var(--nw-fg-soft);opacity:.85;}
+.nw-advice-paste-input::placeholder{color:var(--nw-fg-soft);opacity:.75;}
 .nw-advice-paste-error{
   font-size:12px;line-height:1.55;color:var(--dsw-alias-state-error-primary);
 }
-.nw-advice-paste-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.nw-advice-paste-actions{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding-top:2px;border-top:1px solid var(--nw-line);
+}
+.nw-advice-paste-actions-hint{margin-left:auto;font-size:10.5px;color:var(--nw-fg-soft);}
 /* R73：角度是可选的。这行小字把「不选也行」说在明面上，否则十颗药丸默认全灭
    只会让人以为加载失败。 */
 .nw-advice-focus-hint{
@@ -21958,7 +21997,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     }
   }
 
-  /** Copy text to the clipboard; resolves false when the browser refuses. */
+  /**
+   * Copy text to the clipboard; resolves false when every channel refuses.
+   *
+   * R87: the WebView can deny `navigator.clipboard.writeText` (permission
+   * policy) and `execCommand('copy')` can quietly return false when the
+   * textarea never receives focus. So the order is: async clipboard → host
+   * clipboard (Electron / clip.exe / pbcopy) → focused textarea. The host path
+   * is the one that makes a whole-chapter copy dependable.
+   */
   async function copyToClipboard(text) {
     const value = String(text == null ? '' : text);
     try {
@@ -21967,16 +22014,32 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         return true;
       }
     } catch (err) {
-      /* fall through to the textarea trick */
+      /* fall through */
+    }
+    try {
+      if (NW.io && NW.io.clipboard && typeof NW.io.clipboard.write === 'function') {
+        await NW.io.clipboard.write(value);
+        return true;
+      }
+    } catch (err) {
+      /* fall through */
     }
     try {
       const area = document.createElement('textarea');
       area.value = value;
       area.setAttribute('readonly', 'readonly');
       area.style.position = 'fixed';
-      area.style.left = '-9999px';
+      area.style.top = '0';
+      area.style.left = '0';
+      area.style.width = '1px';
+      area.style.height = '1px';
+      area.style.padding = '0';
+      area.style.border = '0';
+      area.style.opacity = '0';
       document.body.appendChild(area);
+      area.focus();
       area.select();
+      area.setSelectionRange(0, value.length);
       const ok = document.execCommand && document.execCommand('copy');
       document.body.removeChild(area);
       return !!ok;
@@ -22530,9 +22593,20 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      */
     const copyFullPrompt = useCallback(() => {
       const parser = NW.advicePaste;
-      if (!parser || typeof parser.buildPrompt !== 'function') return;
-      const api = p.editorApi && p.editorApi.current;
-      const text = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+      if (!parser || typeof parser.buildPrompt !== 'function') {
+        // A stale client (page not refreshed after an update) has no parser.
+        // Returning silently here is how "点了没反应" used to happen.
+        if (typeof p.onToast === 'function') p.onToast(NW.t('复制组件没有加载，请刷新页面后再试'), 'warn');
+        return;
+      }
+      let text = '';
+      try {
+        const api = p.editorApi && p.editorApi.current;
+        text = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+      } catch (err) {
+        if (typeof p.onToast === 'function') p.onToast(NW.t('读不到当前章节，请刷新页面后再试'), 'warn');
+        return;
+      }
       const list = Array.isArray(items) ? items : [];
       copyToClipboard(parser.buildPrompt(text, list)).then((ok) => {
         if (typeof p.onToast !== 'function') return;
@@ -22544,17 +22618,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         );
       });
     }, [items, p.editorApi, p.onToast]);
-
-    /** The skeleton alone, for a writer who only wants to brief a model. */
-    const copyPasteTemplate = useCallback(() => {
-      const value = NW.advicePaste ? NW.advicePaste.TEMPLATE : '';
-      if (!value) return;
-      copyToClipboard(value).then((ok) => {
-        if (typeof p.onToast === 'function') {
-          p.onToast(ok ? NW.t('格式说明已经复制') : NW.t('复制失败，请手动选中'), ok ? 'ok' : 'warn');
-        }
-      });
-    }, [p.onToast]);
 
     /**
      * R75: a chip press only changes the selection — it must never start a read.
@@ -22975,29 +23038,49 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     );
 
     /**
-     * R85: a paste box that produces the same cards as a model read.
+     * R85/R87: a paste box that produces the same cards as a model read.
      *
-     * The format block is written as a prompt, not as documentation: the
-     * writer copies it to the other model, gets suggestions back, and pastes
-     * the answer here. 「原文」 must be exact or the card cannot locate the
-     * span — that is stated both in the template and in the hint above it.
+     * The panel is framed as a small import card: a title row, the format block
+     * (which doubles as the prompt), one copy button, then the textarea. R87
+     * removed the 「只复制格式」 button — the format block itself is still
+     * selectable, and two copy buttons only made the primary one ambiguous.
      */
     const pastePanel = pasteOpen
       ? h(
           'div',
-          { className: 'nw-advice-paste' },
+          { className: 'nw-advice-paste', role: 'region', 'aria-label': NW.t('粘贴其他 AI 的建议') },
+          h(
+            'div',
+            { className: 'nw-advice-paste-head' },
+            h('strong', { className: 'nw-advice-paste-title' }, NW.t('粘贴其他 AI 的建议')),
+            h('span', { className: 'nw-advice-paste-tag' }, NW.t('与模型建议同一套卡片')),
+          ),
           h(
             'div',
             { className: 'nw-advice-paste-help' },
-            NW.t('把另一个 AI 写好的建议贴进来，格式照着下面。点「复制全文与全部问题」会把本章全文和已有建议一起复制，直接发给对方。原文要和这一章一字不差，卡片才能定位和高亮。'),
+            NW.t('把另一个 AI 写好的建议贴进来。点「复制全文与全部问题」会把本章全文和已有建议一起复制，直接发给对方；原文要和这一章一字不差，卡片才能定位和高亮。'),
           ),
-          h('pre', { className: 'nw-advice-paste-fmt' }, NW.advicePaste ? NW.advicePaste.TEMPLATE : ''),
+          h(
+            'div',
+            { className: 'nw-advice-paste-fmtbox' },
+            h(
+              'div',
+              { className: 'nw-advice-paste-fmtlabel' },
+              h('span', null, NW.t('格式说明')),
+              h('span', { className: 'nw-advice-paste-fmtnote' }, NW.t('可直接整段复制给 AI')),
+            ),
+            h('pre', { className: 'nw-advice-paste-fmt' }, NW.advicePaste ? NW.advicePaste.TEMPLATE : ''),
+          ),
           h(
             'div',
             { className: 'nw-advice-paste-tools' },
-            NW.ui.btn({ kind: 'ghost', onClick: copyFullPrompt, children: NW.t('复制全文与全部问题') }),
-            NW.ui.btn({ kind: 'ghost', onClick: copyPasteTemplate, children: NW.t('只复制格式') }),
-            h('span', { className: 'nw-advice-notehint' }, NW.t('也可以直接贴 JSON 数组')),
+            NW.ui.btn({
+              kind: 'ghost',
+              className: 'nw-advice-paste-copy',
+              onClick: copyFullPrompt,
+              children: NW.t('复制全文与全部问题'),
+            }),
+            h('span', { className: 'nw-advice-paste-tip' }, NW.t('也可以直接贴 JSON 数组')),
           ),
           h('textarea', {
             className: 'nw-advice-paste-input',
@@ -23036,7 +23119,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               },
               children: NW.t('取消'),
             }),
-            h('span', { className: 'nw-advice-notehint' }, NW.t('Ctrl+Enter 导入')),
+            h('span', { className: 'nw-advice-paste-actions-hint' }, NW.t('Ctrl+Enter 导入')),
           ),
         )
       : null;
