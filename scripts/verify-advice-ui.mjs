@@ -204,6 +204,10 @@ const NW = {
   },
 };
 
+// R85: load the real paste parser into the same NW stub, so the import path is
+// exercised with its actual grammar rather than a fake that always agrees.
+new Function('window', readFileSync(join(here, '..', 'client', 'src', '91-advice-paste.js'), 'utf8'))({ NW });
+
 const BASE_TEXT = '他把门推开，屋子里很安静。桌上那本书还摊着，像在等他回来。';
 let editorText = BASE_TEXT;
 const fakeEditor = {
@@ -496,6 +500,65 @@ clickText('接受');
 await tick(10);
 check('悬浮坞接受写入 source=chapter', dockAccepted.length === 1 && dockAccepted[0].source === 'chapter', dockAccepted[0] && dockAccepted[0].source);
 check('接受的那条带 example 作为改后', dockAccepted[0] && dockAccepted[0].revised === '屋里静得能听见心跳');
+
+// ---- 6. R85 粘贴其他 AI 的建议 ---------------------------------------------
+console.log('[6] 粘贴其他 AI 的建议：同一个卡片，同一个导入路径');
+const pasteToasts = [];
+const pasteAccepted = [];
+const pasteAiBefore = focusCalls.length;
+mount(
+  createElement(C.Advice, {
+    chapter: { id: 'c1' },
+    editorApi: fakeEditor,
+    settings: {},
+    accepted: pasteAccepted,
+    onAccept: async (draft) => {
+      pasteAccepted.push(Object.assign({ id: 'p1', createdAt: 6000 }, draft));
+      return { id: 'p1' };
+    },
+    onRemoveAccepted: async () => {},
+    onClose: () => {},
+    onToast: (message, kind) => pasteToasts.push([message, kind]),
+  }),
+);
+clickText('粘贴其他 AI 的建议');
+check('入口展开后给出可复制的格式说明', /一字不差/.test(textOf(rootTree)) && /原文/.test(textOf(rootTree)));
+const pasteBox = () =>
+  nodes().find((n) => n.tag === 'textarea' && n.props['aria-label'] === '粘贴其他 AI 的建议');
+check('面板里有粘贴输入框', !!pasteBox());
+
+pasteBox().props.onChange({ target: { value: '原文：屋子里很安静\n问题：太静\n建议：写一点声音' } });
+await tick(5);
+clickText('导入到建议栏');
+await tick(10);
+let pasted = textOf(rootTree);
+check('导入后出现建议内容', /写一点声音/.test(pasted), pasted.slice(-80));
+check('导入的卡片也是 接受 / 拒绝', pasteAccepted.length === 0 && /接受/.test(pasted) && /拒绝/.test(pasted));
+check('导入没有顺手再调一次模型', focusCalls.length === pasteAiBefore, focusCalls.length);
+check('导入成功有 toast 条数', pasteToasts.some(([m]) => /已导入 1 条建议/.test(m)), pasteToasts);
+
+clickText('粘贴其他 AI 的建议');
+pasteBox().props.onChange({ target: { value: '原文：这一句不在正文里\n问题：缺反应\n建议：补一个动作' } });
+await tick(5);
+clickText('导入到建议栏');
+await tick(10);
+pasted = textOf(rootTree);
+check('原文定位不到也导入，并说明「定位不到」', /这一句不在正文里/.test(pasted) && /定位不到/.test(pasted));
+check('toast 报出未定位条数', pasteToasts.some(([m]) => /没定位到原文/.test(m)), pasteToasts);
+
+clickText('粘贴其他 AI 的建议');
+pasteBox().props.onChange({ target: { value: '原文：屋子里很安静\n问题：太静\n建议：写一点声音' } });
+await tick(5);
+clickText('导入到建议栏');
+await tick(10);
+check('同一条再贴一次会被挡住', /已经在列表里/.test(textOf(rootTree)));
+check('挡住时不重复建卡片', pasteToasts.filter(([m]) => /已导入/.test(m)).length === 2, pasteToasts);
+
+clickText('重新审读');
+await tick(10);
+pasted = textOf(rootTree);
+check('重新审读保留粘贴进来的建议', /这一句不在正文里/.test(pasted) && /写一点声音/.test(pasted), pasted.slice(-120));
+check('重新审读仍会换掉模型自己的卡片', /屋里静得能听见心跳/.test(pasted), pasted.slice(-120));
 
 console.log(failed === 0 ? '\n全部通过 ✅' : '\n失败 ' + failed + ' 项 ❌');
 process.exit(failed === 0 ? 0 : 1);

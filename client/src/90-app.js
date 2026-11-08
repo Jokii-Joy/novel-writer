@@ -320,6 +320,46 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-advice-note textarea::placeholder{color:var(--nw-fg-soft);opacity:.85;}
 .nw-advice-notebar{display:flex;align-items:center;gap:var(--nw-sp-0);margin-top:var(--nw-sp-0);}
 .nw-advice-notehint{font-size:var(--nw-fs-tiny);color:var(--nw-fg-soft);opacity:.85;}
+/* R85：粘贴其他 AI 建议的入口。做成文字按钮而不是第二个输入框，平时收起来，
+   不跟「补充要求」抢视线。 */
+.nw-advice-paste-toggle{
+  border:0;background:none;padding:0;cursor:pointer;
+  color:var(--nw-brand);font:inherit;font-size:var(--nw-fs-tiny);
+  text-decoration:underline;text-underline-offset:2px;
+}
+.nw-advice-paste-toggle:hover{color:var(--nw-brand-strong,var(--nw-brand));}
+.nw-advice-paste-toggle:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;border-radius:2px;}
+/* R85：粘贴面板。格式说明本身就是给另一个模型的提示词，所以等宽、可滚动、
+   选中即可复制；面板整体限高，避免把下面的卡片挤没。 */
+.nw-advice-paste{
+  flex:0 0 auto;display:flex;flex-direction:column;gap:7px;
+  padding:0 12px 10px;max-height:46vh;overflow:auto;
+}
+.nw-advice-paste-help{font-size:var(--nw-fs-tiny);line-height:1.65;color:var(--nw-fg-soft);}
+.nw-advice-paste-fmt{
+  margin:0;padding:8px 10px;border:1px dashed var(--nw-line);border-radius:var(--nw-r-control);
+  background:var(--nw-sunken);color:var(--nw-fg-soft);
+  font-family:var(--nw-ui-font,ui-monospace,monospace);font-size:10.5px;line-height:1.7;
+  white-space:pre-wrap;word-break:break-word;max-height:124px;overflow:auto;
+}
+.nw-advice-paste-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.nw-advice-paste-input{
+  display:block;width:100%;box-sizing:border-box;
+  min-height:92px;max-height:180px;resize:vertical;overflow:auto;
+  padding:8px 10px;border-radius:var(--nw-r-control);
+  border:1px solid var(--nw-line);
+  background:var(--nw-sunken);color:var(--nw-fg);
+  font-family:var(--nw-ui-font,ui-monospace,monospace);font-size:11px;line-height:1.7;
+}
+.nw-advice-paste-input:focus{
+  outline:none;border-color:var(--nw-brand);
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-brand) 18%, transparent);
+}
+.nw-advice-paste-input::placeholder{color:var(--nw-fg-soft);opacity:.85;}
+.nw-advice-paste-error{
+  font-size:12px;line-height:1.55;color:var(--dsw-alias-state-error-primary);
+}
+.nw-advice-paste-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
 /* R73：角度是可选的。这行小字把「不选也行」说在明面上，否则十颗药丸默认全灭
    只会让人以为加载失败。 */
 .nw-advice-focus-hint{
@@ -1053,21 +1093,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     return { theme: mapped };
   }
 
-  /**
-   * R83: the dock's expanded state as it survives a remount of the panel.
-   *
-   * `dockOpen` used to be pure component state. The host can re-render (and in
-   * some flows remount) the slot the panel lives in — for example when the
-   * writer clicks another part of the shell — and a remount re-initialised the
-   * state to `false`. On screen that is a menu that "collapses by itself when
-   * you click anywhere else", which is exactly the report this fixes.
-   *
-   * Deliberately module scope, not localStorage: a remount inside the same page
-   * keeps the menu open, while a real reload still starts collapsed (an expanded
-   * dock after restart would cover the last paragraphs of the chapter).
-   */
-  let dockOpenMemory = false;
-
   NW.App = function App() {
     const [ready, setReady] = useState(false);
     const [bootError, setBootError] = useState('');
@@ -1126,18 +1151,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * what the button toggles. Not persisted on disk on purpose — a dock that
      * reopens itself on restart would cover the last paragraphs of the chapter.
      *
-     * R83: it does survive a remount inside the same page (see dockOpenMemory
-     * above). Only the page's own state should decide that the menu closes, not
-     * the host re-rendering the slot around it.
+     * R85: clicking anywhere outside the expanded dock collapses it, and Esc
+     * does the same. The root node is kept in a ref so "outside" means "not one
+     * of these five rows or the FAB", not "the host re-rendered the slot".
      */
-    const [dockOpen, setDockOpenState] = useState(() => dockOpenMemory);
-    const setDockOpen = useCallback((next) => {
-      setDockOpenState((prev) => {
-        const value = typeof next === 'function' ? next(prev) : next;
-        dockOpenMemory = !!value;
-        return !!value;
-      });
-    }, []);
+    const [dockOpen, setDockOpen] = useState(false);
+    const dockRef = useRef(null);
     /**
      * R25: null = auto. The column measures itself from the bench (see
      * .nw-suggest in the CSS above) so it always hugs the page instead of
@@ -1528,6 +1547,30 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       // column (dock row, shortcut, restored session), collapse the dock.
       if (adviceOpen) setDockOpen(false);
     }, [adviceOpen, setDockOpen]);
+    /**
+     * R85: an expanded dock is a popover — the next click that misses it puts
+     * it away. Capture phase on purpose: the click that opens a dialog or
+     * switches screens should close the menu *before* that screen arrives, so
+     * the menu never floats over the thing the writer just asked for. A click
+     * on one of the five rows is a hit and keeps its own handler in charge.
+     */
+    useEffect(() => {
+      if (!dockOpen) return undefined;
+      const onPointerDown = (event) => {
+        const node = dockRef.current;
+        if (node && event.target && node.contains(event.target)) return;
+        setDockOpen(false);
+      };
+      const onKeyDown = (event) => {
+        if (event.key === 'Escape' && !event.defaultPrevented) setDockOpen(false);
+      };
+      document.addEventListener('pointerdown', onPointerDown, true);
+      document.addEventListener('keydown', onKeyDown, true);
+      return () => {
+        document.removeEventListener('pointerdown', onPointerDown, true);
+        document.removeEventListener('keydown', onKeyDown, true);
+      };
+    }, [dockOpen]);
     useEffect(() => {
       /* null means auto — clear the key so a fresh session keeps measuring. */
       lsSet(LS_ADVICE_WIDTH, adviceWidth == null ? null : adviceWidth);
@@ -3683,6 +3726,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const dock = h(Dock, {
           immersive: immersive,
           chapter: chapter,
+          dockRef: dockRef,
           // R60: the FAB shape is back, so the dock needs the open flag again.
           open: dockOpen,
           onToggle: () => setDockOpen((v) => !v),
@@ -4339,6 +4383,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       'div',
       {
         className: 'nw-dock',
+        ref: p.dockRef,
         'data-immersive': p.immersive ? '1' : '0',
         'data-open': open ? '1' : '0',
       },

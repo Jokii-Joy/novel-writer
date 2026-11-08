@@ -87,3 +87,13 @@ if (highlight.status !== 0) {
   console.error('build-client: a highlight/comment tint no longer stands out from its paper');
   process.exit(1);
 }
+
+// R85: pasted advice becomes ordinary cards, so the parser is the only place
+// that can mis-place a highlight. It is a pure IIFE and runs in plain Node.
+const paste = spawnSync(process.execPath, [join(here, 'verify-advice-paste.mjs')], {
+  stdio: 'inherit',
+});
+if (paste.status !== 0) {
+  console.error('build-client: the paste-import parser regressed');
+  process.exit(1);
+}

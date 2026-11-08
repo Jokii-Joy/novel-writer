@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.6',
+      version: '1.6.7',
     };
     NW.ReactDOM = null;
 
@@ -16717,6 +16717,46 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-advice-note textarea::placeholder{color:var(--nw-fg-soft);opacity:.85;}
 .nw-advice-notebar{display:flex;align-items:center;gap:var(--nw-sp-0);margin-top:var(--nw-sp-0);}
 .nw-advice-notehint{font-size:var(--nw-fs-tiny);color:var(--nw-fg-soft);opacity:.85;}
+/* R85：粘贴其他 AI 建议的入口。做成文字按钮而不是第二个输入框，平时收起来，
+   不跟「补充要求」抢视线。 */
+.nw-advice-paste-toggle{
+  border:0;background:none;padding:0;cursor:pointer;
+  color:var(--nw-brand);font:inherit;font-size:var(--nw-fs-tiny);
+  text-decoration:underline;text-underline-offset:2px;
+}
+.nw-advice-paste-toggle:hover{color:var(--nw-brand-strong,var(--nw-brand));}
+.nw-advice-paste-toggle:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;border-radius:2px;}
+/* R85：粘贴面板。格式说明本身就是给另一个模型的提示词，所以等宽、可滚动、
+   选中即可复制；面板整体限高，避免把下面的卡片挤没。 */
+.nw-advice-paste{
+  flex:0 0 auto;display:flex;flex-direction:column;gap:7px;
+  padding:0 12px 10px;max-height:46vh;overflow:auto;
+}
+.nw-advice-paste-help{font-size:var(--nw-fs-tiny);line-height:1.65;color:var(--nw-fg-soft);}
+.nw-advice-paste-fmt{
+  margin:0;padding:8px 10px;border:1px dashed var(--nw-line);border-radius:var(--nw-r-control);
+  background:var(--nw-sunken);color:var(--nw-fg-soft);
+  font-family:var(--nw-ui-font,ui-monospace,monospace);font-size:10.5px;line-height:1.7;
+  white-space:pre-wrap;word-break:break-word;max-height:124px;overflow:auto;
+}
+.nw-advice-paste-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.nw-advice-paste-input{
+  display:block;width:100%;box-sizing:border-box;
+  min-height:92px;max-height:180px;resize:vertical;overflow:auto;
+  padding:8px 10px;border-radius:var(--nw-r-control);
+  border:1px solid var(--nw-line);
+  background:var(--nw-sunken);color:var(--nw-fg);
+  font-family:var(--nw-ui-font,ui-monospace,monospace);font-size:11px;line-height:1.7;
+}
+.nw-advice-paste-input:focus{
+  outline:none;border-color:var(--nw-brand);
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-brand) 18%, transparent);
+}
+.nw-advice-paste-input::placeholder{color:var(--nw-fg-soft);opacity:.85;}
+.nw-advice-paste-error{
+  font-size:12px;line-height:1.55;color:var(--dsw-alias-state-error-primary);
+}
+.nw-advice-paste-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
 /* R73：角度是可选的。这行小字把「不选也行」说在明面上，否则十颗药丸默认全灭
    只会让人以为加载失败。 */
 .nw-advice-focus-hint{
@@ -17450,21 +17490,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     return { theme: mapped };
   }
 
-  /**
-   * R83: the dock's expanded state as it survives a remount of the panel.
-   *
-   * `dockOpen` used to be pure component state. The host can re-render (and in
-   * some flows remount) the slot the panel lives in — for example when the
-   * writer clicks another part of the shell — and a remount re-initialised the
-   * state to `false`. On screen that is a menu that "collapses by itself when
-   * you click anywhere else", which is exactly the report this fixes.
-   *
-   * Deliberately module scope, not localStorage: a remount inside the same page
-   * keeps the menu open, while a real reload still starts collapsed (an expanded
-   * dock after restart would cover the last paragraphs of the chapter).
-   */
-  let dockOpenMemory = false;
-
   NW.App = function App() {
     const [ready, setReady] = useState(false);
     const [bootError, setBootError] = useState('');
@@ -17523,18 +17548,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * what the button toggles. Not persisted on disk on purpose — a dock that
      * reopens itself on restart would cover the last paragraphs of the chapter.
      *
-     * R83: it does survive a remount inside the same page (see dockOpenMemory
-     * above). Only the page's own state should decide that the menu closes, not
-     * the host re-rendering the slot around it.
+     * R85: clicking anywhere outside the expanded dock collapses it, and Esc
+     * does the same. The root node is kept in a ref so "outside" means "not one
+     * of these five rows or the FAB", not "the host re-rendered the slot".
      */
-    const [dockOpen, setDockOpenState] = useState(() => dockOpenMemory);
-    const setDockOpen = useCallback((next) => {
-      setDockOpenState((prev) => {
-        const value = typeof next === 'function' ? next(prev) : next;
-        dockOpenMemory = !!value;
-        return !!value;
-      });
-    }, []);
+    const [dockOpen, setDockOpen] = useState(false);
+    const dockRef = useRef(null);
     /**
      * R25: null = auto. The column measures itself from the bench (see
      * .nw-suggest in the CSS above) so it always hugs the page instead of
@@ -17925,6 +17944,30 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       // column (dock row, shortcut, restored session), collapse the dock.
       if (adviceOpen) setDockOpen(false);
     }, [adviceOpen, setDockOpen]);
+    /**
+     * R85: an expanded dock is a popover — the next click that misses it puts
+     * it away. Capture phase on purpose: the click that opens a dialog or
+     * switches screens should close the menu *before* that screen arrives, so
+     * the menu never floats over the thing the writer just asked for. A click
+     * on one of the five rows is a hit and keeps its own handler in charge.
+     */
+    useEffect(() => {
+      if (!dockOpen) return undefined;
+      const onPointerDown = (event) => {
+        const node = dockRef.current;
+        if (node && event.target && node.contains(event.target)) return;
+        setDockOpen(false);
+      };
+      const onKeyDown = (event) => {
+        if (event.key === 'Escape' && !event.defaultPrevented) setDockOpen(false);
+      };
+      document.addEventListener('pointerdown', onPointerDown, true);
+      document.addEventListener('keydown', onKeyDown, true);
+      return () => {
+        document.removeEventListener('pointerdown', onPointerDown, true);
+        document.removeEventListener('keydown', onKeyDown, true);
+      };
+    }, [dockOpen]);
     useEffect(() => {
       /* null means auto — clear the key so a fresh session keeps measuring. */
       lsSet(LS_ADVICE_WIDTH, adviceWidth == null ? null : adviceWidth);
@@ -20080,6 +20123,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const dock = h(Dock, {
           immersive: immersive,
           chapter: chapter,
+          dockRef: dockRef,
           // R60: the FAB shape is back, so the dock needs the open flag again.
           open: dockOpen,
           onToggle: () => setDockOpen((v) => !v),
@@ -20736,6 +20780,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       'div',
       {
         className: 'nw-dock',
+        ref: p.dockRef,
         'data-immersive': p.immersive ? '1' : '0',
         'data-open': open ? '1' : '0',
       },
@@ -21305,6 +21350,290 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         /* ignore */
       }
     }
+  };
+})();
+
+/* ==== 91-advice-paste.js ==== */
+;(() => {
+  'use strict';
+
+  /**
+   * R85: import advice written by another AI.
+   *
+   * The column has one card shape, and it should not grow a second one just
+   * because the text came from a different model. So a paste is parsed into the
+   * same fields the host's `revise` call returns —
+   * `{quote, issue, why, advice, example, kind, severity}` — plus `start`/`end`
+   * located against the chapter that is open right now. After that the cards,
+   * the highlight, 接受/拒绝 and 替换/复制 all behave exactly as before.
+   *
+   * Two input shapes are accepted because both are what a model actually emits:
+   *   1. the JSON array our own prompt asks for (fenced or bare);
+   *   2. labelled lines — 原文 / 问题 / 理由 / 建议 / 改后 / 类型 / 严重度 —
+   *      which is what a writer gets when they paste the prompt below into
+   *      another chat and copy the answer back.
+   *
+   * Parsing never throws: a paste that cannot be understood returns an error
+   * string the panel can show next to the box, and nothing is imported.
+   */
+
+  const NW = (window.NW = window.NW || {});
+
+  /** The ten kinds the cards know, plus the labels a writer may paste. */
+  const KIND_ALIASES = new Map();
+  [
+    ['rhythm', '节奏', 'pacing'],
+    ['diction', '用词', '语言', '表达', 'wording'],
+    ['pov', '视角', 'pointofview'],
+    ['detail', '画面', '细节', '描写'],
+    ['dialogue', '对话', '台词'],
+    ['structure', '结构', '结构节奏'],
+    ['character', '人物', '角色', '人设'],
+    ['logic', '逻辑', '设定'],
+    ['emotion', '情绪', '情感'],
+    ['redundancy', '冗余', '重复', '啰嗦'],
+  ].forEach(([kind, ...labels]) => {
+    KIND_ALIASES.set(kind, kind);
+    labels.forEach((label) => KIND_ALIASES.set(String(label).toLowerCase(), kind));
+  });
+
+  const SEVERITY_ALIASES = new Map();
+  [
+    ['high', '高', '严重', '重要', 'high'],
+    ['medium', '中', '一般', '普通', 'medium'],
+    ['low', '低', '轻', '次要', 'low'],
+  ].forEach(([level, ...labels]) => {
+    SEVERITY_ALIASES.set(level, level);
+    labels.forEach((label) => SEVERITY_ALIASES.set(String(label).toLowerCase(), level));
+  });
+
+  const FIELD_ALIASES = new Map();
+  const FIELDS = {
+    quote: ['原文', '引文', '原句', 'quote'],
+    issue: ['问题', '毛病', 'issue'],
+    why: ['理由', '原因', '为什么', 'why'],
+    advice: ['建议', '改法', '怎么改', 'advice'],
+    example: ['改后', '示例', '改写', '改后的文字', 'example', 'revised'],
+    kind: ['类型', '维度', 'kind'],
+    severity: ['严重度', '严重程度', '优先级', 'severity'],
+  };
+  Object.keys(FIELDS).forEach((field) => {
+    FIELDS[field].forEach((label) => FIELD_ALIASES.set(String(label).toLowerCase(), field));
+  });
+
+  const escapeRe = (label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const LABELS = Array.from(FIELD_ALIASES.keys())
+    .sort((a, b) => b.length - a.length)
+    .map(escapeRe)
+    .join('|');
+  const FIELD_RE = new RegExp('(?:\\*\\*)?(' + LABELS + ')(?:\\*\\*)?\\s*[:：]\\s*', 'gi');
+  const ENTRY_RE = new RegExp(
+    '(?:^|\\n)[ \\t]*(?:\\d{1,2}[.、)）]\\s*)?(?:\\*\\*)?(?:' +
+      FIELDS.quote.map(escapeRe).join('|') +
+      ')(?:\\*\\*)?\\s*[:：]\\s*',
+    'gi',
+  );
+
+  /** Text as a trimmed string; `null`/`undefined` become ''. */
+  function textOf(value) {
+    return String(value == null ? '' : value).trim();
+  }
+
+  function canonicalKind(value) {
+    const key = textOf(value).toLowerCase();
+    return KIND_ALIASES.get(key) || '';
+  }
+
+  function canonicalSeverity(value) {
+    const key = textOf(value).toLowerCase();
+    return SEVERITY_ALIASES.get(key) || 'medium';
+  }
+
+  /** The format block shown above the paste box — also copied as the prompt. */
+  const TEMPLATE = [
+    '请按下面的格式给修改建议，每条之间空一行：',
+    '',
+    '原文：从正文里逐字复制的一句（20~60 字）',
+    '问题：一句话说清问题（不超过 40 字）',
+    '理由：为什么是问题（不超过 60 字）',
+    '建议：具体怎么改（不超过 80 字）',
+    '改后：改后的文字（可选）',
+    '类型：节奏 / 用词 / 视角 / 画面 / 对话 / 结构 / 人物 / 逻辑 / 情绪 / 冗余（可选）',
+    '严重度：高 / 中 / 低（可选）',
+    '',
+    '要求：原文必须与小说正文一字不差；没有值得改的就不要编。',
+    '',
+    '也可以直接给 JSON 数组：[{"quote":"原文","issue":"问题","advice":"建议"}]',
+  ].join('\n');
+
+  /**
+   * Split the labelled form into one object per 原文 line.
+   *
+   * A field value runs until the next label, so a value may wrap over several
+   * lines and `原文：… 问题：…` on one line is still understood. The first
+   * occurrence of a field wins; a repeated 建议 label is almost always the
+   * model restating itself, and the first one is the one it meant.
+   */
+  function parseLabelled(raw) {
+    const entries = [];
+    const starts = [];
+    let match;
+    ENTRY_RE.lastIndex = 0;
+    while ((match = ENTRY_RE.exec(raw))) starts.push(match.index);
+    if (!starts.length) return null;
+
+    for (let i = 0; i < starts.length; i += 1) {
+      const chunk = raw.slice(starts[i], i + 1 < starts.length ? starts[i + 1] : raw.length);
+      const fields = {};
+      const marks = [];
+      FIELD_RE.lastIndex = 0;
+      let hit;
+      while ((hit = FIELD_RE.exec(chunk))) {
+        const field = FIELD_ALIASES.get(hit[1].toLowerCase());
+        if (!field) continue;
+        marks.push({ field, end: hit.index + hit[0].length, index: hit.index });
+      }
+      for (let m = 0; m < marks.length; m += 1) {
+        const mark = marks[m];
+        const end = m + 1 < marks.length ? marks[m + 1].index : chunk.length;
+        const value = chunk.slice(mark.end, end).replace(/\n{3,}/g, '\n\n').trim();
+        if (value && !fields[mark.field]) fields[mark.field] = value;
+      }
+      if (fields.quote) entries.push(fields);
+    }
+    return entries.length ? entries : null;
+  }
+
+  /**
+   * The JSON form. Fences are stripped, then the first array (or an object
+   * with `suggestions`) is parsed. A chapter's quotes can contain `]`, so the
+   * slice is taken greedily to the last bracket; a malformed paste falls back
+   * to the labelled parser instead of failing the import.
+   */
+  function parseJson(raw) {
+    let text = raw.trim();
+    text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+    if (!text) return null;
+    const attempt = (value) => {
+      try {
+        return JSON.parse(value);
+      } catch (err) {
+        return null;
+      }
+    };
+    let data = null;
+    const arrayStart = text.indexOf('[');
+    const arrayEnd = text.lastIndexOf(']');
+    if (arrayStart >= 0 && arrayEnd > arrayStart) {
+      data = attempt(text.slice(arrayStart, arrayEnd + 1));
+    }
+    if (!data) {
+      const objectStart = text.indexOf('{');
+      const objectEnd = text.lastIndexOf('}');
+      if (objectStart < 0 || objectEnd <= objectStart) return null;
+      const object = attempt(text.slice(objectStart, objectEnd + 1));
+      if (!object) return null;
+      data = Array.isArray(object) ? object : object.suggestions;
+    }
+    if (Array.isArray(data)) return data.filter((entry) => entry && typeof entry === 'object');
+    if (data && typeof data === 'object') return [data];
+    return null;
+  }
+
+  function locate(quote, source) {
+    if (!source || !quote) return { start: -1, end: -1 };
+    let at = source.indexOf(quote);
+    if (at >= 0) return { start: at, end: at + quote.length };
+    // A model sometimes hard-wraps a long quote. The manuscript has no newline
+    // there, so retry with line breaks folded into spaces; if that also misses,
+    // the card stays importable with start:-1 and says it cannot locate.
+    const folded = quote.replace(/\s*\n+\s*/g, ' ');
+    if (folded !== quote) {
+      at = source.indexOf(folded);
+      if (at >= 0) return { start: at, end: at + folded.length };
+    }
+    return { start: -1, end: -1 };
+  }
+
+  function normalise(entry, source) {
+    if (!entry || typeof entry !== 'object') return null;
+    const quote = textOf(entry.quote).replace(/\s*\n+\s*/g, ' ');
+    if (!quote) return null;
+    const issue = textOf(entry.issue);
+    const why = textOf(entry.why);
+    const advice = textOf(entry.advice);
+    const example = textOf(entry.example || entry.revised);
+    if (!issue && !advice && !example) return null;
+    const span = locate(quote, source);
+    return {
+      quote,
+      issue,
+      why,
+      advice,
+      example,
+      kind: canonicalKind(entry.kind),
+      severity: canonicalSeverity(entry.severity),
+      start: span.start,
+      end: span.end,
+    };
+  }
+
+  function dedupe(items) {
+    const seen = new Set();
+    return items.filter((item) => {
+      const key = item.quote + '|' + item.issue;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  /**
+   * Parse a paste against the chapter's current text.
+   *
+   * Resolves to `{ok, items, unlocated, error}`. `items` carry no `id` — the
+   * panel assigns ids that cannot collide with the model's `r1…r8`.
+   */
+  function parse(raw, source) {
+    const text = textOf(raw);
+    if (!text) return { ok: false, items: [], unlocated: 0, error: '先把建议粘贴进来' };
+    let entries = null;
+    try {
+      entries = parseJson(text);
+    } catch (err) {
+      entries = null;
+    }
+    if (!entries || !entries.length) entries = parseLabelled(text);
+    if (!entries || !entries.length) {
+      return {
+        ok: false,
+        items: [],
+        unlocated: 0,
+        error: '没有认出建议。每条至少要有「原文」和「问题 / 建议 / 改后」中的一项；也可以直接粘贴 JSON 数组。',
+      };
+    }
+    const items = dedupe(entries.map((entry) => normalise(entry, source)).filter(Boolean));
+    if (!items.length) {
+      return {
+        ok: false,
+        items: [],
+        unlocated: 0,
+        error: '认出了格式，但没有一条同时带着「原文」和「问题 / 建议 / 改后」中的一项。',
+      };
+    }
+    return {
+      ok: true,
+      items,
+      unlocated: items.filter((item) => item.start < 0).length,
+      error: '',
+    };
+  }
+
+  NW.advicePaste = {
+    parse,
+    TEMPLATE,
+    /** Exposed for the build gate, which checks aliases without a browser. */
+    kinds: Array.from(new Set(KIND_ALIASES.values())).sort(),
   };
 })();
 
@@ -21954,6 +22283,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     focusRef.current = focus;
     const [note, setNote] = useState('');
     const [items, setItems] = useState(null);
+    /** R85: the paste box for advice written by another AI. */
+    const [pasteOpen, setPasteOpen] = useState(false);
+    const [pasteText, setPasteText] = useState('');
+    const [pasteError, setPasteError] = useState('');
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
     const [activeId, setActiveId] = useState('');
@@ -21966,6 +22299,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [fromCache, setFromCache] = useState(false);
     /** item.id → the stored row id, so 撤销 can remove exactly what it created. */
     const madeRef = useRef({});
+    /** R85: imported cards survive a re-read; the model replaces only its own. */
+    const itemsRef = useRef([]);
+    itemsRef.current = Array.isArray(items) ? items : [];
     const [savingId, setSavingId] = useState('');
     const runRef = useRef(0);
     const noteRef = useRef('');
@@ -22048,13 +22384,17 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           }
           if (used) setError('');
           const finalItems = Array.isArray(data && data.suggestions) ? data.suggestions : [];
-          setItems(finalItems);
+          /* R85: a re-read replaces the model's cards, not the writer's paste.
+             Imported ids start with `p`, and that prefix is the whole rule. */
+          const imported = itemsRef.current.filter((item) => String((item && item.id) || '').startsWith('p'));
+          const merged = imported.concat(finalItems);
+          setItems(merged);
           setModel(String((data && data.model) || ''));
           // R76: remember this read so closing and reopening the column does not
           // silently bill the same chapter twice.
-          if (finalItems.length) {
+          if (merged.length) {
             cachePut('dock|' + chapterId, {
-              items: finalItems,
+              items: merged,
               model: String((data && data.model) || ''),
               fp: textFingerprint(text),
               at: Date.now(),
@@ -22062,7 +22402,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           }
         } catch (err) {
           if (runRef.current !== token) return;
-          setItems(null);
+          const imported = itemsRef.current.filter((item) => String((item && item.id) || '').startsWith('p'));
+          setItems(imported.length ? imported : null);
           setError(errText(err, '获取修改建议失败'));
         } finally {
           if (runRef.current === token) setBusy(false);
@@ -22074,6 +22415,75 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       // R76: `chapterId` joined the list because the result is cached per chapter.
       [chapterId, p.editorApi, p.settings],
     );
+
+    /**
+     * R85: take a paste from another AI and put it in the same list as the
+     * model's own cards. The parser returns the host's suggestion shape, so
+     * from here on nothing in the panel needs to know where a card came from:
+     * 高亮、接受、拒绝、复制、替换、撤销 all read the same fields.
+     *
+     * Imported cards are appended rather than replacing the current read —
+     * a writer comparing two models wants both in front of them. Ids get a
+     * timestamp prefix so they cannot collide with the model's `r1…r8`, and a
+     * card whose quote is no longer in the chapter is kept with `start:-1`
+     * (the panel already explains that state).
+     */
+    const importPaste = useCallback(() => {
+      const parser = NW.advicePaste;
+      if (!parser) {
+        setPasteError('粘贴导入没有加载');
+        return;
+      }
+      const api = p.editorApi && p.editorApi.current;
+      const text = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+      const parsed = parser.parse(pasteText, text);
+      if (!parsed.ok) {
+        setPasteError(parsed.error);
+        return;
+      }
+      const base = Array.isArray(items) ? items : [];
+      const seen = new Set(base.map((item) => String(item.quote || '') + '|' + String(item.issue || '')));
+      const stamp = Date.now().toString(36);
+      const additions = [];
+      parsed.items.forEach((item, index) => {
+        const key = item.quote + '|' + item.issue;
+        if (seen.has(key)) return;
+        seen.add(key);
+        additions.push(Object.assign({}, item, { id: 'p' + stamp + index }));
+      });
+      if (!additions.length) {
+        setPasteError('这些建议已经在列表里了');
+        return;
+      }
+      const merged = base.concat(additions);
+      setItems(merged);
+      setModel('');
+      setFromCache(false);
+      cachePut('dock|' + chapterId, {
+        items: merged,
+        model: '',
+        fp: textFingerprint(text),
+        at: Date.now(),
+      });
+      setPasteError('');
+      setPasteOpen(false);
+      setPasteText('');
+      if (typeof p.onToast === 'function') {
+        const tail = parsed.unlocated ? ' · ' + NW.t('{0} 条没定位到原文', parsed.unlocated) : '';
+        p.onToast(NW.t('已导入 {0} 条建议', additions.length) + tail, 'ok');
+      }
+    }, [items, pasteText, chapterId, p.onToast]);
+
+    /** R85: the format block doubles as the prompt to give the other model. */
+    const copyPasteTemplate = useCallback(() => {
+      const value = NW.advicePaste ? NW.advicePaste.TEMPLATE : '';
+      if (!value) return;
+      copyToClipboard(value).then((ok) => {
+        if (typeof p.onToast === 'function') {
+          p.onToast(ok ? NW.t('格式说明已经复制') : NW.t('复制失败，请手动选中'), ok ? 'ok' : 'warn');
+        }
+      });
+    }, [p.onToast]);
 
     /**
      * R75: a chip press only changes the selection — it must never start a read.
@@ -22470,6 +22880,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         { className: 'nw-advice-notebar' },
         h('span', { className: 'nw-advice-notehint' }, NW.t('Enter 按这个要求重来')),
         h('span', { style: { flex: '1 1 auto' } }),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'nw-advice-paste-toggle',
+            'aria-expanded': pasteOpen ? 'true' : 'false',
+            onClick: () => {
+              setPasteOpen((open) => !open);
+              setPasteError('');
+            },
+          },
+          pasteOpen ? NW.t('收起粘贴') : NW.t('粘贴其他 AI 的建议'),
+        ),
         note
           ? NW.ui.btn({
               kind: 'ghost',
@@ -22479,6 +22902,72 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           : null,
       ),
     );
+
+    /**
+     * R85: a paste box that produces the same cards as a model read.
+     *
+     * The format block is written as a prompt, not as documentation: the
+     * writer copies it to the other model, gets suggestions back, and pastes
+     * the answer here. 「原文」 must be exact or the card cannot locate the
+     * span — that is stated both in the template and in the hint above it.
+     */
+    const pastePanel = pasteOpen
+      ? h(
+          'div',
+          { className: 'nw-advice-paste' },
+          h(
+            'div',
+            { className: 'nw-advice-paste-help' },
+            NW.t('把另一个 AI 写好的建议贴进来，格式照着下面。原文要和这一章一字不差，卡片才能定位和高亮。'),
+          ),
+          h('pre', { className: 'nw-advice-paste-fmt' }, NW.advicePaste ? NW.advicePaste.TEMPLATE : ''),
+          h(
+            'div',
+            { className: 'nw-advice-paste-tools' },
+            NW.ui.btn({ kind: 'ghost', onClick: copyPasteTemplate, children: NW.t('复制格式说明') }),
+            h('span', { className: 'nw-advice-notehint' }, NW.t('也可以直接贴 JSON 数组')),
+          ),
+          h('textarea', {
+            className: 'nw-advice-paste-input',
+            value: pasteText,
+            rows: 6,
+            spellCheck: false,
+            placeholder: NW.t('原文：……\n问题：……\n建议：……'),
+            'aria-label': NW.t('粘贴其他 AI 的建议'),
+            onChange: (ev) => {
+              setPasteText(ev.target.value);
+              if (pasteError) setPasteError('');
+            },
+            onKeyDown: (ev) => {
+              if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) {
+                ev.preventDefault();
+                importPaste();
+              }
+            },
+          }),
+          pasteError ? h('div', { className: 'nw-advice-paste-error', role: 'alert' }, pasteError) : null,
+          h(
+            'div',
+            { className: 'nw-advice-paste-actions' },
+            NW.ui.btn({
+              kind: 'primary',
+              disabled: !String(pasteText).trim(),
+              onClick: importPaste,
+              children: NW.t('导入到建议栏'),
+            }),
+            NW.ui.btn({
+              kind: 'ghost',
+              onClick: () => {
+                setPasteOpen(false);
+                setPasteText('');
+                setPasteError('');
+              },
+              children: NW.t('取消'),
+            }),
+            h('span', { className: 'nw-advice-notehint' }, NW.t('Ctrl+Enter 导入')),
+          ),
+        )
+      : null;
 
     let body;
     if (busy) {
@@ -22613,6 +23102,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       head,
       focusRow,
       noteBox,
+      pastePanel,
       // R73: 已接收 sits under whatever the column is currently showing — the
       // new read, the busy state or the empty state. It is the same store the
       // selection window reads, so a decision made in one place is in both.

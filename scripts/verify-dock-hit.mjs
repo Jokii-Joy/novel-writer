@@ -428,30 +428,36 @@ if (appFiles.length) {
   problems.push(...local);
 }
 
-// ---- 9. R83: the dock follows the page, not the host's re-render ----------
-// Two reports, two invariants:
-//   * clicking anywhere else in the plugin must not collapse the menu. The
-//     state lives in component state, so a host re-render / slot remount used
-//     to re-initialise it to false. It now also lives at module scope, and the
-//     setter keeps both in sync.
-//   * while the 修改建议 column is open, the whole dock must not render — the
-//     column owns the right lane and the FAB sat on top of its cards.
+// ---- 9. R85: outside click closes the dock; advice column still hides it ----
+// The writer wants the opposite of what R83 guessed: an expanded dock should
+// put itself away on the next click that misses it. That is now explicit
+// (pointerdown on document, capture phase, root-node hit test) instead of
+// depending on a host re-render to reset the state by accident. The other
+// invariant is unchanged: while the 修改建议 column is open, the whole dock
+// must not render — the column owns the right lane and the FAB sat on its cards.
 {
   const local = [];
   const src = appFiles.length ? readFileSync(join(srcDir, appFiles[0]), 'utf8') : '';
-  const appAt = src.indexOf('NW.App = function App()');
-  const memoryAt = src.search(/let\s+dockOpenMemory\s*=\s*false\s*;/);
-  if (memoryAt < 0 || appAt < 0 || memoryAt > appAt) {
-    local.push(
-      'dockOpenMemory — missing (or declared inside App); a host remount would re-initialise ' +
-      'dockOpen to false and the menu would "collapse when you click elsewhere"',
-    );
+  if (src.includes('dockOpenMemory')) {
+    local.push('dockOpen — dockOpenMemory is back; it keeps the menu open on outside clicks');
   }
-  if (!/useState\s*\(\s*\(\s*\)\s*=>\s*dockOpenMemory\s*\)/.test(src)) {
-    local.push('dockOpen — state is not seeded from dockOpenMemory; an expanded menu still collapses on remount');
+  if (!/\[\s*dockOpen\s*,\s*setDockOpen\s*\]\s*=\s*useState\s*\(\s*false\s*\)/.test(src)) {
+    local.push('dockOpen — state is not plain component state; the menu must start collapsed and close on outside click');
   }
-  if (!/dockOpenMemory\s*=\s*!!value/.test(src)) {
-    local.push('dockOpen — setter does not write dockOpenMemory; the module-scope copy goes stale');
+  if (!/const\s+dockRef\s*=\s*useRef\s*\(\s*null\s*\)/.test(src)) {
+    local.push('dockRef — missing; an outside-click handler has no way to tell a menu row from the rest of the shell');
+  }
+  if (!/document\.addEventListener\s*\(\s*['"]pointerdown['"]\s*,\s*onPointerDown\s*,\s*true\s*\)/.test(src)) {
+    local.push('outside click — no capture-phase pointerdown listener; clicking the plugin elsewhere leaves the menu open');
+  }
+  if (!/node\.contains\s*\(\s*event\.target\s*\)/.test(src)) {
+    local.push('outside click — handler does not hit-test the dock root; clicks on the five rows would also close it');
+  }
+  if (!/event\.key\s*===\s*['"]Escape['"][\s\S]{0,80}setDockOpen\s*\(\s*false\s*\)/.test(src)) {
+    local.push('outside click — Esc does not close the dock');
+  }
+  if (!/dockRef\s*:\s*dockRef/.test(src) || !/ref\s*:\s*p\.dockRef/.test(src)) {
+    local.push('dockRef — not threaded from App into the Dock root node');
   }
   if (!/adviceOpen\s*&&\s*!immersive\s*\?\s*null\s*:\s*dock/.test(src)) {
     local.push(
@@ -464,7 +470,7 @@ if (appFiles.length) {
   }
   problems.push(...local);
   if (!local.length) {
-    notes.push('R83 — dockOpen survives a remount, and the dock is not rendered while the advice column is open');
+    notes.push('R85 — outside click / Esc collapses the dock, and the dock is not rendered while the advice column is open');
   }
 }
 

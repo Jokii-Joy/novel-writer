@@ -6,8 +6,26 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.6 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.7 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第八十五轮（R85）编辑页悬浮坞按反馈改为「点外面就收起」，并新增**粘贴其他 AI 建议**。
+  ① **点其它地方收起**：R83 曾把展开态存进模块作用域，想避免宿主重挂载导致自动收起；实际反馈
+  要的是相反行为——展开菜单后点插件别处应当收起。现在撤销 `dockOpenMemory`，改由
+  `dockRef` + 捕获阶段的 `pointerdown` 判断点击是否落在坞内：点在坞外立即收起；`Escape`
+  同样收起；点菜单行、切章、打开修改建议栏仍走原来的显式关闭。R83 的「保持展开」因此作废。
+  ② **粘贴其他 AI 的建议**：修改建议栏的「补充要求」下方新增入口，展开后给出可复制的提示词
+  格式（原文 / 问题 / 理由 / 建议 / 改后 / 类型 / 严重度，也接受 JSON 数组），并提供粘贴框。
+  解析在 `client/src/91-advice-paste.js` 里完成，产出与宿主 `revise` 完全相同的字段
+  （`quote/issue/why/advice/example/kind/severity` + `start/end`），所以导入后就是同一种卡片：
+  同样的高亮、接受 / 拒绝、复制、替换与撤销。原文按当前章节 `indexOf` 定位，找不到时保留
+  卡片并标「定位不到」，不编造位置；导入是追加而不是覆盖，id 带 `p` 前缀避免与模型的 `r1…r8` 相撞。
+  ③ **输入与反馈**：Ctrl+Enter 导入、空输入 / 认不出格式 / 全部重复都有就近的错误提示；
+  导入成功后 toast 报条数与未定位条数，并写入「上次的结果」缓存，关栏再开不会丢。
+  ④ 验收：新增 `scripts/verify-advice-paste.mjs` 20 项（中文标签、编号、粗体、同一行多字段、
+  JSON 数组 / `suggestions` 对象、英文标签、未定位、重复、只有问题 / 改后、模板与十种类型），
+  接入 `build-client`；`verify-dock-hit` 第 9 节改为 R85 断言（pointerdown 捕获、`contains`、
+  Escape、`dockRef`、建议栏让位）。`build-client` 23 parts、`verify-host` 283、`verify-advice-ui` 54、
+  `verify-restore` 16、`verify-crypto-recovery` 18、`verify-highlight-style` 全过。版本 **1.6.7**。
 - 第八十四轮（R84）标注与建议高亮：**只上色，不划线；颜色跟着纸走**。
   ① **批注不再是一条下划线**：写作区和「读一遍」里的批注都去掉了 `inset` 底边。
   以前批注是「淡底色 + 一条底线」，和真正的下划线标注看起来是同一个东西；现在批注只留色块。

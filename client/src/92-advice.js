@@ -643,6 +643,10 @@
     focusRef.current = focus;
     const [note, setNote] = useState('');
     const [items, setItems] = useState(null);
+    /** R85: the paste box for advice written by another AI. */
+    const [pasteOpen, setPasteOpen] = useState(false);
+    const [pasteText, setPasteText] = useState('');
+    const [pasteError, setPasteError] = useState('');
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
     const [activeId, setActiveId] = useState('');
@@ -655,6 +659,9 @@
     const [fromCache, setFromCache] = useState(false);
     /** item.id → the stored row id, so 撤销 can remove exactly what it created. */
     const madeRef = useRef({});
+    /** R85: imported cards survive a re-read; the model replaces only its own. */
+    const itemsRef = useRef([]);
+    itemsRef.current = Array.isArray(items) ? items : [];
     const [savingId, setSavingId] = useState('');
     const runRef = useRef(0);
     const noteRef = useRef('');
@@ -737,13 +744,17 @@
           }
           if (used) setError('');
           const finalItems = Array.isArray(data && data.suggestions) ? data.suggestions : [];
-          setItems(finalItems);
+          /* R85: a re-read replaces the model's cards, not the writer's paste.
+             Imported ids start with `p`, and that prefix is the whole rule. */
+          const imported = itemsRef.current.filter((item) => String((item && item.id) || '').startsWith('p'));
+          const merged = imported.concat(finalItems);
+          setItems(merged);
           setModel(String((data && data.model) || ''));
           // R76: remember this read so closing and reopening the column does not
           // silently bill the same chapter twice.
-          if (finalItems.length) {
+          if (merged.length) {
             cachePut('dock|' + chapterId, {
-              items: finalItems,
+              items: merged,
               model: String((data && data.model) || ''),
               fp: textFingerprint(text),
               at: Date.now(),
@@ -751,7 +762,8 @@
           }
         } catch (err) {
           if (runRef.current !== token) return;
-          setItems(null);
+          const imported = itemsRef.current.filter((item) => String((item && item.id) || '').startsWith('p'));
+          setItems(imported.length ? imported : null);
           setError(errText(err, '获取修改建议失败'));
         } finally {
           if (runRef.current === token) setBusy(false);
@@ -763,6 +775,75 @@
       // R76: `chapterId` joined the list because the result is cached per chapter.
       [chapterId, p.editorApi, p.settings],
     );
+
+    /**
+     * R85: take a paste from another AI and put it in the same list as the
+     * model's own cards. The parser returns the host's suggestion shape, so
+     * from here on nothing in the panel needs to know where a card came from:
+     * 高亮、接受、拒绝、复制、替换、撤销 all read the same fields.
+     *
+     * Imported cards are appended rather than replacing the current read —
+     * a writer comparing two models wants both in front of them. Ids get a
+     * timestamp prefix so they cannot collide with the model's `r1…r8`, and a
+     * card whose quote is no longer in the chapter is kept with `start:-1`
+     * (the panel already explains that state).
+     */
+    const importPaste = useCallback(() => {
+      const parser = NW.advicePaste;
+      if (!parser) {
+        setPasteError('粘贴导入没有加载');
+        return;
+      }
+      const api = p.editorApi && p.editorApi.current;
+      const text = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+      const parsed = parser.parse(pasteText, text);
+      if (!parsed.ok) {
+        setPasteError(parsed.error);
+        return;
+      }
+      const base = Array.isArray(items) ? items : [];
+      const seen = new Set(base.map((item) => String(item.quote || '') + '|' + String(item.issue || '')));
+      const stamp = Date.now().toString(36);
+      const additions = [];
+      parsed.items.forEach((item, index) => {
+        const key = item.quote + '|' + item.issue;
+        if (seen.has(key)) return;
+        seen.add(key);
+        additions.push(Object.assign({}, item, { id: 'p' + stamp + index }));
+      });
+      if (!additions.length) {
+        setPasteError('这些建议已经在列表里了');
+        return;
+      }
+      const merged = base.concat(additions);
+      setItems(merged);
+      setModel('');
+      setFromCache(false);
+      cachePut('dock|' + chapterId, {
+        items: merged,
+        model: '',
+        fp: textFingerprint(text),
+        at: Date.now(),
+      });
+      setPasteError('');
+      setPasteOpen(false);
+      setPasteText('');
+      if (typeof p.onToast === 'function') {
+        const tail = parsed.unlocated ? ' · ' + NW.t('{0} 条没定位到原文', parsed.unlocated) : '';
+        p.onToast(NW.t('已导入 {0} 条建议', additions.length) + tail, 'ok');
+      }
+    }, [items, pasteText, chapterId, p.onToast]);
+
+    /** R85: the format block doubles as the prompt to give the other model. */
+    const copyPasteTemplate = useCallback(() => {
+      const value = NW.advicePaste ? NW.advicePaste.TEMPLATE : '';
+      if (!value) return;
+      copyToClipboard(value).then((ok) => {
+        if (typeof p.onToast === 'function') {
+          p.onToast(ok ? NW.t('格式说明已经复制') : NW.t('复制失败，请手动选中'), ok ? 'ok' : 'warn');
+        }
+      });
+    }, [p.onToast]);
 
     /**
      * R75: a chip press only changes the selection — it must never start a read.
@@ -1159,6 +1240,19 @@
         { className: 'nw-advice-notebar' },
         h('span', { className: 'nw-advice-notehint' }, NW.t('Enter 按这个要求重来')),
         h('span', { style: { flex: '1 1 auto' } }),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'nw-advice-paste-toggle',
+            'aria-expanded': pasteOpen ? 'true' : 'false',
+            onClick: () => {
+              setPasteOpen((open) => !open);
+              setPasteError('');
+            },
+          },
+          pasteOpen ? NW.t('收起粘贴') : NW.t('粘贴其他 AI 的建议'),
+        ),
         note
           ? NW.ui.btn({
               kind: 'ghost',
@@ -1168,6 +1262,72 @@
           : null,
       ),
     );
+
+    /**
+     * R85: a paste box that produces the same cards as a model read.
+     *
+     * The format block is written as a prompt, not as documentation: the
+     * writer copies it to the other model, gets suggestions back, and pastes
+     * the answer here. 「原文」 must be exact or the card cannot locate the
+     * span — that is stated both in the template and in the hint above it.
+     */
+    const pastePanel = pasteOpen
+      ? h(
+          'div',
+          { className: 'nw-advice-paste' },
+          h(
+            'div',
+            { className: 'nw-advice-paste-help' },
+            NW.t('把另一个 AI 写好的建议贴进来，格式照着下面。原文要和这一章一字不差，卡片才能定位和高亮。'),
+          ),
+          h('pre', { className: 'nw-advice-paste-fmt' }, NW.advicePaste ? NW.advicePaste.TEMPLATE : ''),
+          h(
+            'div',
+            { className: 'nw-advice-paste-tools' },
+            NW.ui.btn({ kind: 'ghost', onClick: copyPasteTemplate, children: NW.t('复制格式说明') }),
+            h('span', { className: 'nw-advice-notehint' }, NW.t('也可以直接贴 JSON 数组')),
+          ),
+          h('textarea', {
+            className: 'nw-advice-paste-input',
+            value: pasteText,
+            rows: 6,
+            spellCheck: false,
+            placeholder: NW.t('原文：……\n问题：……\n建议：……'),
+            'aria-label': NW.t('粘贴其他 AI 的建议'),
+            onChange: (ev) => {
+              setPasteText(ev.target.value);
+              if (pasteError) setPasteError('');
+            },
+            onKeyDown: (ev) => {
+              if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) {
+                ev.preventDefault();
+                importPaste();
+              }
+            },
+          }),
+          pasteError ? h('div', { className: 'nw-advice-paste-error', role: 'alert' }, pasteError) : null,
+          h(
+            'div',
+            { className: 'nw-advice-paste-actions' },
+            NW.ui.btn({
+              kind: 'primary',
+              disabled: !String(pasteText).trim(),
+              onClick: importPaste,
+              children: NW.t('导入到建议栏'),
+            }),
+            NW.ui.btn({
+              kind: 'ghost',
+              onClick: () => {
+                setPasteOpen(false);
+                setPasteText('');
+                setPasteError('');
+              },
+              children: NW.t('取消'),
+            }),
+            h('span', { className: 'nw-advice-notehint' }, NW.t('Ctrl+Enter 导入')),
+          ),
+        )
+      : null;
 
     let body;
     if (busy) {
@@ -1302,6 +1462,7 @@
       head,
       focusRow,
       noteBox,
+      pastePanel,
       // R73: 已接收 sits under whatever the column is currently showing — the
       // new read, the busy state or the empty state. It is the same store the
       // selection window reads, so a decision made in one place is in both.
