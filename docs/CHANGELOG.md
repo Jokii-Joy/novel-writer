@@ -6,8 +6,24 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.15 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.16 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第九十四轮（R94）锁屏终于跟上主题，流式建议真的流起来。
+  ① **锁屏主题**：R93 虽然给 locked 根节点补了 `data-theme`，但 `boot()` 在锁定分支里
+  `setLocked(true); setReady(true); return;`，**跳过了 `loadAll()`**，`settings` 仍是
+  `DEFAULT_SETTINGS`（`theme: 'claude'`），于是写上去的永远是默认主题。现在锁定分支只读设置这一行
+  （正文仍是密文，不需要解密）：`NW.db.init()` → `NW.db.getSettings()` → 与
+  `NW.db.DEFAULT_SETTINGS` 合并 → `migrateTheme()` 迁移旧 id → `setSettings()`，失败也不阻塞锁屏。
+  `themeSettings` 随后就能解析出作者真正选的主题（含自动深浅色）。
+  ② **流式输出**：浏览器侧五条 AI 路由（`proofread` / `revise` / `revise.selection` /
+  `revise.selection.stream` / `revise.stream`）从未给模型传 `sessionId`。默认模型走 OpenCode Go，
+  它要求 `x-opencode-session` 头，缺了直接 400 `MissingSessionID`；流式请求先失败，面板于是回退到
+  unary 的 `reviseSafe`，卡片要么一次全出、要么换模型失败，看起来就是「没有流式输出」。
+  现在五条路由统一传 `sessionId: payload.sessionId || 'nw-web'`（`WEB_AI_SESSION`，与手机端的
+  `nw-lan-<device>` 同一思路：只作路由元数据，稳定值还能保住 prompt cache）。
+  ③ **验收**：`verify-host` 299 → **300**（`[3f]` 断言流式请求带合成 session id）；
+  `build-client` 23 parts，`verify-advice-ui` 84、`verify-docs` 44 及其余闸门全过。版本 **1.6.16**。
+  注意：客户端刷新页面即加载新 bundle；宿主路由的 `sessionId` 要重启 DSH 才会生效。
 - 第九十三轮（R93）锁屏主题、审读空回复与建议栏的三个断点。
   ① **锁屏跟主题走**：locked 早返回的根节点补上 `data-theme`（用已解析的
   `themeSettings` / `effectiveTheme`），与正常界面共用同一套主题 token；同时删掉

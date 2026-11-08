@@ -589,6 +589,12 @@ check(
 );
 const adviceStreamPrompt = messageText(lastRequest && lastRequest.messages && lastRequest.messages[0]);
 check('流式提示词带上了关注点', adviceStreamPrompt.includes('本次只看画面'));
+// R94: OpenCode-backed models reject a request without x-opencode-session.
+check(
+  '流式请求带合成 session id',
+  lastRequest && lastRequest.sessionId === 'nw-web',
+  String(lastRequest && lastRequest.sessionId),
+);
 const adviceStreamEmpty = await call('revise.stream', { text: '   ' });
 check('空正文返回错误信封', adviceStreamEmpty.json && adviceStreamEmpty.json.ok === false);
 

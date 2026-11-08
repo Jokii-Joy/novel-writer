@@ -1553,6 +1553,30 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const isLocked = hasPw && !(NW.crypto.isUnlocked && NW.crypto.isUnlocked());
         if (isLocked) {
           if (NW.crypto.lock) NW.crypto.lock();
+          // R94: the lock screen must wear the studio's theme, not the default
+          // palette. `loadAll()` is skipped while locked because chapter bodies
+          // are ciphertext, but the settings row is plaintext — read just that
+          // so `themeSettings` below resolves to the writer's real choice.
+          try {
+            await NW.db.init();
+            let stored = await NW.db.getSettings();
+            // R80's host-copy adoption lives in loadAll(), which is skipped
+            // while locked. Without it a wiped profile would still paint the
+            // default theme on the lock screen, so mirror that one step here.
+            const hasLocal = typeof NW.db.hasSettings === 'function' ? await NW.db.hasSettings() : true;
+            if (!hasLocal && NW.io && NW.io.client && typeof NW.io.client.state === 'function') {
+              const host = await NW.io.client.state();
+              if (host && host.settings && typeof host.settings === 'object') {
+                stored = Object.assign({}, host.settings);
+                NW.db.saveSettings(stored).catch(() => {});
+              }
+            }
+            const lockSettings = Object.assign({}, NW.db.DEFAULT_SETTINGS || {}, stored || {});
+            migrateTheme(lockSettings);
+            setSettings(lockSettings);
+          } catch (err) {
+            /* a missing settings row must never block the lock screen */
+          }
           setLocked(true);
           setReady(true);
           return;
