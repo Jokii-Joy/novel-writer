@@ -1325,8 +1325,24 @@
           h(
             'div',
             { className: 'nw-advice-paste-head' },
+            h('span', { className: 'nw-advice-paste-icon', 'aria-hidden': 'true' }, NW.icon('sparkle', { size: 14 })),
             h('strong', { className: 'nw-advice-paste-title' }, NW.t('粘贴其他 AI 的建议')),
             h('span', { className: 'nw-advice-paste-tag' }, NW.t('与模型建议同一套卡片')),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-advice-paste-close',
+                'aria-label': NW.t('关闭粘贴面板'),
+                title: NW.t('关闭'),
+                onClick: () => {
+                  setPasteOpen(false);
+                  setPasteText('');
+                  setPasteError('');
+                },
+              },
+              '×',
+            ),
           ),
           h(
             'div',
@@ -1373,6 +1389,18 @@
               }
             },
           }),
+          h(
+            'div',
+            { className: 'nw-advice-paste-meta' },
+            h(
+              'span',
+              { className: 'nw-advice-paste-count' },
+              pasteText
+                ? NW.t('已输入 {0} 字', String(pasteText).length)
+                : NW.t('支持标签格式或 JSON 数组'),
+            ),
+            h('span', { className: 'nw-advice-paste-actions-hint' }, NW.t('Ctrl+Enter 导入')),
+          ),
           pasteError ? h('div', { className: 'nw-advice-paste-error', role: 'alert' }, pasteError) : null,
           h(
             'div',
@@ -1392,7 +1420,6 @@
               },
               children: NW.t('取消'),
             }),
-            h('span', { className: 'nw-advice-paste-actions-hint' }, NW.t('Ctrl+Enter 导入')),
           ),
         )
       : null;

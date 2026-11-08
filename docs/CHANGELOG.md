@@ -6,8 +6,23 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.10 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.11 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第八十九轮（R89）粘贴建议的解析器终于挂在了正确的命名空间上。
+  ① **根因**：`91-advice-paste.js` 开头写了 `const NW = (window.NW = window.NW || {})`，
+  在 bundle 的 factory 作用域里遮蔽了 `00-boot.js` 声明的共享 `NW`，`advicePaste` 被挂到
+  另一个新建对象上；`92-advice.js` 读的仍是外层 `NW`，所以点复制只弹「复制组件没有加载」，
+  格式说明是空的，粘贴导入也一并失效。先前测试单独执行 91 并自备 `window.NW`，正好把这个
+  组合问题掩盖了。
+  ② **修法**：91 改用 `const NS = typeof NW !== 'undefined' && NW ? NW : (window.NW = window.NW || {})`，
+  文件末尾写 `NS.advicePaste`：bundle 内写回共享对象，只有脱离 bundle 单测时才回退 `window.NW`。
+  ③ **回归**：`verify-advice-paste` 新增组合场景 3 项——写入 00-boot 作用域的 `NW`、不再另建
+  `window.NW`、静态禁止 `const NW =` 遮蔽；该项从 29 增至 32 项。
+  ④ **界面美化**：粘贴卡标题行加图标与关闭按钮，格式说明与复制入口分层，输入框下新增字数与
+  「Ctrl+Enter 导入」一行，错误提示改成浅红底左描边，底部按钮与间距重排；入口按钮改为虚线胶囊。
+  ⑤ 验收：`build-client` 23 parts、`verify-host` 283、`verify-advice-ui` 56、`verify-dock-hit`、
+  `verify-dialog-kinds` 14、`verify-restore` 16、`verify-crypto-recovery` 18、
+  `verify-highlight-style` 全过。版本 **1.6.11**。
 - 第八十八轮（R88）深色主题改用宿主自己的深色盘。
   ① **取色不再自造**：`night` 的 shell 调色板逐项换成宿主
   `body[data-ds-dark-theme]` 的值——底 `#151517`（neutral-bluish-950）、层 1/2 `#232324` /

@@ -186,6 +186,30 @@ console.log('verify-advice-paste: 从别的 AI 粘贴进来的建议');
   ok('默认复制不截断长章', big.includes(long) && big.length > long.length, `len=${big.length}`);
 }
 
+// ------------------------------------------------- R88: real bundle scope --
+// The browser bundle is one factory scope: 00-boot declares `NW`, and 92-advice
+// reads that object. A `const NW = …` in this file shadowed it and put
+// `advicePaste` on a fresh `window.NW`, so copy said “复制组件没有加载” while
+// every standalone test still passed. Check the composition, not just the IIFE.
+{
+  const factoryNW = {};
+  const secondWindow = {};
+  let threw = null;
+  try {
+    // eslint-disable-next-line no-new-func
+    new Function('NW', 'window', code)(factoryNW, secondWindow);
+  } catch (error) {
+    threw = error;
+  }
+  ok(
+    '组合场景：写入 00-boot 作用域的 NW',
+    !threw && !!(factoryNW.advicePaste && typeof factoryNW.advicePaste.parse === 'function'),
+    threw && threw.message,
+  );
+  ok('组合场景：不再另建 window.NW', secondWindow.NW === undefined);
+  ok('静态：91 不用 const NW 遮蔽出厂命名空间', !/^\s*const NW\s*=/m.test(code));
+}
+
 console.log('');
 if (fail) {
   console.error(`结果: ${pass} 通过, ${fail} 失败`);

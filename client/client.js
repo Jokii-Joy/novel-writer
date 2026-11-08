@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.10',
+      version: '1.6.11',
     };
     NW.ReactDOM = null;
 
@@ -16740,66 +16740,91 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 /* R85：粘贴其他 AI 建议的入口。做成文字按钮而不是第二个输入框，平时收起来，
    不跟「补充要求」抢视线。 */
 .nw-advice-paste-toggle{
-  border:0;background:none;padding:0;cursor:pointer;
+  border:1px dashed color-mix(in srgb,var(--nw-brand) 32%,var(--nw-line));
+  background:none;padding:2px 9px;border-radius:999px;cursor:pointer;
   color:var(--nw-brand);font:inherit;font-size:var(--nw-fs-tiny);
-  text-decoration:underline;text-underline-offset:2px;
 }
-.nw-advice-paste-toggle:hover{color:var(--nw-brand-strong,var(--nw-brand));}
+.nw-advice-paste-toggle:hover{
+  color:var(--nw-brand-strong,var(--nw-brand));
+  background:color-mix(in srgb,var(--nw-brand) 7%,transparent);
+}
 .nw-advice-paste-toggle:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;border-radius:2px;}
-/* R85/R87：粘贴面板是一张独立的导入卡：标题 + 格式说明 + 一个复制入口 +
+/* R85/R87/R88：粘贴面板是一张独立的导入卡：标题 + 格式说明 + 一个复制入口 +
    输入框。等宽格式块限高，面板整体限高，避免把下面的建议卡片挤没。 */
 .nw-advice-paste{
-  flex:0 0 auto;display:flex;flex-direction:column;gap:10px;
-  margin:2px 0 8px;padding:12px;
-  border:1px solid var(--nw-line);border-radius:10px;
-  background:var(--nw-sunken);
+  flex:0 0 auto;display:flex;flex-direction:column;gap:9px;
+  margin:2px 0 8px;padding:13px 13px 11px;
+  border:1px solid var(--nw-line);border-radius:12px;
+  background:var(--nw-bg,var(--nw-sunken));
+  box-shadow:0 10px 30px -24px rgba(0,0,0,.55);
   max-height:52vh;overflow:auto;
 }
-.nw-advice-paste-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;}
-.nw-advice-paste-title{font-size:12px;font-weight:600;color:var(--nw-fg);}
-.nw-advice-paste-tag{
-  font-size:10px;line-height:1.5;color:var(--nw-fg-soft);
-  border:1px solid var(--nw-line);border-radius:999px;padding:1px 7px;
+.nw-advice-paste-head{
+  display:flex;align-items:center;gap:7px;flex-wrap:wrap;
+  padding-bottom:9px;border-bottom:1px solid var(--nw-line);
 }
+.nw-advice-paste-icon{display:inline-flex;color:var(--nw-brand);}
+.nw-advice-paste-title{font-size:12.5px;font-weight:650;letter-spacing:.01em;color:var(--nw-fg);}
+.nw-advice-paste-tag{
+  font-size:9.5px;line-height:1.5;color:var(--nw-brand);
+  border:1px solid color-mix(in srgb,var(--nw-brand) 28%,var(--nw-line));
+  background:color-mix(in srgb,var(--nw-brand) 7%,transparent);
+  border-radius:999px;padding:1px 7px;
+}
+.nw-advice-paste-close{
+  margin-left:auto;width:22px;height:22px;border:0;border-radius:50%;
+  background:none;color:var(--nw-fg-soft);font-size:16px;line-height:1;
+  cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
+}
+.nw-advice-paste-close:hover{background:var(--nw-hover,var(--nw-sunken));color:var(--nw-fg);}
+.nw-advice-paste-close:focus-visible{outline:2px solid var(--nw-brand);outline-offset:1px;}
 .nw-advice-paste-help{font-size:var(--nw-fs-tiny);line-height:1.7;color:var(--nw-fg-soft);}
 .nw-advice-paste-fmtbox{
-  display:flex;flex-direction:column;gap:6px;
-  padding:8px 10px;border:1px solid var(--nw-line);border-radius:8px;
-  background:var(--nw-bg,transparent);
+  display:flex;flex-direction:column;gap:7px;
+  padding:9px 11px;border:1px solid var(--nw-line);border-radius:9px;
+  background:var(--nw-sunken);
 }
 .nw-advice-paste-fmtlabel{
   display:flex;align-items:center;justify-content:space-between;gap:8px;
-  font-size:10.5px;color:var(--nw-fg-soft);
+  font-size:10px;letter-spacing:.04em;color:var(--nw-fg-soft);
 }
-.nw-advice-paste-fmtnote{opacity:.8;}
+.nw-advice-paste-fmtnote{letter-spacing:0;opacity:.75;}
 .nw-advice-paste-fmt{
   margin:0;max-height:104px;overflow:auto;
   padding:0;border:0;background:none;color:var(--nw-fg-soft);
-  font-family:var(--nw-ui-font,ui-monospace,monospace);font-size:10.5px;line-height:1.7;
+  font-family:var(--nw-ui-font,ui-monospace,monospace);font-size:10.5px;line-height:1.75;
   white-space:pre-wrap;word-break:break-word;
 }
 .nw-advice-paste-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .nw-advice-paste-copy{flex:0 0 auto;}
-.nw-advice-paste-tip{font-size:10.5px;color:var(--nw-fg-soft);}
+.nw-advice-paste-tip{font-size:10.5px;color:var(--nw-fg-soft);opacity:.85;}
 .nw-advice-paste-input{
   display:block;width:100%;box-sizing:border-box;
-  min-height:104px;max-height:200px;resize:vertical;overflow:auto;
-  padding:9px 11px;border-radius:8px;
+  min-height:118px;max-height:220px;resize:vertical;overflow:auto;
+  padding:10px 12px;border-radius:9px;
   border:1px solid var(--nw-line);
   background:var(--nw-bg,transparent);color:var(--nw-fg);
-  font-family:var(--nw-ui-font,ui-monospace,monospace);font-size:11px;line-height:1.7;
+  font-family:var(--nw-ui-font,ui-monospace,monospace);font-size:11.5px;line-height:1.75;
 }
 .nw-advice-paste-input:focus{
   outline:none;border-color:var(--nw-brand);
-  box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-brand) 18%, transparent);
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--nw-brand) 16%, transparent);
 }
 .nw-advice-paste-input::placeholder{color:var(--nw-fg-soft);opacity:.75;}
+.nw-advice-paste-meta{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  font-size:10.5px;color:var(--nw-fg-soft);margin-top:-2px;
+}
+.nw-advice-paste-count{font-variant-numeric:tabular-nums;opacity:.85;}
 .nw-advice-paste-error{
-  font-size:12px;line-height:1.55;color:var(--dsw-alias-state-error-primary);
+  padding:7px 9px;border-radius:7px;
+  border-left:2px solid var(--dsw-alias-state-error-primary);
+  background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent);
+  font-size:11.5px;line-height:1.55;color:var(--dsw-alias-state-error-primary);
 }
 .nw-advice-paste-actions{
   display:flex;align-items:center;gap:8px;flex-wrap:wrap;
-  padding-top:2px;border-top:1px solid var(--nw-line);
+  padding-top:1px;
 }
 .nw-advice-paste-actions-hint{margin-left:auto;font-size:10.5px;color:var(--nw-fg-soft);}
 /* R73：角度是可选的。这行小字把「不选也行」说在明面上，否则十颗药丸默认全灭
@@ -21422,7 +21447,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    * string the panel can show next to the box, and nothing is imported.
    */
 
-  const NW = (window.NW = window.NW || {});
+  // R89: the bundle is one factory scope: 00-boot declares the shared `NW`, and
+  // every other part writes into that same object. Declaring `const NW = …`
+  // here shadowed it, so `NW.advicePaste` landed on a fresh `window.NW` that
+  // 92-advice never reads — the panel then reported “复制组件没有加载”. Use the
+  // factory namespace when it exists; the standalone test harness runs this
+  // file with no outer `NW`, so it still falls back to `window.NW`.
+  const NS = typeof NW !== 'undefined' && NW ? NW : (window.NW = window.NW || {});
 
   /** The ten kinds the cards know, plus the labels a writer may paste. */
   const KIND_ALIASES = new Map();
@@ -21721,7 +21752,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     return lines.join('\n');
   }
 
-  NW.advicePaste = {
+  NS.advicePaste = {
     parse,
     buildPrompt,
     TEMPLATE,
@@ -23058,8 +23089,24 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           h(
             'div',
             { className: 'nw-advice-paste-head' },
+            h('span', { className: 'nw-advice-paste-icon', 'aria-hidden': 'true' }, NW.icon('sparkle', { size: 14 })),
             h('strong', { className: 'nw-advice-paste-title' }, NW.t('粘贴其他 AI 的建议')),
             h('span', { className: 'nw-advice-paste-tag' }, NW.t('与模型建议同一套卡片')),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-advice-paste-close',
+                'aria-label': NW.t('关闭粘贴面板'),
+                title: NW.t('关闭'),
+                onClick: () => {
+                  setPasteOpen(false);
+                  setPasteText('');
+                  setPasteError('');
+                },
+              },
+              '×',
+            ),
           ),
           h(
             'div',
@@ -23106,6 +23153,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               }
             },
           }),
+          h(
+            'div',
+            { className: 'nw-advice-paste-meta' },
+            h(
+              'span',
+              { className: 'nw-advice-paste-count' },
+              pasteText
+                ? NW.t('已输入 {0} 字', String(pasteText).length)
+                : NW.t('支持标签格式或 JSON 数组'),
+            ),
+            h('span', { className: 'nw-advice-paste-actions-hint' }, NW.t('Ctrl+Enter 导入')),
+          ),
           pasteError ? h('div', { className: 'nw-advice-paste-error', role: 'alert' }, pasteError) : null,
           h(
             'div',
@@ -23125,7 +23184,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               },
               children: NW.t('取消'),
             }),
-            h('span', { className: 'nw-advice-paste-actions-hint' }, NW.t('Ctrl+Enter 导入')),
           ),
         )
       : null;

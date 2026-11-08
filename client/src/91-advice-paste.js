@@ -21,7 +21,13 @@
    * string the panel can show next to the box, and nothing is imported.
    */
 
-  const NW = (window.NW = window.NW || {});
+  // R89: the bundle is one factory scope: 00-boot declares the shared `NW`, and
+  // every other part writes into that same object. Declaring `const NW = …`
+  // here shadowed it, so `NW.advicePaste` landed on a fresh `window.NW` that
+  // 92-advice never reads — the panel then reported “复制组件没有加载”. Use the
+  // factory namespace when it exists; the standalone test harness runs this
+  // file with no outer `NW`, so it still falls back to `window.NW`.
+  const NS = typeof NW !== 'undefined' && NW ? NW : (window.NW = window.NW || {});
 
   /** The ten kinds the cards know, plus the labels a writer may paste. */
   const KIND_ALIASES = new Map();
@@ -320,7 +326,7 @@
     return lines.join('\n');
   }
 
-  NW.advicePaste = {
+  NS.advicePaste = {
     parse,
     buildPrompt,
     TEMPLATE,

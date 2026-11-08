@@ -8,6 +8,6 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.10',
+      version: '1.6.11',
     };
     NW.ReactDOM = null;
