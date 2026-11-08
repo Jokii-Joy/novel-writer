@@ -309,6 +309,21 @@ check(
   blocks.every((b) => longText.startsWith(b.text, b.offset)),
 );
 
+// R90 regression: advice used to inherit the 4,000-character proofreading chunks
+// and await them one by one, so a 5k chapter made two model calls. A chapter that
+// fits the advice limit must now travel as one request, like a web-chat paste.
+{
+  const advicePara = '　　他沿着河岸慢慢走着，水面反着天光，风从背后推着他往前。\n';
+  const adviceShort = advicePara.repeat(180); // ≈ 5.4k chars, above the old 4k boundary
+  const shortPlan = ai.reviseBlocks(adviceShort);
+  check('建议整章：5k 字不再按 4k 切块', adviceShort.length > 4000 && shortPlan.length === 1, `${adviceShort.length} 字 / ${shortPlan.length} 块`);
+  const adviceLong = advicePara.repeat(600); // ≈ 18k chars
+  const longPlan = ai.reviseBlocks(adviceLong);
+  check('建议整章：超长章节按 16k 切块', longPlan.length >= 2 && longPlan.every((b) => b.text.length <= 16000), `${adviceLong.length} 字 / ${longPlan.length} 块`);
+  check('建议整章：切块拼接仍是原文', longPlan.map((b) => b.text).join('') === adviceLong);
+  check('建议整章：空文本没有块', ai.reviseBlocks('   ').length === 0);
+}
+
 // A second fake provider path: multi-block proofreading. The reply depends on
 // which marker paragraph is inside the block, so block-2/block-3 offsets get
 // exercised (a regression here silently corrupts every suggestion past block 1).

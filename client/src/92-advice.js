@@ -270,6 +270,10 @@
     }
   }
 
+  function cacheDel(key) {
+    if (key && ADVICE_CACHE.has(key)) ADVICE_CACHE.delete(key);
+  }
+
   /**
    * Copy text to the clipboard; resolves false when every channel refuses.
    *
@@ -667,6 +671,8 @@
     focusRef.current = focus;
     const [note, setNote] = useState('');
     const [items, setItems] = useState(null);
+    /** R90: the list was emptied by accepting/rejecting, not by a clean read. */
+    const [drained, setDrained] = useState(false);
     /** R85: the paste box for advice written by another AI. */
     const [pasteOpen, setPasteOpen] = useState(false);
     const [pasteText, setPasteText] = useState('');
@@ -735,6 +741,7 @@
         setError('');
         setActiveId('');
         setFromCache(false);
+        setDrained(false);
         try {
           // R34: failover. The advice panel is the surface most likely to sit
           // on an expensive model, so it is also the one most likely to hit a
@@ -841,6 +848,7 @@
       }
       const merged = base.concat(additions);
       setItems(merged);
+      setDrained(false);
       setModel('');
       setFromCache(false);
       cachePut('dock|' + chapterId, {
@@ -913,6 +921,7 @@
       setDecided({});
       setApplied({});
       setFromCache(false);
+      setDrained(false);
       madeRef.current = {};
       runRef.current += 1;
       // R76: reopening the column on an unchanged chapter shows the last read
@@ -989,6 +998,45 @@
       if (api && typeof api.setHighlights === 'function') api.setHighlights([]);
     }, [p.editorApi]);
 
+    /**
+     * R90: a decided card leaves the pending list. Accepting also writes a row,
+     * so the suggestion reappears under 已接收; rejecting keeps nothing. The read
+     * cache is rewritten in the same step — otherwise closing and reopening the
+     * column would restore the card from cache and undo the writer's decision.
+     */
+    const dropItem = useCallback(
+      (item) => {
+        if (!item || item.id == null) return;
+        const id = String(item.id);
+        const base = Array.isArray(itemsRef.current) ? itemsRef.current : [];
+        const remainder = base.filter((entry) => String(entry.id) !== id);
+        setItems(remainder);
+        setDrained(remainder.length === 0);
+        setDecided((prev) => {
+          if (!prev[id]) return prev;
+          const next = Object.assign({}, prev);
+          delete next[id];
+          return next;
+        });
+        if (activeId === id) clearHighlights();
+        const key = 'dock|' + chapterId;
+        if (!remainder.length) {
+          cacheDel(key);
+          return;
+        }
+        const api = p.editorApi && p.editorApi.current;
+        const text =
+          api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+        cachePut(key, {
+          items: remainder,
+          model: model,
+          fp: textFingerprint(text),
+          at: Date.now(),
+        });
+      },
+      [activeId, chapterId, clearHighlights, model, p.editorApi],
+    );
+
     // R73: no 全部 chip and nothing preselected. "No angle" means the read is
     // driven by what the writer typed in the box, which is what they asked for.
     const FOCUS_OPTIONS = [
@@ -1030,6 +1078,8 @@
           });
           if (row && row.id) {
             madeRef.current = Object.assign({}, madeRef.current, { [item.id]: String(row.id) });
+            // R90: the card moves to 已接收 instead of lingering in the list.
+            dropItem(item);
           }
         } catch (err) {
           // The row did not land: the card must not claim it did.
@@ -1042,13 +1092,18 @@
           setSavingId('');
         }
       },
-      [chapterId, p.onAccept],
+      [chapterId, dropItem, p.onAccept],
     );
 
-    const rejectItem = useCallback((item) => {
-      if (!item) return;
-      setDecided((prev) => Object.assign({}, prev, { [item.id]: 'rejected' }));
-    }, []);
+    const rejectItem = useCallback(
+      (item) => {
+        if (!item) return;
+        // R90: a rejected suggestion is discarded on the spot — no history row,
+        // no card left behind waiting for an undo.
+        dropItem(item);
+      },
+      [dropItem],
+    );
 
     const undoItem = useCallback(
       async (item) => {
@@ -1449,7 +1504,7 @@
         h(
           'span',
           { style: { fontSize: '12px', opacity: '.7' } },
-          NW.t('接受会记进「已接收」，拒绝的不保存；点一条会把原文滚到那一段。'),
+          NW.t('接受会移到下面的「已接收」，拒绝的直接丢掉；点一条会把原文滚到那一段。'),
         ),
         NW.ui.btn({ kind: 'primary', onClick: () => run(focus), children: NW.t('开始审读') }),
       );
@@ -1458,8 +1513,19 @@
         'div',
         { className: 'nw-suggest-empty' },
         NW.icon('success', { size: 24 }),
-        h('span', null, NW.t('这一章没有被标出的明显问题。')),
-        h('span', { style: { fontSize: '12px', opacity: '.7' } }, NW.t('换个重点再看看，或写下去。')),
+        h(
+          'span',
+          null,
+          NW.t(drained ? '这些建议都处理完了。' : '这一章没有被标出的明显问题。'),
+        ),
+        h(
+          'span',
+          { style: { fontSize: '12px', opacity: '.7' } },
+          NW.t(drained ? '重新审读可以再找一轮，或者回去接着写。' : '换个重点再看看，或写下去。'),
+        ),
+        drained
+          ? NW.ui.btn({ kind: 'ghost', onClick: () => run(focus), children: NW.t('重新审读') })
+          : null,
       );
     } else {
       body = h(

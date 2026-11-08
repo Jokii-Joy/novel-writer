@@ -500,6 +500,18 @@ clickText('接受');
 await tick(10);
 check('悬浮坞接受写入 source=chapter', dockAccepted.length === 1 && dockAccepted[0].source === 'chapter', dockAccepted[0] && dockAccepted[0].source);
 check('接受的那条带 example 作为改后', dockAccepted[0] && dockAccepted[0].revised === '屋里静得能听见心跳');
+// R90: a decided card leaves the pending list; accepted rows move to 已接收.
+const adviceCards = () => nodes().filter((n) => n.props.className === 'nw-adv');
+check('接受后卡片从待处理列表移走', adviceCards().length === 0, adviceCards().length);
+check('接受的那条出现在已接收', /已接收/.test(textOf(rootTree)) && /1 条/.test(textOf(rootTree)));
+check('建议处理完后可以再找一轮', /这些建议都处理完了/.test(textOf(rootTree)) && /重新审读/.test(textOf(rootTree)));
+clickText('重新审读');
+await tick(10);
+check('重新审读后又回到一张待处理卡片', adviceCards().length === 1);
+clickText('拒绝');
+await tick(10);
+check('拒绝后卡片直接消失', adviceCards().length === 0);
+check('拒绝不写已接收', dockAccepted.length === 1, dockAccepted.length);
 
 // ---- 6. R85 粘贴其他 AI 的建议 ---------------------------------------------
 console.log('[6] 粘贴其他 AI 的建议：同一个卡片，同一个导入路径');

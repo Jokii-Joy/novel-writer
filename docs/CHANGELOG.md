@@ -6,8 +6,23 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.11 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.12 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第九十轮（R90）修改建议整章一次发；处理完的卡片离开列表。
+  ① **慢的根因**：`revise` 一直复用校对用的 4,000 字分块（`BLOCK_CHARS`），并且是
+  **for 循环逐块等待**——章节每多 4,000 字就多一次完整的串行模型往返，
+  12,000 字就是三次调用；网页版一次粘贴整章、一次回答，自然显得快。
+  聊天补全 API 没有「文本文件附件」这种参数，整章内联在提示词里就是等价做法。
+  ② **整章一次请求**：新增 `REVISE_WHOLE_CHAPTER_CHARS = 16000` 与 `reviseBlocks(source)`——
+  16,000 字以内发一块，超过才按 16,000 字切，不再按 4,000 切；`verify-host` 新增 4 项
+  （5,400 字一块、18,000 字两块、切块拼接仍是原文、空文本没有块），283 → **287**。
+  ③ **接受/拒绝离开列表**：接受成功即从待处理列表移走，并出现在下方「已接收」；拒绝直接丢弃，
+  不留历史。同一时刻改写或删除 `ADVICE_CACHE`，关闭再打开建议栏不会把已处理的卡片复活。
+  列表被处理空时显示「这些建议都处理完了」并给一个「重新审读」按钮，不再误报「这一章没有被
+  标出的明显问题」。
+  ④ **验收**：`build-client` 23 parts、`verify-host` 287、`verify-advice-ui` **63**、
+  `verify-dock-hit`、`verify-dialog-kinds` 14、`verify-restore` 16、`verify-crypto-recovery` 18、
+  `verify-highlight-style` 全过。版本 **1.6.12**。
 - 第八十九轮（R89）粘贴建议的解析器终于挂在了正确的命名空间上。
   ① **根因**：`91-advice-paste.js` 开头写了 `const NW = (window.NW = window.NW || {})`，
   在 bundle 的 factory 作用域里遮蔽了 `00-boot.js` 声明的共享 `NW`，`advicePaste` 被挂到
