@@ -694,6 +694,8 @@
     itemsRef.current = Array.isArray(items) ? items : [];
     const [savingId, setSavingId] = useState('');
     const runRef = useRef(0);
+    /** R91: the in-flight stream; closing the column or starting a re-read stops it. */
+    const runAbortRef = useRef(null);
     const noteRef = useRef('');
     noteRef.current = note;
     /** R19 B2: pointer-drag on the left edge, mirrored from NW.Splitter. */
@@ -702,6 +704,22 @@
        whatever the column currently measures, not from a hard-coded 336. */
     const widthRef = useRef(0);
     widthRef.current = Number(p.width) || 0;
+
+    /* R91: unmounting the column must stop the model, not just hide the cards.
+       Aborting the fetch closes the NDJSON response, and the host aborts the model
+       stream on that close. */
+    React.useEffect(
+      () => () => {
+        if (runAbortRef.current) {
+          try {
+            runAbortRef.current.abort();
+          } catch {
+            /* already aborted */
+          }
+        }
+      },
+      [],
+    );
 
     React.useEffect(() => {
       if (!dragging) return undefined;
@@ -737,33 +755,81 @@
         }
         const token = runRef.current + 1;
         runRef.current = token;
+        // R91: a re-read replaces the previous stream. Two model calls writing
+        // into one column would interleave cards from different runs.
+        if (runAbortRef.current) {
+          try {
+            runAbortRef.current.abort();
+          } catch {
+            /* already gone */
+          }
+        }
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        runAbortRef.current = controller;
         setBusy(true);
         setError('');
         setActiveId('');
         setFromCache(false);
         setDrained(false);
+        const imported = itemsRef.current.filter((item) => String((item && item.id) || '').startsWith('p'));
+        // Keep the writer's own pasted cards visible; the model's cards stream in
+        // below them, one closing brace at a time.
+        setItems(imported.length ? imported : null);
+        const streamed = [];
+        const focusIds = (Array.isArray(nextFocus) ? nextFocus : focusRef.current).join(',');
+        // `undefined` rather than '' so a stale caller cannot wipe a note the
+        // writer typed after pressing Enter.
+        const note = nextNote == null ? noteRef.current : nextNote;
+        // R29: this panel has its own model — the writer may want the editorial
+        // read on a stronger model than the proofreader.
+        const provider = (p.settings && p.settings.adviceProvider) || undefined;
+        const model = (p.settings && p.settings.adviceModel) || undefined;
         try {
-          // R34: failover. The advice panel is the surface most likely to sit
-          // on an expensive model, so it is also the one most likely to hit a
-          // provider that is down; walking the list beats a dead-end error.
-          const data = await NW.ai.reviseSafe({
-            text,
-            // R74: several angles travel as one comma-joined string, which is
-            // what the host's prompt builder splits on. `null`/undefined still
-            // means "keep whatever is ticked now" — read through a ref so the
-            // callback does not go stale between two chip presses.
-            focus: (Array.isArray(nextFocus) ? nextFocus : focusRef.current).join(','),
-            // `undefined` rather than '' so a stale caller cannot wipe a note
-            // the writer typed after pressing Enter.
-            note: nextNote == null ? noteRef.current : nextNote,
-            // R29: this panel has its own model — the writer may want the
-            // editorial read on a stronger model than the proofreader.
-            provider: (p.settings && p.settings.adviceProvider) || undefined,
-            model: (p.settings && p.settings.adviceModel) || undefined,
-            onRetry: (candidate) => {
-              if (runRef.current === token) setError(NW.t('换用 {0} 重试…', candidate.label));
-            },
-          });
+          let data = null;
+          let streamFailure = null;
+          if (NW.ai && typeof NW.ai.reviseStream === 'function') {
+            try {
+              data = await NW.ai.reviseStream(
+                { text, focus: focusIds, note, provider, model },
+                {
+                  signal: controller ? controller.signal : undefined,
+                  onEvent: (event) => {
+                    if (runRef.current !== token) return;
+                    if (!event || event.type !== 'suggestion' || !event.item) return;
+                    streamed.push(event.item);
+                    setItems(imported.concat(streamed));
+                  },
+                },
+              );
+            } catch (err) {
+              if (runRef.current !== token) return;
+              // An explicit cancel is not a failure: the writer closed the panel
+              // or started another read, so there is nothing to report.
+              if (err && err.code === 'aborted') return;
+              streamFailure = err;
+            }
+          }
+          if (!data && streamed.length) {
+            // Half a loaf is still bread: keep what already arrived and say that
+            // the rest is missing instead of throwing the cards away.
+            data = { suggestions: streamed, model: '', partial: true };
+            if (streamFailure) setError('流式读到一半断了，下面是收到的部分');
+          }
+          if (!data) {
+            // The unary route is the one with model failover, so a dead default
+            // model still ends with an answer instead of an error card.
+            setItems(imported.length ? imported : null);
+            data = await NW.ai.reviseSafe({
+              text,
+              focus: focusIds,
+              note,
+              provider,
+              model,
+              onRetry: (candidate) => {
+                if (runRef.current === token) setError(NW.t('换用 {0} 重试…', candidate.label));
+              },
+            });
+          }
           if (runRef.current !== token) return;
           const used = (data && data.usedModel) || null;
           if (used && typeof p.onToast === 'function') {
@@ -774,10 +840,11 @@
             }
           }
           if (used) setError('');
-          const finalItems = Array.isArray(data && data.suggestions) ? data.suggestions : [];
+          const finalItems = streamed.length
+            ? streamed
+            : (Array.isArray(data && data.suggestions) ? data.suggestions : []);
           /* R85: a re-read replaces the model's cards, not the writer's paste.
              Imported ids start with `p`, and that prefix is the whole rule. */
-          const imported = itemsRef.current.filter((item) => String((item && item.id) || '').startsWith('p'));
           const merged = imported.concat(finalItems);
           setItems(merged);
           setModel(String((data && data.model) || ''));
@@ -790,14 +857,20 @@
               fp: textFingerprint(text),
               at: Date.now(),
             });
+          } else {
+            // R91: a clean "nothing to flag" answer must clear yesterday's cache,
+            // or reopening the column resurrects cards the model just withdrew.
+            cacheDel('dock|' + chapterId);
           }
         } catch (err) {
           if (runRef.current !== token) return;
-          const imported = itemsRef.current.filter((item) => String((item && item.id) || '').startsWith('p'));
-          setItems(imported.length ? imported : null);
+          if (err && err.code === 'aborted') return;
+          const keep = imported.concat(streamed);
+          setItems(keep.length ? keep : null);
           setError(errText(err, '获取修改建议失败'));
         } finally {
           if (runRef.current === token) setBusy(false);
+          if (runAbortRef.current === controller) runAbortRef.current = null;
         }
       },
       // R74: `focus` is deliberately absent — the payload is read from
@@ -1480,7 +1553,11 @@
       : null;
 
     let body;
-    if (busy) {
+    /* R91: once the first card has streamed in, the list stays on screen and the
+       waiting card becomes a small footer — a full-screen spinner would hide the
+       very cards that make streaming feel fast. */
+    const hasCards = Array.isArray(items) && items.length > 0;
+    if (busy && !hasCards) {
       body = h(
         'div',
         { className: 'nw-suggest-empty' },
@@ -1553,6 +1630,14 @@
               'div',
               { className: 'nw-advice-notehint' },
               NW.t('「原文已改动，定位不到」：那段文字已经不在这一章里了。'),
+            )
+          : null,
+        busy
+          ? h(
+              'div',
+              { className: 'nw-suggest-reading' },
+              NW.ui.spinner(),
+              h('span', null, NW.t('还在往下读…')),
             )
           : null,
       );

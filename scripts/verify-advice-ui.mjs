@@ -513,6 +513,73 @@ await tick(10);
 check('拒绝后卡片直接消失', adviceCards().length === 0);
 check('拒绝不写已接收', dockAccepted.length === 1, dockAccepted.length);
 
+// ---- 5b. R91 流式：卡片边到边画 ---------------------------------------------
+console.log('[5b] Advice 栏：整章建议流式到达');
+let releaseStream = null;
+const streamGate = new Promise((resolve) => {
+  releaseStream = resolve;
+});
+const chapterStreamCalls = [];
+const streamFirst = {
+  id: 's1',
+  quote: '屋子里很安静',
+  issue: '交代',
+  advice: '写一点声音',
+  example: '屋里静得能听见心跳',
+  kind: 'detail',
+  start: selStart,
+  end: selEnd,
+};
+const streamSecond = {
+  id: 's2',
+  quote: '像在等他回来',
+  issue: '比喻顺拐',
+  advice: '换成屋里的细节',
+  kind: 'diction',
+  start: offsetOf('像在等他回来'),
+  end: offsetOf('像在等他回来') + 7,
+};
+NW.ai.reviseStream = async (input, handlers) => {
+  chapterStreamCalls.push(input);
+  handlers.onEvent({ type: 'progress', index: 1, total: 1 });
+  handlers.onEvent({ type: 'suggestion', item: streamFirst });
+  await streamGate;
+  handlers.onEvent({ type: 'suggestion', item: streamSecond });
+  return { suggestions: [streamFirst, streamSecond], model: 'p/stream' };
+};
+mount(
+  createElement(C.Advice, {
+    chapter: { id: 'c2' },
+    editorApi: fakeEditor,
+    settings: {},
+    accepted: [],
+    onAccept: async () => ({ id: 'x' }),
+    onRemoveAccepted: async () => {},
+    onClose: () => {},
+    onToast: () => {},
+  }),
+);
+clickText('开始审读');
+await tick(20);
+check(
+  '请求还没结束，第一张卡片已经画出来',
+  adviceCards().length === 1 && /屋里静得能听见心跳/.test(textOf(rootTree)),
+  `${adviceCards().length} / ${textOf(rootTree).slice(-160)}`,
+);
+check('流式期间底部写着「还在往下读」', /还在往下读/.test(textOf(rootTree)));
+check('流式期间不是整屏等待卡', !/正在读这一章/.test(textOf(rootTree)));
+releaseStream();
+await tick(20);
+check('流结束后两张卡片都在', nodes().filter((n) => n.props.className === 'nw-adv').length === 2, nodes().filter((n) => n.props.className === 'nw-adv').length);
+check('流结束后「还在往下读」消失', !/还在往下读/.test(textOf(rootTree)));
+check('流式请求带上了正文与角度', chapterStreamCalls.length === 1 && chapterStreamCalls[0].text === fakeEditor.current.getContent());
+
+// R91: section [6] presses 「重新审读」 again; keep the stream fast from here on.
+NW.ai.reviseStream = async (input, handlers) => {
+  handlers.onEvent({ type: 'suggestion', item: streamFirst });
+  return { suggestions: [streamFirst], model: 'p/stream' };
+};
+
 // ---- 6. R85 粘贴其他 AI 的建议 ---------------------------------------------
 console.log('[6] 粘贴其他 AI 的建议：同一个卡片，同一个导入路径');
 const pasteToasts = [];

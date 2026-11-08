@@ -93,6 +93,13 @@ const rewriteReply = JSON.stringify([
   { quote: '像在等他回来', revised: '像是他没走时留在那儿的', issue: '比喻顺拐', why: '换成属于屋子的细节', kind: 'diction', severity: 'medium' },
 ]);
 
+// R91: chapter advice answers with advice entries (not rewrites). The stream
+// test's text contains both quotes, so start/end can be checked as slices.
+const adviceReply = JSON.stringify([
+  { quote: '屋子里很安静', issue: '交代代替画面', advice: '写一点声音', why: '让读者听见', example: '屋里静得能听见心跳', kind: 'detail', severity: 'high' },
+  { quote: '像在等他回来', issue: '比喻顺拐', advice: '换成屋里的细节', kind: 'diction', severity: 'medium' },
+]);
+
 /** Last request the stub model saw — lets a test read the prompt we built. */
 let lastRequest = null;
 
@@ -124,7 +131,9 @@ const fakeLlm = {
       ? jsonlReply
       : content.includes('选中开始')
         ? rewriteReply
-        : fakeReply;
+        : content.includes('给出修改建议')
+          ? adviceReply
+          : fakeReply;
     // Two text deltas to prove the collector concatenates them.
     yield { type: 'text-delta', text: '```json\n' };
     yield { type: 'text-delta', text: reply.slice(0, 17) };
@@ -542,6 +551,46 @@ await call('revise.selection', {
 const prevPrompt = messageText(lastRequest && lastRequest.messages && lastRequest.messages[0]);
 check('prompt 里带上了上一版', prevPrompt.includes('屋里静得能听见自己的心跳'));
 check('并且明确不要重复它', prevPrompt.includes('不要重复它'));
+
+// ---------------------------------------------------------------------------
+// 3f. revise.stream (R91 整章建议流式)
+// ---------------------------------------------------------------------------
+console.log('\n[3f] POST revise.stream');
+const adviceStreamText = '他把门推开，屋子里很安静。桌上那本书还摊着，像在等他回来。';
+const adviceStreamRes = await call('revise.stream', { text: adviceStreamText, focus: 'detail' });
+const adviceStreamLines = String(adviceStreamRes.body || '')
+  .split('\n')
+  .map((line) => line.trim())
+  .filter(Boolean)
+  .map((line) => {
+    try {
+      return JSON.parse(line);
+    } catch (err) {
+      return null;
+    }
+  });
+check('200 + NDJSON content-type', adviceStreamRes.statusCode === 200 && String(adviceStreamRes.headers && adviceStreamRes.headers['content-type']).includes('application/x-ndjson'));
+check('每行都是合法 JSON', adviceStreamLines.every((row) => row && typeof row === 'object'), adviceStreamLines.length + ' 行');
+const adviceStreamItems = adviceStreamLines.filter((row) => row && row.type === 'suggestion');
+const adviceStreamDone = adviceStreamLines.filter((row) => row && row.type === 'done');
+check('收到 2 条 suggestion 事件', adviceStreamItems.length === 2, `${adviceStreamItems.length} 条`);
+check('最后有 done 事件并带 model', adviceStreamDone.length === 1 && adviceStreamDone[0].model === 'stub-provider/stub-large', JSON.stringify(adviceStreamDone));
+check(
+  'suggestion 在 done 之前',
+  adviceStreamLines.findIndex((row) => row && row.type === 'done') > adviceStreamLines.map((row) => row && row.type).lastIndexOf('suggestion'),
+);
+check(
+  '流式建议的 start/end 落在正文里',
+  adviceStreamItems.every((row) => row.item && adviceStreamText.slice(row.item.start, row.item.end) === row.item.quote),
+);
+check(
+  '流式建议带 advice/issue 与 id',
+  adviceStreamItems.every((row) => row.item && row.item.advice && row.item.issue && /^r\d+$/.test(row.item.id)),
+);
+const adviceStreamPrompt = messageText(lastRequest && lastRequest.messages && lastRequest.messages[0]);
+check('流式提示词带上了关注点', adviceStreamPrompt.includes('本次只看画面'));
+const adviceStreamEmpty = await call('revise.stream', { text: '   ' });
+check('空正文返回错误信封', adviceStreamEmpty.json && adviceStreamEmpty.json.ok === false);
 
 // ---------------------------------------------------------------------------
 // 4. export.build docx

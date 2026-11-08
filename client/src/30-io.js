@@ -1165,6 +1165,109 @@
     return { suggestions: suggestions, model: model };
   }
 
+  /**
+   * R91: chapter advice as NDJSON — the streaming twin of `revise`.
+   *
+   * The host emits `progress` / `suggestion` / `done` / `error` lines; the panel
+   * gets each card through `onEvent` while the model is still writing. Same
+   * contract as `reviseSelectionStream`: the caller owns the AbortController so a
+   * closed panel stops the host's model call instead of billing for it.
+   */
+  async function reviseStream(input, handlers) {
+    const body = input && typeof input === 'object' ? input : {};
+    const onEvent = handlers && typeof handlers.onEvent === 'function' ? handlers.onEvent : function () {};
+    const payload = {
+      text: String(body.text == null ? '' : body.text),
+      focus: String(body.focus == null || body.focus === '' ? 'all' : body.focus),
+    };
+    if (body.note) payload.note = String(body.note);
+    if (body.provider) payload.provider = String(body.provider);
+    if (body.model) payload.model = String(body.model);
+
+    const url = apiUrl('revise.stream');
+    const signal = handlers && handlers.signal ? handlers.signal : undefined;
+    let response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        credentials: 'same-origin',
+        ...(signal ? { signal } : {}),
+      });
+    } catch (err) {
+      const aborted = signal && signal.aborted;
+      const error = new Error(aborted ? '已取消' : '网络请求失败：' + (err && err.message ? err.message : String(err)));
+      if (aborted) error.code = 'aborted';
+      throw error;
+    }
+    if (!response || !response.ok) throw new Error('接口不可用：HTTP ' + (response ? response.status : '?'));
+
+    const suggestions = [];
+    let model = '';
+    let failure = null;
+    const handleLine = (line) => {
+      const text = String(line || '').trim();
+      if (!text) return;
+      let event = null;
+      try {
+        event = JSON.parse(text);
+      } catch (err) {
+        return;
+      }
+      if (!event || typeof event !== 'object') return;
+      if (event.type === 'suggestion' && event.item) {
+        suggestions.push(event.item);
+        try {
+          onEvent(event);
+        } catch (err) {
+          /* a broken listener must not kill the stream */
+        }
+        return;
+      }
+      if (event.type === 'done') {
+        model = String(event.model || '');
+        return;
+      }
+      if (event.type === 'error') {
+        failure = new Error(String(event.message || '模型调用失败'));
+        return;
+      }
+      try {
+        onEvent(event);
+      } catch (err) {
+        /* ignore */
+      }
+    };
+
+    if (response.body && typeof response.body.getReader === 'function') {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        // eslint-disable-next-line no-await-in-loop
+        const step = await reader.read();
+        if (step.done) break;
+        buffer += decoder.decode(step.value, { stream: true });
+        let nl = buffer.indexOf('\n');
+        while (nl >= 0) {
+          handleLine(buffer.slice(0, nl));
+          buffer = buffer.slice(nl + 1);
+          nl = buffer.indexOf('\n');
+        }
+      }
+      handleLine(buffer);
+    } else {
+      const text = await response.text();
+      String(text).split('\n').forEach(handleLine);
+    }
+
+    // Partial suggestions are still useful; only a stream that produced nothing
+    // counts as a failure, which is what lets the panel fall back cleanly.
+    if (failure && suggestions.length === 0) throw failure;
+    return { suggestions: suggestions, model: model };
+  }
+
   // ---- LAN sync / pairing (R34) ---------------------------------------------
   // The phone talks to the host over HTTP; these wrappers are what the desktop
   // side of that conversation calls, so both ends speak the same method names.
@@ -1351,6 +1454,8 @@
     revise: revise,
     reviseSelection: reviseSelection,
     reviseSelectionStream: reviseSelectionStream,
+    // R91: the chapter-level stream; `reviseSafe` remains the failover fallback.
+    reviseStream: reviseStream,
     selftest: selftest,
     // R34: failover-aware variants. `proofread` / `revise` stay bare so the
     // dialogs that manage their own picker keep exact control.

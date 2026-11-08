@@ -6,8 +6,24 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.12 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.13 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第九十一轮（R91）修改建议整章流式输出：卡片边读边画。
+  ① **宿主**：新增 `reviseStream(ctx, opts, onEvent)`——提示词、16,000 字分块上限与八条上限都和
+  `revise` 完全一致，只是把模型回复边收边解析：`extractJsonObjects` 在括号层面增量提取**已经闭合**
+  的 JSON 对象（正确跳过字符串里的 `{` 与转义），每闭合一条就发 `{type:'suggestion', item}`；
+  流结束若一条都没解析出来，再整段走 `parseAdviceJson` 兜底。事件与选中改写同为
+  `progress` / `suggestion` / `done` / `error`，路由 `revise.stream` 以 NDJSON 输出，客户端断开
+  连接即 abort 模型调用。
+  ② **界面**：`run()` 先走 `NW.ai.reviseStream` 并把每条建议实时并进列表；流失败但已收到部分时
+  保留这些卡片并提示「流式读到一半断了」；一条都没收到才回退带模型 failover 的 `reviseSafe`。
+  等待卡只在**还没有任何卡片**时占满整栏，出现第一张后缩成列表底部的一行「还在往下读…」。
+  关闭建议栏、开始新一轮或切换章节都会 abort 上一轮请求，不再为没人看的章节计费。
+  ③ **附带修正**：模型这次明确回答「没有问题」时清掉该章缓存，避免重开建议栏又看到上一轮卡片。
+  ④ **验收**：`verify-host` 新增 `[3f]` 9 项（NDJSON 头、两条 suggestion、done 带模型、顺序在
+  done 前、start/end 切片、字段与 id、提示词带角度、空正文错误信封）→ **296**；`verify-advice-ui`
+  新增 `[5b]` 6 项（第一张卡在请求结束前出现、底部提示、不再整屏等待、结束后两张都在、提示消失、
+  请求带正文）→ **69**；`build-client` 23 parts，其余闸门全过。版本 **1.6.13**。
 - 第九十轮（R90）修改建议整章一次发；处理完的卡片离开列表。
   ① **慢的根因**：`revise` 一直复用校对用的 4,000 字分块（`BLOCK_CHARS`），并且是
   **for 循环逐块等待**——章节每多 4,000 字就多一次完整的串行模型往返，

@@ -424,6 +424,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   flex:0 0 auto;display:flex;align-items:center;gap:var(--nw-sp-1);flex-wrap:wrap;
   padding:9px 12px;border-top:1px solid var(--dsw-alias-border-l1);
 }
+/* R91：流式时列表底部的小提示。它必须比卡片轻，否则会像「又出了一条建议」；
+   圆点用 spinner，但放在一行里，不占一整屏。 */
+.nw-suggest-reading{
+  display:flex;align-items:center;gap:8px;justify-content:center;
+  padding:10px 12px 14px;color:var(--nw-fg-soft);font-size:12px;
+}
 /* ======================= R73：选中改写 / 接受 / 已接收 =======================
 
    选中一段字 → 纸面上浮出一个小方钮 → 在正文右侧开一扇并排的窗口。窗口是
