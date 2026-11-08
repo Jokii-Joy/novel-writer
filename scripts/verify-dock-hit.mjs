@@ -428,13 +428,13 @@ if (appFiles.length) {
   problems.push(...local);
 }
 
-// ---- 9. R85: outside click closes the dock; advice column still hides it ----
-// The writer wants the opposite of what R83 guessed: an expanded dock should
-// put itself away on the next click that misses it. That is now explicit
-// (pointerdown on document, capture phase, root-node hit test) instead of
-// depending on a host re-render to reset the state by accident. The other
-// invariant is unchanged: while the 修改建议 column is open, the whole dock
-// must not render — the column owns the right lane and the FAB sat on its cards.
+// ---- 9. R92: hover opens the dock, leaving closes it; advice hides it -----
+// R85 made the expanded dock a popover that closed on an outside click. R92
+// adds the writer's later request: a real mouse opens it on hover and a
+// delayed leave closes it (the delay bridges the 8px gap between FAB and
+// menu). Touch and keyboard keep the click toggle, and the two safety nets
+// stay: an outside pointerdown and Esc still collapse it, and the whole dock
+// is not rendered while the 修改建议 column owns the right lane.
 {
   const local = [];
   const src = appFiles.length ? readFileSync(join(srcDir, appFiles[0]), 'utf8') : '';
@@ -468,9 +468,24 @@ if (appFiles.length) {
   if (!/if\s*\(\s*adviceOpen\s*\)\s*setDockOpen\s*\(\s*false\s*\)/.test(src)) {
     local.push('advice effect — opening the column does not collapse dockOpen; the hidden dock would pop back expanded');
   }
+  if (!/onPointerEnter\s*:\s*p\.onHoverStart/.test(src) || !/onPointerLeave\s*:\s*p\.onHoverEnd/.test(src)) {
+    local.push('hover — the Dock root does not wire pointerenter/pointerleave to the hover handlers');
+  }
+  if (!/onHoverStart\s*:\s*enterDock/.test(src) || !/onHoverEnd\s*:\s*leaveDock/.test(src)) {
+    local.push('hover — App does not pass enterDock/leaveDock into the Dock');
+  }
+  if (!/event\.pointerType\s*&&\s*event\.pointerType\s*!==\s*['"]mouse['"]/.test(src)) {
+    local.push('hover — touch taps would also open the menu; only a real mouse should drive hover');
+  }
+  if (!/setTimeout\s*\(\s*\(\)\s*=>\s*\{[\s\S]{0,160}setDockOpen\s*\(\s*false\s*\)/.test(src)) {
+    local.push('hover — pointerleave closes immediately; crossing the FAB/menu gap would snap the menu shut');
+  }
+  if (!/cancelDockHoverClose/.test(src)) {
+    local.push('hover — no way to cancel a pending close when the pointer comes back');
+  }
   problems.push(...local);
   if (!local.length) {
-    notes.push('R85 — outside click / Esc collapses the dock, and the dock is not rendered while the advice column is open');
+    notes.push('R92 — hover opens the dock and a delayed leave closes it; outside click / Esc still work, and the dock stays hidden while the advice column is open');
   }
 }
 

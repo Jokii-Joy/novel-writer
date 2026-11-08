@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.13',
+      version: '1.6.14',
     };
     NW.ReactDOM = null;
 
@@ -17732,9 +17732,36 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * R85: clicking anywhere outside the expanded dock collapses it, and Esc
      * does the same. The root node is kept in a ref so "outside" means "not one
      * of these five rows or the FAB", not "the host re-rendered the slot".
+     *
+     * R92: the writer asked for the dock to open on hover and close when the
+     * pointer leaves. Only a real mouse drives that, so a touch tap still goes
+     * through the FAB's click toggle. The small close delay covers the 8px gap
+     * between the FAB and the menu: without it, crossing that gap would fire
+     * pointerleave and snap the menu shut before the pointer reaches a row.
      */
     const [dockOpen, setDockOpen] = useState(false);
     const dockRef = useRef(null);
+    const dockHoverTimerRef = useRef(null);
+    const cancelDockHoverClose = useCallback(() => {
+      if (dockHoverTimerRef.current) {
+        clearTimeout(dockHoverTimerRef.current);
+        dockHoverTimerRef.current = null;
+      }
+    }, []);
+    const enterDock = useCallback((event) => {
+      if (event.pointerType && event.pointerType !== 'mouse') return;
+      cancelDockHoverClose();
+      setDockOpen(true);
+    }, [cancelDockHoverClose]);
+    const leaveDock = useCallback((event) => {
+      if (event.pointerType && event.pointerType !== 'mouse') return;
+      cancelDockHoverClose();
+      dockHoverTimerRef.current = setTimeout(() => {
+        dockHoverTimerRef.current = null;
+        setDockOpen(false);
+      }, 160);
+    }, [cancelDockHoverClose]);
+    useEffect(() => () => cancelDockHoverClose(), [cancelDockHoverClose]);
     /**
      * R25: null = auto. The column measures itself from the bench (see
      * .nw-suggest in the CSS above) so it always hugs the page instead of
@@ -20305,6 +20332,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           immersive: immersive,
           chapter: chapter,
           dockRef: dockRef,
+          // R92: mouse in opens, mouse out closes (touch keeps the click toggle).
+          onHoverStart: enterDock,
+          onHoverEnd: leaveDock,
           // R60: the FAB shape is back, so the dock needs the open flag again.
           open: dockOpen,
           onToggle: () => setDockOpen((v) => !v),
@@ -20962,6 +20992,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       {
         className: 'nw-dock',
         ref: p.dockRef,
+        onPointerEnter: p.onHoverStart,
+        onPointerLeave: p.onHoverEnd,
         'data-immersive': p.immersive ? '1' : '0',
         'data-open': open ? '1' : '0',
       },

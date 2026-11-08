@@ -6,8 +6,18 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.13 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.14 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第九十二轮（R92）写作坞改成鼠标悬停展开、移开收起。
+  ① **悬停开关**：Dock 根节点接 `onPointerEnter` / `onPointerLeave`，只有 `pointerType === 'mouse'`
+  才驱动；触屏点按仍走原来的圆钮开关，键盘也仍可用 Enter / Space 展开。
+  ② **8px 缝**：圆钮与菜单之间留了 8px 视觉空隙，直接 `pointerleave` 就关会在指针跨越这条缝时
+  把菜单收掉；现在延迟 160ms 关闭，指针在延迟内回到坞里就取消，走完这条缝菜单仍是开的。
+  ③ **安全网不变**：点插件其它地方仍会在捕获阶段收起，Esc 仍会收起；修改建议栏打开且非沉浸时
+  整个坞照旧不渲染，不会压住建议卡片。
+  ④ **验收**：`verify-dock-hit` 第 9 节从 R85 断言扩成 R92——检查悬停接线、只认鼠标、延迟关闭、
+  `cancelDockHoverClose` 取消、外点 / Esc / 建议栏隐藏三条不回退；全过。`build-client` 23 parts，
+  `verify-host` 296、`verify-advice-ui` 69 及其余闸门全过。版本 **1.6.14**。
 - 第九十一轮（R91）修改建议整章流式输出：卡片边读边画。
   ① **宿主**：新增 `reviseStream(ctx, opts, onEvent)`——提示词、16,000 字分块上限与八条上限都和
   `revise` 完全一致，只是把模型回复边收边解析：`extractJsonObjects` 在括号层面增量提取**已经闭合**
