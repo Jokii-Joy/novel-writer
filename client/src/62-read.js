@@ -257,12 +257,17 @@
   text-decoration-thickness:max(2px, .09em);
 }
 .nw-mark-comment{
-  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 16%, transparent);
-  box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
+  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 28%, transparent);
+  box-shadow:none;
 }
 .nw-mark[data-active="1"]{
   background-color:color-mix(in srgb, var(--nw-brand) 30%, transparent);
   box-shadow:inset 0 -1px 0 var(--nw-brand);
+}
+/* R84：批注只加底色，不补底边——否则读起来和「下划线」一模一样。 */
+.nw-mark-comment[data-active="1"]{
+  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 46%, transparent);
+  box-shadow:none;
 }
 /* R53d：删除线被点开时只加底色，不补底边——它身上已经有一条穿字而过的线，再加
    一道底边就成了「删除线附带下划线」，和编辑页那个 bug 是同一个。 */
@@ -306,6 +311,11 @@
 .nw-mark[data-hover="1"]{
   background-color:color-mix(in srgb, var(--nw-brand) 26%, transparent);
   box-shadow:inset 0 -2px 0 var(--nw-brand);
+}
+/* R84：同上，批注悬停只加深底色。 */
+.nw-mark-comment[data-hover="1"]{
+  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 38%, transparent);
+  box-shadow:none;
 }
 /* R53d：删除线悬停时也只加底色。底边一旦补上去，删除线底下就多出一道下划线——
    这正是用户报的那个 bug，只不过换了个触发状态。 */

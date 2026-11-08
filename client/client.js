@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.5',
+      version: '1.6.6',
     };
     NW.ReactDOM = null;
 
@@ -9767,7 +9767,8 @@ window.__ModuleLoader__.load({
   --nw-scroll-thumb:rgba(27,24,19,.18);--nw-scroll-thumb-hover:rgba(27,24,19,.32);
   --nw-panel:#fdf8ef;--nw-panel-border:#e6dccb;--nw-panel-shadow:0 8px 24px rgba(64,44,24,.09);
   --nw-btn-bg:#f3ecdf;--nw-btn-fg:#1b1813;--nw-btn-border:#e6dccb;--nw-btn-hover:#eae1d1;
-  --nw-hl-bg:rgba(196,83,47,.20);--nw-hl-line:rgba(170,66,36,.60);--nw-hl-active:rgba(196,83,47,.36);
+  --nw-hl-bg:rgba(232,171,56,.38);--nw-hl-active:rgba(214,140,26,.55);
+  --nw-mark-comment:#0f6b73;
   --nw-find-bg:rgba(196,83,47,.13);--nw-find-active:rgba(196,83,47,.28);--nw-find-ring:rgba(170,66,36,.82);
   --nw-empty-glyph:rgba(27,24,19,.16);
   /* A warm vertical wash: the page is lit from the top like a sheet on a desk. */
@@ -9783,7 +9784,8 @@ window.__ModuleLoader__.load({
   --nw-scroll-thumb:rgba(31,42,32,.22);--nw-scroll-thumb-hover:rgba(31,42,32,.36);
   --nw-panel:#ddf1de;--nw-panel-border:#b6d6ba;--nw-panel-shadow:0 8px 24px rgba(31,42,32,.14);
   --nw-btn-bg:#c1e0c5;--nw-btn-fg:#1f2a20;--nw-btn-border:#a9cbaa;--nw-btn-hover:#b3d8b8;
-  --nw-hl-bg:rgba(255,214,0,.32);--nw-hl-line:rgba(158,116,0,.62);--nw-hl-active:rgba(255,170,0,.44);
+  --nw-hl-bg:rgba(214,92,120,.32);--nw-hl-active:rgba(190,64,96,.48);
+  --nw-mark-comment:#1f4f7a;
   --nw-find-bg:rgba(31,42,32,.12);--nw-find-active:rgba(31,42,32,.26);--nw-find-ring:rgba(31,42,32,.76);
   --nw-empty-glyph:rgba(31,42,32,.18);
   --nw-texture:none;
@@ -9795,7 +9797,8 @@ window.__ModuleLoader__.load({
   --nw-scroll-thumb:rgba(232,230,220,.18);--nw-scroll-thumb-hover:rgba(232,230,220,.34);
   --nw-panel:#221f1d;--nw-panel-border:#33322d;--nw-panel-shadow:0 8px 24px rgba(0,0,0,.46);
   --nw-btn-bg:#2a2825;--nw-btn-fg:#e8e6dc;--nw-btn-border:#3a3832;--nw-btn-hover:#35322e;
-  --nw-hl-bg:rgba(224,141,111,.24);--nw-hl-line:rgba(224,141,111,.62);--nw-hl-active:rgba(224,141,111,.40);
+  --nw-hl-bg:rgba(110,170,255,.30);--nw-hl-active:rgba(90,150,240,.46);
+  --nw-mark-comment:#f0b46a;
   --nw-find-bg:rgba(224,141,111,.16);--nw-find-active:rgba(224,141,111,.32);--nw-find-ring:rgba(224,141,111,.86);
   --nw-empty-glyph:rgba(232,230,220,.16);
   --nw-texture:none;
@@ -9808,7 +9811,8 @@ window.__ModuleLoader__.load({
   --nw-scroll-thumb:rgba(26,25,19,.20);--nw-scroll-thumb-hover:rgba(26,25,19,.36);
   --nw-panel:#f4ecd6;--nw-panel-border:#d9cfae;--nw-panel-shadow:0 8px 22px rgba(80,64,32,.14);
   --nw-btn-bg:#e4d7b4;--nw-btn-fg:#2a271e;--nw-btn-border:#d3c8a9;--nw-btn-hover:#dbcca6;
-  --nw-hl-bg:rgba(140,43,34,.18);--nw-hl-line:rgba(140,43,34,.56);--nw-hl-active:rgba(140,43,34,.32);
+  --nw-hl-bg:rgba(52,110,150,.30);--nw-hl-active:rgba(40,92,132,.46);
+  --nw-mark-comment:#8a5206;
   --nw-find-bg:rgba(26,25,19,.10);--nw-find-active:rgba(26,25,19,.24);--nw-find-ring:rgba(26,25,19,.72);
   --nw-empty-glyph:rgba(26,25,19,.16);
   /* A newspaper has no rounded corners anywhere. */
@@ -9832,7 +9836,8 @@ window.__ModuleLoader__.load({
   --nw-scroll-thumb:rgba(20,23,26,.16);--nw-scroll-thumb-hover:rgba(20,23,26,.30);
   --nw-panel:#ffffff;--nw-panel-border:#e6e8eb;--nw-panel-shadow:0 10px 30px rgba(20,23,26,.08);
   --nw-btn-bg:#fafafa;--nw-btn-fg:#14171a;--nw-btn-border:#e6e8eb;--nw-btn-hover:#f1f2f3;
-  --nw-hl-bg:rgba(208,2,27,.14);--nw-hl-line:rgba(208,2,27,.58);--nw-hl-active:rgba(208,2,27,.28);
+  --nw-hl-bg:rgba(255,206,0,.50);--nw-hl-active:rgba(255,188,0,.66);
+  --nw-mark-comment:#00695c;
   --nw-find-bg:rgba(208,2,27,.12);--nw-find-active:rgba(208,2,27,.24);--nw-find-ring:rgba(208,2,27,.80);
   --nw-empty-glyph:rgba(20,23,26,.12);
   --nw-r-card:14px;--nw-r-control:10px;
@@ -10017,16 +10022,17 @@ window.__ModuleLoader__.load({
   color:transparent;pointer-events:none;user-select:none;z-index:var(--nw-z-base);
 }
 .nw-hl mark{color:transparent;background-color:transparent;}
-.nw-hl .nw-hl-mark{background-color:var(--nw-hl-bg);border-radius:var(--nw-r-hair);box-shadow:inset 0 -1.5px 0 var(--nw-hl-line);}
-.nw-hl .nw-hl-mark[data-active="1"]{background-color:var(--nw-hl-active);}
-/* R23: the sentence the advice panel is talking about gets a solid underline.
-   The fill drops to a hint of tint so the words stay legible (the writer is
-   comparing them with the suggestion, not looking at a highlight) and the rule
-   itself carries the emphasis — the same brand-coloured underline the quote
-   wears inside the advice card. */
+/* R84: the sentence under discussion is a wash of colour, not a ruled line.
+   The old inset bottom edge doubled as an underline, which the writer asked to
+   remove: at this size it cut through descenders and read like a spell-check
+   squiggle. The fill itself carries the emphasis; the active sentence only gets
+   a stronger mix of the same paper-aware colour. */
+.nw-hl .nw-hl-mark{
+  background-color:var(--nw-hl-bg, rgba(232,171,56,.38));
+  border-radius:var(--nw-r-hair);
+}
 .nw-hl .nw-hl-mark[data-active="1"]{
-  background-color:color-mix(in srgb, var(--nw-hl-active) 30%, transparent);
-  box-shadow:inset 0 -2px 0 var(--nw-brand);
+  background-color:var(--nw-hl-active, rgba(214,140,26,.55));
 }
 .nw-hl .nw-find-hit{background-color:var(--nw-find-bg);border-radius:var(--nw-r-hair);}
 .nw-hl .nw-find-hit[data-active="1"]{background-color:var(--nw-find-active);box-shadow:inset 0 0 0 1px var(--nw-find-ring);}
@@ -10053,19 +10059,26 @@ window.__ModuleLoader__.load({
    legible (no faded filler) until the writer actually deletes them. The mirror
    paints every glyph transparent, so the strike is drawn with text-decoration
    on the transparent run — which is why the mark keeps its own colour clear. */
+/* R84: a 批注 is a colour wash too. The border-bottom that used to sit under it
+   made the commented sentence look underlined — which is the underline mark's
+   job, so the two kinds read as the same thing. The wash uses the theme's own
+   comment ink, so it stays distinct from the paper and from the advice tint. */
 .nw-hl .nw-mark-comment{
   position:relative;
-  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 16%, transparent);
-  box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
+  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 28%, transparent);
+  box-shadow:none;
 }
 /* R53：写作区不再在字里插角标。原先那个小方框（.nw-mark-dot）虽然零宽，但
    它画在字尾右上角，行距紧的时候仍然压住上一行的字脚；而且它跟着镜像走，一
    重排就得重画。改成页边批注签（.nw-mark-gutter / .nw-mark-side）：签挂在纸
    的右外侧，正文上只留下那条线本身，字一个也不动。 */
-.nw-hl .nw-mark-comment[data-active="1"],
 .nw-hl .nw-mark-underline[data-active="1"]{
   background-color:color-mix(in srgb, var(--nw-brand) 30%, transparent);
   box-shadow:inset 0 -1px 0 var(--nw-brand);
+}
+.nw-hl .nw-mark-comment[data-active="1"]{
+  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 46%, transparent);
+  box-shadow:none;
 }
 /* 删除线的「点开」只加底色，不补底边——它身上已经有一条穿字而过的线，再加一道
    底边就又成了「删除线附带下划线」，和正常状态那个 bug 是同一个。 */
@@ -10093,7 +10106,7 @@ window.__ModuleLoader__.load({
   font-variant-numeric:tabular-nums;
   color:var(--nw-panel);
   background:var(--nw-mark-comment, var(--nw-brand));
-  box-shadow:0 0 0 1px color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 24%, transparent);
+  box-shadow:0 0 0 1px color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 28%, transparent);
   transition:transform .12s, opacity .12s;
   opacity:.9;
 }
@@ -10104,11 +10117,15 @@ window.__ModuleLoader__.load({
    装饰。改成让**句子自己**回答：鼠标停在签上、或点开一条批注时，它指的那句
    明显变色（见下面的 [data-hover] 与 mark[data-active]）。 */
 /* 悬停时点亮签所指的那条线。R53c：14% 太轻，提到 26% 再加一道 2px 底边，
-   隔着一页也能一眼扫到是哪句。 */
-.nw-hl .nw-mark-comment[data-hover="1"],
+   隔着一页也能一眼扫到是哪句。R84：批注不再补底边——它的身份由底色和页边
+   签表示，补线就又变成下划线。 */
 .nw-hl .nw-mark-underline[data-hover="1"]{
   background-color:color-mix(in srgb, var(--nw-brand) 26%, transparent);
   box-shadow:inset 0 -2px 0 var(--nw-brand);
+}
+.nw-hl .nw-mark-comment[data-hover="1"]{
+  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 38%, transparent);
+  box-shadow:none;
 }
 /* R53d：删除线悬停时同样只加底色——补底边就又变成「删除线附带下划线」。 */
 .nw-hl .nw-mark-strike[data-hover="1"]{
@@ -10189,8 +10206,8 @@ window.__ModuleLoader__.load({
   background-image:linear-gradient(to bottom, transparent calc(50% - 1px), var(--nw-mark-strike, var(--nw-danger)) calc(50% - 1px), var(--nw-mark-strike, var(--nw-danger)) calc(50% + 1px), transparent calc(50% + 1px));
 }
 .nw-mark-menu-swatch[data-kind="comment"]{
-  background:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 16%, transparent);
-  box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
+  background:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 28%, transparent);
+  box-shadow:none;
 }
 
 /* R73：选中文字后浮出的小方钮。一个按钮、一句话，落在指针松开处的右下角。
@@ -14802,12 +14819,17 @@ window.__ModuleLoader__.load({
   text-decoration-thickness:max(2px, .09em);
 }
 .nw-mark-comment{
-  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 16%, transparent);
-  box-shadow:inset 0 -1px 0 var(--nw-mark-comment, var(--nw-brand));
+  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 28%, transparent);
+  box-shadow:none;
 }
 .nw-mark[data-active="1"]{
   background-color:color-mix(in srgb, var(--nw-brand) 30%, transparent);
   box-shadow:inset 0 -1px 0 var(--nw-brand);
+}
+/* R84：批注只加底色，不补底边——否则读起来和「下划线」一模一样。 */
+.nw-mark-comment[data-active="1"]{
+  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 46%, transparent);
+  box-shadow:none;
 }
 /* R53d：删除线被点开时只加底色，不补底边——它身上已经有一条穿字而过的线，再加
    一道底边就成了「删除线附带下划线」，和编辑页那个 bug 是同一个。 */
@@ -14851,6 +14873,11 @@ window.__ModuleLoader__.load({
 .nw-mark[data-hover="1"]{
   background-color:color-mix(in srgb, var(--nw-brand) 26%, transparent);
   box-shadow:inset 0 -2px 0 var(--nw-brand);
+}
+/* R84：同上，批注悬停只加深底色。 */
+.nw-mark-comment[data-hover="1"]{
+  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 38%, transparent);
+  box-shadow:none;
 }
 /* R53d：删除线悬停时也只加底色。底边一旦补上去，删除线底下就多出一道下划线——
    这正是用户报的那个 bug，只不过换了个触发状态。 */
@@ -16595,14 +16622,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-advice-quote{
   font-family:var(--nw-reading-font,inherit);font-size:13px;line-height:1.7;
   color:var(--dsw-alias-label-secondary);
-  /* R23: the quote is underlined instead of boxed on the left. The matching
-     sentence on the paper wears the same underline in the same colour, so the
-     pair reads as one annotation seen from two sides. Both use --nw-brand
-     rather than the host alias so the two rules can never drift apart. */
-  text-decoration:underline;
-  text-decoration-color:var(--nw-brand);
-  text-decoration-thickness:2px;
-  text-underline-offset:3px;
+  /* R84: the quote used to wear an underline that matched the sentence in the
+     manuscript. Both are gone now — the writer asked for highlight-only marks.
+     The quote still reads as a quotation through the reading face and the
+     secondary colour, and the paper wash is what links it to the sentence. */
   padding-bottom:2px;
   max-height:4.8em;overflow:hidden;
 }

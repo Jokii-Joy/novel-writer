@@ -75,3 +75,15 @@ if (recovery.status !== 0) {
   console.error('build-client: password recovery from the host copy regressed');
   process.exit(1);
 }
+
+// Mark emphasis is design, but it is also a contract: two kinds of annotation
+// must not collapse into the same underlined look, and a tint that vanishes on
+// one of the five papers is a bug the writer sees every day. The palette table
+// is static, so gate the build on the measured contrast.
+const highlight = spawnSync(process.execPath, [join(here, 'verify-highlight-style.mjs')], {
+  stdio: 'inherit',
+});
+if (highlight.status !== 0) {
+  console.error('build-client: a highlight/comment tint no longer stands out from its paper');
+  process.exit(1);
+}

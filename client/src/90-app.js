@@ -225,14 +225,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-advice-quote{
   font-family:var(--nw-reading-font,inherit);font-size:13px;line-height:1.7;
   color:var(--dsw-alias-label-secondary);
-  /* R23: the quote is underlined instead of boxed on the left. The matching
-     sentence on the paper wears the same underline in the same colour, so the
-     pair reads as one annotation seen from two sides. Both use --nw-brand
-     rather than the host alias so the two rules can never drift apart. */
-  text-decoration:underline;
-  text-decoration-color:var(--nw-brand);
-  text-decoration-thickness:2px;
-  text-underline-offset:3px;
+  /* R84: the quote used to wear an underline that matched the sentence in the
+     manuscript. Both are gone now — the writer asked for highlight-only marks.
+     The quote still reads as a quotation through the reading face and the
+     secondary colour, and the paper wash is what links it to the sentence. */
   padding-bottom:2px;
   max-height:4.8em;overflow:hidden;
 }
