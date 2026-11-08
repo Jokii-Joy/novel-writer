@@ -113,6 +113,40 @@
     return count;
   }
 
+  /**
+   * R95: the word count of a chapter row, measured the way the user reads it
+   * *now*. Rows that carry plaintext are recounted with the current 标点
+   * setting, so toggling the setting can never leave the totals on yesterday's
+   * algorithm. A locked row only exposes a placeholder body, and a metadata-only
+   * row (stripContent) has no body at all — for those the stored count is the
+   * only number that means anything.
+   *
+   * The result is memoised per row object: the library screen recounts every
+   * chapter on each save, and most rows keep their identity between saves, so a
+   * WeakMap turns that O(all text) scan into O(the chapter that changed).
+   */
+  const chapterWordCache = typeof WeakMap === 'function' ? new WeakMap() : null;
+
+  function chapterWordCount(row, options) {
+    if (!row) return 0;
+    const stored = Number(row.wordCount);
+    const hasStored = Number.isFinite(stored) && stored >= 0;
+    if (row.locked) return hasStored ? stored : 0;
+    const text = typeof row.content === 'string' ? row.content : null;
+    if (text == null || text === '') return hasStored ? stored : 0;
+    const withPunctuation =
+      options && options.includePunctuation !== undefined
+        ? options.includePunctuation !== false
+        : countPunctuation;
+    if (chapterWordCache) {
+      const hit = chapterWordCache.get(row);
+      if (hit && hit.text === text && hit.withPunctuation === withPunctuation) return hit.words;
+    }
+    const words = wordCount(text, options);
+    if (chapterWordCache) chapterWordCache.set(row, { text: text, withPunctuation: withPunctuation, words: words });
+    return words;
+  }
+
   // -------------------------------- typeset ---------------------------------
 
   function recordEdit(edits, kind, before, after, index) {
@@ -579,6 +613,7 @@
 
   NW.format = {
     wordCount: wordCount,
+    chapterWordCount: chapterWordCount,
     setCountPunctuation: setCountPunctuation,
     includePunctuation: includePunctuation,
     typeset: typeset,

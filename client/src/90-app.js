@@ -1281,6 +1281,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const dailyStatsRef = useRef(dailyStats);
     dailyStatsRef.current = dailyStats;
     const dailyWordsRef = useRef({});
+    // R95: which counting rule the baselines above were taken under. Toggling
+    // 字数含标点 rescales every count, so the baselines have to be dropped.
+    const dailyWordsRuleRef = useRef(settings.countPunctuation !== false);
     const dailyTimerRef = useRef(0);
     /**
      * R78: 增量保存的状态。`mirrorSeenRef` 记「上次成功写盘时每本书长什么样」，
@@ -1377,6 +1380,30 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const versionRef = useRef({ chapterId: null, at: 0 });
     const chapterRef = useRef(null);
     chapterRef.current = chapter;
+    // R95: seed the per-chapter baseline the moment a chapter opens. Without it
+    // the first autosave of a session only recorded the baseline, so everything
+    // typed in that first 1.2s window never reached 今日字数.
+    useEffect(() => {
+      const rule = settings.countPunctuation !== false;
+      if (dailyWordsRuleRef.current !== rule) {
+        dailyWordsRuleRef.current = rule;
+        dailyWordsRef.current = {};
+      }
+      const row = chapter;
+      if (!row || row.id == null) return;
+      const key = String(row.id);
+      if (typeof dailyWordsRef.current[key] === 'number') return;
+      dailyWordsRef.current[key] =
+        NW.format && typeof NW.format.chapterWordCount === 'function'
+          ? NW.format.chapterWordCount(row, { includePunctuation: settings.countPunctuation !== false })
+          : Number(row.wordCount) || 0;
+      // Only the identity of the open chapter and the counting rule matter: a save
+      // replaces the row object with the post-save count, which must not become
+      // the baseline. Toggling 字数含标点 rescales the counts, so the baseline has
+      // to be taken again — otherwise the next save reports a punctuation-sized
+      // delta as if words had been typed.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [chapter && chapter.id, settings.countPunctuation]);
     const immersiveRef = useRef(false);
     immersiveRef.current = immersive;
     // R43 ④: `pullSync` must not close over `novels`. Every keystroke that lands
@@ -2361,11 +2388,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         try {
           await NW.db.saveChapterContent(targetId, text);
           if (!aliveRef.current) return;
-          const words = NW.format.wordCount(text);
-          // R77: 今日字数 = this save's word delta. The first save of a chapter in
-          // this session only records the baseline (no delta), so opening a book
-          // never counts as writing it. Swings above 30k are restores or imports,
-          // not typing — counting them would fake a heroic day.
+          const words = NW.format.wordCount(text, {
+            includePunctuation: settings.countPunctuation !== false,
+          });
+          // R77/R95: 今日字数 = this save's word delta. The baseline is seeded when
+          // the chapter opens (the effect above), so words typed before the first
+          // autosave still count, while merely opening a book never does. Swings
+          // above 30k are restores or imports, not typing — counting them would
+          // fake a heroic day.
           const prevWords = dailyWordsRef.current[String(targetId)];
           if (typeof prevWords === 'number') {
             const delta = words - prevWords;
@@ -2395,7 +2425,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           pushToast(errText(err, '保存失败'), 'error');
         }
       },
-      [patchChapterInList, pushToast],
+      [patchChapterInList, pushToast, settings.countPunctuation],
     );
 
     const flushEditor = useCallback(() => {
@@ -3696,17 +3726,31 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const wordCounts = useMemo(() => {
       let book = 0;
       let novelWords = 0;
+      // R95: count the live text, not the stored number. The stored count is
+      // only rewritten on save, so toggling 字数含标点 (or an old import that
+      // used a different algorithm) left 本书/全部 on a stale total. The flag is
+      // passed explicitly because NW.format's mirror is updated by an effect
+      // that runs after this render.
+      const options = { includePunctuation: settings.countPunctuation !== false };
       for (let i = 0; i < chapters.length; i += 1) {
         const row = chapters[i];
         if (!row) continue;
-        const words = Number(row.wordCount) || 0;
+        const words =
+          NW.format && typeof NW.format.chapterWordCount === 'function'
+            ? NW.format.chapterWordCount(row, options)
+            : Number(row.wordCount) || 0;
         book += words;
         if (activeNovelId != null && String(row.novelId) === String(activeNovelId)) novelWords += words;
       }
       return { book: book, novel: novelWords };
-    }, [chapters, activeNovelId]);
+    }, [chapters, activeNovelId, settings.countPunctuation]);
 
-    const chapterWords = chapter ? Number(chapter.wordCount) || 0 : 0;
+    const chapterWords =
+      chapter && NW.format && typeof NW.format.chapterWordCount === 'function'
+        ? NW.format.chapterWordCount(chapter, { includePunctuation: settings.countPunctuation !== false })
+        : chapter
+          ? Number(chapter.wordCount) || 0
+          : 0;
     // R77 (B2): 主题最终落到哪一套。手动时就是 settings.theme，自动时按系统亮暗取。
     const autoTheme = settings.themeAuto === true;
     const effectiveTheme = autoTheme
@@ -3989,6 +4033,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 novels: novels,
                 chapters: chapters,
                 activeNovelId: activeNovelId,
+                // R95: 今天 / 近 7 天 read the per-day ledger instead of guessing
+                // from updatedAt; countPunctuation is part of the recount key.
+                dailyStats: dailyStats,
+                countPunctuation: settings.countPunctuation !== false,
                 hasChapter: !!chapter,
                 journalCount: journalCount,
                 submissions: submissions,

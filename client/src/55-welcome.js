@@ -70,30 +70,75 @@
     return d.getTime();
   }
 
+  /** Local-date key, matching the ledger 90-app.js writes (settings.dailyStats). */
+  function dayKeyOf(ms) {
+    const d = new Date(ms);
+    const pad = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function chapterWordsOf(row, options) {
+    if (!row) return 0;
+    if (NW.format && typeof NW.format.chapterWordCount === 'function') return NW.format.chapterWordCount(row, options);
+    return Number(row.wordCount) || 0;
+  }
+
+  /**
+   * R95: 今天 / 近 7 天 come from the per-day ledger, not from "which chapter was
+   * touched today". The old heuristic counted a whole chapter's wordCount as
+   * today's work, so re-opening an old chapter (or a sync that restamped every
+   * chapter) made the day look enormous. The ledger records the actual delta of
+   * each save. Installs that predate R77 have no ledger at all — for those we
+   * keep the old estimate rather than reporting zero.
+   */
+  function ledgerWindow(dailyStats, today) {
+    const ledger = dailyStats && typeof dailyStats === 'object' ? dailyStats : null;
+    if (!ledger) return null;
+    let entries = 0;
+    let todayWords = 0;
+    let weekWords = 0;
+    const DAY = 24 * 60 * 60 * 1000;
+    for (let i = 0; i < 7; i += 1) {
+      const value = Number(ledger[dayKeyOf(today - i * DAY)]);
+      if (Number.isFinite(value)) entries += 1;
+      const words = Number(value) || 0;
+      weekWords += words;
+      if (i === 0) todayWords = words;
+    }
+    return entries > 0 ? { todayWords: todayWords, weekWords: weekWords } : null;
+  }
+
   /** Aggregate the numbers the stats card shows from the live chapter list. */
-  function computeStats(chapters, activeNovelId) {
+  function computeStats(chapters, activeNovelId, dailyStats, countPunctuation) {
     const rows = Array.isArray(chapters) ? chapters : [];
+    // Pass the flag explicitly: the module-level mirror in NW.format is updated
+    // by an effect *after* the render that saw the new setting, so relying on it
+    // here would leave the card one render behind.
+    const options = { includePunctuation: countPunctuation !== false };
     const today = startOfToday();
     const weekAgo = today - 6 * 24 * 60 * 60 * 1000;
     let total = 0;
     let novel = 0;
-    let todayWords = 0;
-    let weekWords = 0;
+    let estimateToday = 0;
+    let estimateWeek = 0;
     let count = 0;
     let touched = 0;
 
     for (const row of rows) {
       if (!row) continue;
       count += 1;
-      const words = Number(row.wordCount) || 0;
+      const words = chapterWordsOf(row, options);
       total += words;
       if (activeNovelId != null && String(row.novelId) === String(activeNovelId)) novel += words;
       const at = Number(row.updatedAt) || 0;
-      if (at >= today) todayWords += words;
-      else if (at >= weekAgo) weekWords += words;
+      if (at >= today) estimateToday += words;
+      else if (at >= weekAgo) estimateWeek += words;
       if (at > touched) touched = at;
     }
 
+    const ledger = ledgerWindow(dailyStats, today);
+    const todayWords = ledger ? ledger.todayWords : estimateToday;
+    const weekWords = ledger ? ledger.weekWords : estimateWeek;
     return { total, novel, todayWords, weekWords, count, touched };
   }
 
@@ -123,16 +168,17 @@
   }
 
   /** Per-novel rollup so each card can show chapters + words + last touched. */
-  function rollupNovels(novels, chapters, lastMap) {
+  function rollupNovels(novels, chapters, lastMap, countPunctuation) {
     const list = Array.isArray(novels) ? novels.filter(Boolean) : [];
     const rows = Array.isArray(chapters) ? chapters : [];
+    const options = { includePunctuation: countPunctuation !== false };
     const byNovel = new Map();
     for (const row of rows) {
       if (!row) continue;
       const key = String(row.novelId);
       const cell = byNovel.get(key) || { chapters: 0, words: 0, touched: 0, rows: [] };
       cell.chapters += 1;
-      cell.words += Number(row.wordCount) || 0;
+      cell.words += chapterWordsOf(row, options);
       cell.rows.push(row);
       const at = Number(row.updatedAt) || 0;
       if (at > cell.touched) cell.touched = at;
@@ -227,8 +273,21 @@
     const novels = Array.isArray(p.novels) ? p.novels.filter(Boolean) : [];
     const chapters = Array.isArray(p.chapters) ? p.chapters : [];
     const submissions = Array.isArray(p.submissions) ? p.submissions : [];
-    const stats = computeStats(chapters, p.activeNovelId);
-    const rollups = rollupNovels(novels, chapters, readLastChapterMap());
+    // R95: the word totals are recounted from the live text (so the 标点 switch
+    // applies immediately) — memoised because that walk touches every character
+    // of every chapter. The last-chapter map is read on each render but only its
+    // serialised value takes part in the memo key, so switching chapters still
+    // updates 正在写 without recounting the library.
+    const lastMap = readLastChapterMap();
+    const lastKey = JSON.stringify(lastMap);
+    const stats = NW.React.useMemo(
+      () => computeStats(chapters, p.activeNovelId, p.dailyStats, p.countPunctuation),
+      [chapters, p.activeNovelId, p.dailyStats, p.countPunctuation],
+    );
+    const rollups = NW.React.useMemo(
+      () => rollupNovels(novels, chapters, lastMap, p.countPunctuation),
+      [novels, chapters, lastKey, p.countPunctuation],
+    );
     const journalCount = Number(p.journalCount) || 0;
     // R41 ③: a 投稿记录 row stores the title *as mailed*, so a renamed book kept
     // showing its old name on the home screen. The record now carries the book
@@ -370,7 +429,7 @@
     // ---- 创作统计 ---------------------------------------------------------
     const statCells = [
       { k: '全书', v: fmtWords(stats.total) + ' 字' },
-      { k: '本章书', v: fmtWords(stats.novel) + ' 字' },
+      { k: '本书', v: fmtWords(stats.novel) + ' 字' },
       { k: '近 7 天', v: fmtWords(stats.weekWords) + ' 字' },
       { k: '今天', v: fmtWords(stats.todayWords) + ' 字' },
     ];

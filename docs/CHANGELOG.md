@@ -6,8 +6,28 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.16 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.17 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第九十五轮（R95）首页创作统计不再虚高，也不再是旧数。
+  ① **全书 / 本书**：统计卡原来直接汇总 `chapter.wordCount`，而这个数只在保存时重写；切换
+  「字数含标点」后旧章节不会重算，`hydrateChapter()` 又原样沿用，于是全书停在旧算法的结果。
+  新增 `NW.format.chapterWordCount(row, options)`：有明文就按当前规则重算；只有 `locked`
+  章节（正文是占位符）和 metadata-only 行（`stripContent` 没有正文）才回退到 stored。
+  首页统计卡、按书汇总、状态栏的「本章 / 本书 / 全部」都改用这个函数，并显式传
+  `{ includePunctuation }`——`NW.format` 的模块级镜像是设置变更后一个 effect 才更新，
+  不传就会慢一帧。
+  ② **今天 / 近 7 天**：旧 `computeStats()` 用 `updatedAt` 判断——只要章节今天被碰过，就把
+  **整章** wordCount 算进今天；重开旧章节、或同步导入把每章 `updatedAt` 都盖成同步时刻，
+  都会让当天数字暴涨。现在这两个数取自 R77 的按天账 `settings.dailyStats`（今天 + 往前 6 天），
+  只有旧安装完全没有账本时才回退到原来的估算。
+  ③ **基线**：`dailyWordsRef` 改为开章时就用当前规则播种，开章后第一次自动保存的字数差不再丢；
+  切换「字数含标点」会丢弃旧基线（计数尺度变了，否则会把标点差算成今天写了多少字）。
+  ④ **错别字**：统计卡的「本章书」改成「本书」。
+  ⑤ **验收**：新增 `scripts/verify-welcome-stats.mjs` **12** 项（实时重算、locked/无正文回退、
+  账本窗口、旧安装回退、脏值回退、按书汇总、按行缓存、文案、App 传参、基线播种）；
+  `build-client` 23 parts（1,318,131 bytes），`verify-advice-ui` 84、`verify-host` 300、
+  `verify-docs` 44 及其余闸门全过。版本 **1.6.17**。
+  注意：纯客户端改动，刷新页面即生效，不需要重启 DSH。
 - 第九十四轮（R94）锁屏终于跟上主题，流式建议真的流起来。
   ① **锁屏主题**：R93 虽然给 locked 根节点补了 `data-theme`，但 `boot()` 在锁定分支里
   `setLocked(true); setReady(true); return;`，**跳过了 `loadAll()`**，`settings` 仍是
