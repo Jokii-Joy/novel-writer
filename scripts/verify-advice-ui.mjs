@@ -194,6 +194,9 @@ const NW = {
   t: tpl,
   icon: (name) => createElement('i', { 'data-icon': name }),
   fmtDate: () => '11-07',
+  // R82: the selection window joins the shared escape stack (40-ui). The harness
+  // has no stack, so a no-op is enough for the render tests.
+  useModalEscape: () => {},
   ui: {
     btn: (o) => createElement('button', { className: 'btn', onClick: o.onClick, disabled: o.disabled }, o.children),
     iconBtn: (label, title, onClick) => createElement('button', { className: 'iconbtn', title, onClick }, label),

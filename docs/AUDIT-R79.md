@@ -23,10 +23,9 @@
 其余为 19 条中等正确性/可靠性问题（§C）、19 条低优先级项（§D）与 10 条性能优化点（§E），
 正文逐条给了文件:行号、触发条件、后果与修法。修复顺序见 §G。
 
-> **已修**：A1、A2、A3、B1、B2（R80）、B3、C1–C11、D1、D11、E7（R81）与 D10。新增
-> `scripts/verify-async-guards.mjs`、`scripts/verify-restore.mjs`、
-> `scripts/verify-crypto-recovery.mjs` 三个回归脚本，并接进 `build-client`。版本 1.6.3。
-> 其余条目仍在清单里。
+> **已修**：A1、A2、A3、B1、B2（R80）、B3、C1–C11、D1–D19（其中 D13 未做焦点陷阱）、E7、E10
+> （R81/R82）与 D10。新增 `scripts/verify-async-guards.mjs`、`scripts/verify-restore.mjs`、
+> `scripts/verify-crypto-recovery.mjs` 三个回归脚本，并接进 `build-client`。版本 1.6.4。
 
 ---
 
@@ -574,6 +573,14 @@ const target = hasChapter ? defaultTarget : { kind: 'novel', id: String(novel.id
 | E7 导入 O(n²) | 新增 `createChapters` 单事务批量建章，导入不再逐章全表扫描。 |
 | D1 CRLF 偏移 | 段落推进按真实分隔符长度（`\r\n` 记 2）。 |
 | D11 隐藏页轮询 | `visibilityState === 'hidden'` 时跳过同步轮询。 |
+| B3 目录限制（R82） | `library.mirror` 拒绝与设置不一致的 `dir`。 |
+| D2 镜像章名（R82） | 无题章节不再打印「第N章」，与导出统一。 |
+| D3 删除孤儿（R82） | 便签 / 设定集 / 已接收建议随书/章进回收站并可在撤销时还原。 |
+| D4 打开竞态（R82） | `selectChapter` 加序号，后点者胜。 |
+| D5–D9（R82） | keyup 只对编辑键重排；隐藏页跳过 1.5s 轮询并取消聚焦 rAF；建议指纹全文；导出下载失败报错。 |
+| D14/D15/D16（R82） | 模型选择器与选中改写并入 Esc 栈；J/K/A/R 忽略 SELECT / 按钮 / 弹窗。 |
+| D17–D19（R82） | SMTP/IMAP 保存前校验；自动保存间隔可输入；开区间显示「N 字以上」；备份文件 32MB 上限。 |
+| E10 新增书重写（R82） | 新增书只写它自己；删除仍由宿主旧文件对比清理。 |
 
 ---
 

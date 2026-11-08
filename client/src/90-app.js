@@ -1234,6 +1234,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const editorRef = useRef(null);
     const rootRef = useRef(null);
     const aliveRef = useRef(true);
+    /** R82: last chapter-open request; a slower earlier open must not win. */
+    const chapterOpenSeqRef = useRef(0);
     // R34: the latest inbox page, read by `refreshHomeFeed` to reconcile the
     // submission log without taking `inbox` into its dependency list.
     const inboxRef = useRef(inbox);
@@ -2016,19 +2018,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const metaChanged = metaRef.note !== noteSig || metaRef.submission !== submissionSig;
         let changed = null;
         if (seen.size > 0 && !encryptChanged) {
-          // A book disappeared: the host can only clean up its file when it is
-          // asked for the whole library (the stale-file pass compares the
-          // previous snapshot against this one).
-          if (next.size !== seen.size) changed = null;
-          else {
-            changed = [];
-            for (const [id, sig] of next) {
-              if (seen.get(id) !== sig) changed.push(id);
-            }
+          // R82: do not fall back to "rewrite every book" when the count changes.
+          // An added book is simply in `changed`; a deleted one is handled by the
+          // host's stale-name pass (it compares the previous snapshot with this
+          // one on every call), which only needs a mirror call with an empty list.
+          const bookCountChanged = next.size !== seen.size;
+          changed = [];
+          for (const [id, sig] of next) {
+            if (seen.get(id) !== sig) changed.push(id);
           }
-          // Nothing about any book and neither the notes nor the submission log
-          // moved: the folder already holds exactly this library.
-          if (Array.isArray(changed) && changed.length === 0 && !metaChanged) return;
+          // Nothing about any book, note or submission moved and no book appeared
+          // or disappeared: the folder already holds exactly this library.
+          if (changed.length === 0 && !metaChanged && !bookCountChanged) return;
         }
         const run = mirrorLibrary({ silent: true, changed: changed });
         if (run && typeof run.then === 'function') {
@@ -2262,11 +2263,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       async (id) => {
         if (id == null) return;
         if (activeChapterId != null && String(id) === String(activeChapterId)) return;
+        // R82: two opens can be in flight (shelf search calls "select novel" and
+        // "select chapter" back to back). The later request wins; an earlier one
+        // that resolves afterwards must not steal the view.
+        chapterOpenSeqRef.current += 1;
+        const seq = chapterOpenSeqRef.current;
         flushEditor();
         await snapshotVersion();
         try {
           const record = await NW.db.getChapter(id);
-          if (!aliveRef.current) return;
+          if (!aliveRef.current || chapterOpenSeqRef.current !== seq) return;
           if (!record) {
             pushToast('章节不存在或已被删除', 'error');
             return;
@@ -4673,6 +4679,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [value, setValue] = useState(() => {
       const first = options[0];
       return first ? first.value : '';
+    });
+    // R82: this picker is a second modal mask. Without registering here Escape
+    // closed the dialog underneath and left the picker stranded.
+    NW.useModalEscape(true, () => {
+      if (typeof p.onDone === 'function') p.onDone(null);
     });
     const tried = Array.isArray(req.tried) ? req.tried : [];
     // R34: the caller passes a Chinese label ('AI 校对' / 'AI 投稿' / '修改建议');

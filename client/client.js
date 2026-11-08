@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.3',
+      version: '1.6.4',
     };
     NW.ReactDOM = null;
 
@@ -1060,6 +1060,40 @@ window.__ModuleLoader__.load({
         ops.push({ store: 'marks', type: 'delete', key: marks[i].id });
       }
     }
+    // R82: the book's 灵感便签, 设定集 and 已接收建议 go into the same trash item.
+    // Without this, deleting a book (or emptying the trash) left those rows
+    // orphaned forever, and restoring the book brought back the text but not the
+    // notes/lore/decisions that belonged to it.
+    const allNotes = await readAll('notes');
+    const notes = allNotes.filter(function (row) {
+      return row && (chapterIds[row.chapterId] || row.novelId === id);
+    });
+    if (notes.length) {
+      trashItem.payload.notes = notes;
+      for (let i = 0; i < notes.length; i += 1) {
+        ops.push({ store: 'notes', type: 'delete', key: notes[i].id });
+      }
+    }
+    const allLore = await readAll('lore');
+    const lore = allLore.filter(function (row) {
+      return row && row.novelId === id;
+    });
+    if (lore.length) {
+      trashItem.payload.lore = lore;
+      for (let i = 0; i < lore.length; i += 1) {
+        ops.push({ store: 'lore', type: 'delete', key: lore[i].id });
+      }
+    }
+    const allRevisions = await readAll('revisions');
+    const revisions = allRevisions.filter(function (row) {
+      return row && chapterIds[row.chapterId];
+    });
+    if (revisions.length) {
+      trashItem.payload.revisions = revisions;
+      for (let i = 0; i < revisions.length; i += 1) {
+        ops.push({ store: 'revisions', type: 'delete', key: revisions[i].id });
+      }
+    }
     await writeBatch(ops);
     notify();
     // R22: same contract as deleteChapter — the id lets the caller offer 撤销.
@@ -1423,6 +1457,29 @@ window.__ModuleLoader__.load({
         ops.push({ store: 'marks', type: 'delete', key: marks[i].id });
       }
     }
+    // R82: 灵感便签 and 已接收建议 point at this chapter too. Deleting the chapter
+    // used to leave them behind as unreachable orphans (and an undone delete
+    // silently kept them). Park them in the same trash item.
+    const allNotes = await readAll('notes');
+    const notes = allNotes.filter(function (row) {
+      return row && idSet[row.chapterId];
+    });
+    if (notes.length) {
+      trashItem.payload.notes = notes;
+      for (let i = 0; i < notes.length; i += 1) {
+        ops.push({ store: 'notes', type: 'delete', key: notes[i].id });
+      }
+    }
+    const allRevisions = await readAll('revisions');
+    const revisions = allRevisions.filter(function (row) {
+      return row && idSet[row.chapterId];
+    });
+    if (revisions.length) {
+      trashItem.payload.revisions = revisions;
+      for (let i = 0; i < revisions.length; i += 1) {
+        ops.push({ store: 'revisions', type: 'delete', key: revisions[i].id });
+      }
+    }
     await writeBatch(ops);
     if (root.novelId) await touchNovel(root.novelId);
     notify();
@@ -1614,6 +1671,17 @@ window.__ModuleLoader__.load({
       const row = restoredMarks[i];
       if (!row || !row.id) continue;
       ops.push({ store: 'marks', type: 'put', value: row });
+    }
+    // R82: 灵感便签 / 设定集 / 已接收建议 travel with the trash payload too, so
+    // deleting a book and undoing it no longer leaves those rows orphaned (or
+    // loses them when the trash is emptied).
+    for (const key of ['notes', 'lore', 'revisions']) {
+      const rows = Array.isArray(payload[key]) ? payload[key] : [];
+      for (let i = 0; i < rows.length; i += 1) {
+        const row = rows[i];
+        if (!row || !row.id) continue;
+        ops.push({ store: key, type: 'put', value: row });
+      }
     }
     await writeBatch(ops);
     notify();
@@ -4058,7 +4126,9 @@ window.__ModuleLoader__.load({
     if (!base64) throw new Error('导出失败：没有拿到文件数据');
     const bytes = fromBase64(base64);
     const blob = new Blob([bytes], { type: String(data.mime || 'application/octet-stream') });
-    download(String(data.filename || book.title || 'novel'), blob);
+    if (!download(String(data.filename || book.title || 'novel'), blob)) {
+      throw new Error('浏览器拦截了下载，请允许本站下载后重试');
+    }
     return { filename: data.filename, mime: data.mime, size: bytes.length };
   }
 
@@ -4097,7 +4167,9 @@ window.__ModuleLoader__.load({
     if (!base64) throw new Error('导出失败：没有拿到压缩包数据');
     const bytes = fromBase64(base64);
     const blob = new Blob([bytes], { type: String(built.mime || 'application/zip') });
-    download(String(built.filename || 'novel-writer.zip'), blob);
+    if (!download(String(built.filename || 'novel-writer.zip'), blob)) {
+      throw new Error('浏览器拦截了下载，请允许本站下载后重试');
+    }
     return {
       filename: built.filename,
       size: bytes.length,
@@ -13816,6 +13888,9 @@ window.__ModuleLoader__.load({
       // layout-affecting event: host panels mount lazily, so a one-shot resolve
       // at mount time can see a still-collapsed panel.
       const recheckTimer = window.setInterval(() => {
+        // R82: a hidden tab does not need to re-resolve the scroller every 1.5s
+        // (the check walks the ancestor chain and reads computed styles).
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
         const prev = scrollerRef.current;
         syncScroller();
         if (scrollerRef.current !== prev) {
@@ -13854,6 +13929,14 @@ window.__ModuleLoader__.load({
             window.cancelAnimationFrame(measureRafRef.current);
           }
           measureRafRef.current = 0;
+        }
+        // R82: the focus repaint is also a rAF; left running it painted a caret
+        // for a node that was already gone.
+        if (focusRafRef.current) {
+          if (typeof window.cancelAnimationFrame === 'function') {
+            window.cancelAnimationFrame(focusRafRef.current);
+          }
+          focusRafRef.current = 0;
         }
         measureQueuedRef.current = false;
         if (measureTimerRef.current) {
@@ -14168,7 +14251,15 @@ window.__ModuleLoader__.load({
               'aria-label': NW.t('正文'),
               onInput: handleInput,
               onKeyDown: handleKeyDown,
-              onKeyUp: () => scheduleMeasure(true),
+              onKeyUp: (ev) => {
+                // R82: a bare Shift / Ctrl / Esc / Tab is not writing. Re-centring
+                // on those pulled the page back while the writer was reading a
+                // few lines further down.
+                const key = ev && typeof ev.key === 'string' ? ev.key : '';
+                if (key === 'Shift' || key === 'Control' || key === 'Alt' || key === 'Meta'
+                  || key === 'CapsLock' || key === 'Escape' || key === 'Tab') return;
+                scheduleMeasure(true);
+              },
               onMouseDown: (ev) => {
                 // R73: a new press starts a new selection; the previous
                 // button described the old one.
@@ -17513,6 +17604,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const editorRef = useRef(null);
     const rootRef = useRef(null);
     const aliveRef = useRef(true);
+    /** R82: last chapter-open request; a slower earlier open must not win. */
+    const chapterOpenSeqRef = useRef(0);
     // R34: the latest inbox page, read by `refreshHomeFeed` to reconcile the
     // submission log without taking `inbox` into its dependency list.
     const inboxRef = useRef(inbox);
@@ -18295,19 +18388,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const metaChanged = metaRef.note !== noteSig || metaRef.submission !== submissionSig;
         let changed = null;
         if (seen.size > 0 && !encryptChanged) {
-          // A book disappeared: the host can only clean up its file when it is
-          // asked for the whole library (the stale-file pass compares the
-          // previous snapshot against this one).
-          if (next.size !== seen.size) changed = null;
-          else {
-            changed = [];
-            for (const [id, sig] of next) {
-              if (seen.get(id) !== sig) changed.push(id);
-            }
+          // R82: do not fall back to "rewrite every book" when the count changes.
+          // An added book is simply in `changed`; a deleted one is handled by the
+          // host's stale-name pass (it compares the previous snapshot with this
+          // one on every call), which only needs a mirror call with an empty list.
+          const bookCountChanged = next.size !== seen.size;
+          changed = [];
+          for (const [id, sig] of next) {
+            if (seen.get(id) !== sig) changed.push(id);
           }
-          // Nothing about any book and neither the notes nor the submission log
-          // moved: the folder already holds exactly this library.
-          if (Array.isArray(changed) && changed.length === 0 && !metaChanged) return;
+          // Nothing about any book, note or submission moved and no book appeared
+          // or disappeared: the folder already holds exactly this library.
+          if (changed.length === 0 && !metaChanged && !bookCountChanged) return;
         }
         const run = mirrorLibrary({ silent: true, changed: changed });
         if (run && typeof run.then === 'function') {
@@ -18541,11 +18633,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       async (id) => {
         if (id == null) return;
         if (activeChapterId != null && String(id) === String(activeChapterId)) return;
+        // R82: two opens can be in flight (shelf search calls "select novel" and
+        // "select chapter" back to back). The later request wins; an earlier one
+        // that resolves afterwards must not steal the view.
+        chapterOpenSeqRef.current += 1;
+        const seq = chapterOpenSeqRef.current;
         flushEditor();
         await snapshotVersion();
         try {
           const record = await NW.db.getChapter(id);
-          if (!aliveRef.current) return;
+          if (!aliveRef.current || chapterOpenSeqRef.current !== seq) return;
           if (!record) {
             pushToast('章节不存在或已被删除', 'error');
             return;
@@ -20953,6 +21050,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       const first = options[0];
       return first ? first.value : '';
     });
+    // R82: this picker is a second modal mask. Without registering here Escape
+    // closed the dialog underneath and left the picker stranded.
+    NW.useModalEscape(true, () => {
+      if (typeof p.onDone === 'function') p.onDone(null);
+    });
     const tried = Array.isArray(req.tried) ? req.tried : [];
     // R34: the caller passes a Chinese label ('AI 校对' / 'AI 投稿' / '修改建议');
     // translate it here so the picker reads as one sentence in either language.
@@ -21391,8 +21493,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   function textFingerprint(text) {
     const s = String(text == null ? '' : text);
     let hash = 5381;
-    const n = Math.min(s.length, 4000);
-    for (let i = 0; i < n; i += 1) hash = ((hash * 33) ^ s.charCodeAt(i)) >>> 0;
+    // R82: hash the whole text. The old 4000-char cap meant an equal-length edit
+    // deep inside a long chapter produced the same fingerprint, so reopening the
+    // column showed advice about text that no longer existed.
+    for (let i = 0; i < s.length; i += 1) hash = ((hash * 33) ^ s.charCodeAt(i)) >>> 0;
     return hash.toString(36) + ':' + s.length;
   }
 
@@ -22182,8 +22286,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // R77 (B3): 键盘 —— J/K 上下、A 接受、R 拒绝。输入框/文本域里不抢键。
     React.useEffect(() => {
       const onKey = (ev) => {
+        if (ev.defaultPrevented) return;
         const target = ev.target;
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+        // R82: a <select> uses the arrow keys, a focused button uses Space/Enter,
+        // and a dialog on top owns the keyboard. None of them should scroll the
+        // manuscript or accept advice behind the overlay.
+        if (target && (target.tagName === 'SELECT' || target.tagName === 'BUTTON')) return;
+        if (target && typeof target.closest === 'function' && target.closest('.nw-modal-mask')) return;
         if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
         const list = Array.isArray(items) ? items : [];
         if (!list.length) return;
@@ -22683,17 +22793,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     }, [selStart, selEnd, chapterId]);
 
     // Esc closes the window — the same contract as every other transient surface
-    // in the studio.
-    React.useEffect(() => {
-      const onKey = (ev) => {
-        if (ev.key !== 'Escape') return;
-        const target = ev.target;
-        if (target && typeof target.closest === 'function' && target.closest('.nw-modal-mask')) return;
-        if (typeof p.onClose === 'function') p.onClose();
-      };
-      window.addEventListener('keydown', onKey, true);
-      return () => window.removeEventListener('keydown', onKey, true);
-    }, [p.onClose]);
+    // in the studio. R82: join the shared escape stack instead of a private
+    // window listener, so one Esc closes only the topmost layer (a settings
+    // dialog opened on top no longer gets closed together with this window).
+    NW.useModalEscape(true, () => {
+      if (typeof p.onClose === 'function') p.onClose();
+    });
 
     // R77 (B3): 键盘走一遍 —— J/K 上下、A 接受、R 拒绝。输入框里打字时不抢键。
     // 这个 effect 放在 reveal / acceptItem 之后：deps 数组在渲染时求值，
@@ -22882,8 +22987,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // R77 (B3): 键盘走一遍 —— J/K 上下、A 接受、R 拒绝。输入框里不抢键。
     React.useEffect(() => {
       const onKey = (ev) => {
+        if (ev.defaultPrevented) return;
         const target = ev.target;
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+        // R82: same guard as the dock's handler (see above).
+        if (target && (target.tagName === 'SELECT' || target.tagName === 'BUTTON')) return;
+        if (target && typeof target.closest === 'function' && target.closest('.nw-modal-mask')) return;
         if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
         const list = Array.isArray(items) ? items : [];
         if (!list.length) return;
@@ -23417,9 +23526,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       .map((row) => ({
         email: String(row.email || ''),
         genres: Object.keys(row.genres || {}).filter((key) => row.genres[key]),
-        range: Number(row.minWords) || Number(row.maxWords)
-          ? String(Number(row.minWords) || 0) + '-' + String(Number(row.maxWords) || 0)
-          : '',
+        range: (() => {
+          // R82: `maxWords === 0` means "no upper bound" (「80000 字以上」), not
+          // 0. The old format printed 「80000-0」.
+          const min = Number(row.minWords) || 0;
+          const max = Number(row.maxWords) || 0;
+          if (min > 0 && max === 0) return String(min) + ' 字以上';
+          if (min === 0 && max > 0) return String(max) + ' 字以内';
+          if (min > 0 || max > 0) return String(min) + '-' + String(max);
+          return '';
+        })(),
         note: String(row.note || ''),
       }));
   }
@@ -23438,7 +23554,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     if (nums.length >= 2) {
       minWords = Number(nums[0]) || 0;
       maxWords = Number(nums[1]) || 0;
-      if (minWords > maxWords) {
+      // R82: 0 means "no bound"; only swap two real bounds. Swapping 「80000-0」
+      // used to turn an open-ended range into 「0-80000」.
+      if (maxWords > 0 && minWords > 0 && minWords > maxWords) {
         const swap = minWords;
         minWords = maxWords;
         maxWords = swap;
@@ -24469,6 +24587,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const picked = await NW.io.pickFiles('.json,.nwe');
         const file = picked && picked[0];
         if (!file) return null;
+        // R82: `file.text()` loads the whole snapshot into one JS string and then
+        // sends it as a JSON field — two copies in memory. A folder restore has no
+        // such doubling, so point large files there instead of freezing the tab.
+        if (Number(file.size) > 32 * 1024 * 1024) {
+          throw new Error('备份文件超过 32MB，请用「从文件夹恢复」而不是选文件');
+        }
         const text =
           typeof file.text === 'function' ? await file.text() : await readAsTextFallback(file);
         if (!String(text || '').trim()) throw new Error('选中的文件是空的');
@@ -25009,6 +25133,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     // ------------------------------------------------------------ SMTP ------
     const saveSmtp = async () => {
+      // R82: validate before round-tripping. Empty host used to be "saved ok"
+      // while the connection test then reported a generic failure; a bogus port
+      // was silently clamped to 465 by the host.
+      if (!String(smtp.host || '').trim()) {
+        setSmtp((prev) => Object.assign({}, prev, { error: '请填写 SMTP 主机（例如 smtp.qq.com）' }));
+        return;
+      }
+      const port = Number(smtp.port);
+      if (!(port > 0 && port < 65536)) {
+        setSmtp((prev) => Object.assign({}, prev, { error: '端口必须是 1 – 65535' }));
+        return;
+      }
       setSmtp((prev) => Object.assign({}, prev, { busy: '正在保存邮箱设置…', error: '', hint: '' }));
       try {
         if (!(NW.io && NW.io.submit && NW.io.submit.smtpConfigure)) throw new Error('当前版本不支持邮箱设置');
@@ -25156,6 +25292,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const imapReason = (code, fallback) => IMAP_REASON[String(code || '')] || String(fallback || '');
 
     const saveImap = async () => {
+      // R82: same pre-flight as SMTP (see saveSmtp).
+      if (imap.enabled && !String(imap.host || '').trim()) {
+        setImap((prev) => Object.assign({}, prev, { error: '请填写 IMAP 主机（例如 imap.qq.com）' }));
+        return;
+      }
+      const imapPort = Number(imap.port);
+      if (!(imapPort > 0 && imapPort < 65536)) {
+        setImap((prev) => Object.assign({}, prev, { error: '端口必须是 1 – 65535' }));
+        return;
+      }
       setImap((prev) => Object.assign({}, prev, { busy: '正在保存收件设置…', error: '', hint: '' }));
       try {
         if (!(NW.io && NW.io.inbox && NW.io.inbox.configure)) throw new Error('当前版本不支持收件设置');
@@ -25464,7 +25610,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               children: NW.ui.input({
                 type: 'number',
                 value: draft.autoSaveMs || 1200,
-                onChange: (v) => set('autoSaveMs', Math.max(300, Number(v) || 1200)),
+                onChange: (v) => {
+                  // R82: do not clamp while typing. `Math.max(300, 6)` turned a
+                  // typed 「600」 into 「3000」 because every keystroke was pushed to
+                  // settings; the editor applies its own 200–60000 clamp when it
+                  // reads the value.
+                  const raw = String(v == null ? '' : v).replace(/[^\d]/g, '').slice(0, 6);
+                  set('autoSaveMs', raw === '' ? '' : Number(raw));
+                },
                 style: { maxWidth: '140px' },
               }),
             }),

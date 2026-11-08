@@ -337,7 +337,9 @@
     if (!base64) throw new Error('导出失败：没有拿到文件数据');
     const bytes = fromBase64(base64);
     const blob = new Blob([bytes], { type: String(data.mime || 'application/octet-stream') });
-    download(String(data.filename || book.title || 'novel'), blob);
+    if (!download(String(data.filename || book.title || 'novel'), blob)) {
+      throw new Error('浏览器拦截了下载，请允许本站下载后重试');
+    }
     return { filename: data.filename, mime: data.mime, size: bytes.length };
   }
 
@@ -376,7 +378,9 @@
     if (!base64) throw new Error('导出失败：没有拿到压缩包数据');
     const bytes = fromBase64(base64);
     const blob = new Blob([bytes], { type: String(built.mime || 'application/zip') });
-    download(String(built.filename || 'novel-writer.zip'), blob);
+    if (!download(String(built.filename || 'novel-writer.zip'), blob)) {
+      throw new Error('浏览器拦截了下载，请允许本站下载后重试');
+    }
     return {
       filename: built.filename,
       size: bytes.length,

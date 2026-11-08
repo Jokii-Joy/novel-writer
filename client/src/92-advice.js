@@ -243,8 +243,10 @@
   function textFingerprint(text) {
     const s = String(text == null ? '' : text);
     let hash = 5381;
-    const n = Math.min(s.length, 4000);
-    for (let i = 0; i < n; i += 1) hash = ((hash * 33) ^ s.charCodeAt(i)) >>> 0;
+    // R82: hash the whole text. The old 4000-char cap meant an equal-length edit
+    // deep inside a long chapter produced the same fingerprint, so reopening the
+    // column showed advice about text that no longer existed.
+    for (let i = 0; i < s.length; i += 1) hash = ((hash * 33) ^ s.charCodeAt(i)) >>> 0;
     return hash.toString(36) + ':' + s.length;
   }
 
@@ -1034,8 +1036,14 @@
     // R77 (B3): 键盘 —— J/K 上下、A 接受、R 拒绝。输入框/文本域里不抢键。
     React.useEffect(() => {
       const onKey = (ev) => {
+        if (ev.defaultPrevented) return;
         const target = ev.target;
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+        // R82: a <select> uses the arrow keys, a focused button uses Space/Enter,
+        // and a dialog on top owns the keyboard. None of them should scroll the
+        // manuscript or accept advice behind the overlay.
+        if (target && (target.tagName === 'SELECT' || target.tagName === 'BUTTON')) return;
+        if (target && typeof target.closest === 'function' && target.closest('.nw-modal-mask')) return;
         if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
         const list = Array.isArray(items) ? items : [];
         if (!list.length) return;
@@ -1535,17 +1543,12 @@
     }, [selStart, selEnd, chapterId]);
 
     // Esc closes the window — the same contract as every other transient surface
-    // in the studio.
-    React.useEffect(() => {
-      const onKey = (ev) => {
-        if (ev.key !== 'Escape') return;
-        const target = ev.target;
-        if (target && typeof target.closest === 'function' && target.closest('.nw-modal-mask')) return;
-        if (typeof p.onClose === 'function') p.onClose();
-      };
-      window.addEventListener('keydown', onKey, true);
-      return () => window.removeEventListener('keydown', onKey, true);
-    }, [p.onClose]);
+    // in the studio. R82: join the shared escape stack instead of a private
+    // window listener, so one Esc closes only the topmost layer (a settings
+    // dialog opened on top no longer gets closed together with this window).
+    NW.useModalEscape(true, () => {
+      if (typeof p.onClose === 'function') p.onClose();
+    });
 
     // R77 (B3): 键盘走一遍 —— J/K 上下、A 接受、R 拒绝。输入框里打字时不抢键。
     // 这个 effect 放在 reveal / acceptItem 之后：deps 数组在渲染时求值，
@@ -1734,8 +1737,12 @@
     // R77 (B3): 键盘走一遍 —— J/K 上下、A 接受、R 拒绝。输入框里不抢键。
     React.useEffect(() => {
       const onKey = (ev) => {
+        if (ev.defaultPrevented) return;
         const target = ev.target;
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+        // R82: same guard as the dock's handler (see above).
+        if (target && (target.tagName === 'SELECT' || target.tagName === 'BUTTON')) return;
+        if (target && typeof target.closest === 'function' && target.closest('.nw-modal-mask')) return;
         if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
         const list = Array.isArray(items) ? items : [];
         if (!list.length) return;

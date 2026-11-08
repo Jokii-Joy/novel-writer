@@ -4438,6 +4438,9 @@
       // layout-affecting event: host panels mount lazily, so a one-shot resolve
       // at mount time can see a still-collapsed panel.
       const recheckTimer = window.setInterval(() => {
+        // R82: a hidden tab does not need to re-resolve the scroller every 1.5s
+        // (the check walks the ancestor chain and reads computed styles).
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
         const prev = scrollerRef.current;
         syncScroller();
         if (scrollerRef.current !== prev) {
@@ -4476,6 +4479,14 @@
             window.cancelAnimationFrame(measureRafRef.current);
           }
           measureRafRef.current = 0;
+        }
+        // R82: the focus repaint is also a rAF; left running it painted a caret
+        // for a node that was already gone.
+        if (focusRafRef.current) {
+          if (typeof window.cancelAnimationFrame === 'function') {
+            window.cancelAnimationFrame(focusRafRef.current);
+          }
+          focusRafRef.current = 0;
         }
         measureQueuedRef.current = false;
         if (measureTimerRef.current) {
@@ -4790,7 +4801,15 @@
               'aria-label': NW.t('正文'),
               onInput: handleInput,
               onKeyDown: handleKeyDown,
-              onKeyUp: () => scheduleMeasure(true),
+              onKeyUp: (ev) => {
+                // R82: a bare Shift / Ctrl / Esc / Tab is not writing. Re-centring
+                // on those pulled the page back while the writer was reading a
+                // few lines further down.
+                const key = ev && typeof ev.key === 'string' ? ev.key : '';
+                if (key === 'Shift' || key === 'Control' || key === 'Alt' || key === 'Meta'
+                  || key === 'CapsLock' || key === 'Escape' || key === 'Tab') return;
+                scheduleMeasure(true);
+              },
               onMouseDown: (ev) => {
                 // R73: a new press starts a new selection; the previous
                 // button described the old one.

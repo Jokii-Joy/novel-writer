@@ -622,6 +622,40 @@
         ops.push({ store: 'marks', type: 'delete', key: marks[i].id });
       }
     }
+    // R82: the book's 灵感便签, 设定集 and 已接收建议 go into the same trash item.
+    // Without this, deleting a book (or emptying the trash) left those rows
+    // orphaned forever, and restoring the book brought back the text but not the
+    // notes/lore/decisions that belonged to it.
+    const allNotes = await readAll('notes');
+    const notes = allNotes.filter(function (row) {
+      return row && (chapterIds[row.chapterId] || row.novelId === id);
+    });
+    if (notes.length) {
+      trashItem.payload.notes = notes;
+      for (let i = 0; i < notes.length; i += 1) {
+        ops.push({ store: 'notes', type: 'delete', key: notes[i].id });
+      }
+    }
+    const allLore = await readAll('lore');
+    const lore = allLore.filter(function (row) {
+      return row && row.novelId === id;
+    });
+    if (lore.length) {
+      trashItem.payload.lore = lore;
+      for (let i = 0; i < lore.length; i += 1) {
+        ops.push({ store: 'lore', type: 'delete', key: lore[i].id });
+      }
+    }
+    const allRevisions = await readAll('revisions');
+    const revisions = allRevisions.filter(function (row) {
+      return row && chapterIds[row.chapterId];
+    });
+    if (revisions.length) {
+      trashItem.payload.revisions = revisions;
+      for (let i = 0; i < revisions.length; i += 1) {
+        ops.push({ store: 'revisions', type: 'delete', key: revisions[i].id });
+      }
+    }
     await writeBatch(ops);
     notify();
     // R22: same contract as deleteChapter — the id lets the caller offer 撤销.
@@ -985,6 +1019,29 @@
         ops.push({ store: 'marks', type: 'delete', key: marks[i].id });
       }
     }
+    // R82: 灵感便签 and 已接收建议 point at this chapter too. Deleting the chapter
+    // used to leave them behind as unreachable orphans (and an undone delete
+    // silently kept them). Park them in the same trash item.
+    const allNotes = await readAll('notes');
+    const notes = allNotes.filter(function (row) {
+      return row && idSet[row.chapterId];
+    });
+    if (notes.length) {
+      trashItem.payload.notes = notes;
+      for (let i = 0; i < notes.length; i += 1) {
+        ops.push({ store: 'notes', type: 'delete', key: notes[i].id });
+      }
+    }
+    const allRevisions = await readAll('revisions');
+    const revisions = allRevisions.filter(function (row) {
+      return row && idSet[row.chapterId];
+    });
+    if (revisions.length) {
+      trashItem.payload.revisions = revisions;
+      for (let i = 0; i < revisions.length; i += 1) {
+        ops.push({ store: 'revisions', type: 'delete', key: revisions[i].id });
+      }
+    }
     await writeBatch(ops);
     if (root.novelId) await touchNovel(root.novelId);
     notify();
@@ -1176,6 +1233,17 @@
       const row = restoredMarks[i];
       if (!row || !row.id) continue;
       ops.push({ store: 'marks', type: 'put', value: row });
+    }
+    // R82: 灵感便签 / 设定集 / 已接收建议 travel with the trash payload too, so
+    // deleting a book and undoing it no longer leaves those rows orphaned (or
+    // loses them when the trash is emptied).
+    for (const key of ['notes', 'lore', 'revisions']) {
+      const rows = Array.isArray(payload[key]) ? payload[key] : [];
+      for (let i = 0; i < rows.length; i += 1) {
+        const row = rows[i];
+        if (!row || !row.id) continue;
+        ops.push({ store: key, type: 'put', value: row });
+      }
     }
     await writeBatch(ops);
     notify();

@@ -359,9 +359,16 @@
       .map((row) => ({
         email: String(row.email || ''),
         genres: Object.keys(row.genres || {}).filter((key) => row.genres[key]),
-        range: Number(row.minWords) || Number(row.maxWords)
-          ? String(Number(row.minWords) || 0) + '-' + String(Number(row.maxWords) || 0)
-          : '',
+        range: (() => {
+          // R82: `maxWords === 0` means "no upper bound" (「80000 字以上」), not
+          // 0. The old format printed 「80000-0」.
+          const min = Number(row.minWords) || 0;
+          const max = Number(row.maxWords) || 0;
+          if (min > 0 && max === 0) return String(min) + ' 字以上';
+          if (min === 0 && max > 0) return String(max) + ' 字以内';
+          if (min > 0 || max > 0) return String(min) + '-' + String(max);
+          return '';
+        })(),
         note: String(row.note || ''),
       }));
   }
@@ -380,7 +387,9 @@
     if (nums.length >= 2) {
       minWords = Number(nums[0]) || 0;
       maxWords = Number(nums[1]) || 0;
-      if (minWords > maxWords) {
+      // R82: 0 means "no bound"; only swap two real bounds. Swapping 「80000-0」
+      // used to turn an open-ended range into 「0-80000」.
+      if (maxWords > 0 && minWords > 0 && minWords > maxWords) {
         const swap = minWords;
         minWords = maxWords;
         maxWords = swap;
@@ -1411,6 +1420,12 @@
         const picked = await NW.io.pickFiles('.json,.nwe');
         const file = picked && picked[0];
         if (!file) return null;
+        // R82: `file.text()` loads the whole snapshot into one JS string and then
+        // sends it as a JSON field — two copies in memory. A folder restore has no
+        // such doubling, so point large files there instead of freezing the tab.
+        if (Number(file.size) > 32 * 1024 * 1024) {
+          throw new Error('备份文件超过 32MB，请用「从文件夹恢复」而不是选文件');
+        }
         const text =
           typeof file.text === 'function' ? await file.text() : await readAsTextFallback(file);
         if (!String(text || '').trim()) throw new Error('选中的文件是空的');
@@ -1951,6 +1966,18 @@
 
     // ------------------------------------------------------------ SMTP ------
     const saveSmtp = async () => {
+      // R82: validate before round-tripping. Empty host used to be "saved ok"
+      // while the connection test then reported a generic failure; a bogus port
+      // was silently clamped to 465 by the host.
+      if (!String(smtp.host || '').trim()) {
+        setSmtp((prev) => Object.assign({}, prev, { error: '请填写 SMTP 主机（例如 smtp.qq.com）' }));
+        return;
+      }
+      const port = Number(smtp.port);
+      if (!(port > 0 && port < 65536)) {
+        setSmtp((prev) => Object.assign({}, prev, { error: '端口必须是 1 – 65535' }));
+        return;
+      }
       setSmtp((prev) => Object.assign({}, prev, { busy: '正在保存邮箱设置…', error: '', hint: '' }));
       try {
         if (!(NW.io && NW.io.submit && NW.io.submit.smtpConfigure)) throw new Error('当前版本不支持邮箱设置');
@@ -2098,6 +2125,16 @@
     const imapReason = (code, fallback) => IMAP_REASON[String(code || '')] || String(fallback || '');
 
     const saveImap = async () => {
+      // R82: same pre-flight as SMTP (see saveSmtp).
+      if (imap.enabled && !String(imap.host || '').trim()) {
+        setImap((prev) => Object.assign({}, prev, { error: '请填写 IMAP 主机（例如 imap.qq.com）' }));
+        return;
+      }
+      const imapPort = Number(imap.port);
+      if (!(imapPort > 0 && imapPort < 65536)) {
+        setImap((prev) => Object.assign({}, prev, { error: '端口必须是 1 – 65535' }));
+        return;
+      }
       setImap((prev) => Object.assign({}, prev, { busy: '正在保存收件设置…', error: '', hint: '' }));
       try {
         if (!(NW.io && NW.io.inbox && NW.io.inbox.configure)) throw new Error('当前版本不支持收件设置');
@@ -2406,7 +2443,14 @@
               children: NW.ui.input({
                 type: 'number',
                 value: draft.autoSaveMs || 1200,
-                onChange: (v) => set('autoSaveMs', Math.max(300, Number(v) || 1200)),
+                onChange: (v) => {
+                  // R82: do not clamp while typing. `Math.max(300, 6)` turned a
+                  // typed 「600」 into 「3000」 because every keystroke was pushed to
+                  // settings; the editor applies its own 200–60000 clamp when it
+                  // reads the value.
+                  const raw = String(v == null ? '' : v).replace(/[^\d]/g, '').slice(0, 6);
+                  set('autoSaveMs', raw === '' ? '' : Number(raw));
+                },
                 style: { maxWidth: '140px' },
               }),
             }),
