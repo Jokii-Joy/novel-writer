@@ -326,6 +326,12 @@
           : label,
       });
 
+    // R100: the newest book with a remembered chapter is what 「继续写」 means.
+    const resumeRow = rollups.find((row) => row && row.resume) || null;
+    const resumeTarget =
+      resumeRow && typeof p.onResumeChapter === 'function' ? resumeRow : null;
+    const microEnabled = !!(resumeTarget && typeof p.onMicroGoal === 'function');
+
     const header = NW.h(
       'header',
       { className: 'nw-welcome-head' },
@@ -344,7 +350,16 @@
       NW.h(
         'div',
         { className: 'nw-welcome-actions' },
-        btn(tr('新建小说'), () => typeof p.onNewNovel === 'function' && p.onNewNovel(), 'primary', 'plus'),
+        // R100: 「继续写」 is the one button the home screen exists for — it lands
+        // on the chapter the writer left, not merely on the shelf. 「只写 100 字」
+        // is the same door with a goal small enough to walk through on a bad day.
+        resumeTarget
+          ? btn(tr('继续写'), () => p.onResumeChapter(resumeTarget.novel.id, resumeTarget.resume.id), 'primary', 'pencil')
+          : null,
+        microEnabled
+          ? btn(tr('只写 100 字'), () => p.onMicroGoal(resumeTarget.novel.id, resumeTarget.resume.id, 100), 'ghost', 'clock')
+          : null,
+        btn(tr('新建小说'), () => typeof p.onNewNovel === 'function' && p.onNewNovel(), resumeTarget ? 'ghost' : 'primary', 'plus'),
         btn(tr('导入'), () => typeof p.onImport === 'function' && p.onImport(), 'ghost', 'upload'),
         btn(
           '投稿',
@@ -432,8 +447,51 @@
       { k: '全书', v: fmtWords(stats.total) + ' 字' },
       { k: '本书', v: fmtWords(stats.novel) + ' 字' },
       { k: '近 7 天', v: fmtWords(stats.weekWords) + ' 字' },
-      { k: '今天', v: fmtWords(stats.todayWords) + ' 字' },
     ];
+    // R100: 今天 shows progress toward the daily goal instead of a bare number.
+    // The ring is the whole cell: clicking it asks for a new goal, which is how
+    // the number stays honest — a goal you cannot change is a rule, not a goal.
+    const dailyGoal = Math.max(0, Math.round(Number(p.dailyGoal) || 0));
+    const todayWords = Math.max(0, Number(stats.todayWords) || 0);
+    const goalRatio = dailyGoal > 0 ? Math.min(1, todayWords / dailyGoal) : 0;
+    const ringR = 15;
+    const ringLen = 2 * Math.PI * ringR;
+    const todayCell = NW.h(
+      'button',
+      {
+        type: 'button',
+        className: 'nw-welcome-stat nw-welcome-statgoal',
+        'data-done': goalRatio >= 1 ? '1' : '0',
+        title: dailyGoal > 0 ? `今日目标 ${dailyGoal} 字 · 点击修改` : '点击设置每日字数目标',
+        onClick: () => typeof p.onSetDailyGoal === 'function' && p.onSetDailyGoal(),
+      },
+      NW.h('dt', null, '今天'),
+      NW.h(
+        'dd',
+        null,
+        dailyGoal > 0
+          ? NW.h(
+              'svg',
+              { className: 'nw-goal-ring', viewBox: '0 0 36 36', width: 30, height: 30, 'aria-hidden': 'true' },
+              NW.h('circle', { className: 'nw-goal-track', cx: 18, cy: 18, r: ringR }),
+              NW.h('circle', {
+                className: 'nw-goal-fill',
+                cx: 18,
+                cy: 18,
+                r: ringR,
+                transform: 'rotate(-90 18 18)',
+                strokeDasharray: ringLen,
+                strokeDashoffset: ringLen * (1 - goalRatio),
+              }),
+            )
+          : null,
+        NW.h(
+          'span',
+          { className: 'nw-goal-text' },
+          dailyGoal > 0 ? `${fmtWords(todayWords)} / ${fmtWords(dailyGoal)} 字` : `${fmtWords(todayWords)} 字`,
+        ),
+      ),
+    );
     const statsCard = card(
       '创作统计',
       NW.h(
@@ -447,6 +505,7 @@
             NW.h('dd', null, cell.v),
           ),
         ),
+        todayCell,
       ),
     );
 
@@ -852,6 +911,24 @@
   margin:2px 0 0;font-family:var(--nw-reading-font);font-weight:600;
   font-size:16px;line-height:1.3;color:var(--nw-fg);font-variant-numeric:tabular-nums;
 }
+/* R100: 今天 is a goal ring, and the whole cell is the way to change the goal.
+   It is a button that looks like the other cells until hovered — the number is
+   the point, not the affordance. */
+.nw-welcome-statgoal{
+  display:block;width:100%;text-align:left;border:1px solid transparent;
+  font:inherit;color:inherit;cursor:pointer;transition:border-color .15s ease,background .15s ease;
+}
+.nw-welcome-statgoal:hover{border-color:var(--nw-line-soft);}
+.nw-welcome-statgoal:focus-visible{outline:2px solid var(--nw-brand);outline-offset:1px;}
+.nw-welcome-statgoal dd{display:flex;align-items:center;gap:8px;}
+.nw-goal-ring{flex:0 0 auto;transform:rotate(0deg);}
+.nw-goal-track{fill:none;stroke:color-mix(in srgb,var(--nw-line) 55%,transparent);stroke-width:3;}
+.nw-goal-fill{
+  fill:none;stroke:var(--nw-brand);stroke-width:3;stroke-linecap:round;
+  transition:stroke-dashoffset .4s ease;
+}
+.nw-welcome-statgoal[data-done="1"] .nw-goal-fill{stroke:var(--nw-success,var(--nw-brand));}
+.nw-goal-text{font-variant-numeric:tabular-nums;}
 
 /* -------------------------------------------------------- 投稿记录 ----- */
 .nw-welcome-subs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--nw-sp-0);}

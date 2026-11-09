@@ -32,6 +32,13 @@
     fontSize: 20,
     lineHeight: 2,
     pageWidth: 760,
+    /**
+     * R100: the daily word goal drives the home-screen ring and the status bar.
+     * Kept small on purpose — a goal you can hit on a bad day is what makes the
+     * next session start; a number that only works on a good day becomes guilt.
+     * 0 disables the ring (the plain 「今天 N 字」 stays).
+     */
+    dailyGoal: 500,
     /* 'claude' | 'eye' | 'night' | 'newspaper' | 'magazine' — five themes since
        R19; retired ids (light/harness/card/ink/dark/parchment/guofeng) are
        migrated on load by 90-app.js migrateTheme() and aliased by 60-editor.js. */

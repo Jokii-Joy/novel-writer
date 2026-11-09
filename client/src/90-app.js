@@ -66,6 +66,48 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   }
 
   /**
+   * R100: the micro goal ("只写 100 字") is a promise to the writer, not a
+   * setting — it belongs to one sitting on one chapter. It lives in
+   * localStorage because it must survive a reload (the whole point is that the
+   * bar is still there when the writer comes back), and it is deliberately
+   * small: `{novelId, chapterId, target, baseline, startedAt}` where `baseline`
+   * is today's ledger value when the goal started, so the bar measures words
+   * written *since* the click rather than today's total.
+   */
+  const MICRO_GOAL_KEY = 'nw.microGoal';
+
+  function readMicroGoal() {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = window.localStorage.getItem(MICRO_GOAL_KEY);
+      const row = raw ? JSON.parse(raw) : null;
+      if (!row || typeof row !== 'object') return null;
+      const target = Number(row.target);
+      const baseline = Number(row.baseline);
+      if (!Number.isFinite(target) || !Number.isFinite(baseline)) return null;
+      return {
+        novelId: row.novelId == null ? null : row.novelId,
+        chapterId: row.chapterId == null ? null : row.chapterId,
+        target: Math.max(1, Math.round(target)),
+        baseline: Math.max(0, baseline),
+        startedAt: Number(row.startedAt) || 0,
+      };
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function writeMicroGoal(row) {
+    if (typeof window === 'undefined') return;
+    try {
+      if (row) window.localStorage.setItem(MICRO_GOAL_KEY, JSON.stringify(row));
+      else window.localStorage.removeItem(MICRO_GOAL_KEY);
+    } catch (err) {
+      /* a full quota must never block writing */
+    }
+  }
+
+  /**
    * R80: fill in the layout preferences a wiped WebView profile lost.
    *
    * Only missing keys are touched — whatever this profile already recorded stays
@@ -111,6 +153,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   container-type:inline-size;container-name:bench;
 }
 .nw-bench-paper{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;min-height:0;position:relative;}
+/* R100: 微目标 — a 3px line at the top of the paper. Quiet by design: it answers
+   "how much is left" without asking the writer to look at it. */
+.nw-microbar{
+  position:absolute;top:0;left:0;right:0;height:3px;z-index:4;
+  background:color-mix(in srgb,var(--nw-line) 38%,transparent);
+  pointer-events:none;overflow:hidden;
+}
+.nw-microbar-fill{
+  display:block;height:100%;
+  background:linear-gradient(90deg,color-mix(in srgb,var(--nw-brand) 55%,transparent),var(--nw-brand));
+  transition:width .35s ease;
+}
 /* R28 ①: the reserved lane is gone. R24/R27 carved 348px out of the manuscript by
    padding the surface, which narrowed the page and pushed the prose right the
    moment the card opened — the exact two things the writer asked us to stop
@@ -1304,6 +1358,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [dailyStats, setDailyStats] = useState({});
     const dailyStatsRef = useRef(dailyStats);
     dailyStatsRef.current = dailyStats;
+    // R100: 「只写 100 字」 — one sitting, one chapter, persisted across reloads.
+    const [microGoal, setMicroGoal] = useState(readMicroGoal);
     const dailyWordsRef = useRef({});
     // R95: which counting rule the baselines above were taken under. Toggling
     // 字数含标点 rescales every count, so the baselines have to be dropped.
@@ -3176,6 +3232,49 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [pushToast],
     );
 
+    // ------------------------------------------------------ R100 goals ------
+    const editDailyGoal = useCallback(async () => {
+      const answer = await NW.ui.prompt({
+        title: '每日字数目标',
+        label: '每天想写多少字？（0 关闭目标环）',
+        value: String(dailyGoal || 0),
+      });
+      if (answer == null) return;
+      const next = Math.max(0, Math.min(20000, Math.round(Number(String(answer).replace(/[^\d]/g, '')) || 0)));
+      await applySettings({ dailyGoal: next });
+      pushToast(next > 0 ? `每日目标：${next} 字` : '已关闭每日目标', 'ok');
+    }, [applySettings, dailyGoal, pushToast]);
+
+    const startMicroGoal = useCallback(
+      (novelId, chapterId, target) => {
+        if (chapterId == null) return;
+        const baseline = Number(dailyStatsRef.current[dayKeyOf(Date.now())]) || 0;
+        const row = {
+          novelId: novelId == null ? null : novelId,
+          chapterId: chapterId,
+          target: Math.max(1, Math.round(Number(target) || 100)),
+          baseline: baseline,
+          startedAt: Date.now(),
+        };
+        writeMicroGoal(row);
+        setMicroGoal(row);
+        const open = chapterRef.current;
+        if (open && String(open.id) === String(chapterId)) setView('write');
+        else selectChapter(chapterId);
+      },
+      [selectChapter],
+    );
+
+    // The bar is a promise, not a nag: it disappears the moment the target is
+    // met, with one quiet toast and no dialog to dismiss.
+    useEffect(() => {
+      if (!microGoal) return;
+      if (microWritten < microGoal.target) return;
+      writeMicroGoal(null);
+      setMicroGoal(null);
+      pushToast(`微目标达成：${microGoal.target} 字。今天可以收工了。`, 'ok');
+    }, [microGoal, microWritten, pushToast]);
+
     // ----------------------------------------------------------- locking ----
     const doLock = useCallback(async () => {
       // Order matters: flush (writes plaintext), snapshot (needs plaintext),
@@ -3836,6 +3935,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     );
     // R77: 今日进度。一条记录都没有时显示「今日 0 字」，不编数字。
     const todayWords = Number(dailyStats[dayKeyOf(Date.now())]) || 0;
+    // R100: 目标环与微目标都从同一本账推导，绝不另算一套字数。
+    const dailyGoal = Math.max(0, Math.round(Number(settings.dailyGoal) || 0));
+    const microWritten = microGoal ? Math.max(0, todayWords - microGoal.baseline) : 0;
+    const microActive = !!(
+      microGoal &&
+      chapter &&
+      String(chapter.id) === String(microGoal.chapterId) &&
+      microWritten < microGoal.target
+    );
     const streakDays = (() => {
       const DAY = 86400000;
       const keyOf = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -4108,6 +4216,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 // from updatedAt; countPunctuation is part of the recount key.
                 dailyStats: dailyStats,
                 countPunctuation: settings.countPunctuation !== false,
+                // R100: 今天 becomes a goal ring, and 「只写 100 字」 starts a
+                // sitting-sized target on the chapter the writer is resuming.
+                dailyGoal: dailyGoal,
+                onSetDailyGoal: editDailyGoal,
+                onMicroGoal: startMicroGoal,
                 hasChapter: !!chapter,
                 journalCount: journalCount,
                 submissions: submissions,
@@ -4185,6 +4298,26 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       // manuscript for no reason.
                       'data-notes-lane': notesOpen && !immersive ? '1' : '0',
                     },
+                    // R100: the micro goal is a thin line at the top of the paper,
+                    // not a dialog. It is quiet on purpose — a progress bar you
+                    // cannot stop looking at is the opposite of encouragement.
+                    microActive
+                      ? h(
+                          'div',
+                          {
+                            className: 'nw-microbar',
+                            role: 'progressbar',
+                            'aria-valuemin': 0,
+                            'aria-valuemax': microGoal.target,
+                            'aria-valuenow': Math.min(microWritten, microGoal.target),
+                            title: `微目标 ${Math.min(microWritten, microGoal.target)} / ${microGoal.target} 字`,
+                          },
+                          h('span', {
+                            className: 'nw-microbar-fill',
+                            style: { width: Math.min(100, (microWritten / microGoal.target) * 100) + '%' },
+                          }),
+                        )
+                      : null,
                     h(NW.Editor, {
                       key: String(chapter.id),
                       chapter: chapter,
@@ -4387,7 +4520,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               h(
                 'span',
                 { className: 'nw-status-today', 'data-sign': todayWords < 0 ? 'down' : 'up' },
-                '今日 ' + (todayWords > 0 ? '+' : '') + NW.fmtWords(todayWords) + ' 字'
+                '今日 ' + (todayWords > 0 ? '+' : '') + NW.fmtWords(todayWords)
+                  + (dailyGoal > 0 ? ' / ' + NW.fmtWords(dailyGoal) : '') + ' 字'
+                  + (microActive ? ' · 微目标 ' + microWritten + '/' + microGoal.target : '')
                   + (streakDays > 1 ? ' · 连续 ' + streakDays + ' 天' : ''),
               ),
             ),

@@ -198,6 +198,47 @@ check('建议面板显示等待秒数与已到条数', () => {
   assert.ok(adviceSrc.includes('const [elapsed, setElapsed] = useState(0)'), 'elapsed state exists');
 });
 
+// --- R100: 低摩擦启动 ------------------------------------------------------
+check('默认每日目标是 500 字（0 关闭）', () => {
+  const dbSrc = read('10-db.js');
+  assert.ok(/dailyGoal:\s*500,/.test(dbSrc), 'DEFAULT_SETTINGS carries dailyGoal: 500');
+});
+
+check('首页有「继续写」与「只写 100 字」两个入口', () => {
+  assert.ok(welcomeSrc.includes("tr('继续写')"), 'resume button exists');
+  assert.ok(welcomeSrc.includes("p.onResumeChapter(resumeTarget.novel.id, resumeTarget.resume.id)"), 'resume lands on the remembered chapter');
+  assert.ok(welcomeSrc.includes("tr('只写 100 字')"), 'micro goal button exists');
+  assert.ok(welcomeSrc.includes("p.onMicroGoal(resumeTarget.novel.id, resumeTarget.resume.id, 100)"), 'micro goal starts at 100');
+});
+
+check('今天变成可点击的目标环', () => {
+  assert.ok(welcomeSrc.includes('nw-goal-ring'), 'ring is rendered');
+  assert.ok(welcomeSrc.includes('strokeDashoffset'), 'ring reflects progress');
+  assert.ok(welcomeSrc.includes('nw-welcome-statgoal'), 'the cell is a button');
+  assert.ok(welcomeSrc.includes('p.onSetDailyGoal'), 'clicking the ring edits the goal');
+  assert.ok(welcomeSrc.includes("'data-done'"), 'met goal has its own state');
+});
+
+check('App 接线：目标、微目标、完成提示', () => {
+  const appSrc = read('90-app.js');
+  assert.ok(appSrc.includes('dailyGoal: dailyGoal'), 'Welcome receives the goal');
+  assert.ok(appSrc.includes('onSetDailyGoal: editDailyGoal'), 'goal editor is wired');
+  assert.ok(appSrc.includes('onMicroGoal: startMicroGoal'), 'micro goal starter is wired');
+  assert.ok(appSrc.includes("const MICRO_GOAL_KEY = 'nw.microGoal'"), 'micro goal survives a reload');
+  assert.ok(appSrc.includes('微目标达成'), 'finishing the goal says so once');
+  assert.ok(appSrc.includes("title: '每日字数目标'"), 'the goal prompt exists');
+  assert.ok(appSrc.includes('nw-microbar'), 'the thin bar is rendered');
+});
+
+check('「继续写」恢复精确光标位置', () => {
+  const edSrc = read('60-editor.js');
+  assert.ok(edSrc.includes("const CARET_PREFIX = 'nw.caret.'"), 'caret is stored per chapter');
+  assert.ok(edSrc.includes('function readCaret('), 'caret can be read back');
+  assert.ok(edSrc.includes('function flushCaretNow('), 'caret is flushed on unload/switch');
+  assert.ok(edSrc.includes('const savedCaret = readCaret(nextId)'), 'chapter load restores it');
+  assert.ok(edSrc.includes('scrollOffsetToCenter(caretAt)'), 'restored caret is scrolled into view');
+});
+
 // --- summary ---------------------------------------------------------------
 console.log('');
 if (failed) {

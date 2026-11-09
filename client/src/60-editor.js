@@ -275,6 +275,45 @@ const SEL_EMIT_MS = 120;
     }
   }
 
+  /**
+   * R100: where the caret was in each chapter. 「继续写」 is only frictionless if
+   * it lands on the sentence the writer stopped at, so the offset is persisted
+   * per chapter and restored when the chapter opens. Offsets are UTF-16 code
+   * units, exactly what textarea.selectionStart reports — no conversion needed.
+   */
+  const CARET_PREFIX = 'nw.caret.';
+  /** R100: typing moves the caret 8–10 times a second; localStorage is sync. */
+  const CARET_SAVE_MS = 1500;
+
+  function caretKeyOf(chapterId) {
+    return chapterId == null ? '' : CARET_PREFIX + String(chapterId);
+  }
+
+  function readCaret(chapterId) {
+    const key = caretKeyOf(chapterId);
+    if (!key) return null;
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (raw == null) return null;
+      const value = Number(raw);
+      return Number.isFinite(value) && value >= 0 ? value : null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function writeCaret(chapterId, offset) {
+    const key = caretKeyOf(chapterId);
+    if (!key) return;
+    const value = Number(offset);
+    if (!Number.isFinite(value) || value < 0) return;
+    try {
+      window.localStorage.setItem(key, String(Math.round(value)));
+    } catch (err) {
+      /* best effort: losing a caret is not losing a chapter */
+    }
+  }
+
   /** Button that prefers `NW.ui.btn` but always renders something usable. */
   function mkBtn(opts) {
     const o = opts || {};
@@ -1232,6 +1271,8 @@ const SEL_EMIT_MS = 120;
     const lastSelAtRef = React.useRef(0);
     /** R99: pending trailing selection emit. */
     const selTimerRef = React.useRef(0);
+    /** R100: pending caret write (「继续写」 lands where the writer stopped). */
+    const caretTimerRef = React.useRef(0);
     /** R99: what the highlight mirror was last built from (skip no-op rebuilds). */
     const hlSigRef = React.useRef({ text: null, ranges: '' });
     const [, forceFind] = React.useState(0);
@@ -1943,7 +1984,24 @@ const SEL_EMIT_MS = 120;
     } catch (err) {
       /* a parent-side bug must never break typing */
     }
+    // R100: remember where the writer is, so 「继续写」 opens on this sentence.
+    if (caretTimerRef.current) clearTimeout(caretTimerRef.current);
+    caretTimerRef.current = setTimeout(() => {
+      caretTimerRef.current = 0;
+      const ta2 = taRef.current;
+      if (ta2) writeCaret(chapterIdRef.current, ta2.selectionStart || 0);
+    }, CARET_SAVE_MS);
   }
+
+    /** R100: write the caret now (unload, hidden tab, chapter switch, save). */
+    function flushCaretNow() {
+      if (caretTimerRef.current) {
+        clearTimeout(caretTimerRef.current);
+        caretTimerRef.current = 0;
+      }
+      const ta = taRef.current;
+      if (ta) writeCaret(chapterIdRef.current, ta.selectionStart || 0);
+    }
 
     // ------------------------------------------------------------ highlight --
     function rebuildHighlights() {
@@ -2757,6 +2815,9 @@ const SEL_EMIT_MS = 120;
 
     function flushNow() {
       cancelSave();
+      // R100: a flush is a good moment to remember the caret too — chapter
+      // switches, exports and locking all pass through here.
+      flushCaretNow();
       // R99: returns the write promise so callers that must see the text in the
       // database (export, lock, snapshot) can await it.
       return commitSave(true);
@@ -4258,6 +4319,7 @@ const SEL_EMIT_MS = 120;
       if (prevId === nextId) return;
 
       if (prevId != null && dirtyRef.current) flushNow();
+      if (prevId != null) flushCaretNow();
       chapterIdRef.current = nextId;
       // R41 ①: a half-typed heading belongs to the chapter it was typed in.
       // Reset the restore point and repaint the incoming title explicitly,
@@ -4304,8 +4366,12 @@ const SEL_EMIT_MS = 120;
 
       if (ta) {
         ta.value = body;
+        // R100: land on the sentence the writer stopped at. Clamp because a
+        // recovered draft can be shorter than the text the offset came from.
+        const savedCaret = readCaret(nextId);
+        const caretAt = savedCaret == null ? 0 : Math.min(savedCaret, body.length);
         try {
-          ta.setSelectionRange(0, 0);
+          ta.setSelectionRange(caretAt, caretAt);
         } catch (err) {
           /* ignore */
         }
@@ -4331,6 +4397,13 @@ const SEL_EMIT_MS = 120;
         }
         rebuildHighlights();
         scheduleMeasure(false);
+        // R100: 「继续写」 restores the exact caret, then centers it. Done after
+        // autosize so the measurement is final — the typewriter padding above
+        // would otherwise leave the restored line below the fold.
+        if (savedCaret != null && caretAt > 0) {
+          scrollOffsetToCenter(caretAt);
+          emitSelection();
+        }
       }
       // R99: a recovered draft is unsaved work — tell the status bar and let the
       // normal debounce write it. lastSavedRef still holds the disk text, so
@@ -4513,6 +4586,7 @@ const SEL_EMIT_MS = 120;
         // R99: write the synchronous draft *before* flushing — flushNow() clears
         // dirtyRef synchronously, and the IndexedDB write it starts is the one
         // the browser may abort as the page unloads.
+        flushCaretNow();
         if (dirtyRef.current) {
           writeDraftNow();
           if (ev && typeof ev.preventDefault === 'function') {
@@ -4524,6 +4598,7 @@ const SEL_EMIT_MS = 120;
       };
       const onVisibility = () => {
         if (document.visibilityState !== 'hidden') return;
+        flushCaretNow();
         if (dirtyRef.current) writeDraftNow();
         flushNow();
       };
