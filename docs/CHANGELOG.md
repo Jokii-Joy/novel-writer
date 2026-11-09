@@ -6,8 +6,16 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.23 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.24 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第一百零二轮（R102）**「继续写」真正落回停笔处**：上一轮只存了光标，却假设开章那一刻版面已经量好。
+  实际上从首页切进正文时编辑器刚挂载，滚动容器高度还是 0，滚动目标被夹到顶部——于是「继续写」停在
+  章节开头，最后一句要等鼠标点一下才滚出来。现在：① 落点改成一次即时 + `rAF` + 60ms + 200ms 的三次
+  尝试，每次都先重算高度再居中，用户一旦自己移动光标就立刻停手；② 光标保存从 1.5s 缩到 400ms，并在
+  `blur` 时立即写；③ `selectChapter` 现在 `await flushEditor()`，且 `flushEditor` 会等
+  `pendingSaveRef` 里那次「编辑器已卸载但还没写完」的保存——首页 → 继续写的竞态不再读到缺最后一句的旧稿。
+  `verify-welcome-stats` 20 → **21** 项（新增落点重试、保存顺序检查）。
+
 - 第一百零一轮（R101）**修复首页打不开（R100 回归）**：`editDailyGoal` / `startMicroGoal` /
   微目标完成 effect 的依赖数组在**渲染时**求值，而它们读取的 `dailyGoal` / `microWritten` 用
   `const` 声明在后面，首屏直接抛 `ReferenceError: Cannot access 'dailyGoal' before initialization`，

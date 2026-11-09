@@ -283,7 +283,9 @@ const SEL_EMIT_MS = 120;
    */
   const CARET_PREFIX = 'nw.caret.';
   /** R100: typing moves the caret 8–10 times a second; localStorage is sync. */
-  const CARET_SAVE_MS = 1500;
+  // R102: 400ms is short enough that stopping to think already persists the
+  // caret, and a debounced localStorage write per burst is still free.
+  const CARET_SAVE_MS = 400;
 
   function caretKeyOf(chapterId) {
     return chapterId == null ? '' : CARET_PREFIX + String(chapterId);
@@ -4163,6 +4165,9 @@ const SEL_EMIT_MS = 120;
     }
 
     function handleBlur() {
+      // R102: leaving the manuscript is the most common way to stop writing —
+      // persist the caret here instead of waiting for the debounce to expire.
+      flushCaretNow();
       flushNow();
       // Unfocused editor: the painted caret hides (the browser has no caret of
       // its own to show either). A measurement pass is all that is needed.
@@ -4401,8 +4406,27 @@ const SEL_EMIT_MS = 120;
         // autosize so the measurement is final — the typewriter padding above
         // would otherwise leave the restored line below the fold.
         if (savedCaret != null && caretAt > 0) {
-          scrollOffsetToCenter(caretAt);
-          emitSelection();
+          // R102: the first paint of a freshly mounted editor can still have a
+          // zero-height scroller (the panel was just switched in). A scroll
+          // target clamped to 0 leaves the writer at the top of the chapter and
+          // their last sentence only appears after a click; land once now and
+          // twice more as layout settles. Every attempt bails the moment the
+          // writer moves the caret themselves.
+          const land = () => {
+            const ta2 = taRef.current;
+            if (!ta2 || chapterIdRef.current !== nextId) return;
+            if ((ta2.selectionStart || 0) !== caretAt) return;
+            invalidateAutosize();
+            autosize();
+            scrollOffsetToCenter(caretAt);
+            emitSelection();
+          };
+          land();
+          if (typeof window.requestAnimationFrame === 'function') {
+            window.requestAnimationFrame(land);
+          }
+          window.setTimeout(land, 60);
+          window.setTimeout(land, 200);
         }
       }
       // R99: a recovered draft is unsaved work — tell the status bar and let the

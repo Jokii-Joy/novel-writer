@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.23',
+      version: '1.6.24',
     };
     NW.ReactDOM = null;
 
@@ -10151,7 +10151,9 @@ const SEL_EMIT_MS = 120;
    */
   const CARET_PREFIX = 'nw.caret.';
   /** R100: typing moves the caret 8–10 times a second; localStorage is sync. */
-  const CARET_SAVE_MS = 1500;
+  // R102: 400ms is short enough that stopping to think already persists the
+  // caret, and a debounced localStorage write per burst is still free.
+  const CARET_SAVE_MS = 400;
 
   function caretKeyOf(chapterId) {
     return chapterId == null ? '' : CARET_PREFIX + String(chapterId);
@@ -14031,6 +14033,9 @@ const SEL_EMIT_MS = 120;
     }
 
     function handleBlur() {
+      // R102: leaving the manuscript is the most common way to stop writing —
+      // persist the caret here instead of waiting for the debounce to expire.
+      flushCaretNow();
       flushNow();
       // Unfocused editor: the painted caret hides (the browser has no caret of
       // its own to show either). A measurement pass is all that is needed.
@@ -14269,8 +14274,27 @@ const SEL_EMIT_MS = 120;
         // autosize so the measurement is final — the typewriter padding above
         // would otherwise leave the restored line below the fold.
         if (savedCaret != null && caretAt > 0) {
-          scrollOffsetToCenter(caretAt);
-          emitSelection();
+          // R102: the first paint of a freshly mounted editor can still have a
+          // zero-height scroller (the panel was just switched in). A scroll
+          // target clamped to 0 leaves the writer at the top of the chapter and
+          // their last sentence only appears after a click; land once now and
+          // twice more as layout settles. Every attempt bails the moment the
+          // writer moves the caret themselves.
+          const land = () => {
+            const ta2 = taRef.current;
+            if (!ta2 || chapterIdRef.current !== nextId) return;
+            if ((ta2.selectionStart || 0) !== caretAt) return;
+            invalidateAutosize();
+            autosize();
+            scrollOffsetToCenter(caretAt);
+            emitSelection();
+          };
+          land();
+          if (typeof window.requestAnimationFrame === 'function') {
+            window.requestAnimationFrame(land);
+          }
+          window.setTimeout(land, 60);
+          window.setTimeout(land, 200);
         }
       }
       // R99: a recovered draft is unsaved work — tell the status bar and let the
@@ -18487,6 +18511,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     });
 
     const editorRef = useRef(null);
+    // R102: the last chapter write, kept so flushEditor() can wait for a save
+    // whose editor has already unmounted (the 首页 → 继续写 race).
+    const pendingSaveRef = useRef(null);
     const rootRef = useRef(null);
     const aliveRef = useRef(true);
     /** R82: last chapter-open request; a slower earlier open must not win. */
@@ -19589,14 +19616,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     const flushEditor = useCallback(() => {
       const api = editorRef.current;
-      if (!api || typeof api.flush !== 'function') return Promise.resolve();
-      try {
-        // R99: flush() returns the IndexedDB write now, so export/lock paths can
-        // wait for the last keystrokes instead of reading a stale chapter.
-        return Promise.resolve(api.flush()).catch(() => {});
-      } catch (err) {
-        return Promise.resolve();
-      }
+      // R102: an unmounted editor's flush is a promise we can no longer call
+      // into, so remember the last save and wait for it too. Without this a
+      // fast 首页 → 继续写 reopened the chapter before the unmount write landed
+      // and the final sentence was missing until something forced a repaint.
+      const pending = pendingSaveRef.current;
+      const flush = !api || typeof api.flush !== 'function'
+        ? Promise.resolve()
+        : Promise.resolve()
+            .then(() => api.flush())
+            .catch(() => {});
+      return Promise.resolve(flush)
+        .then(() => (pending ? pending.catch(() => {}) : undefined))
+        .catch(() => {});
     }, []);
 
     /**
@@ -19640,7 +19672,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         // that resolves afterwards must not steal the view.
         chapterOpenSeqRef.current += 1;
         const seq = chapterOpenSeqRef.current;
-        flushEditor();
+        // R102: the write must land before getChapter() reads, otherwise a quick
+        // "go home → 继续写" reopens the chapter without its last sentence.
+        await flushEditor();
         await snapshotVersion();
         try {
           const record = await NW.db.getChapter(id);
@@ -21397,7 +21431,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       // R22: Alt+N / Alt+A from inside the textarea.
                       onNewChapter: () => createChapter(null),
                       onToggleAdvice: () => setAdviceOpen((v) => !v),
-                      onSave: (content) => saveChapter(content, chapter.id),
+                      onSave: (content) => {
+                        const pending = saveChapter(content, chapter.id);
+                        pendingSaveRef.current = pending;
+                        pending.catch(() => {}).then(() => {
+                          if (pendingSaveRef.current === pending) pendingSaveRef.current = null;
+                        });
+                        return pending;
+                      },
                       // R41 ①: the manuscript heading is editable in place; the
                       // studio owns the row and answers with the stored title.
                       // The editor calls this as `(chapterId, nextTitle)` — keep the

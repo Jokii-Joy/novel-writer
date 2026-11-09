@@ -239,6 +239,21 @@ check('「继续写」恢复精确光标位置', () => {
   assert.ok(edSrc.includes('scrollOffsetToCenter(caretAt)'), 'restored caret is scrolled into view');
 });
 
+check('R102: 恢复光标要等布局稳定，且保存前先落盘', () => {
+  const edSrc = read('60-editor.js');
+  const appSrc = read('90-app.js');
+  // The first paint of a fresh editor can have a zero-height scroller; a single
+  // scroll attempt then clamps to 0 and the writer lands at the top of the
+  // chapter (their last sentence only shows after a click).
+  assert.ok(edSrc.includes('window.setTimeout(land, 200)'), 'caret landing is retried after layout');
+  assert.ok(edSrc.includes('const CARET_SAVE_MS = 400;'), 'caret is persisted quickly after typing');
+  const blurAt = edSrc.indexOf('function handleBlur()');
+  assert.ok(blurAt > 0 && edSrc.slice(blurAt, blurAt + 400).includes('flushCaretNow();'), 'blur persists the caret');
+  // A fast 首页 → 继续写 must not read the chapter before the unmount write lands.
+  assert.ok(appSrc.includes('await flushEditor();'), 'chapter open waits for the editor flush');
+  assert.ok(appSrc.includes('pendingSaveRef.current = pending;'), 'flush waits for the in-flight save');
+});
+
 check('没有「依赖数组读到了后声明的 const」的 TDZ 崩溃', () => {
   // R100 regression: a useCallback/useEffect declared before `dailyGoal`/
   // `microWritten` read them in its dependency array, which throws

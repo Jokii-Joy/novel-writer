@@ -1445,6 +1445,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     });
 
     const editorRef = useRef(null);
+    // R102: the last chapter write, kept so flushEditor() can wait for a save
+    // whose editor has already unmounted (the 首页 → 继续写 race).
+    const pendingSaveRef = useRef(null);
     const rootRef = useRef(null);
     const aliveRef = useRef(true);
     /** R82: last chapter-open request; a slower earlier open must not win. */
@@ -2547,14 +2550,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     const flushEditor = useCallback(() => {
       const api = editorRef.current;
-      if (!api || typeof api.flush !== 'function') return Promise.resolve();
-      try {
-        // R99: flush() returns the IndexedDB write now, so export/lock paths can
-        // wait for the last keystrokes instead of reading a stale chapter.
-        return Promise.resolve(api.flush()).catch(() => {});
-      } catch (err) {
-        return Promise.resolve();
-      }
+      // R102: an unmounted editor's flush is a promise we can no longer call
+      // into, so remember the last save and wait for it too. Without this a
+      // fast 首页 → 继续写 reopened the chapter before the unmount write landed
+      // and the final sentence was missing until something forced a repaint.
+      const pending = pendingSaveRef.current;
+      const flush = !api || typeof api.flush !== 'function'
+        ? Promise.resolve()
+        : Promise.resolve()
+            .then(() => api.flush())
+            .catch(() => {});
+      return Promise.resolve(flush)
+        .then(() => (pending ? pending.catch(() => {}) : undefined))
+        .catch(() => {});
     }, []);
 
     /**
@@ -2598,7 +2606,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         // that resolves afterwards must not steal the view.
         chapterOpenSeqRef.current += 1;
         const seq = chapterOpenSeqRef.current;
-        flushEditor();
+        // R102: the write must land before getChapter() reads, otherwise a quick
+        // "go home → 继续写" reopens the chapter without its last sentence.
+        await flushEditor();
         await snapshotVersion();
         try {
           const record = await NW.db.getChapter(id);
@@ -4355,7 +4365,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       // R22: Alt+N / Alt+A from inside the textarea.
                       onNewChapter: () => createChapter(null),
                       onToggleAdvice: () => setAdviceOpen((v) => !v),
-                      onSave: (content) => saveChapter(content, chapter.id),
+                      onSave: (content) => {
+                        const pending = saveChapter(content, chapter.id);
+                        pendingSaveRef.current = pending;
+                        pending.catch(() => {}).then(() => {
+                          if (pendingSaveRef.current === pending) pendingSaveRef.current = null;
+                        });
+                        return pending;
+                      },
                       // R41 ①: the manuscript heading is editable in place; the
                       // studio owns the row and answers with the stored title.
                       // The editor calls this as `(chapterId, nextTitle)` — keep the
