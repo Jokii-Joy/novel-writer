@@ -97,3 +97,15 @@ if (paste.status !== 0) {
   console.error('build-client: the paste-import parser regressed');
   process.exit(1);
 }
+
+// R101: the module loader only proves the factory runs; the panel can still
+// throw on its first render (that is exactly how R100 shipped a blank screen —
+// a dependency array read a `const` declared further down). Render App and
+// Welcome once with a tiny React stand-in so that class of crash fails the build.
+const smoke = spawnSync(process.execPath, [join(here, 'smoke-app-render.mjs')], {
+  stdio: 'inherit',
+});
+if (smoke.status !== 0) {
+  console.error('build-client: the panel crashes on its first render');
+  process.exit(1);
+}

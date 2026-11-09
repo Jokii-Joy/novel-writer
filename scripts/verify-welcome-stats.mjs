@@ -239,6 +239,50 @@ check('「继续写」恢复精确光标位置', () => {
   assert.ok(edSrc.includes('scrollOffsetToCenter(caretAt)'), 'restored caret is scrolled into view');
 });
 
+check('没有「依赖数组读到了后声明的 const」的 TDZ 崩溃', () => {
+  // R100 regression: a useCallback/useEffect declared before `dailyGoal`/
+  // `microWritten` read them in its dependency array, which throws
+  // "Cannot access 'x' before initialization" on the first render — the panel
+  // simply refuses to open. This walks the file and compares declaration order.
+  const appSrc = read('90-app.js');
+  const lines = appSrc.split('\n');
+  const declAt = new Map();
+  const note = (name, line) => {
+    if (name && !declAt.has(name)) declAt.set(name, line);
+  };
+  lines.forEach((line, i) => {
+    const simple = line.match(/^\s*(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=/);
+    if (simple) note(simple[1], i + 1);
+    const arr = line.match(/^\s*(?:const|let)\s*\[\s*([A-Za-z_$][\w$]*)/);
+    if (arr) note(arr[1], i + 1);
+    const obj = line.match(/^\s*(?:const|let)\s*\{([^}]*)\}\s*=/);
+    if (obj) {
+      obj[1].split(',').forEach((part) => {
+        const m = part.trim().match(/^([A-Za-z_$][\w$]*)/);
+        if (m) note(m[1], i + 1);
+      });
+    }
+  });
+  const problems = [];
+  lines.forEach((line, i) => {
+    let deps = null;
+    const inline = line.match(/\},\s*\[([^\]]*)\]\s*\)/);
+    if (inline) deps = inline[1];
+    else {
+      const alone = line.match(/^\s*\[([^\]]*)\],?\s*$/);
+      if (alone) deps = alone[1];
+    }
+    if (!deps) return;
+    deps.split(',').forEach((raw) => {
+      const name = raw.trim();
+      if (!/^[A-Za-z_$][\w$]*$/.test(name)) return;
+      const at = declAt.get(name);
+      if (at && at > i + 1) problems.push(`${name}: declared line ${at}, read line ${i + 1}`);
+    });
+  });
+  assert.deepEqual(problems, [], 'no dependency array reads a later const');
+});
+
 // --- summary ---------------------------------------------------------------
 console.log('');
 if (failed) {

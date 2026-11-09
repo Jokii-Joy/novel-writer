@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.22',
+      version: '1.6.23',
     };
     NW.ReactDOM = null;
 
@@ -20274,49 +20274,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [pushToast],
     );
 
-    // ------------------------------------------------------ R100 goals ------
-    const editDailyGoal = useCallback(async () => {
-      const answer = await NW.ui.prompt({
-        title: '每日字数目标',
-        label: '每天想写多少字？（0 关闭目标环）',
-        value: String(dailyGoal || 0),
-      });
-      if (answer == null) return;
-      const next = Math.max(0, Math.min(20000, Math.round(Number(String(answer).replace(/[^\d]/g, '')) || 0)));
-      await applySettings({ dailyGoal: next });
-      pushToast(next > 0 ? `每日目标：${next} 字` : '已关闭每日目标', 'ok');
-    }, [applySettings, dailyGoal, pushToast]);
-
-    const startMicroGoal = useCallback(
-      (novelId, chapterId, target) => {
-        if (chapterId == null) return;
-        const baseline = Number(dailyStatsRef.current[dayKeyOf(Date.now())]) || 0;
-        const row = {
-          novelId: novelId == null ? null : novelId,
-          chapterId: chapterId,
-          target: Math.max(1, Math.round(Number(target) || 100)),
-          baseline: baseline,
-          startedAt: Date.now(),
-        };
-        writeMicroGoal(row);
-        setMicroGoal(row);
-        const open = chapterRef.current;
-        if (open && String(open.id) === String(chapterId)) setView('write');
-        else selectChapter(chapterId);
-      },
-      [selectChapter],
-    );
-
-    // The bar is a promise, not a nag: it disappears the moment the target is
-    // met, with one quiet toast and no dialog to dismiss.
-    useEffect(() => {
-      if (!microGoal) return;
-      if (microWritten < microGoal.target) return;
-      writeMicroGoal(null);
-      setMicroGoal(null);
-      pushToast(`微目标达成：${microGoal.target} 字。今天可以收工了。`, 'ok');
-    }, [microGoal, microWritten, pushToast]);
-
     // ----------------------------------------------------------- locking ----
     const doLock = useCallback(async () => {
       // Order matters: flush (writes plaintext), snapshot (needs plaintext),
@@ -20986,6 +20943,53 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       String(chapter.id) === String(microGoal.chapterId) &&
       microWritten < microGoal.target
     );
+
+    // ------------------------------------------------------ R100 goals ------
+    // Declared after `dailyGoal`/`microWritten`: these closures read them in
+    // their dependency arrays, and reading a `const` before its declaration
+    // would throw on the first render.
+    const editDailyGoal = useCallback(async () => {
+      const answer = await NW.ui.prompt({
+        title: '每日字数目标',
+        label: '每天想写多少字？（0 关闭目标环）',
+        value: String(dailyGoal || 0),
+      });
+      if (answer == null) return;
+      const next = Math.max(0, Math.min(20000, Math.round(Number(String(answer).replace(/[^\d]/g, '')) || 0)));
+      await applySettings({ dailyGoal: next });
+      pushToast(next > 0 ? `每日目标：${next} 字` : '已关闭每日目标', 'ok');
+    }, [applySettings, dailyGoal, pushToast]);
+
+    const startMicroGoal = useCallback(
+      (novelId, chapterId, target) => {
+        if (chapterId == null) return;
+        const baseline = Number(dailyStatsRef.current[dayKeyOf(Date.now())]) || 0;
+        const row = {
+          novelId: novelId == null ? null : novelId,
+          chapterId: chapterId,
+          target: Math.max(1, Math.round(Number(target) || 100)),
+          baseline: baseline,
+          startedAt: Date.now(),
+        };
+        writeMicroGoal(row);
+        setMicroGoal(row);
+        const open = chapterRef.current;
+        if (open && String(open.id) === String(chapterId)) setView('write');
+        else selectChapter(chapterId);
+      },
+      [selectChapter],
+    );
+
+    // The bar is a promise, not a nag: it disappears the moment the target is
+    // met, with one quiet toast and no dialog to dismiss.
+    useEffect(() => {
+      if (!microGoal) return;
+      if (microWritten < microGoal.target) return;
+      writeMicroGoal(null);
+      setMicroGoal(null);
+      pushToast(`微目标达成：${microGoal.target} 字。今天可以收工了。`, 'ok');
+    }, [microGoal, microWritten, pushToast]);
+
     const streakDays = (() => {
       const DAY = 86400000;
       const keyOf = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');

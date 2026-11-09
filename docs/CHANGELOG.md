@@ -6,8 +6,14 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.22 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.23 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第一百零一轮（R101）**修复首页打不开（R100 回归）**：`editDailyGoal` / `startMicroGoal` /
+  微目标完成 effect 的依赖数组在**渲染时**求值，而它们读取的 `dailyGoal` / `microWritten` 用
+  `const` 声明在后面，首屏直接抛 `ReferenceError: Cannot access 'dailyGoal' before initialization`，
+  面板白屏。现在这三个 hooks 移到 `microActive` 之后；`verify-welcome-stats` 增加一条静态回归检查——
+  依赖数组里的标识符，其声明行号不得晚于 hooks 调用行号（19 → **20** 项）。
+
 - 第一百轮（R100）**低摩擦启动**：写作热情不是靠更多功能，而是靠「开始容易、进展可见」。
   ① 首页第一行现在是 **继续写**：直接回到上次那一章，并恢复**精确光标位置**（每章存
   `nw.caret.<chapterId>`，切章/关页/保存时落盘，开章后夹紧 offset 并居中滚动）。旁边是
