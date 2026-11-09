@@ -614,6 +614,10 @@
       return true;
     };
     api.keyDown = (ev, ch, hasKids, collapsed) => {
+      // R99: the row hosts its own rename/delete/more buttons. Their keydowns
+      // bubble here, and Enter/Space used to select the chapter *instead of*
+      // pressing the focused button. Only the row itself owns these shortcuts.
+      if (ev.target && ev.target !== ev.currentTarget) return;
       if (ev.key === 'Enter' || ev.key === ' ') {
         ev.preventDefault();
         api.select(ch.id);
@@ -786,6 +790,10 @@
           title: n.title || tr('无标题'),
           onClick: open,
           onKeyDown: (ev) => {
+            // R99: ignore Enter/Space bubbling up from the rename/delete/more
+            // buttons inside this card — they must press themselves, not open
+            // the novel.
+            if (ev.target && ev.target !== ev.currentTarget) return;
             if (ev.key !== 'Enter' && ev.key !== ' ') return;
             ev.preventDefault();
             open();

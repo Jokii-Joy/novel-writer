@@ -54,6 +54,10 @@
   // phone instead) gets taken to the change instead of being left behind.
   const PEER_FOLLOW_IDLE_MS = 3000;
   const MEASURE_MS = 60; // caret measurement / autosize throttle
+// R99: pushing the selection to the App re-renders the whole tree (status bar,
+// shelf). Typing used to do that on every keystroke; 120ms is invisible to the
+// writer but cuts the renders by an order of magnitude.
+const SEL_EMIT_MS = 120;
   const TAB_TEXT = '\u3000\u3000'; // two full-width spaces
   const MAX_MATCHES = 5000;
   // R47: the annotation kinds the editor knows how to draw. Each one becomes a
@@ -227,6 +231,48 @@
 
   function clearNode(el) {
     while (el && el.firstChild) el.removeChild(el.firstChild);
+  }
+
+  // R99: a synchronous copy of the unsaved buffer. IndexedDB writes started from
+  // `beforeunload` are aborted when the page goes away, so the last <autoSaveMs>
+  // of typing used to vanish on a tab close. localStorage is synchronous and
+  // survives the unload, which is what makes the recovery below possible.
+  // Encrypted books never write one: a plaintext copy of a sealed manuscript in
+  // localStorage would defeat the password.
+  const DRAFT_PREFIX = 'nw.draft.';
+  const DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+  function draftKeyOf(chapterId) {
+    return chapterId == null ? '' : DRAFT_PREFIX + String(chapterId);
+  }
+
+  function readDraft(chapterId) {
+    const key = draftKeyOf(chapterId);
+    if (!key) return null;
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed.text !== 'string') return null;
+      const at = Number(parsed.at) || 0;
+      if (!at || nowMs() - at > DRAFT_MAX_AGE_MS) {
+        window.localStorage.removeItem(key);
+        return null;
+      }
+      return { text: parsed.text, at: at };
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function dropDraft(chapterId) {
+    const key = draftKeyOf(chapterId);
+    if (!key) return;
+    try {
+      window.localStorage.removeItem(key);
+    } catch (err) {
+      /* private mode / quota: nothing to clean up */
+    }
   }
 
   /** Button that prefers `NW.ui.btn` but always renders something usable. */
@@ -1182,6 +1228,12 @@
     const apiRef = React.useRef(null);
     /** Last selection payload pushed to the app (dedupe guard). */
     const lastSelRef = React.useRef({ start: -1, end: -1, value: null });
+    /** R99: last emitted selection payload's timestamp (typing throttle). */
+    const lastSelAtRef = React.useRef(0);
+    /** R99: pending trailing selection emit. */
+    const selTimerRef = React.useRef(0);
+    /** R99: what the highlight mirror was last built from (skip no-op rebuilds). */
+    const hlSigRef = React.useRef({ text: null, ranges: '' });
     const [, forceFind] = React.useState(0);
     // Which element class actually scrolls the surface: 'self' | 'ancestor' |
     // 'document'. Mirrored into `data-scroller` for diagnosis; only changes
@@ -1850,6 +1902,24 @@
     ) {
       return;
     }
+    // R99: typing changes both the caret and the text, so the dedupe above never
+    // caught it and the App re-rendered on every keystroke. Cap the push rate;
+    // a trailing timer makes sure the final state still lands.
+    const now = Date.now();
+    if (now - lastSelAtRef.current < SEL_EMIT_MS) {
+      if (!selTimerRef.current) {
+        selTimerRef.current = setTimeout(() => {
+          selTimerRef.current = 0;
+          if (taRef.current) emitSelection();
+        }, SEL_EMIT_MS);
+      }
+      return;
+    }
+    if (selTimerRef.current) {
+      clearTimeout(selTimerRef.current);
+      selTimerRef.current = 0;
+    }
+    lastSelAtRef.current = now;
     lastSelRef.current = { start, end, value };
     if (typeof cb !== 'function') return;
     const words = countWordsOf(value);
@@ -1928,6 +1998,15 @@
           });
         }
       }
+      // R99: this runs in the write phase of every refresh — including scroll,
+      // resize and plain caret moves, where neither the text nor the marks
+      // changed. Rebuilding the whole mirror then threw away thousands of DOM
+      // nodes per frame; compare what it would be built from first.
+      const sig = ranges
+        .map((r) => `${r.start}:${r.end}:${r.id == null ? '' : r.id}:${r.active ? 1 : 0}:${r.kind}:${r.mark || ''}`)
+        .join('|');
+      if (text === hlSigRef.current.text && sig === hlSigRef.current.ranges) return;
+      hlSigRef.current = { text, ranges: sig };
       if (!ranges.length) {
         if (hl.firstChild) clearNode(hl);
         paintGutter();
@@ -2591,6 +2670,7 @@
         // text is clean again — otherwise the status bar stays on 未保存 and
         // beforeunload keeps warning about work that no longer exists.
         dirtyRef.current = false;
+        dropDraft(chapterIdRef.current);
         const settled = propsRef.current.onDirty;
         if (typeof settled === 'function') {
           try {
@@ -2625,25 +2705,61 @@
       dirtyRef.current = false;
       valueRef.current = text;
       const fn = propsRef.current.onSave;
-      if (typeof fn !== 'function') return;
+      if (typeof fn !== 'function') return null;
       try {
         const result = fn(text, !!immediate);
         if (result && typeof result.then === 'function') {
-          result.then(null, () => {
-            // Persist failed: keep the buffer dirty so the next pass retries.
-            lastSavedRef.current = null;
-            dirtyRef.current = true;
-          });
+          // R99: the promise is returned so flush()/export can wait for the
+          // write to actually land. The failure branch never rethrows: most
+          // flushes are fire-and-forget and an unhandled rejection here would
+          // only spam the console — the app has already shown the toast.
+          return result.then(
+            () => {
+              // R99: the write landed, so the crash/close copy is redundant.
+              dropDraft(chapterIdRef.current);
+            },
+            () => {
+              // Persist failed: keep the buffer dirty so the next pass retries.
+              lastSavedRef.current = null;
+              dirtyRef.current = true;
+            },
+          );
         }
+        dropDraft(chapterIdRef.current);
+        return result;
       } catch (err) {
         lastSavedRef.current = null;
         dirtyRef.current = true;
+        return null;
+      }
+    }
+
+    /**
+     * R99: synchronous draft for the close-the-tab case. Called only when the
+     * buffer is dirty; the caller then flushes as usual.
+     */
+    function writeDraftNow() {
+      const id = chapterIdRef.current;
+      const ta = taRef.current;
+      if (id == null || !ta) return;
+      const settings = propsRef.current.settings || {};
+      if (settings.encryption === true) return;
+      if (lastSavedRef.current !== null && ta.value === lastSavedRef.current) {
+        dropDraft(id);
+        return;
+      }
+      try {
+        window.localStorage.setItem(draftKeyOf(id), JSON.stringify({ text: ta.value, at: nowMs() }));
+      } catch (err) {
+        /* quota / private mode: the flush below is still the primary path */
       }
     }
 
     function flushNow() {
       cancelSave();
-      commitSave(true);
+      // R99: returns the write promise so callers that must see the text in the
+      // database (export, lock, snapshot) can await it.
+      return commitSave(true);
     }
 
     function scheduleSave() {
@@ -3716,12 +3832,14 @@
           /* ignore */
         }
       }
-      scheduleSave();
       if (composingRef.current) {
-        // IME composition: never re-centre mid-composition.
+        // IME composition: never re-centre mid-composition, and never persist a
+        // half-composed word. handleCompositionEnd() schedules the save once the
+        // text is actually committed (R99).
         emitSelection();
         return;
       }
+      scheduleSave();
       if (findRef.current.open) refreshMatches();
       scheduleMeasure(true);
     }
@@ -4055,7 +4173,7 @@
           return currentValue();
         },
         flush() {
-          flushNow();
+          return flushNow();
         },
         replaceRange(start, end, text) {
           replaceRange(start, end, text);
@@ -4151,9 +4269,15 @@
 
       const ta = taRef.current;
       const text = chapter && typeof chapter.content === 'string' ? chapter.content : '';
-      valueRef.current = text;
+      // R99: a draft left behind by a tab that closed mid-edit wins over the
+      // disk copy. lastSavedRef keeps pointing at the disk text, so the first
+      // autosave actually writes the recovered buffer instead of skipping it.
+      const settings = propsRef.current.settings || {};
+      const draft = nextId == null || settings.encryption === true ? null : readDraft(nextId);
+      const body = draft && draft.text && draft.text !== text ? draft.text : text;
+      valueRef.current = body;
       lastSavedRef.current = nextId == null ? null : text;
-      dirtyRef.current = false;
+      dirtyRef.current = body !== text;
       highlightsRef.current = [];
       manualAtRef.current = -1e9;
       // Switching chapters is not typing here: the first peer edit in the new
@@ -4179,7 +4303,7 @@
       bumpFind();
 
       if (ta) {
-        ta.value = text;
+        ta.value = body;
         try {
           ta.setSelectionRange(0, 0);
         } catch (err) {
@@ -4207,6 +4331,20 @@
         }
         rebuildHighlights();
         scheduleMeasure(false);
+      }
+      // R99: a recovered draft is unsaved work — tell the status bar and let the
+      // normal debounce write it. lastSavedRef still holds the disk text, so
+      // commitSave() sees a real change and does not skip the write.
+      if (body !== text) {
+        const notify = propsRef.current.onDirty;
+        if (typeof notify === 'function') {
+          try {
+            notify(true);
+          } catch (err) {
+            /* ignore */
+          }
+        }
+        scheduleSave();
       }
       emitSelection();
     }, [chapterId]);
@@ -4371,11 +4509,23 @@
         if (!ta || ev.target !== ta) return;
         arrowNavRef.current = false;
       };
-      const onBeforeUnload = () => {
+      const onBeforeUnload = (ev) => {
+        // R99: write the synchronous draft *before* flushing — flushNow() clears
+        // dirtyRef synchronously, and the IndexedDB write it starts is the one
+        // the browser may abort as the page unloads.
+        if (dirtyRef.current) {
+          writeDraftNow();
+          if (ev && typeof ev.preventDefault === 'function') {
+            ev.preventDefault();
+            ev.returnValue = '';
+          }
+        }
         flushNow();
       };
       const onVisibility = () => {
-        if (document.visibilityState === 'hidden') flushNow();
+        if (document.visibilityState !== 'hidden') return;
+        if (dirtyRef.current) writeDraftNow();
+        flushNow();
       };
       // Resize can change which element scrolls: re-resolve before measuring.
       const onResize = () => {

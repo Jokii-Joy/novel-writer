@@ -290,6 +290,9 @@
   border-radius:var(--nw-r-pill);border:1px solid var(--nw-line-strong);
   background:transparent;color:var(--nw-brand);
   font-family:inherit;font-size:var(--nw-fs-tiny);font-weight:600;cursor:pointer;
+  /* R99: the toast lane is pointer-events:none so it never blocks the page;
+     the undo action has to opt back in or the mouse goes straight through it. */
+  pointer-events:auto;
   transition:background var(--nw-dur) var(--nw-ease),color var(--nw-dur) var(--nw-ease);
 }
 .nw-toast-act:hover{background:var(--nw-brand);color:var(--nw-panel);}

@@ -395,6 +395,14 @@
    * idempotent. Requires an unlocked crypto session; returns the rows rewritten.
    */
   async function encryptAll() {
+    // R99: share the chapter write chain. This read-all → encrypt-all →
+    // write-all sequence used to run beside a flush that was still in flight,
+    // and the whole-row put could restore the pre-flush body over the text the
+    // editor had just saved.
+    return serialise('chapter', encryptAllUnlocked);
+  }
+
+  async function encryptAllUnlocked() {
     try {
       if (!NW.crypto || typeof NW.crypto.encryptText !== 'function') return 0;
       if (typeof NW.crypto.isUnlocked === 'function' && !NW.crypto.isUnlocked()) return 0;
@@ -434,6 +442,11 @@
    * ciphertext does not decrypt are left as they are rather than blanked.
    */
   async function decryptAll() {
+    // R99: see encryptAll — same chain, same reason.
+    return serialise('chapter', decryptAllUnlocked);
+  }
+
+  async function decryptAllUnlocked() {
     try {
       if (!NW.crypto || typeof NW.crypto.decryptText !== 'function') return 0;
       if (typeof NW.crypto.isUnlocked === 'function' && !NW.crypto.isUnlocked()) return 0;

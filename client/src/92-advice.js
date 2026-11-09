@@ -409,6 +409,9 @@
           if (typeof p.onReveal === 'function') p.onReveal(item);
         },
         onKeyDown: (ev) => {
+          // R99: the card contains its own accept/reject/undo buttons; their
+          // Enter/Space must press the button, not jump the manuscript.
+          if (ev.target && ev.target !== ev.currentTarget) return;
           if (ev.key !== 'Enter' && ev.key !== ' ') return;
           ev.preventDefault();
           if (typeof p.onReveal === 'function') p.onReveal(item);

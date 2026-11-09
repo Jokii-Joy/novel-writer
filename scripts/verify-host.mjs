@@ -1150,6 +1150,18 @@ check('library.mirror count 正确', libMirror.json.data.count === 2, String(lib
 check('library.mirror 返回 lastMirrorAt', libMirror.json.data.lastMirrorAt > 0);
 check('lastMirrorAt 写进 settings.json', JSON.parse(fs.readFileSync(library.settingsPath(), 'utf8')).lastMirrorAt > 0);
 
+// R99: library.list / decryptTo 不再接受任意 dir，解密输出只能落在保存目录里。
+const listOther = await call('library.list', { dir: path.join(tmpRun, 'library') });
+check('library.list: 目录与设置不一致 → dir-invalid',
+  listOther.json && listOther.json.ok === false && listOther.json.error.code === 'dir-invalid',
+  JSON.stringify(listOther.json).slice(0, 120));
+const listDefault = await call('library.list', {});
+check('library.list: 缺省用设置目录', listDefault.json && listDefault.json.ok === true, JSON.stringify(listDefault.json).slice(0, 120));
+const decryptOutside = await call('library.decryptTo', { outDir: path.join(tmpRun, 'elsewhere') });
+check('library.decryptTo: 输出目录越界 → dir-invalid',
+  decryptOutside.json && decryptOutside.json.ok === false && decryptOutside.json.error.code === 'dir-invalid',
+  JSON.stringify(decryptOutside.json).slice(0, 120));
+
 // R79: 标注 / 设定集 / 已接收建议 must ride in the folder snapshot. This goes
 // through the real route so the `extra` whitelist in routes.js is covered too.
 const libMirrorExtras = await call('library.mirror', {
@@ -1391,6 +1403,27 @@ console.log('\n[8e] SMTP / IMAP TLS 策略');
   check('IMAP: 无凭据的明文连接放行', imap.requiresTls({ tls: false, user: '', pass: '' }) === null);
   check('IMAP: 显式允许明文才放行', imap.requiresTls({ tls: false, user: 'a@b.com', pass: 'secret', allowPlaintextAuth: true }) === null);
   check('IMAP: 错误信息带主机与端口', String(imapPlain && imapPlain.message).includes('imap.example.com:143'));
+
+  // R99: 期刊地址可能来自粘贴/模型，裸 CRLF 会注入 Bcc。
+  const good = smtp.buildMessage({ from: '张三 <a@b.com>', to: ['x@y.com'], subject: 'hi', text: '正文' });
+  check('SMTP: 正常地址构建成功', typeof good.raw === 'string' && good.raw.includes('To: x@y.com'), String(good.raw).slice(0, 60));
+  check('SMTP: 显示名加引号且不含尖括号残留', good.raw.includes('From: "张三" <a@b.com>'));
+  let injected = null;
+  try {
+    smtp.buildMessage({ from: 'a@b.com', to: ['x@y.com\r\nBcc: evil@example.com'], subject: 's', text: 't' });
+  } catch (error) {
+    injected = error;
+  }
+  check('SMTP: 收件人 CRLF 注入被拒', Boolean(injected) && injected.code === 'smtp-invalid-address', injected && injected.code);
+  let fromInjected = null;
+  try {
+    smtp.buildMessage({ from: 'a@b.com\r\nBcc: evil@example.com', to: ['x@y.com'], subject: 's', text: 't' });
+  } catch (error) {
+    fromInjected = error;
+  }
+  check('SMTP: 发件人 CRLF 注入被拒', Boolean(fromInjected) && fromInjected.code === 'smtp-invalid-address', fromInjected && fromInjected.code);
+  const partial = await smtp.send({ from: 'a@b.com', to: ['x@y.com', 'not-an-address'], subject: 's', text: 't' });
+  check('SMTP: 收件人部分非法 → 整封拒发', partial.ok === false && partial.code === 'smtp-invalid-address', partial && partial.code);
 }
 
 // ---------------------------------------------------------------------------

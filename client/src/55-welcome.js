@@ -903,10 +903,11 @@
   width:30px;padding:0;border-radius:var(--nw-r-control);
   border:1px solid transparent;background:transparent;
   color:var(--nw-fg-soft);font-family:inherit;cursor:pointer;
-  opacity:0;transition:opacity var(--nw-dur) ease,color var(--nw-dur) ease,background var(--nw-dur) ease,border-color var(--nw-dur) ease;
+  opacity:0;pointer-events:none;
+  transition:opacity var(--nw-dur) ease,color var(--nw-dur) ease,background var(--nw-dur) ease,border-color var(--nw-dur) ease;
 }
 .nw-welcome-subrow:hover .nw-welcome-subdel,
-.nw-welcome-subdel:focus-visible{opacity:1;}
+.nw-welcome-subdel:focus-visible{opacity:1;pointer-events:auto;}
 .nw-welcome-subdel:hover{
   color:var(--nw-danger);
   border-color:color-mix(in srgb, var(--nw-danger) 34%, transparent);

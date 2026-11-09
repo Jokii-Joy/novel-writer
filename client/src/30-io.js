@@ -1199,7 +1199,20 @@
     }
 
     if (failure && suggestions.length === 0) throw failure;
-    return { suggestions: suggestions, model: model };
+    // R99: same two fallbacks as reviseStream. Without them an empty answer or
+    // a cut-off connection read as "no suggestions" and the panel said the
+    // selection was fine, when in fact the request had failed.
+    if (!suggestions.length && emptyReplies > 0) {
+      const error = new Error('模型这次没有返回内容，正在换一种方式重试');
+      error.code = 'model-empty';
+      throw error;
+    }
+    if (!suggestions.length && !sawDone && !failure) {
+      const error = new Error('审读接口没有返回结果');
+      error.code = 'stream-empty';
+      throw error;
+    }
+    return { suggestions: suggestions, model: model, emptyReplies: emptyReplies };
   }
 
   /**

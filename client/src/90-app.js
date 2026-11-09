@@ -1208,6 +1208,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [dialog, setDialog] = useState(null);
     const [modalReq, setModalReq] = useState(null);
     const [modelPicker, setModelPicker] = useState(null);
+    // R99: the hosts below hold one request at a time. Remembering the live one
+    // lets a second request resolve the first instead of orphaning its promise.
+    const modalReqRef = useRef(null);
+    const modelPickerRef = useRef(null);
     const [toasts, setToasts] = useState([]);
     const [locked, setLocked] = useState(false);
     const [busy, setBusy] = useState('');
@@ -1472,9 +1476,24 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     }, []);
 
     useEffect(() => {
-      NW.uiModalHost.request = (req) => setModalReq(req);
+      NW.uiModalHost.request = (req) => {
+        // R99: one dialog slot. Two confirms at once (a double-clicked delete,
+        // a delete racing a rename) used to overwrite each other and leave the
+        // first `await NW.ui.confirm(...)` pending forever — no toast, no error.
+        const prev = modalReqRef.current;
+        if (prev && prev !== req) {
+          try {
+            prev.resolve(prev.kind === 'prompt' ? null : false);
+          } catch (err) {
+            /* a listener that already settled is harmless */
+          }
+        }
+        modalReqRef.current = req;
+        setModalReq(req);
+      };
       return () => {
         NW.uiModalHost.request = null;
+        modalReqRef.current = null;
       };
     }, []);
 
@@ -1490,7 +1509,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     useEffect(() => {
       NW.askModel = (input) =>
         new Promise((resolve) => {
-          setModelPicker({ req: input || {}, resolve: resolve });
+          // R99: same single-slot guard as the confirm host. Overwriting the
+          // picker left withModelFallback awaiting a promise nobody could settle.
+          const prev = modelPickerRef.current;
+          if (prev) {
+            try {
+              prev.resolve(null);
+            } catch (err) {
+              /* ignore */
+            }
+          }
+          const next = { req: input || {}, resolve: resolve };
+          modelPickerRef.current = next;
+          setModelPicker(next);
         });
       return () => {
         NW.askModel = null;
@@ -2445,9 +2476,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             );
           }
         } catch (err) {
-          if (!aliveRef.current) return;
-          setSaveState('error');
-          pushToast(errText(err, '保存失败'), 'error');
+          if (aliveRef.current) {
+            setSaveState('error');
+            pushToast(errText(err, '保存失败'), 'error');
+          }
+          // R99: the editor keys its "clean" state and the localStorage draft
+          // off this promise. Swallowing the error here told it the write had
+          // landed, so the draft was dropped and the last keystrokes vanished.
+          throw err;
         }
       },
       [patchChapterInList, pushToast, settings.countPunctuation],
@@ -2455,12 +2491,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     const flushEditor = useCallback(() => {
       const api = editorRef.current;
-      if (api && typeof api.flush === 'function') {
-        try {
-          api.flush();
-        } catch (err) {
-          /* ignore */
-        }
+      if (!api || typeof api.flush !== 'function') return Promise.resolve();
+      try {
+        // R99: flush() returns the IndexedDB write now, so export/lock paths can
+        // wait for the last keystrokes instead of reading a stale chapter.
+        return Promise.resolve(api.flush()).catch(() => {});
+      } catch (err) {
+        return Promise.resolve();
       }
     }, []);
 
@@ -3144,7 +3181,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       // Order matters: flush (writes plaintext), snapshot (needs plaintext),
       // encrypt every stored body while the key is still in hand, THEN drop the
       // key. Calling lock() first would leave plaintext on disk for good.
-      flushEditor();
+      // R99: the flush is awaited — encryptAll reads the rows next, and starting
+      // it while the flush was still in flight could seal (and then restore) the
+      // pre-flush body.
+      await flushEditor();
       await snapshotVersion();
       try {
         if (NW.crypto && NW.crypto.hasPassword && (await NW.crypto.hasPassword())) {
@@ -3181,7 +3221,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       async (password) => {
         // Persist the buffered body *before* the key goes away; afterwards the
         // editor's unmount flush is plaintext and db refuses it on purpose.
-        flushEditor();
+        // R99: awaited so encryptAll cannot read the row before this write lands.
+        await flushEditor();
         await snapshotVersion();
         if (password != null) await NW.crypto.setPassword(password);
         await applySettings({ lockEnabled: true, encryption: true });
@@ -3554,6 +3595,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const target = opts.target && opts.target.kind === 'chapter' ? opts.target : null;
         setBusy('正在导出…');
         try {
+          // R99: the autosave debounce means the chapter row can lag the buffer
+          // by a second; exporting without this produced files missing the last
+          // sentence the author typed.
+          await flushEditor();
           const rows = await NW.db.listChapters(activeNovelId);
           let chapters = (rows || [])
             .filter((row) => row && row.id)
@@ -3587,7 +3632,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           if (aliveRef.current) setBusy('');
         }
       },
-      [novels, activeNovelId, settings.exportFormat, pushToast],
+      [novels, activeNovelId, settings.exportFormat, pushToast, flushEditor],
     );
 
     /**
@@ -3606,6 +3651,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const format = String(opts.format || settings.exportFormat || 'docx');
         setBusy('正在导出全部作品…');
         try {
+          await flushEditor();
           const payloads = [];
           for (const novel of books) {
             const rows = await NW.db.listChapters(novel.id);
@@ -3637,7 +3683,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           if (aliveRef.current) setBusy('');
         }
       },
-      [novels, settings.exportFormat, pushToast],
+      [novels, settings.exportFormat, pushToast, flushEditor],
     );
 
     // -------------------------------------------------------------- import --
@@ -4504,12 +4550,21 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             onLibraryMirror: mirrorLibrary,
           })
         : null,
-      modalReq ? h(ModalRequest, { req: modalReq, onDone: () => setModalReq(null) }) : null,
+      modalReq
+        ? h(ModalRequest, {
+            req: modalReq,
+            onDone: () => {
+              modalReqRef.current = null;
+              setModalReq(null);
+            },
+          })
+        : null,
       modelPicker
         ? h(ModelPicker, {
             req: modelPicker.req,
             onDone: (picked) => {
               const resolve = modelPicker.resolve;
+              modelPickerRef.current = null;
               setModelPicker(null);
               // Resolve after the state flip so the dialog is gone before the
               // retried request starts painting a spinner somewhere else.
@@ -4722,6 +4777,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     useEffect(
       () => () => {
         if (timerRef.current) clearTimeout(timerRef.current);
+        // R99: closing the card (or the screen that owns it) unmounts this
+        // component, and the pending 600ms debounce used to be dropped with the
+        // last sentence still in the box. The live textarea is the only source
+        // of truth at this point — the `text` in this closure is stale.
+        const el = areaRef.current;
+        flush(el ? el.value : '');
       },
       [],
     );

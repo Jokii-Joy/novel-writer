@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.20',
+      version: '1.6.21',
     };
     NW.ReactDOM = null;
 
@@ -836,6 +836,14 @@ window.__ModuleLoader__.load({
    * idempotent. Requires an unlocked crypto session; returns the rows rewritten.
    */
   async function encryptAll() {
+    // R99: share the chapter write chain. This read-all → encrypt-all →
+    // write-all sequence used to run beside a flush that was still in flight,
+    // and the whole-row put could restore the pre-flush body over the text the
+    // editor had just saved.
+    return serialise('chapter', encryptAllUnlocked);
+  }
+
+  async function encryptAllUnlocked() {
     try {
       if (!NW.crypto || typeof NW.crypto.encryptText !== 'function') return 0;
       if (typeof NW.crypto.isUnlocked === 'function' && !NW.crypto.isUnlocked()) return 0;
@@ -875,6 +883,11 @@ window.__ModuleLoader__.load({
    * ciphertext does not decrypt are left as they are rather than blanked.
    */
   async function decryptAll() {
+    // R99: see encryptAll — same chain, same reason.
+    return serialise('chapter', decryptAllUnlocked);
+  }
+
+  async function decryptAllUnlocked() {
     try {
       if (!NW.crypto || typeof NW.crypto.decryptText !== 'function') return 0;
       if (typeof NW.crypto.isUnlocked === 'function' && !NW.crypto.isUnlocked()) return 0;
@@ -5026,7 +5039,20 @@ window.__ModuleLoader__.load({
     }
 
     if (failure && suggestions.length === 0) throw failure;
-    return { suggestions: suggestions, model: model };
+    // R99: same two fallbacks as reviseStream. Without them an empty answer or
+    // a cut-off connection read as "no suggestions" and the panel said the
+    // selection was fine, when in fact the request had failed.
+    if (!suggestions.length && emptyReplies > 0) {
+      const error = new Error('模型这次没有返回内容，正在换一种方式重试');
+      error.code = 'model-empty';
+      throw error;
+    }
+    if (!suggestions.length && !sawDone && !failure) {
+      const error = new Error('审读接口没有返回结果');
+      error.code = 'stream-empty';
+      throw error;
+    }
+    return { suggestions: suggestions, model: model, emptyReplies: emptyReplies };
   }
 
   /**
@@ -7612,6 +7638,10 @@ window.__ModuleLoader__.load({
       return true;
     };
     api.keyDown = (ev, ch, hasKids, collapsed) => {
+      // R99: the row hosts its own rename/delete/more buttons. Their keydowns
+      // bubble here, and Enter/Space used to select the chapter *instead of*
+      // pressing the focused button. Only the row itself owns these shortcuts.
+      if (ev.target && ev.target !== ev.currentTarget) return;
       if (ev.key === 'Enter' || ev.key === ' ') {
         ev.preventDefault();
         api.select(ch.id);
@@ -7784,6 +7814,10 @@ window.__ModuleLoader__.load({
           title: n.title || tr('无标题'),
           onClick: open,
           onKeyDown: (ev) => {
+            // R99: ignore Enter/Space bubbling up from the rename/delete/more
+            // buttons inside this card — they must press themselves, not open
+            // the novel.
+            if (ev.target && ev.target !== ev.currentTarget) return;
             if (ev.key !== 'Enter' && ev.key !== ' ') return;
             ev.preventDefault();
             open();
@@ -9654,10 +9688,11 @@ window.__ModuleLoader__.load({
   width:30px;padding:0;border-radius:var(--nw-r-control);
   border:1px solid transparent;background:transparent;
   color:var(--nw-fg-soft);font-family:inherit;cursor:pointer;
-  opacity:0;transition:opacity var(--nw-dur) ease,color var(--nw-dur) ease,background var(--nw-dur) ease,border-color var(--nw-dur) ease;
+  opacity:0;pointer-events:none;
+  transition:opacity var(--nw-dur) ease,color var(--nw-dur) ease,background var(--nw-dur) ease,border-color var(--nw-dur) ease;
 }
 .nw-welcome-subrow:hover .nw-welcome-subdel,
-.nw-welcome-subdel:focus-visible{opacity:1;}
+.nw-welcome-subdel:focus-visible{opacity:1;pointer-events:auto;}
 .nw-welcome-subdel:hover{
   color:var(--nw-danger);
   border-color:color-mix(in srgb, var(--nw-danger) 34%, transparent);
@@ -9803,6 +9838,10 @@ window.__ModuleLoader__.load({
   // phone instead) gets taken to the change instead of being left behind.
   const PEER_FOLLOW_IDLE_MS = 3000;
   const MEASURE_MS = 60; // caret measurement / autosize throttle
+// R99: pushing the selection to the App re-renders the whole tree (status bar,
+// shelf). Typing used to do that on every keystroke; 120ms is invisible to the
+// writer but cuts the renders by an order of magnitude.
+const SEL_EMIT_MS = 120;
   const TAB_TEXT = '\u3000\u3000'; // two full-width spaces
   const MAX_MATCHES = 5000;
   // R47: the annotation kinds the editor knows how to draw. Each one becomes a
@@ -9976,6 +10015,48 @@ window.__ModuleLoader__.load({
 
   function clearNode(el) {
     while (el && el.firstChild) el.removeChild(el.firstChild);
+  }
+
+  // R99: a synchronous copy of the unsaved buffer. IndexedDB writes started from
+  // `beforeunload` are aborted when the page goes away, so the last <autoSaveMs>
+  // of typing used to vanish on a tab close. localStorage is synchronous and
+  // survives the unload, which is what makes the recovery below possible.
+  // Encrypted books never write one: a plaintext copy of a sealed manuscript in
+  // localStorage would defeat the password.
+  const DRAFT_PREFIX = 'nw.draft.';
+  const DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+  function draftKeyOf(chapterId) {
+    return chapterId == null ? '' : DRAFT_PREFIX + String(chapterId);
+  }
+
+  function readDraft(chapterId) {
+    const key = draftKeyOf(chapterId);
+    if (!key) return null;
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed.text !== 'string') return null;
+      const at = Number(parsed.at) || 0;
+      if (!at || nowMs() - at > DRAFT_MAX_AGE_MS) {
+        window.localStorage.removeItem(key);
+        return null;
+      }
+      return { text: parsed.text, at: at };
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function dropDraft(chapterId) {
+    const key = draftKeyOf(chapterId);
+    if (!key) return;
+    try {
+      window.localStorage.removeItem(key);
+    } catch (err) {
+      /* private mode / quota: nothing to clean up */
+    }
   }
 
   /** Button that prefers `NW.ui.btn` but always renders something usable. */
@@ -10931,6 +11012,12 @@ window.__ModuleLoader__.load({
     const apiRef = React.useRef(null);
     /** Last selection payload pushed to the app (dedupe guard). */
     const lastSelRef = React.useRef({ start: -1, end: -1, value: null });
+    /** R99: last emitted selection payload's timestamp (typing throttle). */
+    const lastSelAtRef = React.useRef(0);
+    /** R99: pending trailing selection emit. */
+    const selTimerRef = React.useRef(0);
+    /** R99: what the highlight mirror was last built from (skip no-op rebuilds). */
+    const hlSigRef = React.useRef({ text: null, ranges: '' });
     const [, forceFind] = React.useState(0);
     // Which element class actually scrolls the surface: 'self' | 'ancestor' |
     // 'document'. Mirrored into `data-scroller` for diagnosis; only changes
@@ -11599,6 +11686,24 @@ window.__ModuleLoader__.load({
     ) {
       return;
     }
+    // R99: typing changes both the caret and the text, so the dedupe above never
+    // caught it and the App re-rendered on every keystroke. Cap the push rate;
+    // a trailing timer makes sure the final state still lands.
+    const now = Date.now();
+    if (now - lastSelAtRef.current < SEL_EMIT_MS) {
+      if (!selTimerRef.current) {
+        selTimerRef.current = setTimeout(() => {
+          selTimerRef.current = 0;
+          if (taRef.current) emitSelection();
+        }, SEL_EMIT_MS);
+      }
+      return;
+    }
+    if (selTimerRef.current) {
+      clearTimeout(selTimerRef.current);
+      selTimerRef.current = 0;
+    }
+    lastSelAtRef.current = now;
     lastSelRef.current = { start, end, value };
     if (typeof cb !== 'function') return;
     const words = countWordsOf(value);
@@ -11677,6 +11782,15 @@ window.__ModuleLoader__.load({
           });
         }
       }
+      // R99: this runs in the write phase of every refresh — including scroll,
+      // resize and plain caret moves, where neither the text nor the marks
+      // changed. Rebuilding the whole mirror then threw away thousands of DOM
+      // nodes per frame; compare what it would be built from first.
+      const sig = ranges
+        .map((r) => `${r.start}:${r.end}:${r.id == null ? '' : r.id}:${r.active ? 1 : 0}:${r.kind}:${r.mark || ''}`)
+        .join('|');
+      if (text === hlSigRef.current.text && sig === hlSigRef.current.ranges) return;
+      hlSigRef.current = { text, ranges: sig };
       if (!ranges.length) {
         if (hl.firstChild) clearNode(hl);
         paintGutter();
@@ -12340,6 +12454,7 @@ window.__ModuleLoader__.load({
         // text is clean again — otherwise the status bar stays on 未保存 and
         // beforeunload keeps warning about work that no longer exists.
         dirtyRef.current = false;
+        dropDraft(chapterIdRef.current);
         const settled = propsRef.current.onDirty;
         if (typeof settled === 'function') {
           try {
@@ -12374,25 +12489,61 @@ window.__ModuleLoader__.load({
       dirtyRef.current = false;
       valueRef.current = text;
       const fn = propsRef.current.onSave;
-      if (typeof fn !== 'function') return;
+      if (typeof fn !== 'function') return null;
       try {
         const result = fn(text, !!immediate);
         if (result && typeof result.then === 'function') {
-          result.then(null, () => {
-            // Persist failed: keep the buffer dirty so the next pass retries.
-            lastSavedRef.current = null;
-            dirtyRef.current = true;
-          });
+          // R99: the promise is returned so flush()/export can wait for the
+          // write to actually land. The failure branch never rethrows: most
+          // flushes are fire-and-forget and an unhandled rejection here would
+          // only spam the console — the app has already shown the toast.
+          return result.then(
+            () => {
+              // R99: the write landed, so the crash/close copy is redundant.
+              dropDraft(chapterIdRef.current);
+            },
+            () => {
+              // Persist failed: keep the buffer dirty so the next pass retries.
+              lastSavedRef.current = null;
+              dirtyRef.current = true;
+            },
+          );
         }
+        dropDraft(chapterIdRef.current);
+        return result;
       } catch (err) {
         lastSavedRef.current = null;
         dirtyRef.current = true;
+        return null;
+      }
+    }
+
+    /**
+     * R99: synchronous draft for the close-the-tab case. Called only when the
+     * buffer is dirty; the caller then flushes as usual.
+     */
+    function writeDraftNow() {
+      const id = chapterIdRef.current;
+      const ta = taRef.current;
+      if (id == null || !ta) return;
+      const settings = propsRef.current.settings || {};
+      if (settings.encryption === true) return;
+      if (lastSavedRef.current !== null && ta.value === lastSavedRef.current) {
+        dropDraft(id);
+        return;
+      }
+      try {
+        window.localStorage.setItem(draftKeyOf(id), JSON.stringify({ text: ta.value, at: nowMs() }));
+      } catch (err) {
+        /* quota / private mode: the flush below is still the primary path */
       }
     }
 
     function flushNow() {
       cancelSave();
-      commitSave(true);
+      // R99: returns the write promise so callers that must see the text in the
+      // database (export, lock, snapshot) can await it.
+      return commitSave(true);
     }
 
     function scheduleSave() {
@@ -13465,12 +13616,14 @@ window.__ModuleLoader__.load({
           /* ignore */
         }
       }
-      scheduleSave();
       if (composingRef.current) {
-        // IME composition: never re-centre mid-composition.
+        // IME composition: never re-centre mid-composition, and never persist a
+        // half-composed word. handleCompositionEnd() schedules the save once the
+        // text is actually committed (R99).
         emitSelection();
         return;
       }
+      scheduleSave();
       if (findRef.current.open) refreshMatches();
       scheduleMeasure(true);
     }
@@ -13804,7 +13957,7 @@ window.__ModuleLoader__.load({
           return currentValue();
         },
         flush() {
-          flushNow();
+          return flushNow();
         },
         replaceRange(start, end, text) {
           replaceRange(start, end, text);
@@ -13900,9 +14053,15 @@ window.__ModuleLoader__.load({
 
       const ta = taRef.current;
       const text = chapter && typeof chapter.content === 'string' ? chapter.content : '';
-      valueRef.current = text;
+      // R99: a draft left behind by a tab that closed mid-edit wins over the
+      // disk copy. lastSavedRef keeps pointing at the disk text, so the first
+      // autosave actually writes the recovered buffer instead of skipping it.
+      const settings = propsRef.current.settings || {};
+      const draft = nextId == null || settings.encryption === true ? null : readDraft(nextId);
+      const body = draft && draft.text && draft.text !== text ? draft.text : text;
+      valueRef.current = body;
       lastSavedRef.current = nextId == null ? null : text;
-      dirtyRef.current = false;
+      dirtyRef.current = body !== text;
       highlightsRef.current = [];
       manualAtRef.current = -1e9;
       // Switching chapters is not typing here: the first peer edit in the new
@@ -13928,7 +14087,7 @@ window.__ModuleLoader__.load({
       bumpFind();
 
       if (ta) {
-        ta.value = text;
+        ta.value = body;
         try {
           ta.setSelectionRange(0, 0);
         } catch (err) {
@@ -13956,6 +14115,20 @@ window.__ModuleLoader__.load({
         }
         rebuildHighlights();
         scheduleMeasure(false);
+      }
+      // R99: a recovered draft is unsaved work — tell the status bar and let the
+      // normal debounce write it. lastSavedRef still holds the disk text, so
+      // commitSave() sees a real change and does not skip the write.
+      if (body !== text) {
+        const notify = propsRef.current.onDirty;
+        if (typeof notify === 'function') {
+          try {
+            notify(true);
+          } catch (err) {
+            /* ignore */
+          }
+        }
+        scheduleSave();
       }
       emitSelection();
     }, [chapterId]);
@@ -14120,11 +14293,23 @@ window.__ModuleLoader__.load({
         if (!ta || ev.target !== ta) return;
         arrowNavRef.current = false;
       };
-      const onBeforeUnload = () => {
+      const onBeforeUnload = (ev) => {
+        // R99: write the synchronous draft *before* flushing — flushNow() clears
+        // dirtyRef synchronously, and the IndexedDB write it starts is the one
+        // the browser may abort as the page unloads.
+        if (dirtyRef.current) {
+          writeDraftNow();
+          if (ev && typeof ev.preventDefault === 'function') {
+            ev.preventDefault();
+            ev.returnValue = '';
+          }
+        }
         flushNow();
       };
       const onVisibility = () => {
-        if (document.visibilityState === 'hidden') flushNow();
+        if (document.visibilityState !== 'hidden') return;
+        if (dirtyRef.current) writeDraftNow();
+        flushNow();
       };
       // Resize can change which element scrolls: re-resolve before measuring.
       const onResize = () => {
@@ -17906,6 +18091,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [dialog, setDialog] = useState(null);
     const [modalReq, setModalReq] = useState(null);
     const [modelPicker, setModelPicker] = useState(null);
+    // R99: the hosts below hold one request at a time. Remembering the live one
+    // lets a second request resolve the first instead of orphaning its promise.
+    const modalReqRef = useRef(null);
+    const modelPickerRef = useRef(null);
     const [toasts, setToasts] = useState([]);
     const [locked, setLocked] = useState(false);
     const [busy, setBusy] = useState('');
@@ -18170,9 +18359,24 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     }, []);
 
     useEffect(() => {
-      NW.uiModalHost.request = (req) => setModalReq(req);
+      NW.uiModalHost.request = (req) => {
+        // R99: one dialog slot. Two confirms at once (a double-clicked delete,
+        // a delete racing a rename) used to overwrite each other and leave the
+        // first `await NW.ui.confirm(...)` pending forever — no toast, no error.
+        const prev = modalReqRef.current;
+        if (prev && prev !== req) {
+          try {
+            prev.resolve(prev.kind === 'prompt' ? null : false);
+          } catch (err) {
+            /* a listener that already settled is harmless */
+          }
+        }
+        modalReqRef.current = req;
+        setModalReq(req);
+      };
       return () => {
         NW.uiModalHost.request = null;
+        modalReqRef.current = null;
       };
     }, []);
 
@@ -18188,7 +18392,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     useEffect(() => {
       NW.askModel = (input) =>
         new Promise((resolve) => {
-          setModelPicker({ req: input || {}, resolve: resolve });
+          // R99: same single-slot guard as the confirm host. Overwriting the
+          // picker left withModelFallback awaiting a promise nobody could settle.
+          const prev = modelPickerRef.current;
+          if (prev) {
+            try {
+              prev.resolve(null);
+            } catch (err) {
+              /* ignore */
+            }
+          }
+          const next = { req: input || {}, resolve: resolve };
+          modelPickerRef.current = next;
+          setModelPicker(next);
         });
       return () => {
         NW.askModel = null;
@@ -19143,9 +19359,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             );
           }
         } catch (err) {
-          if (!aliveRef.current) return;
-          setSaveState('error');
-          pushToast(errText(err, '保存失败'), 'error');
+          if (aliveRef.current) {
+            setSaveState('error');
+            pushToast(errText(err, '保存失败'), 'error');
+          }
+          // R99: the editor keys its "clean" state and the localStorage draft
+          // off this promise. Swallowing the error here told it the write had
+          // landed, so the draft was dropped and the last keystrokes vanished.
+          throw err;
         }
       },
       [patchChapterInList, pushToast, settings.countPunctuation],
@@ -19153,12 +19374,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     const flushEditor = useCallback(() => {
       const api = editorRef.current;
-      if (api && typeof api.flush === 'function') {
-        try {
-          api.flush();
-        } catch (err) {
-          /* ignore */
-        }
+      if (!api || typeof api.flush !== 'function') return Promise.resolve();
+      try {
+        // R99: flush() returns the IndexedDB write now, so export/lock paths can
+        // wait for the last keystrokes instead of reading a stale chapter.
+        return Promise.resolve(api.flush()).catch(() => {});
+      } catch (err) {
+        return Promise.resolve();
       }
     }, []);
 
@@ -19842,7 +20064,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       // Order matters: flush (writes plaintext), snapshot (needs plaintext),
       // encrypt every stored body while the key is still in hand, THEN drop the
       // key. Calling lock() first would leave plaintext on disk for good.
-      flushEditor();
+      // R99: the flush is awaited — encryptAll reads the rows next, and starting
+      // it while the flush was still in flight could seal (and then restore) the
+      // pre-flush body.
+      await flushEditor();
       await snapshotVersion();
       try {
         if (NW.crypto && NW.crypto.hasPassword && (await NW.crypto.hasPassword())) {
@@ -19879,7 +20104,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       async (password) => {
         // Persist the buffered body *before* the key goes away; afterwards the
         // editor's unmount flush is plaintext and db refuses it on purpose.
-        flushEditor();
+        // R99: awaited so encryptAll cannot read the row before this write lands.
+        await flushEditor();
         await snapshotVersion();
         if (password != null) await NW.crypto.setPassword(password);
         await applySettings({ lockEnabled: true, encryption: true });
@@ -20252,6 +20478,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const target = opts.target && opts.target.kind === 'chapter' ? opts.target : null;
         setBusy('正在导出…');
         try {
+          // R99: the autosave debounce means the chapter row can lag the buffer
+          // by a second; exporting without this produced files missing the last
+          // sentence the author typed.
+          await flushEditor();
           const rows = await NW.db.listChapters(activeNovelId);
           let chapters = (rows || [])
             .filter((row) => row && row.id)
@@ -20285,7 +20515,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           if (aliveRef.current) setBusy('');
         }
       },
-      [novels, activeNovelId, settings.exportFormat, pushToast],
+      [novels, activeNovelId, settings.exportFormat, pushToast, flushEditor],
     );
 
     /**
@@ -20304,6 +20534,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const format = String(opts.format || settings.exportFormat || 'docx');
         setBusy('正在导出全部作品…');
         try {
+          await flushEditor();
           const payloads = [];
           for (const novel of books) {
             const rows = await NW.db.listChapters(novel.id);
@@ -20335,7 +20566,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           if (aliveRef.current) setBusy('');
         }
       },
-      [novels, settings.exportFormat, pushToast],
+      [novels, settings.exportFormat, pushToast, flushEditor],
     );
 
     // -------------------------------------------------------------- import --
@@ -21202,12 +21433,21 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             onLibraryMirror: mirrorLibrary,
           })
         : null,
-      modalReq ? h(ModalRequest, { req: modalReq, onDone: () => setModalReq(null) }) : null,
+      modalReq
+        ? h(ModalRequest, {
+            req: modalReq,
+            onDone: () => {
+              modalReqRef.current = null;
+              setModalReq(null);
+            },
+          })
+        : null,
       modelPicker
         ? h(ModelPicker, {
             req: modelPicker.req,
             onDone: (picked) => {
               const resolve = modelPicker.resolve;
+              modelPickerRef.current = null;
               setModelPicker(null);
               // Resolve after the state flip so the dialog is gone before the
               // retried request starts painting a spinner somewhere else.
@@ -21420,6 +21660,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     useEffect(
       () => () => {
         if (timerRef.current) clearTimeout(timerRef.current);
+        // R99: closing the card (or the screen that owns it) unmounts this
+        // component, and the pending 600ms debounce used to be dropped with the
+        // last sentence still in the box. The live textarea is the only source
+        // of truth at this point — the `text` in this closure is stale.
+        const el = areaRef.current;
+        flush(el ? el.value : '');
       },
       [],
     );
@@ -22603,6 +22849,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           if (typeof p.onReveal === 'function') p.onReveal(item);
         },
         onKeyDown: (ev) => {
+          // R99: the card contains its own accept/reject/undo buttons; their
+          // Enter/Space must press the button, not jump the manuscript.
+          if (ev.target && ev.target !== ev.currentTarget) return;
           if (ev.key !== 'Enter' && ev.key !== ' ') return;
           ev.preventDefault();
           if (typeof p.onReveal === 'function') p.onReveal(item);
@@ -31541,6 +31790,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   border-radius:var(--nw-r-pill);border:1px solid var(--nw-line-strong);
   background:transparent;color:var(--nw-brand);
   font-family:inherit;font-size:var(--nw-fs-tiny);font-weight:600;cursor:pointer;
+  /* R99: the toast lane is pointer-events:none so it never blocks the page;
+     the undo action has to opt back in or the mouse goes straight through it. */
+  pointer-events:auto;
   transition:background var(--nw-dur) var(--nw-ease),color var(--nw-dur) var(--nw-ease);
 }
 .nw-toast-act:hover{background:var(--nw-brand);color:var(--nw-panel);}

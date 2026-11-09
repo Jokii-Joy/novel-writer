@@ -6,8 +6,32 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.20 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.21 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第九十九轮（R99）一次系统性的 bug 与体验清点：先把「会丢字」的链路堵死，再修键盘与宿主侧的漏洞。
+  ① **关页丢字**：编辑器自动保存有 1.2 秒窗口，`beforeunload` 以前只 flush 不拦截，刷新/关窗时最后
+  一段直接消失；现在未保存时先写一份 `localStorage` 草稿（`nw.draft.<chapterId>`，7 天过期，
+  加密模式下不写明文）再 `preventDefault()`，下次打开同一章自动恢复并立即补存。保存失败时不再
+  把 `lastSaved` 当成已保存（原来会删掉刚写的草稿），而是回滚脏标记、保留草稿、让 App 弹出错误。
+  ② **锁屏/设密码竞态**：`flushEditor()` 以前没有返回值，锁屏与「设置密码」不等它；`encryptAll/
+  decryptAll` 也不走 `serialise('chapter')`，整行回写会覆盖刚写的正文。现在两者都进同一条写链，
+  锁屏与快照前先 `await flushEditor()`，导出前同样先落盘（`onFlush` 不再是死 prop）。
+  ③ **宿主加固**：`client-state` 的读-改-写改为串行（并发 push 不再互相覆盖密码校验值）；
+  SMTP 发件人/收件人做 addr-spec 校验并拒绝 CRLF 注入（期刊地址可能来自粘贴或模型），收件人
+  部分非法时整封拒发而不是静默丢一个；`lan.stop()` 补 `closeAllConnections()`，停止配对后手机
+  的 keep-alive 连接不再继续被服务；LAN 监听没起来时 `pair.start` 直接报错，不再生成扫了也连不上
+  的二维码；`library.list/decryptTo` 只接受设置里的目录，解密输出必须落在该目录之内。
+  ④ **点得到、选得中**：Toast 的「撤销」按钮原来被 `pointer-events:none` 的轨道挡住；章节行、
+  菜单项、建议卡里的嵌套按钮按 Enter 会被父级 onKeyDown 吞掉；收件箱行末的删除按钮 `opacity:0`
+  却仍占 30px 热区，鼠标扫过容易误删——三处都修了。单槽 modal 被第二个请求覆盖时，前一个
+  Promise 现在会先 resolve，不再永久挂起；灵感便签卸载时用 textarea 的实时值补存。
+  ⑤ **打字性能**：选中信息（状态栏字数/行列）改为 120ms 节流 + 尾帧补发，不再每键重渲整棵 App；
+  高亮镜像在「文本与标注都没变」的滚动/resize/方向键刷新里直接跳过重建，不再每帧丢弃并重建
+  上千个 DOM 节点。
+  ⑥ **验收**：`verify-host` 304 → **312** 项（SMTP 地址校验/CRLF 注入/部分非法收件人、library
+  目录守卫），`verify-advice-ui` 89、`verify-welcome-stats` 14、`verify-crypto-recovery` 18、
+  `verify-restore` 16、`verify-docs` 44 及其余闸门全过。`build-client` 23 parts（1,404,669 bytes）。
+  版本 **1.6.21**。注意：宿主改动（client-state/SMTP/LAN/目录守卫）要**重启 DSH**，其余刷新页面即可。
 - 第九十八轮（R98）选中改写窗口补上思考过程、让出悬浮坞，建议栏可以「清空」。
   ① **悬浮坞让位**：选中文字弹出的改写窗口和主栏共用右侧车道，但 R83 只判断了
   `adviceOpen`——窗口打开时悬浮坞照旧渲染在右下角，圆钮浮在卡片上，像是窗口里多出来的
