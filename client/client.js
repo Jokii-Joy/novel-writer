@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.19',
+      version: '1.6.20',
     };
     NW.ReactDOM = null;
 
@@ -20972,8 +20972,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // R83: 修改建议栏展开时整块坞不渲染。栏占着右侧车道，圆钮正好压在
           // 建议卡片的下沿；收起状态下它也没有一个动作可点（修改建议正是打开
           // 这一栏的入口），先让位，关掉栏再回来。沉浸模式下栏不出现，坞照旧。
+          // R98: 选中改写窗口是同一个车道的另一种形态，同样让位——否则圆钮浮在
+          // 窗口的卡片上面，看起来像窗口里多出来一个按钮。
           view === 'write' || immersive
-            ? adviceOpen && !immersive
+            ? (adviceOpen || selAdvice) && !immersive
               ? null
               : dock
             : null,
@@ -24024,12 +24026,47 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       );
     }
 
+    // R98: 清空 — drop everything this column is currently showing. It is not a
+    // decision: nothing is written to the store, 已接收 stays untouched, and the
+    // per-chapter cache is dropped so reopening the chapter starts blank rather
+    // than resurrecting the list the writer just cleared.
+    const clearAll = useCallback(() => {
+      runRef.current += 1;
+      if (runAbortRef.current) {
+        try {
+          runAbortRef.current.abort();
+        } catch {
+          /* already gone */
+        }
+        runAbortRef.current = null;
+      }
+      setItems(null);
+      setBusy(false);
+      setDrained(false);
+      setDecided({});
+      setApplied({});
+      setFromCache(false);
+      setActiveId('');
+      setModel('');
+      setError('');
+      setStreamCount(0);
+      setThinking('');
+      setThinkChars(0);
+      thinkRef.current = '';
+      madeRef.current = {};
+      cacheDel('dock|' + chapterId);
+      const api = p.editorApi && p.editorApi.current;
+      if (api && typeof api.setHighlights === 'function') api.setHighlights([]);
+      if (typeof p.onToast === 'function') p.onToast(NW.t('已清空当前显示的建议'), 'ok');
+    }, [chapterId, p.editorApi, p.onToast]);
+
     const foot =
       items && items.length > 0
         ? h(
             'div',
             { className: 'nw-suggest-foot' },
             NW.ui.btn({ onClick: () => run(focus), disabled: busy, children: NW.t('重新审读') }),
+            NW.ui.btn({ kind: 'ghost', onClick: clearAll, children: NW.t('清空') }),
             clearHighlights && activeId ? NW.ui.btn({ kind: 'ghost', onClick: clearHighlights, children: NW.t('取消高亮') }) : null,
             // R76: the column can reopen with the last read already in it; say
             // so, or the writer will wonder where the results came from.
@@ -24148,6 +24185,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const selEnd = Math.max(selStart, Number(selection.end) || 0);
     const [items, setItems] = useState(null);
     const [busy, setBusy] = useState(false);
+    /** R98: the selection window gets the same live counters as the chapter
+        column — selecting a line can still wait minutes for the first card. */
+    const [elapsed, setElapsed] = useState(0);
+    const [thinking, setThinking] = useState('');
+    const [thinkChars, setThinkChars] = useState(0);
+    const thinkRef = useRef('');
     const [error, setError] = useState('');
     const [activeId, setActiveId] = useState('');
     const [decided, setDecided] = useState({});
@@ -24178,6 +24221,20 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       },
       [],
     );
+
+    /* R98: one-second tick, same contract as the column's timer. */
+    React.useEffect(() => {
+      if (!busy) {
+        setElapsed(0);
+        return undefined;
+      }
+      const started = Date.now();
+      setElapsed(0);
+      const timer = setInterval(() => {
+        setElapsed(Math.max(1, Math.round((Date.now() - started) / 1000)));
+      }, 1000);
+      return () => clearInterval(timer);
+    }, [busy]);
 
     const getText = useCallback(() => {
       const api = p.editorApi && p.editorApi.current;
@@ -24241,6 +24298,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         setBusy(true);
         setError('');
         setActiveId('');
+        // R98: a new read starts with a blank thinking pane.
+        thinkRef.current = '';
+        setThinking('');
+        setThinkChars(0);
         const nextVariant = previous ? variantRef.current + 1 : 1;
         variantRef.current = nextVariant;
         setVariant(nextVariant);
@@ -24267,7 +24328,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                   signal: controller ? controller.signal : undefined,
                   onEvent: (event) => {
                     if (runRef.current !== token) return;
-                    if (!event || event.type !== 'suggestion' || !event.item) return;
+                    if (!event) return;
+                    // R98: the host now relays the model's reasoning here too.
+                    if (event.type === 'reasoning' && typeof event.text === 'string') {
+                      thinkRef.current += event.text;
+                      setThinkChars(thinkRef.current.length);
+                      setThinking(thinkRef.current.slice(-1200));
+                      return;
+                    }
+                    if (event.type !== 'suggestion' || !event.item) return;
                     streamed.push(shift(event.item));
                     setItems(streamed.slice());
                   },
@@ -24593,14 +24662,26 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     );
 
     const hasCards = Array.isArray(items) && items.length > 0;
+    // R98: the model's own words while it reads this selection. Same folded
+    // surface as the chapter column, so the two windows behave alike.
+    const thinkBox =
+      thinkChars > 0
+        ? h(
+            'details',
+            { className: 'nw-think', open: busy ? true : undefined },
+            h('summary', null, NW.t('思考过程 · {0} 字', thinkChars)),
+            h('div', { className: 'nw-think-body' }, thinking),
+          )
+        : null;
     let body;
     if (busy && !hasCards) {
       body = h(
         'div',
         { className: 'nw-selwin-empty' },
         NW.ui.spinner(),
-        h('span', null, NW.t('正在读选中的这段…')),
+        h('span', null, NW.t('正在读选中的这段… {0}s', elapsed)),
         h('span', { style: { fontSize: '12px', opacity: '.7' } }, NW.t('只改这一段，前后文只用来保证接得上。')),
+        thinkBox,
       );
     } else if (error && !hasCards) {
       body = h(
@@ -24631,12 +24712,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       body = h(
         'div',
         { className: 'nw-selwin-body' },
+        thinkBox,
         busy
           ? h(
               'div',
               { className: 'nw-selwin-progress' },
               NW.ui.spinner(),
-              h('span', null, NW.t('还在读…后面可能还有')),
+              h('span', null, NW.t('还在读…后面可能还有 · {0}s', elapsed)),
             )
           : null,
         error

@@ -459,10 +459,10 @@ if (appFiles.length) {
   if (!/dockRef\s*:\s*dockRef/.test(src) || !/ref\s*:\s*p\.dockRef/.test(src)) {
     local.push('dockRef — not threaded from App into the Dock root node');
   }
-  if (!/adviceOpen\s*&&\s*!immersive\s*\?\s*null\s*:\s*dock/.test(src)) {
+  if (!/\(\s*adviceOpen\s*\|\|\s*selAdvice\s*\)\s*&&\s*!immersive\s*\?\s*null\s*:\s*dock/.test(src)) {
     local.push(
-      'dock render — not hidden while the 修改建议 column is open; the FAB covers the column\'s ' +
-      'suggestions and swallows the close click',
+      'dock render — not hidden while the 修改建议 column or the 选中改写 window is open; the FAB covers ' +
+      'the suggestions and swallows the close click',
     );
   }
   if (!/if\s*\(\s*adviceOpen\s*\)\s*setDockOpen\s*\(\s*false\s*\)/.test(src)) {

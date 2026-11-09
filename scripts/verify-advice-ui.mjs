@@ -346,6 +346,9 @@ NW.ai = {
   // R76: the window uses the streaming route when it exists.
   reviseSelectionStream: async (input, handlers) => {
     streamCalls.push(input);
+    // R98: the host relays the model's reasoning on this route too.
+    handlers.onEvent({ type: 'reasoning', text: '先看这一段，' });
+    await tick(0);
     const out = [];
     for (const item of suggestions) {
       streamSeq += 1;
@@ -393,6 +396,7 @@ check('请求里带了上下文', !!streamCalls[0] && typeof streamCalls[0].befo
 check('卡片出现', /屋里静得能听见心跳/.test(view));
 check('选中的原文显示在顶部', /屋子里很安静/.test(view));
 check('两张流式卡片都在', nodes().filter((n) => n.tag === 'div' && n.props.className === 'nw-adv').length === 2);
+check('选中改写窗口也显示思考过程', /思考过程/.test(view) && /先看这一段/.test(view), view.slice(-200));
 
 // R76 (A1): 替换到正文 / 撤销替换
 check('卡片上有复制 / 替换 / 再改一版', /复制/.test(view) && /替换到正文/.test(view) && /再改一版/.test(view));
@@ -526,6 +530,14 @@ await tick(10);
 check('撤销接受会删掉已接收记录', calls.remove.includes('d1'), calls.remove);
 check('撤销后建议回到待处理列表', adviceCards().length === 1, adviceCards().length);
 check('撤销后不再是「都处理完了」', !/这些建议都处理完了/.test(textOf(rootTree)), textOf(rootTree).slice(-120));
+
+// R98: 清空 — 只清当前显示，不动已接收，也不替作者做决定。
+const removesBeforeClear = calls.remove.length;
+clickText('清空');
+await tick(10);
+check('清空后待处理列表为空', adviceCards().length === 0, adviceCards().length);
+check('清空后回到「开始审读」', /开始审读/.test(textOf(rootTree)), textOf(rootTree).slice(-160));
+check('清空不替作者做决定', calls.remove.length === removesBeforeClear, `${calls.remove.length} / ${removesBeforeClear}`);
 
 // ---- 5b. R91 流式：卡片边到边画 ---------------------------------------------
 console.log('[5b] Advice 栏：整章建议流式到达');

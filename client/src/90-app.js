@@ -4274,8 +4274,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // R83: 修改建议栏展开时整块坞不渲染。栏占着右侧车道，圆钮正好压在
           // 建议卡片的下沿；收起状态下它也没有一个动作可点（修改建议正是打开
           // 这一栏的入口），先让位，关掉栏再回来。沉浸模式下栏不出现，坞照旧。
+          // R98: 选中改写窗口是同一个车道的另一种形态，同样让位——否则圆钮浮在
+          // 窗口的卡片上面，看起来像窗口里多出来一个按钮。
           view === 'write' || immersive
-            ? adviceOpen && !immersive
+            ? (adviceOpen || selAdvice) && !immersive
               ? null
               : dock
             : null,

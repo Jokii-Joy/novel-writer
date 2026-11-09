@@ -615,6 +615,39 @@ check(
 const adviceStreamEmpty = await call('revise.stream', { text: '   ' });
 check('空正文返回错误信封', adviceStreamEmpty.json && adviceStreamEmpty.json.ok === false);
 
+// R98: the selection window is the other streaming surface — it must relay the
+// model's reasoning too, or it sits silent while the model thinks.
+const selStreamRes = await call('revise.selection.stream', {
+  text: '屋子里很安静。',
+  before: '他把门推开，',
+  after: '桌上那本书还摊着。',
+});
+const selStreamLines = String(selStreamRes.body || '')
+  .split('\n')
+  .map((line) => line.trim())
+  .filter(Boolean)
+  .map((line) => {
+    try {
+      return JSON.parse(line);
+    } catch (err) {
+      return null;
+    }
+  });
+const selStreamReasoning = selStreamLines.filter((row) => row && row.type === 'reasoning');
+const selStreamItems = selStreamLines.filter((row) => row && row.type === 'suggestion');
+check(
+  '选中改写流也转发思考过程',
+  selStreamReasoning.length > 0 && selStreamReasoning.map((row) => row.text).join('').includes('先通读'),
+  JSON.stringify(selStreamReasoning).slice(0, 100),
+);
+check(
+  '选中改写流的思考在建议之前',
+  selStreamReasoning.length > 0 &&
+    selStreamItems.length > 0 &&
+    selStreamLines.findIndex((row) => row && row.type === 'reasoning') <
+      selStreamLines.findIndex((row) => row && row.type === 'suggestion'),
+);
+
 // R93: a model that returns nothing must not look like a clean chapter. The
 // streamed route emits `error` (so the client falls back to unary failover) and
 // the unary route throws `empty-model` (so reviseSafe tries the next model).

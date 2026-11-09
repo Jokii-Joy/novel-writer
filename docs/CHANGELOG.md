@@ -6,8 +6,25 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.19 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.20 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第九十八轮（R98）选中改写窗口补上思考过程、让出悬浮坞，建议栏可以「清空」。
+  ① **悬浮坞让位**：选中文字弹出的改写窗口和主栏共用右侧车道，但 R83 只判断了
+  `adviceOpen`——窗口打开时悬浮坞照旧渲染在右下角，圆钮浮在卡片上，像是窗口里多出来的
+  一个按钮。现在 `(adviceOpen || selAdvice)` 任一打开，整块坞都不渲染，关掉窗口再回来。
+  ② **思考过程**：R97 只把 `reasoning-delta` 转发给了整章审读的 `reviseStream()`；
+  选中改写走的是 `reviseSelectionStream()`，这条路径仍把推理块丢掉，所以窗口里只剩秒表。
+  宿主现在在这条路径上用同一套 300ms 节流、`THINK_FORWARD_MAX = 12000` 字封顶转发
+  `{type:'reasoning'}`；`SelectionAdvice` 用与主栏相同的 `.nw-think` 折叠面板显示最近
+  1200 字，忙时自动展开、结束后折叠保留。
+  ③ **清空**：建议栏底部新增「清空」ghost 按钮——清掉当前显示的卡片、高亮、决定态和
+  本章缓存（`cacheDel('dock|' + chapterId)`），并中止仍在跑的流；不写库、不动「已接收」、
+  也不替作者做决定，清空后回到「开始审读」。
+  ④ **验收**：`verify-host` 302 → **304** 项（选中改写流转发思考、思考在建议之前）；
+  `verify-advice-ui` 85 → **89** 项（窗口显示思考过程、清空后列表为空/回到开始审读/不替作者决定）。
+  `build-client` 23 parts（1,393,014 bytes），`verify-docs` 及其余闸门全过。版本 **1.6.20**。
+  注意：思考过程与清空都是宿主 + 客户端改动，**重启 DSH 并刷新页面**后生效；主栏若命中缓存
+  （「上次的结果」）或回退到 unary 路由，本来就没有思考内容可显示。
 - 第九十七轮（R97）审读时能看见模型在「想」什么。
   ① **根因**：宿主的 `llm.stream()` 本来就会吐 `{type:'reasoning-delta', text}`（DSH 的
   `StreamChunk` 联合类型里就有这一支），但 `lib/ai.js` 的 `reviseStream()` 只处理 `text-delta`，
