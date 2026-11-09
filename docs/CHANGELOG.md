@@ -6,8 +6,22 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.18 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.19 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第九十七轮（R97）审读时能看见模型在「想」什么。
+  ① **根因**：宿主的 `llm.stream()` 本来就会吐 `{type:'reasoning-delta', text}`（DSH 的
+  `StreamChunk` 联合类型里就有这一支），但 `lib/ai.js` 的 `reviseStream()` 只处理 `text-delta`，
+  推理块被整块丢掉。R96 只能给一个秒表，因为客户端根本收不到思考内容。
+  ② **宿主转发**：`reviseStream()` 现在累积 `reasoning-delta`，按 300ms 节流、每块结束时
+  flush 一次，以 `{type:'reasoning', text}` 写进 NDJSON；总量封顶
+  `THINK_FORWARD_MAX = 12000` 字（面板是阅读辅助，不是调试台）。
+  ③ **面板显示**：`92-advice.js` 的 `Advice` 在等待区上方挂一块可折叠的「思考过程 · N 字」，
+  显示最近 1200 字（最新一行贴底、顶部渐隐），忙时自动展开、结束后折叠保留，可以回看。
+  旧宿主不发这个事件时整块不渲染，R96 的秒表照旧。
+  ④ **验收**：`verify-host` 300 → **302** 项（reasoning 事件转发、在建议之前）；
+  `verify-advice-ui` 84 → **85** 项（面板显示「思考过程」与思考正文）。
+  注意：这条要**重启 DSH** 才生效（改的是宿主 `lib/ai.js`），重启后 ping 应显示 1.6.19。
+  ⑤ 说明：能不能看到取决于模型/供应商是否把思考内容发出来；不发的话只剩秒表，不会报错。
 - 第九十六轮（R96）今日字数不再等于「打开的那一章」，审读等待不再像死机。
   ① **今日字数**：R95 把首页的「今天 / 近 7 天」切到 `settings.dailyStats` 账本，但账本里
   没有记录时仍回退到 `updatedAt` 估算——打开一章就把整章算进今天，打开两章就是两者相加。

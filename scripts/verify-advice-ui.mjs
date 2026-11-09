@@ -556,6 +556,9 @@ const streamSecond = {
 NW.ai.reviseStream = async (input, handlers) => {
   chapterStreamCalls.push(input);
   handlers.onEvent({ type: 'progress', index: 1, total: 1 });
+  // R97: the host forwards the model's reasoning; the panel shows it while it waits.
+  handlers.onEvent({ type: 'reasoning', text: '先看门，' });
+  handlers.onEvent({ type: 'reasoning', text: '再看书。' });
   handlers.onEvent({ type: 'suggestion', item: streamFirst });
   await streamGate;
   handlers.onEvent({ type: 'suggestion', item: streamSecond });
@@ -581,6 +584,11 @@ check(
   `${adviceCards().length} / ${textOf(rootTree).slice(-160)}`,
 );
 check('流式期间底部写着「还在往下读」', /还在往下读/.test(textOf(rootTree)));
+check(
+  '思考过程显示在面板上',
+  /思考过程/.test(textOf(rootTree)) && /先看门，再看书/.test(textOf(rootTree)),
+  textOf(rootTree).slice(-200),
+);
 check('流式期间不是整屏等待卡', !/正在读这一章/.test(textOf(rootTree)));
 releaseStream();
 await tick(20);

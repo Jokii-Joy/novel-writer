@@ -134,6 +134,10 @@ const fakeLlm = {
         : content.includes('给出修改建议')
           ? adviceReply
           : fakeReply;
+    // R97: reasoning models stream their thinking before the JSON. The host
+    // must forward it as `reasoning` events instead of dropping it.
+    yield { type: 'reasoning-delta', text: '先通读这一段，' };
+    yield { type: 'reasoning-delta', text: '再对照关注点。' };
     // Two text deltas to prove the collector concatenates them.
     yield { type: 'text-delta', text: '```json\n' };
     yield { type: 'text-delta', text: reply.slice(0, 17) };
@@ -589,6 +593,19 @@ check(
 );
 const adviceStreamPrompt = messageText(lastRequest && lastRequest.messages && lastRequest.messages[0]);
 check('流式提示词带上了关注点', adviceStreamPrompt.includes('本次只看画面'));
+// R97: the panel shows the model thinking; that only works if the host turns
+// `reasoning-delta` chunks into NDJSON `reasoning` events.
+const adviceStreamReasoning = adviceStreamLines.filter((row) => row && row.type === 'reasoning');
+check(
+  '思考过程以 reasoning 事件转发',
+  adviceStreamReasoning.length > 0 && adviceStreamReasoning.map((row) => row.text).join('').includes('先通读'),
+  JSON.stringify(adviceStreamReasoning).slice(0, 100),
+);
+check(
+  '思考过程在建议之前',
+  adviceStreamLines.findIndex((row) => row && row.type === 'reasoning') <
+    adviceStreamLines.findIndex((row) => row && row.type === 'suggestion'),
+);
 // R94: OpenCode-backed models reject a request without x-opencode-session.
 check(
   '流式请求带合成 session id',

@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.17',
+      version: '1.6.19',
     };
     NW.ReactDOM = null;
 
@@ -17128,6 +17128,26 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   display:flex;align-items:center;gap:8px;justify-content:center;
   padding:10px 12px 14px;color:var(--nw-fg-soft);font-size:12px;
 }
+/* R97：思考过程。推理模型在出第一条建议前会想几十秒到几分钟，宿主现在把
+   reasoning-delta 转成小事件，这里用一块可折叠的浅色区域显示最近的想法。
+   高度封顶，滚动到底部（flex-end），最新的一行永远贴着下边缘。 */
+.nw-think{
+  flex:0 0 auto;margin:0 12px 8px;border:1px solid var(--nw-line-soft);
+  border-radius:10px;background:color-mix(in srgb, var(--nw-fg) 3%, transparent);
+  color:var(--nw-fg-soft);font-size:11.5px;line-height:1.65;
+}
+.nw-think>summary{
+  cursor:pointer;padding:6px 10px;list-style:none;user-select:none;
+  font-size:11px;letter-spacing:.02em;color:var(--nw-fg-soft);opacity:.75;
+}
+.nw-think>summary::-webkit-details-marker{display:none}
+.nw-think-body{
+  display:flex;flex-direction:column;justify-content:flex-end;
+  max-height:148px;overflow:hidden;padding:0 10px 8px;
+  white-space:pre-wrap;word-break:break-word;opacity:.85;
+  -webkit-mask-image:linear-gradient(180deg, transparent 0, #000 22px);
+  mask-image:linear-gradient(180deg, transparent 0, #000 22px);
+}
 /* ======================= R73：选中改写 / 接受 / 已接收 =======================
 
    选中一段字 → 纸面上浮出一个小方钮 → 在正文右侧开一扇并排的窗口。窗口是
@@ -22912,6 +22932,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [elapsed, setElapsed] = useState(0);
     /** R96: cards received so far in the current stream. */
     const [streamCount, setStreamCount] = useState(0);
+    /** R97: the model's reasoning, tail only — what the writer can watch while
+        it thinks. `thinkChars` is the full length, so the count keeps growing
+        even after the visible tail starts sliding. */
+    const [thinking, setThinking] = useState('');
+    const [thinkChars, setThinkChars] = useState(0);
+    const thinkRef = useRef('');
     const [error, setError] = useState('');
     const [activeId, setActiveId] = useState('');
     const [model, setModel] = useState('');
@@ -23019,6 +23045,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         runAbortRef.current = controller;
         setBusy(true);
         setStreamCount(0);
+        thinkRef.current = '';
+        setThinking('');
+        setThinkChars(0);
         setError('');
         setActiveId('');
         setFromCache(false);
@@ -23047,7 +23076,17 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                   signal: controller ? controller.signal : undefined,
                   onEvent: (event) => {
                     if (runRef.current !== token) return;
-                    if (!event || event.type !== 'suggestion' || !event.item) return;
+                    if (!event || typeof event !== 'object') return;
+                    // R97: the host forwards the reasoning stream in small
+                    // chunks; keep the tail (the most recent thought) and let
+                    // the writer see the model working instead of a timer.
+                    if (event.type === 'reasoning' && typeof event.text === 'string') {
+                      thinkRef.current += event.text;
+                      setThinkChars(thinkRef.current.length);
+                      setThinking(thinkRef.current.slice(-1200));
+                      return;
+                    }
+                    if (event.type !== 'suggestion' || !event.item) return;
                     streamed.push(event.item);
                     setStreamCount(streamed.length);
                     setItems(imported.concat(streamed));
@@ -24051,6 +24090,17 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       focusRow,
       noteBox,
       pastePanel,
+      // R97: the model's own words while it thinks. Only rendered once the host
+      // has forwarded reasoning (older hosts never send it); after the read it
+      // stays as a collapsed <details> so the writer can look back.
+      thinkChars > 0
+        ? h(
+            'details',
+            { className: 'nw-think', open: busy ? true : undefined },
+            h('summary', null, NW.t('思考过程 · {0} 字', thinkChars)),
+            h('div', { className: 'nw-think-body' }, thinking),
+          )
+        : null,
       // R73: 已接收 sits under whatever the column is currently showing — the
       // new read, the busy state or the empty state. It is the same store the
       // selection window reads, so a decision made in one place is in both.

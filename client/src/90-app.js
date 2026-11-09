@@ -430,6 +430,26 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   display:flex;align-items:center;gap:8px;justify-content:center;
   padding:10px 12px 14px;color:var(--nw-fg-soft);font-size:12px;
 }
+/* R97：思考过程。推理模型在出第一条建议前会想几十秒到几分钟，宿主现在把
+   reasoning-delta 转成小事件，这里用一块可折叠的浅色区域显示最近的想法。
+   高度封顶，滚动到底部（flex-end），最新的一行永远贴着下边缘。 */
+.nw-think{
+  flex:0 0 auto;margin:0 12px 8px;border:1px solid var(--nw-line-soft);
+  border-radius:10px;background:color-mix(in srgb, var(--nw-fg) 3%, transparent);
+  color:var(--nw-fg-soft);font-size:11.5px;line-height:1.65;
+}
+.nw-think>summary{
+  cursor:pointer;padding:6px 10px;list-style:none;user-select:none;
+  font-size:11px;letter-spacing:.02em;color:var(--nw-fg-soft);opacity:.75;
+}
+.nw-think>summary::-webkit-details-marker{display:none}
+.nw-think-body{
+  display:flex;flex-direction:column;justify-content:flex-end;
+  max-height:148px;overflow:hidden;padding:0 10px 8px;
+  white-space:pre-wrap;word-break:break-word;opacity:.85;
+  -webkit-mask-image:linear-gradient(180deg, transparent 0, #000 22px);
+  mask-image:linear-gradient(180deg, transparent 0, #000 22px);
+}
 /* ======================= R73：选中改写 / 接受 / 已接收 =======================
 
    选中一段字 → 纸面上浮出一个小方钮 → 在正文右侧开一扇并排的窗口。窗口是

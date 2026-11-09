@@ -740,6 +740,12 @@
     const [elapsed, setElapsed] = useState(0);
     /** R96: cards received so far in the current stream. */
     const [streamCount, setStreamCount] = useState(0);
+    /** R97: the model's reasoning, tail only — what the writer can watch while
+        it thinks. `thinkChars` is the full length, so the count keeps growing
+        even after the visible tail starts sliding. */
+    const [thinking, setThinking] = useState('');
+    const [thinkChars, setThinkChars] = useState(0);
+    const thinkRef = useRef('');
     const [error, setError] = useState('');
     const [activeId, setActiveId] = useState('');
     const [model, setModel] = useState('');
@@ -847,6 +853,9 @@
         runAbortRef.current = controller;
         setBusy(true);
         setStreamCount(0);
+        thinkRef.current = '';
+        setThinking('');
+        setThinkChars(0);
         setError('');
         setActiveId('');
         setFromCache(false);
@@ -875,7 +884,17 @@
                   signal: controller ? controller.signal : undefined,
                   onEvent: (event) => {
                     if (runRef.current !== token) return;
-                    if (!event || event.type !== 'suggestion' || !event.item) return;
+                    if (!event || typeof event !== 'object') return;
+                    // R97: the host forwards the reasoning stream in small
+                    // chunks; keep the tail (the most recent thought) and let
+                    // the writer see the model working instead of a timer.
+                    if (event.type === 'reasoning' && typeof event.text === 'string') {
+                      thinkRef.current += event.text;
+                      setThinkChars(thinkRef.current.length);
+                      setThinking(thinkRef.current.slice(-1200));
+                      return;
+                    }
+                    if (event.type !== 'suggestion' || !event.item) return;
                     streamed.push(event.item);
                     setStreamCount(streamed.length);
                     setItems(imported.concat(streamed));
@@ -1879,6 +1898,17 @@
       focusRow,
       noteBox,
       pastePanel,
+      // R97: the model's own words while it thinks. Only rendered once the host
+      // has forwarded reasoning (older hosts never send it); after the read it
+      // stays as a collapsed <details> so the writer can look back.
+      thinkChars > 0
+        ? h(
+            'details',
+            { className: 'nw-think', open: busy ? true : undefined },
+            h('summary', null, NW.t('思考过程 · {0} 字', thinkChars)),
+            h('div', { className: 'nw-think-body' }, thinking),
+          )
+        : null,
       // R73: 已接收 sits under whatever the column is currently showing — the
       // new read, the busy state or the empty state. It is the same store the
       // selection window reads, so a decision made in one place is in both.
