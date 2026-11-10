@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.33',
+      version: '1.6.34',
     };
     NW.ReactDOM = null;
 
@@ -7904,7 +7904,12 @@ window.__ModuleLoader__.load({
       ) {
         return cached.value;
       }
-      const firstAt = Number(ch.firstEditAt) || Number(ch.createdAt) || 0;
+      const hasFirst = Number(ch.firstEditAt) > 0;
+      // R112: 旧章没有记过首次编辑时间，按用户要求显示今年 1 月 1 日；
+      // 不再拿 createdAt 顶替，否则「首次」和「最后」很容易显示成同一分钟。
+      const firstAt = hasFirst
+        ? Number(ch.firstEditAt)
+        : new Date(new Date().getFullYear(), 0, 1).getTime();
       const lastAt = Number(ch.updatedAt) || 0;
       const first = fmtMoment(firstAt, detailWide);
       const last = fmtMoment(lastAt, detailWide);
@@ -7924,7 +7929,11 @@ window.__ModuleLoader__.load({
         last: last,
         firstLabel: tr(detailWide ? '首次编辑' : '首次'),
         lastLabel: tr(detailWide ? '最后编辑' : '最后'),
-        firstTitle: first ? tr('第一次编辑：{0}', fmtMoment(firstAt, true)) : '',
+        firstTitle: first
+          ? hasFirst
+            ? tr('第一次编辑：{0}', fmtMoment(firstAt, true))
+            : tr('首次编辑时间未记录，按今年年初显示')
+          : '',
         lastTitle: last ? tr('最后一次编辑：{0}', fmtMoment(lastAt, true)) : '',
         excerpt: excerpt,
         placeholder: placeholder,
@@ -8858,23 +8867,25 @@ window.__ModuleLoader__.load({
 .nw-shelf-detail-times{
   display:flex;flex-wrap:wrap;align-items:baseline;
   gap:0 var(--nw-sp-2);min-width:0;
+  /* R112: 时间行是元信息，比正文摘要再小一档、更淡，两行一眼分得开。 */
+  font-size:10.5px;color:var(--nw-fg-soft);opacity:.76;
 }
-.nw-shelf-detail-time{white-space:nowrap;font-variant-numeric:tabular-nums;}
-.nw-shelf-detail-label{margin-right:4px;opacity:.72;}
-.nw-shelf-detail-sep{opacity:.5;}
+.nw-shelf-detail-time{white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:.02em;}
+.nw-shelf-detail-label{margin-right:4px;opacity:.78;}
+.nw-shelf-detail-sep{opacity:.45;}
 .nw-shelf-detail-excerpt{
   display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
   /* R111: 固定两行高度。短正文、空占位和打字过程中都不再改变行高，
      侧栏内容高度稳定，滚动条不会跟着一会出现一会消失。 */
   flex:0 0 auto;height:calc(2 * 1.45em);
   min-width:0;overflow:hidden;
-  color:var(--nw-fg-soft);overflow-wrap:anywhere;
+  color:var(--nw-fg);overflow-wrap:anywhere;
 }
 /* 窄栏放不下两句，摘要收成一行，把高度让给下一章。 */
 .nw-shelf-row-detail[data-wide="0"] .nw-shelf-detail-excerpt{
   -webkit-line-clamp:1;height:1.45em;
 }
-.nw-shelf-detail-excerpt.is-empty{opacity:.72;}
+.nw-shelf-detail-excerpt.is-empty{color:var(--nw-fg-soft);}
 
 /* --------------------------------------------- 行内动作按钮（悬停显示） ---- */
 .nw-row-actions{
@@ -19039,6 +19050,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const versionRef = useRef({ chapterId: null, at: 0 });
     const chapterRef = useRef(null);
     chapterRef.current = chapter;
+    // R112: an editor that is being unmounted flushes its old chapter after the
+    // app already switched to the next one, so compare against the whole list.
+    const chaptersRef = useRef(chapters);
+    chaptersRef.current = chapters;
     // R95: seed the per-chapter baseline the moment a chapter opens. Without it
     // the first autosave of a session only recorded the baseline, so everything
     // typed in that first 1.2s window never reached 今日字数.
@@ -20074,6 +20089,23 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const targetId = chapterId != null ? chapterId : current && current.id;
         if (targetId == null) return;
         const text = content == null ? '' : String(content);
+        const known =
+          current && String(current.id) === String(targetId)
+            ? current
+            : (chaptersRef.current || []).find(
+                (row) => row && String(row.id) === String(targetId),
+              ) || null;
+        // R112: merely opening or switching a chapter flushes the editor even when
+        // nothing changed. Writing that back would refresh updatedAt, so the shelf
+        // would claim the chapter was edited. Skip the no-op write entirely.
+        if (
+          known &&
+          !known.locked &&
+          text === String(known.content == null ? '' : known.content)
+        ) {
+          if (aliveRef.current) setSaveState(dirtyDuringSaveRef.current ? 'dirty' : 'saved');
+          return;
+        }
         setSaveState('saving');
         // Anything the editor reports from now on happened after this snapshot.
         dirtyDuringSaveRef.current = false;

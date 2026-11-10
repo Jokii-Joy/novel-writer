@@ -212,6 +212,16 @@ check('详情用 11px 更小字，窄栏一行、宽栏两行，并随宽度换�
   );
   assert.ok(css.includes('-webkit-line-clamp:1'), 'narrow rows clamp to one line');
   assert.ok(css.includes('flex-wrap:wrap'), 'the time line wraps instead of overflowing');
+  // R112: the time line reads as metadata, the excerpt as body copy.
+  assert.ok(css.includes('.nw-shelf-detail-times{'), 'the time line has its own rule');
+  assert.ok(
+    /\.nw-shelf-detail-times\{[^}]*font-size:10\.5px/.test(css),
+    'the time line is a notch smaller than the excerpt',
+  );
+  assert.ok(
+    /\.nw-shelf-detail-excerpt\{[^}]*color:var\(--nw-fg\);/.test(css),
+    'the excerpt uses the body colour, not the muted meta colour',
+  );
   // R111: the excerpt box must not grow/shrink with its text, otherwise typing
   // in the editor changes the shelf row height and the page looks like it jumps.
   assert.ok(css.includes('height:calc(2 * 1.45em)'), 'wide excerpt reserves exactly two lines');
@@ -227,6 +237,23 @@ check('宽度测量用 ResizeObserver，且只在宽度变化后才换档', () =
   assert.ok(shelfSrc.includes('new ResizeObserver(measure)'), 'ResizeObserver observes the shelf');
   assert.ok(shelfSrc.includes('Math.abs(prev - w) >= 8'), 'width updates are quantised');
   assert.ok(shelfSrc.includes('detailWide = detailWidth >= 340'), 'there is a wide/narrow split');
+});
+
+check('没有首次记录时按今年 1 月 1 日显示，不再回退创建时间', () => {
+  assert.ok(shelfSrc.includes('const hasFirst = Number(ch.firstEditAt) > 0;'), 'the row tells recorded and old chapters apart');
+  assert.ok(
+    shelfSrc.includes('new Date(new Date().getFullYear(), 0, 1).getTime()'),
+    'missing firstEditAt falls back to the start of this year',
+  );
+  assert.ok(!shelfSrc.includes('Number(ch.firstEditAt) || Number(ch.createdAt)'), 'createdAt is no longer the first-edit fallback');
+  assert.ok(shelfSrc.includes('首次编辑时间未记录，按今年年初显示'), 'the tooltip explains the synthetic stamp');
+});
+
+check('只是打开/切换章节时，不改写「最后编辑」', () => {
+  const app = read('90-app.js');
+  assert.ok(app.includes('const chaptersRef = useRef(chapters);'), 'the whole chapter list is reachable from a late flush');
+  assert.ok(app.includes('text === String(known.content == null ? \'\' : known.content)'), 'an unchanged flush is detected');
+  assert.ok(app.includes('if (\n          known &&\n          !known.locked'), 'locked bodies still go through the save path');
 });
 
 check('保存正文后立刻更新 updatedAt / firstEditAt', () => {

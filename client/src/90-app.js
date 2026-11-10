@@ -1463,6 +1463,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const versionRef = useRef({ chapterId: null, at: 0 });
     const chapterRef = useRef(null);
     chapterRef.current = chapter;
+    // R112: an editor that is being unmounted flushes its old chapter after the
+    // app already switched to the next one, so compare against the whole list.
+    const chaptersRef = useRef(chapters);
+    chaptersRef.current = chapters;
     // R95: seed the per-chapter baseline the moment a chapter opens. Without it
     // the first autosave of a session only recorded the baseline, so everything
     // typed in that first 1.2s window never reached 今日字数.
@@ -2498,6 +2502,23 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const targetId = chapterId != null ? chapterId : current && current.id;
         if (targetId == null) return;
         const text = content == null ? '' : String(content);
+        const known =
+          current && String(current.id) === String(targetId)
+            ? current
+            : (chaptersRef.current || []).find(
+                (row) => row && String(row.id) === String(targetId),
+              ) || null;
+        // R112: merely opening or switching a chapter flushes the editor even when
+        // nothing changed. Writing that back would refresh updatedAt, so the shelf
+        // would claim the chapter was edited. Skip the no-op write entirely.
+        if (
+          known &&
+          !known.locked &&
+          text === String(known.content == null ? '' : known.content)
+        ) {
+          if (aliveRef.current) setSaveState(dirtyDuringSaveRef.current ? 'dirty' : 'saved');
+          return;
+        }
         setSaveState('saving');
         // Anything the editor reports from now on happened after this snapshot.
         dirtyDuringSaveRef.current = false;
