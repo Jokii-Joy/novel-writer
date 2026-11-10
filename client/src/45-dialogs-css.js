@@ -147,51 +147,249 @@
 }
 
 /* ----------------------------------------------------------- lock screen -- */
+/*
+ * R113: the lock screen is a room, not a login card.
+ *
+ * One layout — name, clock, password, brass lamp and a shelf of books — and the
+ * theme supplies everything else. The five palettes below are the only place
+ * that knows what a book spine looks like on paper / green / newsprint / night;
+ * the structure and the lamp are shared. 「lockDark」 pins data-theme to night,
+ * which is also why no separate “dark mode” block exists.
+ */
 .nw-lock{
-  display:flex;align-items:center;justify-content:center;height:100%;width:100%;padding:var(--nw-sp-6);
-  position:relative;overflow:hidden;
+  position:relative;height:100%;width:100%;overflow:hidden;
   background:
-    radial-gradient(1200px 520px at 50% -16%, color-mix(in srgb, var(--nw-brand) 12%, transparent), transparent 72%),
-    radial-gradient(680px 380px at 82% 108%, color-mix(in srgb, var(--nw-brand) 6%, transparent), transparent 70%),
-    var(--nw-bg);
+    radial-gradient(900px 620px at 14% 58%,var(--nw-lock-warm),transparent 62%),
+    radial-gradient(760px 420px at 78% 92%,var(--nw-lock-shelfglow),transparent 72%),
+    radial-gradient(1100px 500px at 50% -10%,color-mix(in srgb,var(--nw-brand) 6%,transparent),transparent 70%),
+    linear-gradient(180deg,var(--nw-bg),color-mix(in srgb,var(--nw-bg) 88%,var(--nw-fg)));
+  color:var(--nw-fg);font-family:var(--nw-ui-font);
 }
-/* R93: no ruled/grid texture — the lock screen is a calm, seamless surface.
-   The two soft radial washes on .nw-lock above carry the depth on their own. */
-.nw-lock-card{
-  position:relative;display:flex;flex-direction:column;align-items:center;gap:var(--nw-sp-2);
-  width:100%;max-width:392px;padding:38px 32px 30px;
-  border-radius:var(--nw-r-modal);border:1px solid var(--nw-line-soft);
-  background:var(--nw-surface-overlay);box-shadow:var(--nw-shadow-3);color:var(--nw-fg);
-  animation:nw-fade-up var(--nw-dur-long,var(--nw-dur-long)) var(--nw-ease,ease) both;
+.nw-lock *{box-sizing:border-box;}
+
+/* ------------------------------------------------------------- palettes -- */
+.nw-root[data-theme="claude"] .nw-lock{
+  --nw-lock-warm:rgba(196,83,47,.07);--nw-lock-shelfglow:rgba(196,83,47,.05);
+  --nw-lock-board:#d9c7a8;--nw-lock-board-edge:#c3af8b;--nw-lock-shadow:rgba(27,24,19,.20);
+  --nw-lock-b1:#9c3a28;--nw-lock-b2:#34424c;--nw-lock-b3:#6d6a45;--nw-lock-b4:#b08a55;
+  --nw-lock-b5:#e9ddc7;--nw-lock-b6:#7b3a2c;--nw-lock-b7:#41665a;--nw-lock-b8:#8a4a38;
+  --nw-lock-b9:#4a463d;--nw-lock-b10:#b7a071;--nw-lock-b11:#6b3d2e;--nw-lock-b12:#5b6b61;
+  --nw-lock-lamp-filter:drop-shadow(0 10px 16px rgba(27,24,19,.18));
 }
-/* a thin brand rule across the top of the card, like a book's headband */
-.nw-lock-card::before{
-  content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);
-  width:76px;height:3px;border-radius:0 0 3px 3px;
-  background:linear-gradient(90deg, transparent, var(--nw-brand), transparent);
+.nw-root[data-theme="eye"] .nw-lock{
+  --nw-lock-warm:rgba(47,107,60,.06);--nw-lock-shelfglow:rgba(47,107,60,.05);
+  --nw-lock-board:#b3cfb5;--nw-lock-board-edge:#96b899;--nw-lock-shadow:rgba(31,42,32,.20);
+  --nw-lock-b1:#8a3a2c;--nw-lock-b2:#344a4d;--nw-lock-b3:#5d6b45;--nw-lock-b4:#a38653;
+  --nw-lock-b5:#e6e4cf;--nw-lock-b6:#6d3038;--nw-lock-b7:#3d6257;--nw-lock-b8:#7c4a38;
+  --nw-lock-b9:#41483f;--nw-lock-b10:#a99a6f;--nw-lock-b11:#5c4030;--nw-lock-b12:#4f6258;
+  --nw-lock-lamp-filter:drop-shadow(0 10px 16px rgba(31,42,32,.18));
 }
-.nw-lock-card > svg{color:var(--nw-brand);opacity:.92;margin-bottom:2px;}
+.nw-root[data-theme="newspaper"] .nw-lock{
+  --nw-lock-warm:rgba(140,43,34,.055);--nw-lock-shelfglow:rgba(140,43,34,.05);
+  --nw-lock-board:#bfa87d;--nw-lock-board-edge:#a68d60;--nw-lock-shadow:rgba(28,27,23,.22);
+  --nw-lock-b1:#7d2b22;--nw-lock-b2:#3b3a32;--nw-lock-b3:#6b6143;--nw-lock-b4:#9a7a4a;
+  --nw-lock-b5:#e5d7b2;--nw-lock-b6:#5e2c25;--nw-lock-b7:#46564a;--nw-lock-b8:#77513a;
+  --nw-lock-b9:#3f3c33;--nw-lock-b10:#a68c5d;--nw-lock-b11:#5a4330;--nw-lock-b12:#4f5a4c;
+  --nw-lock-go-radius:2px;--nw-lock-lamp-filter:drop-shadow(0 10px 16px rgba(28,27,23,.22));
+}
+.nw-root[data-theme="magazine"] .nw-lock{
+  --nw-lock-warm:rgba(208,2,27,.045);--nw-lock-shelfglow:rgba(208,2,27,.04);
+  --nw-lock-board:#dfe2e6;--nw-lock-board-edge:#c6cbd2;--nw-lock-shadow:rgba(20,23,26,.18);
+  --nw-lock-b1:#a33a2f;--nw-lock-b2:#3c4a5a;--nw-lock-b3:#6b6a4a;--nw-lock-b4:#b08a55;
+  --nw-lock-b5:#e8dcc8;--nw-lock-b6:#7a3038;--nw-lock-b7:#3f6b5f;--nw-lock-b8:#8c4a3f;
+  --nw-lock-b9:#4a4a52;--nw-lock-b10:#b7a47a;--nw-lock-b11:#6b4a3a;--nw-lock-b12:#506058;
+  --nw-lock-lamp-filter:drop-shadow(0 10px 16px rgba(20,23,26,.16));
+}
+.nw-root[data-theme="night"] .nw-lock{
+  --nw-lock-warm:rgba(255,176,96,.14);--nw-lock-shelfglow:rgba(255,176,96,.12);
+  --nw-lock-board:#4a3826;--nw-lock-board-edge:#2b1d12;--nw-lock-shadow:rgba(0,0,0,.55);
+  --nw-lock-b1:#5e1b17;--nw-lock-b2:#24313d;--nw-lock-b3:#3b3a25;--nw-lock-b4:#8a6a45;
+  --nw-lock-b5:#d9c9ad;--nw-lock-b6:#4a1a22;--nw-lock-b7:#1f3a37;--nw-lock-b8:#6f2420;
+  --nw-lock-b9:#2a2622;--nw-lock-b10:#8f7a4e;--nw-lock-b11:#3d2a1f;--nw-lock-b12:#556b62;
+  --nw-lock-lamp-filter:drop-shadow(0 0 26px rgba(255,192,112,.26)) drop-shadow(0 12px 18px rgba(0,0,0,.50));
+}
+
+/* ---------------------------------------------------------------- head --- */
+.nw-lock-head{
+  position:absolute;left:clamp(28px,4.6cqw,72px);right:clamp(28px,4.6cqw,72px);
+  top:clamp(24px,4.2cqw,46px);display:flex;align-items:flex-start;justify-content:space-between;z-index:3;
+}
+.nw-lock-brand{
+  display:flex;align-items:center;gap:10px;
+  font-size:11px;font-weight:600;letter-spacing:.22em;color:var(--nw-fg-soft);
+}
+.nw-lock-brand svg{color:var(--nw-brand);flex:0 0 auto;}
+.nw-lock-clock{text-align:right;font-variant-numeric:tabular-nums;flex:0 0 auto;}
+.nw-lock-clock b{display:block;font-size:22px;font-weight:200;letter-spacing:.08em;color:var(--nw-fg);}
+.nw-lock-clock small{display:block;margin-top:7px;font-size:9.5px;font-weight:500;letter-spacing:.2em;color:var(--nw-fg-soft);}
+
+/* ---------------------------------------------------------------- main --- */
+.nw-lock-main{
+  position:absolute;left:clamp(32px,7.8cqw,112px);top:50%;transform:translateY(-46%);
+  width:min(560px,46cqw);z-index:3;
+}
+.nw-lock-eyebrow{
+  display:flex;align-items:center;gap:12px;
+  font-size:9.5px;font-weight:600;letter-spacing:.32em;color:var(--nw-brand);
+}
+.nw-lock-eyebrow::before{content:"";width:30px;height:1px;background:color-mix(in srgb,var(--nw-brand) 70%,transparent);}
 .nw-lock-title{
-  margin:var(--nw-sp-1) 0 0;font-family:var(--nw-reading-font);
-  font-size:19px;font-weight:600;letter-spacing:.02em;
+  margin:22px 0 0;font-family:var(--nw-reading-font);
+  font-size:clamp(38px,4.1cqw,58px);font-weight:600;letter-spacing:.06em;line-height:1.15;color:var(--nw-fg);
 }
-.nw-lock-hint{
-  margin:0 0 var(--nw-sp-2);font-size:var(--nw-fs-second);color:var(--nw-fg-soft);
-  text-align:center;line-height:1.7;max-width:32ch;
-}
+.nw-lock-rule{width:58px;height:2px;margin:24px 0 20px;background:var(--nw-brand);}
+.nw-lock-hint{margin:0;font-size:13px;line-height:1.9;letter-spacing:.03em;color:var(--nw-fg-soft);}
+.nw-lock-form{display:flex;align-items:flex-end;gap:16px;margin-top:36px;width:min(446px,100%);}
+.nw-lock-field{flex:1 1 auto;min-width:0;}
+.nw-lock-label{display:block;font-size:9.5px;letter-spacing:.24em;color:var(--nw-fg-soft);margin-bottom:7px;}
 .nw-lock-input{
-  text-align:center;letter-spacing:.16em;font-size:var(--nw-fs-base);height:var(--nw-h-input);
-  font-variant-numeric:tabular-nums;
+  width:100%;height:40px;padding:0 2px;border:0;
+  border-bottom:1px solid color-mix(in srgb,var(--nw-fg) 26%,transparent);
+  background:transparent;color:var(--nw-fg);
+  font-family:var(--nw-ui-font);font-size:15px;letter-spacing:.24em;outline:none;
+  transition:border-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
 }
-.nw-lock-input::placeholder{letter-spacing:.04em;}
+.nw-lock-input::placeholder{letter-spacing:.08em;color:var(--nw-fg-soft);opacity:.72;}
+.nw-lock-input:focus{outline:none;border-bottom-color:var(--nw-brand);}
+.nw-lock-input:focus-visible{outline:none;}
+.nw-lock-input.is-error{border-bottom-color:var(--nw-danger);}
+.nw-lock-input:disabled{opacity:.6;}
+.nw-lock-go{
+  flex:0 0 auto;width:46px;height:46px;border:0;
+  border-radius:var(--nw-lock-go-radius,50%);
+  background:var(--nw-brand);color:var(--nw-on-brand);
+  font-family:var(--nw-ui-font);font-size:19px;line-height:1;
+  display:grid;place-items:center;cursor:pointer;
+  box-shadow:0 8px 22px color-mix(in srgb,var(--nw-brand) 30%,transparent);
+  transition:filter var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
+    opacity var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
+}
+.nw-lock-go:hover:not(:disabled){filter:brightness(1.06);}
+.nw-lock-go:disabled{cursor:default;opacity:.72;}
+/* Shared by every password/error dialog, so keep its generic box intact. */
 .nw-lock-error{
   width:100%;margin-top:var(--nw-sp-1);padding:8px 12px;border-radius:var(--nw-r-control);
   font-size:var(--nw-fs-micro);line-height:1.6;color:var(--nw-danger);
-  background:color-mix(in srgb, var(--nw-danger) 10%, transparent);
-  border:1px solid color-mix(in srgb, var(--nw-danger) 30%, transparent);
+  background:color-mix(in srgb,var(--nw-danger) 10%,transparent);
+  border:1px solid color-mix(in srgb,var(--nw-danger) 30%,transparent);
 }
-.nw-lock-actions{
-  display:flex;gap:var(--nw-sp-2);margin-top:var(--nw-sp-2);width:100%;justify-content:center;
+.nw-lock .nw-lock-error{margin-top:14px;}
+.nw-lock-keys{margin-top:13px;font-size:10px;letter-spacing:.06em;color:var(--nw-fg-soft);}
+.nw-lock-keys kbd{
+  display:inline-block;padding:1px 5px;border:1px solid var(--nw-line-soft);border-radius:3px;
+  font-family:var(--nw-ui-font);font-size:9px;color:var(--nw-fg-soft);background:transparent;
+}
+.nw-lock-cancel{
+  display:block;margin-top:12px;padding:0;border:0;background:transparent;
+  color:var(--nw-fg-soft);font-family:var(--nw-ui-font);font-size:11px;letter-spacing:.12em;cursor:pointer;
+}
+.nw-lock-cancel:hover{color:var(--nw-fg);}
+
+.nw-lock-meta{
+  position:absolute;left:clamp(32px,7.8cqw,112px);bottom:clamp(22px,3.2cqw,34px);z-index:4;
+  display:flex;align-items:center;flex-wrap:wrap;gap:8px 26px;
+  font-size:9.5px;letter-spacing:.1em;color:var(--nw-fg-soft);
+}
+.nw-lock-meta-item{display:flex;align-items:center;gap:7px;}
+.nw-lock-meta-item svg{opacity:.8;flex:0 0 auto;}
+
+/* --------------------------------------------------------------- shelf --- */
+.nw-lock-shelf{
+  position:absolute;left:44%;right:0;bottom:0;height:340px;z-index:1;overflow:hidden;pointer-events:none;
+}
+.nw-lock-board{
+  position:absolute;left:0;right:56px;bottom:54px;height:11px;
+  background:linear-gradient(180deg,var(--nw-lock-board),var(--nw-lock-board-edge) 70%,
+    color-mix(in srgb,var(--nw-lock-board-edge) 60%,#000));
+  box-shadow:0 22px 40px var(--nw-lock-shadow);
+}
+.nw-lock-board::after{
+  content:"";position:absolute;left:2%;right:2%;top:-2px;height:1px;
+  background:color-mix(in srgb,var(--nw-fg) 12%,transparent);
+}
+.nw-lock-spines{
+  position:absolute;left:132px;right:58px;bottom:65px;height:238px;
+  display:flex;align-items:flex-end;justify-content:center;gap:5px;
+  filter:drop-shadow(0 -14px 22px var(--nw-lock-shadow));
+}
+.nw-lock-volumes{display:flex;align-items:flex-end;gap:5px;}
+.nw-lock-bookend{
+  flex:0 0 auto;width:15px;height:128px;align-self:flex-end;border-radius:2px;
+  background:linear-gradient(180deg,color-mix(in srgb,var(--nw-fg) 38%,var(--nw-lock-board)),
+    color-mix(in srgb,var(--nw-fg) 18%,var(--nw-lock-board)));
+  box-shadow:inset 1px 0 0 color-mix(in srgb,var(--nw-fg) 14%,transparent),0 10px 18px var(--nw-lock-shadow);
+}
+.nw-lock-spine{
+  position:relative;flex:0 0 auto;border-radius:2px 2px 0 0;
+  background:var(--nw-lock-book);
+  box-shadow:
+    inset -3px 0 0 color-mix(in srgb,var(--nw-fg) 22%,transparent),
+    inset 1px 0 0 color-mix(in srgb,var(--nw-fg) 8%,transparent),
+    inset 0 -60px 80px color-mix(in srgb,#000 16%,transparent);
+}
+.nw-lock-spine::before{
+  content:"";position:absolute;left:5px;right:5px;top:20px;height:1px;
+  background:rgba(230,205,160,.38);
+  box-shadow:0 7px rgba(230,205,160,.24),0 -7px rgba(230,205,160,.16);
+}
+.nw-lock-spine::after{
+  content:"";position:absolute;left:5px;right:5px;bottom:18px;height:1px;
+  background:rgba(230,205,160,.20);
+}
+.nw-lock-spine.is-lean{transform:rotate(7deg);transform-origin:bottom left;margin-left:6px;}
+
+/* brass reading lamp: glows on night, plain brass on paper */
+.nw-lock-lamp{
+  position:absolute;left:26px;bottom:65px;width:100px;height:216px;z-index:2;
+  filter:var(--nw-lock-lamp-filter);
+}
+.nw-lock-lamp-base{
+  position:absolute;left:30px;bottom:0;width:34px;height:7px;border-radius:50%;
+  background:linear-gradient(180deg,#6d4d29,#2c1c0e);
+  box-shadow:0 6px 12px var(--nw-lock-shadow);
+}
+.nw-lock-lamp-stem{
+  position:absolute;left:46px;bottom:6px;width:3px;height:86px;border-radius:2px;
+  background:linear-gradient(180deg,#a97f45,#513515);
+}
+.nw-lock-lamp-shade{
+  position:absolute;left:8px;bottom:88px;width:78px;height:34px;border-radius:3px;
+  background:linear-gradient(180deg,#d3ab6a,#8a5c28 70%,#5f3d1a);
+  clip-path:polygon(18% 0,82% 0,100% 100%,0 100%);
+  box-shadow:0 10px 22px var(--nw-lock-shadow),inset 0 -4px 8px rgba(255,220,160,.25);
+}
+.nw-lock-lamp-shade::after{
+  content:"";position:absolute;left:12px;right:12px;bottom:4px;height:3px;border-radius:50%;
+  background:rgba(255,226,170,.55);filter:blur(1px);
+}
+
+/* ---------------------------------------------------------- responsive --- */
+/* The shelf loses its lamp first (a brass lamp on the desk is the first thing
+   to go when the room narrows), then half the books; only when the password
+   would collide with the bookends is the room dropped entirely. */
+@container nw (max-width: 1240px){
+  .nw-lock-lamp{display:none;}
+}
+@container nw (max-width: 1100px){
+  .nw-lock-volumes .nw-lock-spine:nth-child(n+8){display:none;}
+}
+@container nw (max-width: 980px){
+  .nw-lock-shelf{display:none;}
+  .nw-lock-main{left:64px;width:min(560px,calc(100% - 128px));transform:translateY(-44%);}
+  .nw-lock-meta{left:64px;}
+}
+@container nw (max-width: 720px){
+  .nw-lock-head{left:28px;right:28px;top:24px;}
+  .nw-lock-main{left:28px;width:calc(100% - 56px);transform:translateY(-50%);}
+  .nw-lock-title{font-size:36px;}
+  .nw-lock-form{width:100%;}
+  .nw-lock-keys{font-size:9.5px;}
+  .nw-lock-meta{left:28px;bottom:20px;}
+  .nw-lock-clock b{font-size:19px;}
+}
+@media (max-height: 620px){
+  .nw-lock-shelf{display:none;}
+  .nw-lock-main{top:48%;transform:translateY(-50%);}
 }
 
 /* ------------------------------------------------------------- settings --- */

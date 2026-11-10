@@ -110,6 +110,18 @@ if (shelfDetail.status !== 0) {
   process.exit(1);
 }
 
+// R113: the lock screen is the one surface with no fallback — a wrong theme
+// there looks like another application, and a broken password field locks the
+// writer out. The script renders the real component with a React stub and pins
+// the five palettes plus the 「始终深色」 wiring.
+const lockScreen = spawnSync(process.execPath, [join(here, 'verify-lock-screen.mjs')], {
+  stdio: 'inherit',
+});
+if (lockScreen.status !== 0) {
+  console.error('build-client: the lock screen regressed (theme room / password field)');
+  process.exit(1);
+}
+
 // R101: the module loader only proves the factory runs; the panel can still
 // throw on its first render (that is exactly how R100 shipped a blank screen —
 // a dependency array read a `const` declared further down). Render App and

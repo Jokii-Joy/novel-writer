@@ -4094,6 +4094,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     }
 
     if (locked) {
+      // R113: the lock screen is the same room as the studio. Light themes get
+      // the day shelf; night (or an explicit 「始终深色」) gets the lamp room.
+      const lockNight = settings.lockDark === true || String(themeSettings.theme || '') === 'night';
       return h(
         'div',
         {
@@ -4101,12 +4104,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           ref: rootRef,
           // R93: the lock screen must wear the same theme as the app behind
           // it — without data-theme it fell back to the host palette.
-          'data-theme': themeSettings.theme || 'claude',
+          // R113: 「始终深色」 pins it to night even on a paper theme.
+          'data-theme': lockNight ? 'night' : themeSettings.theme || 'claude',
         },
         h(NW.dialogs.Lock, {
           hasPassword: true,
           onUnlock: unlock,
           onClose: null,
+          night: lockNight,
         }),
         h(Toasts, { toasts: toasts, onDismiss: dismissToast }),
       );

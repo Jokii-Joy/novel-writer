@@ -560,13 +560,43 @@
   }
 
   // =========================================================== Lock screen ===
+  // R113: the lock screen is a room, not a login card. The layout stays the same
+  // in every theme; the CSS only swaps paper, ink, book spines and the lamp's
+  // glow. `night` is set by the app for the night theme or 「始终深色」.
+  const LOCK_BOOKS = [
+    { w: 30, h: 196, n: 1 },
+    { w: 20, h: 170, n: 2 },
+    { w: 34, h: 212, n: 3 },
+    { w: 18, h: 150, n: 4 },
+    { w: 26, h: 184, n: 5 },
+    { w: 22, h: 162, n: 6 },
+    { w: 32, h: 204, n: 7 },
+    { w: 16, h: 142, n: 8 },
+    { w: 28, h: 190, n: 9 },
+    { w: 24, h: 176, n: 10, lean: true },
+    { w: 30, h: 200, n: 11 },
+    { w: 20, h: 158, n: 12 },
+    { w: 26, h: 186, n: 3 },
+    { w: 18, h: 146, n: 7 },
+  ];
+
   NW.dialogs.Lock = function Lock(props) {
     const p = props || {};
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [busy, setBusy] = useState(false);
+    const [now, setNow] = useState(() => new Date());
+    const night = p.night === true;
+
+    // The clock is the only live piece on the lock screen. Thirty seconds is
+    // enough to keep the minute honest without a render every second.
+    useEffect(() => {
+      const timer = window.setInterval(() => setNow(new Date()), 30000);
+      return () => window.clearInterval(timer);
+    }, []);
 
     const submit = async () => {
+      if (busy) return;
       if (!password) {
         setError(NW.t('输入密码'));
         return;
@@ -586,38 +616,134 @@
       }
     };
 
+    const pad2 = (value) => String(value).padStart(2, '0');
+    const clock = pad2(now.getHours()) + ':' + pad2(now.getMinutes());
+    const week = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][now.getDay()];
+    const date = (now.getMonth() + 1) + ' 月 ' + now.getDate() + ' 日 · ' + week;
+
     return h(
       'div',
-      { className: 'nw-lock', role: 'dialog', 'aria-modal': 'true', 'aria-label': NW.t('锁定') },
+      {
+        className: 'nw-lock' + (night ? ' is-night' : ''),
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-label': NW.t('锁定'),
+        'aria-busy': busy ? 'true' : undefined,
+      },
       h(
-        'div',
-        { className: 'nw-lock-card' },
-        h(NW.SidebarIcon, { size: 34 }),
-        h('h2', { className: 'nw-lock-title' }, NW.t('精神空间') + ' · ' + NW.t('锁定')),
-        h('p', { className: 'nw-lock-hint' }, '输入密码以解锁你的书房。'),
-        h('input', {
-          className: 'nw-input nw-lock-input',
-          type: 'password',
-          value: password,
-          autoFocus: true,
-          placeholder: NW.t('输入密码'),
-          'aria-label': NW.t('密码'),
-          onChange: (ev) => setPassword(ev.target.value),
-          onKeyDown: (ev) => {
-            if (ev.key === 'Enter') {
-              ev.preventDefault();
-              submit();
-            }
-          },
-        }),
+        'header',
+        { className: 'nw-lock-head' },
+        h(
+          'div',
+          { className: 'nw-lock-brand' },
+          h(NW.SidebarIcon, { size: 16 }),
+          h('span', null, night ? NW.t('精神空间 · 深夜书房') : NW.t('精神空间 · 书房')),
+        ),
+        h(
+          'div',
+          { className: 'nw-lock-clock' },
+          h('b', null, clock),
+          h('small', null, date),
+        ),
+      ),
+      h(
+        'main',
+        { className: 'nw-lock-main' },
+        h('div', { className: 'nw-lock-eyebrow' }, night ? 'NIGHT STUDY · ' + NW.t('私密书房') : 'PRIVATE STUDY · ' + NW.t('私密书房')),
+        h('h2', { className: 'nw-lock-title' }, NW.t('书房已上锁')),
+        h('div', { className: 'nw-lock-rule', 'aria-hidden': 'true' }),
+        h('p', { className: 'nw-lock-hint' }, NW.t('输入密码，继续昨晚那一页。')),
+        h(
+          'div',
+          { className: 'nw-lock-form' },
+          h(
+            'div',
+            { className: 'nw-lock-field' },
+            h('label', { className: 'nw-lock-label', htmlFor: 'nw-lock-password' }, NW.t('密码')),
+            h('input', {
+              id: 'nw-lock-password',
+              className: 'nw-lock-input' + (error ? ' is-error' : ''),
+              type: 'password',
+              value: password,
+              autoFocus: true,
+              placeholder: NW.t('请输入密码'),
+              'aria-label': NW.t('密码'),
+              'aria-describedby': 'nw-lock-keys',
+              disabled: busy,
+              onChange: (ev) => setPassword(ev.target.value),
+              onKeyDown: (ev) => {
+                if (ev.key === 'Enter' && !ev.isComposing) {
+                  ev.preventDefault();
+                  submit();
+                }
+              },
+            }),
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'nw-lock-go',
+              onClick: submit,
+              disabled: busy,
+              'aria-label': NW.t('解锁'),
+            },
+            busy ? '…' : '→',
+          ),
+        ),
         error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
         h(
           'div',
-          { className: 'nw-lock-actions' },
-          NW.ui.btn({ kind: 'primary', onClick: submit, disabled: busy, children: NW.t('解锁') }),
-          p.onClose ? NW.ui.btn({ onClick: p.onClose, children: NW.t('取消') }) : null,
+          { className: 'nw-lock-keys', id: 'nw-lock-keys' },
+          h('kbd', null, 'Enter'),
+          ' ' + NW.t('解锁') + ' · ' + NW.t('密码只保存在本机'),
         ),
-        busy ? NW.ui.spinner('') : null,
+        p.onClose
+          ? h(
+              'button',
+              { type: 'button', className: 'nw-lock-cancel', onClick: p.onClose, disabled: busy },
+              NW.t('取消'),
+            )
+          : null,
+      ),
+      h(
+        'div',
+        { className: 'nw-lock-meta' },
+        h('span', { className: 'nw-lock-meta-item' }, NW.icon('lock', { size: 11 }), NW.t('本地加密 · AES-256-GCM')),
+        h('span', { className: 'nw-lock-meta-item' }, NW.t('内容不上传')),
+      ),
+      h(
+        'div',
+        { className: 'nw-lock-shelf', 'aria-hidden': 'true' },
+        h(
+          'div',
+          { className: 'nw-lock-lamp' },
+          h('i', { className: 'nw-lock-lamp-base' }),
+          h('i', { className: 'nw-lock-lamp-stem' }),
+          h('i', { className: 'nw-lock-lamp-shade' }),
+        ),
+        h('div', { className: 'nw-lock-board' }),
+        h(
+          'div',
+          { className: 'nw-lock-spines' },
+          h('span', { className: 'nw-lock-bookend' }),
+          h(
+            'div',
+            { className: 'nw-lock-volumes' },
+            LOCK_BOOKS.map((book, index) =>
+              h('span', {
+                key: 'lock-book-' + index,
+                className: 'nw-lock-spine' + (book.lean ? ' is-lean' : ''),
+                style: {
+                  width: book.w + 'px',
+                  height: book.h + 'px',
+                  '--nw-lock-book': 'var(--nw-lock-b' + book.n + ')',
+                },
+              }),
+            ),
+          ),
+          h('span', { className: 'nw-lock-bookend' }),
+        ),
       ),
     );
   };
@@ -2344,6 +2470,21 @@
                   }),
                 )
               : null,
+            // R113: the lock screen follows the reading theme by default; the
+            // night room can be pinned for writers who liked that version.
+            NW.ui.field({
+              label: NW.t('锁屏外观'),
+              hint: NW.t('跟随主题：白天是书房、夜里是夜灯。始终深色：锁屏固定夜灯。'),
+              children: NW.ui.seg({
+                value: draft.lockDark === true ? 'dark' : 'theme',
+                ariaLabel: NW.t('锁屏外观'),
+                options: [
+                  { value: 'theme', label: NW.t('跟随主题') },
+                  { value: 'dark', label: NW.t('始终深色') },
+                ],
+                onChange: (value) => set('lockDark', value === 'dark'),
+              }),
+            }),
             NW.ui.field({
               label: NW.t('字体'),
               children: NW.ui.select({

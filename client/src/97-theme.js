@@ -351,15 +351,6 @@
 .nw-title{font-family:var(--nw-reading-font);letter-spacing:.02em;}
 .nw-title small{font-family:var(--nw-ui-font);letter-spacing:0;}
 
-/* ================================================================ lock ===== */
-.nw-lock-card{padding:38px 30px 28px;gap:var(--nw-sp-2);}
-.nw-lock-title{font-family:var(--nw-reading-font);font-size:20px;letter-spacing:.02em;}
-.nw-lock-hint{font-size:var(--nw-fs-second);line-height:1.75;}
-.nw-lock-input{height:44px;font-size:var(--nw-fs-base);}
-.nw-lock-actions{gap:var(--nw-sp-2);}
-.nw-lock-actions > .nw-btn{flex:1 1 auto;height:38px;}
-.nw-lock-card .nw-inline{justify-content:center;margin-top:var(--nw-sp-2);}
-
 /* ============================================================== settings === */
 .nw-settings-section{padding:16px 18px 8px;border-radius:var(--nw-r-card);}
 .nw-settings-section > h3{font-size:var(--nw-fs-base);font-weight:600;letter-spacing:.02em;}

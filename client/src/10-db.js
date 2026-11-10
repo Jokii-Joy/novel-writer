@@ -92,6 +92,8 @@
     adviceModel: null,
     autoLockMinutes: 15,
     lockEnabled: false,
+    /** R113: lock screen look — false = follow the current theme, true = always the night room. */
+    lockDark: false,
     encryption: false,
     exportFormat: 'docx',
     /** Fixed text appended to the end of every exported document. */
