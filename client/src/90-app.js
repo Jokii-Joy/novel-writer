@@ -2449,7 +2449,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const next = list.map((row) => {
           if (!row || String(row.id) !== String(id)) return row;
           hit = true;
-          return Object.assign({}, row, patch);
+          const extra = typeof patch === 'function' ? patch(row) : patch;
+          return extra ? Object.assign({}, row, extra) : row;
         });
         return hit ? next : list;
       });
@@ -2518,14 +2519,27 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           }
           dailyWordsRef.current[String(targetId)] = words;
           setSaveState(dirtyDuringSaveRef.current ? 'dirty' : 'saved');
-          setSavedAt(Date.now());
-          patchChapterInList(targetId, { content: text, wordCount: words });
+          const savedAt = Date.now();
+          setSavedAt(savedAt);
+          // R109: 目录里当前章要立刻显示新的「最后编辑」和首次正文时间。
+          // firstEditAt 只在第一次真正保存正文时写，之后不再覆盖。
+          patchChapterInList(targetId, (row) =>
+            Object.assign(
+              { content: text, wordCount: words, updatedAt: savedAt },
+              row.firstEditAt ? null : { firstEditAt: savedAt },
+            ),
+          );
           // The write above is awaited, so the user may have switched chapters in the
           // meantime. Merge only if that chapter is still the one on screen, otherwise
           // the old chapter's text would be injected into the newly opened chapter.
           setChapter((prev) =>
             prev && String(prev.id) === String(targetId)
-              ? Object.assign({}, prev, { content: text, wordCount: words })
+              ? Object.assign({}, prev, {
+                  content: text,
+                  wordCount: words,
+                  updatedAt: savedAt,
+                  firstEditAt: prev.firstEditAt || savedAt,
+                })
               : prev,
           );
           const novelId = current && String(current.id) === String(targetId) ? current.novelId : null;

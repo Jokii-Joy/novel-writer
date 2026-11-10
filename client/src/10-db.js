@@ -865,6 +865,8 @@
           updatedAt: stamp,
           wordCount: words,
         };
+        // R109: 导入时带正文的章节，首次编辑就从导入这一刻算起。
+        if (text) chapter.firstEditAt = stamp;
         created.push(chapter);
         ops.push({ store: 'chapters', type: 'put', value: chapter });
       }
@@ -1142,11 +1144,15 @@
       NW.format && typeof NW.format.wordCount === 'function'
         ? NW.format.wordCount(text)
         : text.replace(/\s+/g, '').length;
+    const stamp = now();
     const next = Object.assign({}, current, {
       content: stored,
       wordCount: words,
-      updatedAt: now(),
+      updatedAt: stamp,
     });
+    // R109: 第一次真正保存正文的时间。createdAt 是建章时间，可能早于动笔，
+    // 目录里的「首次编辑」用它；老数据没有这个字段时回退到 createdAt。
+    if (!next.firstEditAt) next.firstEditAt = stamp;
     const ok = await writeBatch([{ store: 'chapters', type: 'put', value: next }]);
     // A failed write must not look like a save. The editor and the status bar key
     // 「已保存」 off this call resolving, and `writeBatch` turns every IndexedDB

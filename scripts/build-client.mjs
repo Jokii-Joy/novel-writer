@@ -98,6 +98,18 @@ if (paste.status !== 0) {
   process.exit(1);
 }
 
+// R109: the detail under an active chapter is a pure text pipeline (two
+// timestamps + a sentence-trimmed excerpt), so it runs in plain Node with a
+// React stub. A bad cut puts a half character under every row the writer
+// clicks, and the static half of the script keeps the block on the active row.
+const shelfDetail = spawnSync(process.execPath, [join(here, 'verify-shelf-detail.mjs')], {
+  stdio: 'inherit',
+});
+if (shelfDetail.status !== 0) {
+  console.error('build-client: the shelf row detail (times/excerpt) regressed');
+  process.exit(1);
+}
+
 // R101: the module loader only proves the factory runs; the panel can still
 // throw on its first render (that is exactly how R100 shipped a blank screen —
 // a dependency array read a `const` declared further down). Render App and

@@ -188,6 +188,94 @@
     };
   }
 
+  // ------------------------------------------------------ row detail (R109) --
+  // 选中的章节在名字下方露出一行「首次编辑 · 最后编辑」和正文开头一两句。
+  // 时间按侧栏宽度换精度：宽时 2026-11-08 21:04，窄时 11-08 21:04。
+  function pad2(n) {
+    return n < 10 ? '0' + n : String(n);
+  }
+
+  function fmtMoment(ms, full) {
+    const n = Number(ms);
+    if (!n || !Number.isFinite(n)) return '';
+    const d = new Date(n);
+    if (isNaN(d.getTime())) return '';
+    const md = pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+    const hm = pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+    if (full) return d.getFullYear() + '-' + md + ' ' + hm;
+    // 跨年时保留年份，但缩成两位，给「月日 时:分」腾地方。
+    if (d.getFullYear() !== new Date().getFullYear()) return String(d.getFullYear()).slice(-2) + '-' + md + ' ' + hm;
+    return md + ' ' + hm;
+  }
+
+  const SENTENCE_END = '。！？!?…';
+  const SENTENCE_CLOSERS = '”’"』」）)】》';
+
+  /**
+   * 取正文开头最多 maxSentences 句、最多 maxChars 字。
+   * 只做文本，不碰 DOM：宽度变化时由调用方换 maxChars 重算。
+   * 返回 {text, cut}，cut 表示后面还有没装下的内容（调用方补省略号）。
+   */
+  function firstSentences(text, maxChars, maxSentences) {
+    const limitChars = Math.max(0, Number(maxChars) || 0);
+    const limitSentences = Math.max(1, Number(maxSentences) || 1);
+    let src = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
+    src = src.replace(/^[\s\u3000]+/, '');
+    const flat = src.replace(/[\s\u3000]+/g, ' ');
+    if (!flat.trim()) return { text: '', cut: false };
+
+    let out = '';
+    let sentences = 0;
+    let i = 0;
+    let cut = false;
+    while (i < flat.length) {
+      let j = i;
+      while (j < flat.length) {
+        const ch = flat.charAt(j);
+        if (SENTENCE_END.indexOf(ch) >= 0) {
+          j += 1;
+          break;
+        }
+        // 英文句点只有在词尾（后接空格或结尾）才算句号，避开 3.14 / 文件名。
+        if (ch === '.' && (j + 1 >= flat.length || flat.charAt(j + 1) === ' ')) {
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+      // 收尾的引号/括号仍属于这一句。
+      while (j < flat.length && SENTENCE_CLOSERS.indexOf(flat.charAt(j)) >= 0) j += 1;
+      const seg = flat.slice(i, j);
+      if (seg) {
+        const room = limitChars - out.length;
+        if (seg.length > room) {
+          if (room > 0) out += seg.slice(0, room);
+          cut = true;
+          break;
+        }
+        out += seg;
+        sentences += 1;
+      }
+      i = j;
+      let gap = false;
+      while (i < flat.length && flat.charAt(i) === ' ') {
+        i += 1;
+        gap = true;
+      }
+      // 中文句间不留空格；英文句子之间补一个，否则会粘成 "world.Next"。
+      if (gap && i < flat.length && /[A-Za-z0-9]/.test(flat.charAt(i)) && /[A-Za-z0-9.!?]$/.test(out)) {
+        out += ' ';
+      }
+      if (sentences >= limitSentences) break;
+      if (out.length >= limitChars) {
+        cut = i < flat.length;
+        break;
+      }
+    }
+    if (i < flat.length) cut = true;
+    return { text: out.replace(/\s+$/, ''), cut: cut };
+  }
+
   // ------------------------------------------------------------ chapter row --
   // 行是 React.memo 组件：展开/折叠/拖拽都不会重渲无关行。
   // 操作按钮只在悬停或聚焦时挂载，2000 章时不会一次性生成上千个 SVG。
@@ -200,6 +288,8 @@
     if (p.active) classes.push('is-active');
     // 菜单打开期间即使鼠标移出也保持动作条可见，否则锚点按钮会被卸载。
     const showActions = hovered || !!p.menuOpen;
+    const detail = p.detail || null;
+    if (detail) classes.push('has-detail');
     return h(
       'div',
       {
@@ -229,53 +319,93 @@
         onDoubleClick: () => api.rename(ch),
         onKeyDown: (ev) => api.keyDown(ev, ch, p.hasKids, p.collapsed),
       },
-      p.hasKids
-        ? h(
-            'span',
-            {
-              className: 'nw-shelf-caret',
-              'data-open': p.collapsed ? '0' : '1',
-              role: 'button',
-              tabIndex: -1,
-              'aria-label': p.collapsed ? tr('展开') : tr('折叠'),
-              onMouseDown: (ev) => ev.preventDefault(),
-              onClick: (ev) => {
-                ev.stopPropagation();
-                api.toggle(ch.id);
+      // R109: 第一行仍是原来的整行内容；详情作为第二行挂在名字下方。
+      // 动作条绝对定位在 .nw-shelf-row-main 内，所以行变高后仍贴第一行居中。
+      h(
+        'div',
+        { className: 'nw-shelf-row-main' },
+        p.hasKids
+          ? h(
+              'span',
+              {
+                className: 'nw-shelf-caret',
+                'data-open': p.collapsed ? '0' : '1',
+                role: 'button',
+                tabIndex: -1,
+                'aria-label': p.collapsed ? tr('展开') : tr('折叠'),
+                onMouseDown: (ev) => ev.preventDefault(),
+                onClick: (ev) => {
+                  ev.stopPropagation();
+                  api.toggle(ch.id);
+                },
               },
-            },
-            icon('caret'),
-          )
-        : h('span', { className: 'nw-shelf-caret is-empty', 'aria-hidden': 'true' }),
-      // R77: 写作状态是一枚小圆点（草稿不画，省得整棵树都是灰点），
-      // 有目标字数时把「已写/目标」并进右侧那行小字。
-      String(ch.status || '')
-        ? h('span', {
-            className: 'nw-shelf-dot',
-            'data-status': String(ch.status),
-            'aria-label': ch.status === 'done' ? tr('已定稿') : tr('修改中'),
-            title: ch.status === 'done' ? tr('已定稿') : tr('修改中'),
-          })
-        : null,
-      h('span', { className: 'nw-shelf-row-title' }, title),
-      Number(ch.targetWords) > 0
+              icon('caret'),
+            )
+          : h('span', { className: 'nw-shelf-caret is-empty', 'aria-hidden': 'true' }),
+        // R77: 写作状态是一枚小圆点（草稿不画，省得整棵树都是灰点），
+        // 有目标字数时把「已写/目标」并进右侧那行小字。
+        String(ch.status || '')
+          ? h('span', {
+              className: 'nw-shelf-dot',
+              'data-status': String(ch.status),
+              'aria-label': ch.status === 'done' ? tr('已定稿') : tr('修改中'),
+              title: ch.status === 'done' ? tr('已定稿') : tr('修改中'),
+            })
+          : null,
+        h('span', { className: 'nw-shelf-row-title' }, title),
+        Number(ch.targetWords) > 0
+          ? h(
+              'span',
+              {
+                className: 'nw-shelf-row-meta',
+                'data-done': (Number(ch.wordCount) || 0) >= Number(ch.targetWords) ? '1' : '0',
+              },
+              fmtWords(ch.wordCount || 0) + '/' + fmtWords(ch.targetWords),
+            )
+          : h('span', { className: 'nw-shelf-row-meta' }, fmtWords(ch.wordCount || 0)),
+        showActions
+          ? h(
+              'span',
+              { className: 'nw-row-actions', onClick: (ev) => ev.stopPropagation() },
+              makeIconBtn(icon('child'), tr('新建子章节'), () => api.createChild(ch.id)),
+              makeIconBtn(icon('pencil'), tr('重命名'), () => api.rename(ch)),
+              makeIconBtn(icon('trash'), tr('删除'), () => api.remove(ch)),
+              makeIconBtn(icon('more', 15), tr('更多操作'), (ev) => api.openMenu(ev, 'chapter', ch)),
+            )
+          : null,
+      ),
+      detail
         ? h(
-            'span',
-            {
-              className: 'nw-shelf-row-meta',
-              'data-done': (Number(ch.wordCount) || 0) >= Number(ch.targetWords) ? '1' : '0',
-            },
-            fmtWords(ch.wordCount || 0) + '/' + fmtWords(ch.targetWords),
-          )
-        : h('span', { className: 'nw-shelf-row-meta' }, fmtWords(ch.wordCount || 0)),
-      showActions
-        ? h(
-            'span',
-            { className: 'nw-row-actions', onClick: (ev) => ev.stopPropagation() },
-            makeIconBtn(icon('child'), tr('新建子章节'), () => api.createChild(ch.id)),
-            makeIconBtn(icon('pencil'), tr('重命名'), () => api.rename(ch)),
-            makeIconBtn(icon('trash'), tr('删除'), () => api.remove(ch)),
-            makeIconBtn(icon('more', 15), tr('更多操作'), (ev) => api.openMenu(ev, 'chapter', ch)),
+            'div',
+            { className: 'nw-shelf-row-detail', 'data-wide': detail.wide ? '1' : '0' },
+            h(
+              'div',
+              { className: 'nw-shelf-detail-times' },
+              detail.first
+                ? h(
+                    'span',
+                    { className: 'nw-shelf-detail-time', title: detail.firstTitle || undefined },
+                    h('span', { className: 'nw-shelf-detail-label' }, detail.firstLabel),
+                    detail.first,
+                  )
+                : null,
+              detail.first && detail.last
+                ? h('span', { className: 'nw-shelf-detail-sep', 'aria-hidden': 'true' }, '·')
+                : null,
+              detail.last
+                ? h(
+                    'span',
+                    { className: 'nw-shelf-detail-time', title: detail.lastTitle || undefined },
+                    h('span', { className: 'nw-shelf-detail-label' }, detail.lastLabel),
+                    detail.last,
+                  )
+                : null,
+            ),
+            h(
+              'div',
+              { className: 'nw-shelf-detail-excerpt' + (detail.placeholder ? ' is-empty' : '') },
+              detail.placeholder || detail.excerpt,
+            ),
           )
         : null,
     );
@@ -302,6 +432,23 @@
     const menuRef = React.useRef(null);
     const sentTermRef = React.useRef('');
     const apiRef = React.useRef({});
+
+    // R109: 选中章节的详情行按侧栏宽度换精度。ResizeObserver 只在宽度变化
+    // ≥8px 时写入 state，拖拽调宽时不会每像素重渲整棵目录。
+    const [detailWidth, setDetailWidth] = React.useState(0);
+    React.useEffect(() => {
+      const node = shelfRef.current;
+      if (!node || typeof ResizeObserver !== 'function') return undefined;
+      const measure = () => {
+        const w = Math.round(node.clientWidth || 0);
+        if (!w) return;
+        setDetailWidth((prev) => (Math.abs(prev - w) >= 8 ? w : prev));
+      };
+      measure();
+      const ro = new ResizeObserver(measure);
+      ro.observe(node);
+      return () => ro.disconnect();
+    }, []);
 
     // ---------------------------------------------------- search (300ms) ----
     React.useEffect(() => {
@@ -434,6 +581,14 @@
     const novels = Array.isArray(P.novels) ? P.novels : EMPTY;
     const activeNovelId = P.activeNovelId == null ? null : P.activeNovelId;
     const activeChapterId = P.activeChapterId;
+
+    // 340px 以上放得下「首次编辑 2026-11-08 21:04」两段；再窄就缩成
+    // 「首次 11-08 21:04」，摘要字数也跟着可用宽度走。
+    const detailWide = detailWidth >= 340;
+    const detailChars = Math.max(
+      30,
+      Math.min(140, Math.floor((Math.max(detailWidth, 220) - 64) / 12) * 2 - 4),
+    );
 
     // ---------------------------------------------------- drag indicator ----
     const placeIndicator = (rect, before) => {
@@ -659,6 +814,36 @@
       }
     };
 
+    // ------------------------------------------------------ row detail -----
+    // R109: 只给当前章算摘要/时间，其余行传 detail:null，memo 不会重渲。
+    const makeDetail = (ch) => {
+      const firstAt = Number(ch.firstEditAt) || Number(ch.createdAt) || 0;
+      const lastAt = Number(ch.updatedAt) || 0;
+      const first = fmtMoment(firstAt, detailWide);
+      const last = fmtMoment(lastAt, detailWide);
+      let excerpt = '';
+      let placeholder = '';
+      if (ch.locked) {
+        placeholder = tr('正文已加密，解锁后显示');
+      } else if (!String(ch.content == null ? '' : ch.content).replace(/\s+/g, '')) {
+        placeholder = tr('还没有正文');
+      } else {
+        const got = firstSentences(ch.content, detailChars, 2);
+        excerpt = got.text + (got.cut ? '…' : '');
+      }
+      return {
+        wide: detailWide,
+        first: first,
+        last: last,
+        firstLabel: tr(detailWide ? '首次编辑' : '首次'),
+        lastLabel: tr(detailWide ? '最后编辑' : '最后'),
+        firstTitle: first ? tr('第一次编辑：{0}', fmtMoment(firstAt, true)) : '',
+        lastTitle: last ? tr('最后一次编辑：{0}', fmtMoment(lastAt, true)) : '',
+        excerpt: excerpt,
+        placeholder: placeholder,
+      };
+    };
+
     // -------------------------------------------------------- tree rows ----
     const buildTreeRows = (novelId) => {
       const out = [];
@@ -673,6 +858,7 @@
           const kids = index.byParent.get(bucketKey(novelId, ch.id));
           const hasKids = !!(kids && kids.length > 0);
           const collapsed = collapsedIds.has(ch.id);
+          const isActive = sameId(activeChapterId, ch.id);
           out.push(
             h(ShelfRow, {
               key: String(ch.id),
@@ -680,7 +866,8 @@
               depth,
               hasKids,
               collapsed,
-              active: sameId(activeChapterId, ch.id),
+              active: isActive,
+              detail: isActive ? makeDetail(ch) : null,
               menuOpen: !!(menu && menu.kind === 'chapter' && sameId(menu.id, ch.id)),
               api,
             }),
@@ -712,6 +899,7 @@
           const ch = stray[i];
           if (seen.has(String(ch.id))) continue;
           seen.add(String(ch.id));
+          const isActive = sameId(activeChapterId, ch.id);
           out.push(
             h(ShelfRow, {
               key: String(ch.id),
@@ -719,7 +907,8 @@
               depth: 0,
               hasKids: false,
               collapsed: false,
-              active: sameId(activeChapterId, ch.id),
+              active: isActive,
+              detail: isActive ? makeDetail(ch) : null,
               menuOpen: !!(menu && menu.kind === 'chapter' && sameId(menu.id, ch.id)),
               api,
             }),
@@ -1476,13 +1665,18 @@
 }
 .nw-shelf-treehead::after{content:'';flex:1 1 auto;height:1px;background:var(--nw-line-soft);}
 .nw-shelf-row{
-  position:relative;display:flex;align-items:center;gap:var(--nw-sp-1);
-  height:36px;margin:1px var(--nw-sp-2);padding:0 var(--nw-sp-2) 0 6px;
+  position:relative;display:flex;flex-direction:column;align-items:stretch;
+  margin:1px var(--nw-sp-2);padding:0 var(--nw-sp-2) 0 6px;
   border-radius:var(--nw-r-control);
   font-size:var(--nw-fs-base);line-height:1.4;color:var(--nw-fg);
   cursor:pointer;outline:none;
   transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
     color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
+}
+/* R109: 第一行单独成块，详情行挂在它下面；动作条仍以这一行为锚点。 */
+.nw-shelf-row-main{
+  position:relative;display:flex;align-items:center;gap:var(--nw-sp-1);
+  min-width:0;min-height:36px;
 }
 .nw-shelf-row:hover{background:var(--nw-surface-2);}
 .nw-shelf-row:focus-visible{outline:2px solid var(--nw-brand);outline-offset:-2px;}
@@ -1548,6 +1742,31 @@
 .nw-shelf-dot[data-status="done"]{background:var(--nw-ok);}
 /* 到了目标字数，那一串「1200/3000」转成绿色。 */
 .nw-shelf-row-meta[data-done="1"]{color:var(--nw-ok);}
+
+/* --------------------------------------- 选中章详情（R109） ---- */
+/* 只在当前章节行出现：一行首末编辑时间 + 最多两行正文开头。
+   时间与摘要都随侧栏宽度换精度/长度（见 fmtMoment / firstSentences）。 */
+.nw-shelf-row-detail{
+  display:flex;flex-direction:column;gap:2px;
+  /* caret 20px + 行内 gap 8px：与标题文字左对齐。 */
+  padding:0 0 6px 28px;
+  min-width:0;
+  font-size:var(--nw-fs-tiny);line-height:1.5;color:var(--nw-fg-soft);
+  cursor:default;
+}
+.nw-shelf-detail-times{
+  display:flex;flex-wrap:wrap;align-items:baseline;
+  gap:0 var(--nw-sp-2);min-width:0;
+}
+.nw-shelf-detail-time{white-space:nowrap;font-variant-numeric:tabular-nums;}
+.nw-shelf-detail-label{margin-right:4px;opacity:.72;}
+.nw-shelf-detail-sep{opacity:.5;}
+.nw-shelf-detail-excerpt{
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
+  min-width:0;max-height:3em;overflow:hidden;
+  color:var(--nw-fg-soft);overflow-wrap:anywhere;
+}
+.nw-shelf-detail-excerpt.is-empty{opacity:.72;}
 
 /* --------------------------------------------- 行内动作按钮（悬停显示） ---- */
 .nw-row-actions{
