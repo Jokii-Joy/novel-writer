@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.25',
+      version: '1.6.26',
     };
     NW.ReactDOM = null;
 
@@ -11145,6 +11145,8 @@ const SEL_EMIT_MS = 120;
     const caretTimerRef = React.useRef(0);
     /** R103: caret offset still waiting to be brought into view after a chapter swap. */
     const landPendingRef = React.useRef(null);
+    /** R103: when a pending landing should stop retrying. */
+    const landDeadlineRef = React.useRef(0);
     /** R99: what the highlight mirror was last built from (skip no-op rebuilds). */
     const hlSigRef = React.useRef({ text: null, ranges: '' });
     const [, forceFind] = React.useState(0);
@@ -11788,9 +11790,15 @@ const SEL_EMIT_MS = 120;
       const v = resolveScroller(false);
       const sc = v && v.el;
       if (!sc) return;
+      // R103: a zero-height pane (still laying out, or hidden) would centre
+      // against a viewport of 0 and park the caret on the top edge — the text
+      // before it then sits above the fold and looks like it vanished. Wait
+      // for a real viewport; the pending landing retries on the next pass.
+      const viewH = sc.clientHeight || 0;
+      if (viewH <= 0) return;
       const m = measureCaret(offset, v);
       if (!m) return;
-      setScrollTop(m.top + m.height / 2 - (sc.clientHeight || 0) / 2, v);
+      setScrollTop(m.top + m.height / 2 - viewH / 2, v);
     }
 
     /**
@@ -11804,10 +11812,17 @@ const SEL_EMIT_MS = 120;
     function settleLanding(view) {
       const target = landPendingRef.current;
       if (target == null) return;
+      // Give up after a few seconds so a pane that never reports a real
+      // viewport cannot keep the measure pass re-fixing itself forever.
+      if (Date.now() > landDeadlineRef.current) {
+        landPendingRef.current = null;
+        return;
+      }
       const ta = taRef.current;
       const v = view || resolveScroller(false);
       const sc = v && v.el;
       if (!ta || !sc) return;
+      if ((sc.clientHeight || 0) <= 0) return;
       if ((ta.selectionStart || 0) !== target) {
         landPendingRef.current = null;
         return;
@@ -14162,22 +14177,26 @@ const SEL_EMIT_MS = 120;
          * the insertion point into view by itself.
          */
         revealCaret() {
+          const ta = taRef.current;
+          if (!ta) return;
+          const id = chapterIdRef.current;
+          const saved = id ? readCaret(id) : null;
+          const at = saved == null ? ta.value.length : Math.min(saved, ta.value.length);
+          try {
+            ta.focus();
+            ta.setSelectionRange(at, at);
+          } catch (err) {
+            /* ignore */
+          }
+          // Arm the same pending landing the chapter effect uses: the measure
+          // pass re-fixes the height and verifies the caret is on screen.
+          landPendingRef.current = at;
+          landDeadlineRef.current = Date.now() + 4000;
           const land = () => {
-            const ta = taRef.current;
-            if (!ta) return;
-            const id = chapterIdRef.current;
-            const saved = id ? readCaret(id) : null;
-            const at = saved == null ? ta.value.length : Math.min(saved, ta.value.length);
-            try {
-              ta.focus();
-              ta.setSelectionRange(at, at);
-            } catch (err) {
-              /* ignore */
-            }
-            invalidateAutosize();
-            autosize();
-            scrollOffsetToCenter(at);
-            emitSelection();
+            const ta2 = taRef.current;
+            if (!ta2) return;
+            if ((ta2.selectionStart || 0) !== at) return;
+            scheduleMeasure(false);
           };
           land();
           if (typeof window.requestAnimationFrame === 'function') {
@@ -14354,6 +14373,7 @@ const SEL_EMIT_MS = 120;
           // which re-fixes the height and verifies the caret is on screen; the
           // retries below just give layout a few chances to become real.
           landPendingRef.current = caretAt;
+          landDeadlineRef.current = Date.now() + 4000;
           const land = () => {
             const ta2 = taRef.current;
             if (!ta2 || chapterIdRef.current !== nextId) return;

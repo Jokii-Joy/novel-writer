@@ -268,6 +268,8 @@ check('R103: 「继续写」聚焦并真正把最后一行带进视野', () => {
   // painted and the browser never scrolls the insertion point into view.
   assert.ok(edSrc.includes('revealCaret() {'), 'the editor exposes revealCaret');
   assert.ok(/revealCaret\(\) \{[\s\S]{0,900}?ta\.focus\(\)/.test(edSrc), 'revealCaret focuses the textarea');
+  assert.ok(edSrc.includes('if (viewH <= 0) return;'), 'a zero-height pane never centres at the top edge');
+  assert.ok(edSrc.includes('const landDeadlineRef = React.useRef(0);'), 'retries have a deadline');
   assert.ok(appSrc.includes('revealEditorCaretSoon'), 'the resume gesture asks for the caret');
   assert.ok(appSrc.includes('api.revealCaret()'), 'the request reaches the editor');
 });
