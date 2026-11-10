@@ -499,6 +499,10 @@ const SEL_EMIT_MS = 120;
   position:relative;flex:1 1 auto;min-height:0;
   overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;
   scrollbar-width:thin;scrollbar-color:var(--nw-scroll-thumb) transparent;
+  /* R111: reserve the 8px scrollbar lane. Without it, the bar appearing on the
+     frame a line wraps changes the textarea width, re-wraps the text and makes
+     the viewport bounce during typing. */
+  scrollbar-gutter:stable;overflow-anchor:none;
 }
 .nw-scroll::-webkit-scrollbar{width:8px;height:8px;}
 .nw-scroll::-webkit-scrollbar-track{background:transparent;}

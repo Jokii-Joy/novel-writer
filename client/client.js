@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.32',
+      version: '1.6.33',
     };
     NW.ReactDOM = null;
 
@@ -7250,7 +7250,7 @@ window.__ModuleLoader__.load({
   }
 
   // ------------------------------------------------------ row detail (R109) --
-  // 选中的章节在名字下方露出一行「首次编辑 · 最后编辑」和正文开头一两句。
+  // 每章都在名字下方露出一行「首次编辑 · 最后编辑」和正文开头一两句。
   // 时间按侧栏宽度换精度：宽时 2026-11-08 21:04，窄时 11-08 21:04。
   function pad2(n) {
     return n < 10 ? '0' + n : String(n);
@@ -8667,6 +8667,8 @@ window.__ModuleLoader__.load({
 .nw-shelf-scroll{
   position:relative;flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;
   padding:var(--nw-sp-1) 0 var(--nw-sp-3);scrollbar-width:thin;
+  /* R111: 滚动条出现/消失不再挤窄内容，避免详情摘要重新换行。 */
+  scrollbar-gutter:stable;
 }
 .nw-shelf-scroll::-webkit-scrollbar{width:10px;}
 .nw-shelf-scroll::-webkit-scrollbar-thumb{
@@ -8862,12 +8864,15 @@ window.__ModuleLoader__.load({
 .nw-shelf-detail-sep{opacity:.5;}
 .nw-shelf-detail-excerpt{
   display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
-  min-width:0;max-height:3em;overflow:hidden;
+  /* R111: 固定两行高度。短正文、空占位和打字过程中都不再改变行高，
+     侧栏内容高度稳定，滚动条不会跟着一会出现一会消失。 */
+  flex:0 0 auto;height:calc(2 * 1.45em);
+  min-width:0;overflow:hidden;
   color:var(--nw-fg-soft);overflow-wrap:anywhere;
 }
 /* 窄栏放不下两句，摘要收成一行，把高度让给下一章。 */
 .nw-shelf-row-detail[data-wide="0"] .nw-shelf-detail-excerpt{
-  -webkit-line-clamp:1;max-height:1.45em;
+  -webkit-line-clamp:1;height:1.45em;
 }
 .nw-shelf-detail-excerpt.is-empty{opacity:.72;}
 
@@ -10665,6 +10670,10 @@ const SEL_EMIT_MS = 120;
   position:relative;flex:1 1 auto;min-height:0;
   overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;
   scrollbar-width:thin;scrollbar-color:var(--nw-scroll-thumb) transparent;
+  /* R111: reserve the 8px scrollbar lane. Without it, the bar appearing on the
+     frame a line wraps changes the textarea width, re-wraps the text and makes
+     the viewport bounce during typing. */
+  scrollbar-gutter:stable;overflow-anchor:none;
 }
 .nw-scroll::-webkit-scrollbar{width:8px;height:8px;}
 .nw-scroll::-webkit-scrollbar-track{background:transparent;}

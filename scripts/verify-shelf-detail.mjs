@@ -212,6 +212,15 @@ check('详情用 11px 更小字，窄栏一行、宽栏两行，并随宽度换�
   );
   assert.ok(css.includes('-webkit-line-clamp:1'), 'narrow rows clamp to one line');
   assert.ok(css.includes('flex-wrap:wrap'), 'the time line wraps instead of overflowing');
+  // R111: the excerpt box must not grow/shrink with its text, otherwise typing
+  // in the editor changes the shelf row height and the page looks like it jumps.
+  assert.ok(css.includes('height:calc(2 * 1.45em)'), 'wide excerpt reserves exactly two lines');
+  assert.ok(
+    css.includes('.nw-shelf-row-detail[data-wide="0"] .nw-shelf-detail-excerpt') &&
+      /\[data-wide="0"\][^{]*\{[^}]*height:1\.45em/.test(css),
+    'narrow excerpt reserves exactly one line',
+  );
+  assert.ok(css.includes('scrollbar-gutter:stable'), 'the shelf scrollbar lane is reserved');
 });
 
 check('宽度测量用 ResizeObserver，且只在宽度变化后才换档', () => {
@@ -231,6 +240,21 @@ check('数据库在第一次真正保存正文时记 firstEditAt', () => {
   const db = read('10-db.js');
   assert.ok(db.includes('if (!next.firstEditAt) next.firstEditAt = stamp;'), 'save path records firstEditAt');
   assert.ok(db.includes('if (text) chapter.firstEditAt = stamp;'), 'import with body records firstEditAt');
+});
+
+check('编辑器滚动条占位固定，避免临界时宽度来回跳', () => {
+  const editor = read('60-editor.js');
+  assert.ok(editor.includes('.nw-scroll{'), '.nw-scroll rule exists');
+  assert.ok(editor.includes('scrollbar-gutter:stable'), 'editor reserves the scrollbar lane');
+  assert.ok(editor.includes('overflow-anchor:none'), 'scroll anchoring cannot shift the page');
+});
+
+check('本地目录写入对瞬时 Windows 文件锁重试', () => {
+  const library = readFileSync(join(HERE, '..', 'lib', 'library.js'), 'utf8');
+  assert.ok(library.includes("const TRANSIENT_FS_CODES = new Set(['EPERM', 'EACCES', 'EBUSY', 'ENOTEMPTY', 'EEXIST'])"), 'transient codes are listed');
+  assert.ok(library.includes('async function retryTransient(work, attempts = 4)'), 'retry helper exists');
+  assert.ok(library.includes('return retryTransient(async () => {'), 'writeBytesFile is retried');
+  assert.ok(library.includes("console.warn('[novel-writer] mirror failed:', error)"), 'the host logs the real cause');
 });
 
 // --- summary ---------------------------------------------------------------
