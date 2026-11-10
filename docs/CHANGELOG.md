@@ -6,8 +6,14 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.27 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.28 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第一百零六轮（R106）**打字时页面不再闪**：R105 修掉了落点造成的整列高度塌陷，但每敲一个字仍会
+  把高亮镜像 `.nw-hl` 整棵 DOM 清空重建（`clearNode(hl)` + 上千个新节点）。Chromium 偶尔会把这一帧
+  合成成空层——表现就是正文整体闪一下。现在先描述下一棵树（`parts`），与现有 `childNodes` 逐个比对
+  结构；结构没变（最常见的情况：在无标注的段落里打字）就**原地更新文字**（文本节点改 `nodeValue`，
+  `<mark>` 改 `textContent`），只有标注区间真的变了才清空重建。`verify-welcome-stats` 23 → **24** 项。
+
 - 第一百零五轮（R105）**保存不再卡死、打字不再晃**：① IndexedDB 连接一旦被浏览器回收或被别的窗口
   阻塞，`openDb()` 仍返回缓存的旧连接，之后每次写入都失败——表现为「小说保存失败」，刷新面板才好。
   现在 `writeBatch` 失败时丢掉缓存连接、**重开并重试一次**；仍失败则把底层错误带进提示，配额不足时

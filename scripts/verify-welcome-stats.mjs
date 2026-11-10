@@ -344,6 +344,24 @@ check('R105: 保存失败会重开连接重试一次，并给出可行动的原�
   assert.ok(edSrc.includes('ta.focus({ preventScroll: true })'), 'focus does not fight our scroll');
 });
 
+check('R105: 高亮镜像原地更新文字，不再每键重建整棵树', () => {
+  const edSrc = read('60-editor.js');
+  const start = edSrc.indexOf('function rebuildHighlights(');
+  const end = edSrc.indexOf('// ------------------------------------------------------------- refresh --');
+  assert.ok(start > 0 && end > start, 'rebuildHighlights is present');
+  const fn = edSrc.slice(start, end);
+  // Typing changes the text on every keystroke; clearing the mirror and
+  // appending thousands of fresh nodes let Chromium composite an empty layer
+  // for a frame, which read as the page blinking. The same structure now gets
+  // its text updated in place, and only a real structure change rebuilds.
+  assert.ok(fn.includes('const parts = []'), 'the next tree is described first');
+  assert.ok(fn.includes('if (same) {'), 'an unchanged structure takes the fast path');
+  assert.ok(fn.includes('node.nodeValue = part.text'), 'text nodes are patched in place');
+  const clearAt = fn.lastIndexOf('clearNode(hl);');
+  const elseAt = fn.indexOf('} else {');
+  assert.ok(clearAt > elseAt && elseAt > 0, 'clear + rebuild only happens on a structure change');
+});
+
 // --- summary ---------------------------------------------------------------
 console.log('');
 if (failed) {

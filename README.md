@@ -123,7 +123,7 @@ plugin_manager action=install_bundle target=<本仓库绝对路径>
 
 ```bash
 curl http://127.0.0.1:<web端口>/novel-writer/api/ping
-# {"ok":true,"data":{"name":"novel-writer","version":"1.6.27",...}}
+# {"ok":true,"data":{"name":"novel-writer","version":"1.6.28",...}}
 ```
 
 改 Host 代码后要**重载插件**（Node 模块已缓存）：

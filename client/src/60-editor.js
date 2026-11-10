@@ -2124,27 +2124,88 @@ const SEL_EMIT_MS = 120;
         return;
       }
       ranges.sort((a, b) => a.start - b.start || a.end - b.end);
-      const frag = document.createDocumentFragment();
+      // R105: the mirror is what keeps marks glued to the right glyphs, so its
+      // text has to follow every keystroke. Rebuilding it (clear + thousands of
+      // fresh nodes) let Chromium composite an empty layer for a frame now and
+      // then — the page looked like it was blinking while typing. Describe the
+      // next tree first; when the node structure is unchanged (the common case:
+      // typing in a plain run of text) update the text in place instead.
+      const parts = [];
       let pos = 0;
       for (let i = 0; i < ranges.length; i += 1) {
         const r = ranges[i];
         const s = Math.max(pos, r.start);
         if (r.end <= s) continue;
-        if (s > pos) frag.appendChild(document.createTextNode(text.slice(pos, s)));
-        const el = document.createElement('mark');
-        el.className = r.kind === 'find' ? 'nw-find-hit' : 'nw-hl-mark';
-        if (r.mark) {
-          el.className += ' nw-mark-' + r.mark;
-        }
-        if (r.active) el.setAttribute('data-active', '1');
-        if (r.id !== undefined && r.id !== null) el.setAttribute('data-id', String(r.id));
-        el.textContent = text.slice(s, r.end);
-        frag.appendChild(el);
+        if (s > pos) parts.push({ mark: false, text: text.slice(pos, s) });
+        parts.push({
+          mark: true,
+          text: text.slice(s, r.end),
+          cls: (r.kind === 'find' ? 'nw-find-hit' : 'nw-hl-mark') + (r.mark ? ' nw-mark-' + r.mark : ''),
+          active: !!r.active,
+          id: r.id === undefined || r.id === null ? null : String(r.id),
+        });
         pos = r.end;
       }
-      if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
-      clearNode(hl);
-      hl.appendChild(frag);
+      if (pos < text.length) parts.push({ mark: false, text: text.slice(pos) });
+      const kids = hl.childNodes;
+      let same = kids.length === parts.length;
+      if (same) {
+        for (let i = 0; i < parts.length; i += 1) {
+          const node = kids[i];
+          const part = parts[i];
+          if (!part.mark) {
+            if (node.nodeType !== 3) {
+              same = false;
+              break;
+            }
+            continue;
+          }
+          if (node.nodeType !== 1 || node.tagName !== 'MARK') {
+            same = false;
+            break;
+          }
+          if (node.className !== part.cls) {
+            same = false;
+            break;
+          }
+          if ((node.getAttribute('data-active') === '1') !== part.active) {
+            same = false;
+            break;
+          }
+          if (node.getAttribute('data-id') !== part.id) {
+            same = false;
+            break;
+          }
+        }
+      }
+      if (same) {
+        for (let i = 0; i < parts.length; i += 1) {
+          const node = kids[i];
+          const part = parts[i];
+          if (part.mark) {
+            if (node.textContent !== part.text) node.textContent = part.text;
+          } else if (node.nodeValue !== part.text) {
+            node.nodeValue = part.text;
+          }
+        }
+      } else {
+        const frag = document.createDocumentFragment();
+        for (let i = 0; i < parts.length; i += 1) {
+          const part = parts[i];
+          if (!part.mark) {
+            frag.appendChild(document.createTextNode(part.text));
+            continue;
+          }
+          const el = document.createElement('mark');
+          el.className = part.cls;
+          if (part.active) el.setAttribute('data-active', '1');
+          if (part.id !== null) el.setAttribute('data-id', part.id);
+          el.textContent = part.text;
+          frag.appendChild(el);
+        }
+        clearNode(hl);
+        hl.appendChild(frag);
+      }
       // R53：正文重建完之后画页边签。签不挂在字上，所以正文怎么切分都不影响它。
       paintGutter();
     }
