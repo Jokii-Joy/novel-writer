@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.28',
+      version: '1.6.29',
     };
     NW.ReactDOM = null;
 
@@ -11116,6 +11116,12 @@ const SEL_EMIT_MS = 120;
     // "someone is writing in this pane" from "this pane is just being watched".
     const typedAtRef = React.useRef(-1e9);
     const expectedScrollTopRef = React.useRef(-1);
+    // R107: when two programmatic scrolls land in the same frame (a chapter
+    // landing followed by typewriter centring), the browser still delivers a
+    // scroll event for the superseded offset. Treating that as a manual scroll
+    // parked the typewriter for 800ms, which read as the page jumping up and
+    // down while typing. Remember when we last moved the viewport ourselves.
+    const programmaticAtRef = React.useRef(-1e9);
     // Cached result of resolveScroller(): the element that really scrolls.
     const scrollerRef = React.useRef(null);
     const scrollerKindRef = React.useRef('self');
@@ -11590,7 +11596,11 @@ const SEL_EMIT_MS = 120;
         // `overflow:hidden` makes the textarea report its real content height:
         // no scrollbar means the content still fits and nothing has to change.
         if (ta.scrollHeight <= ta.clientHeight + 1) return null;
-        return { h: Math.max(ta.scrollHeight + 2, minH) };
+        // R107: one line of slack. A caret on a freshly wrapped (or trailing
+        // empty) line can sit a few pixels below scrollHeight's last line box;
+        // the browser then scrolls the textarea itself to reveal it, and the
+        // text visibly jumps up before the next pass resets it.
+        return { h: Math.max(ta.scrollHeight + 2 + lh, minH) };
       }
 
       // The "height:auto" dance is what makes an exact measurement possible,
@@ -11611,14 +11621,19 @@ const SEL_EMIT_MS = 120;
         sc.scrollTop = savedTop;
         expectedScrollTopRef.current = sc.scrollTop || 0;
       }
-      return { h: Math.max(contentH + 2, minH) };
+      return { h: Math.max(contentH + 2 + lh, minH) };
     }
 
     /** Write phase of the height fix (never mixed with reads). */
     function autosizeWrite(h) {
       const ta = taRef.current;
       if (!ta || !h) return;
-      const next = h.h + 'px';
+      // R107: if the browser already scrolled the textarea internally to keep
+      // the caret visible, the box is exactly that many pixels too short. Grow
+      // it by that much; resetting the offset alone made the text snap back and
+      // forth once per keystroke.
+      const swallowed = ta.scrollTop || 0;
+      const next = h.h + (swallowed > 0 ? swallowed : 0) + 'px';
       if (ta.style.height !== next) ta.style.height = next;
       if (ta.scrollTop !== 0) ta.scrollTop = 0;
     }
@@ -11771,7 +11786,14 @@ const SEL_EMIT_MS = 120;
         // are unaffected (their centred offset is already larger than room),
         // and with typewriter off room is 0, so nothing changes there either.
         const floor = typewriterRoom(v);
-        return centered < floor ? floor : centered;
+        const target = centered < floor ? floor : centered;
+        // R107: never re-scroll for a sub-line difference. Rect rounding and
+        // the +2px room correction made every keystroke request a slightly
+        // different offset; writing it each frame read as the text trembling
+        // up and down. Half a line is invisible, so it is a safe dead zone.
+        const current = sc.scrollTop || 0;
+        if (Math.abs(target - current) < Math.max(1, lineHeightPx() * 0.5)) return null;
+        return target;
       }
       const pad = Math.max(28, m.height);
       const viewTop = sc.scrollTop || 0;
@@ -11791,6 +11813,7 @@ const SEL_EMIT_MS = 120;
       // against it instead of using a timing window, which is far more robust
       // than guessing how many milliseconds the async scroll event takes.
       expectedScrollTopRef.current = target;
+      programmaticAtRef.current = nowMs();
       const prev = sc.scrollTop;
       sc.scrollTop = target;
       // Browsers clamp fractional scroll offsets; remember the real value so a
@@ -13887,6 +13910,11 @@ const SEL_EMIT_MS = 120;
       // was about the words that no longer exist as a range.
       hideSelBtn();
       valueRef.current = ta.value;
+      // R107: the caret may now sit a line below the box for one frame; the
+      // browser scrolls the textarea internally to reveal it, which reads as
+      // the text jumping. Pin the offset back here — the measure pass grows the
+      // box properly on the next frame.
+      if (ta.scrollTop !== 0) ta.scrollTop = 0;
       dirtyRef.current = true;
       typedAtRef.current = nowMs();
       // R68/R70: typing ends the sideways-arrow parking — a keystroke is
@@ -14600,6 +14628,11 @@ const SEL_EMIT_MS = 120;
         // the scroller even when the caret did not move. This uses the cached
         // line top only — no rect, no mirror, no reflow.
         repaintFocusSoon();
+        // R107: a scroll we caused may still deliver its event after a second
+        // programmatic scroll superseded it (chapter landing + centring). Those
+        // are not the writer taking over; ignoring them keeps the typewriter
+        // from parking and then snapping back a frame later.
+        if (nowMs() - programmaticAtRef.current < 150) return;
         const sc = scrollerRef.current;
         const at = sc ? sc.scrollTop || 0 : 0;
         if (Math.abs(at - expectedScrollTopRef.current) <= 2) return;

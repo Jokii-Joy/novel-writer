@@ -362,6 +362,22 @@ check('R105: 高亮镜像原地更新文字，不再每键重建整棵树', () =
   assert.ok(clearAt > elseAt && elseAt > 0, 'clear + rebuild only happens on a structure change');
 });
 
+check('R107: 打字时视口不再自己上下跳', () => {
+  const edSrc = read('60-editor.js');
+  // One line of slack so the browser never has to scroll the textarea itself.
+  assert.ok(edSrc.includes('ta.scrollHeight + 2 + lh'), 'autosize leaves a line of slack');
+  assert.ok(edSrc.includes('contentH + 2 + lh'), 'the exact path leaves the same slack');
+  // If it did scroll internally, absorb that distance into the height.
+  assert.ok(edSrc.includes('const swallowed = ta.scrollTop || 0'), 'the swallowed offset is read');
+  assert.ok(edSrc.includes('h.h + (swallowed > 0 ? swallowed : 0)'), 'the box grows by it');
+  // A caret already where it belongs must not be re-centred for sub-pixel noise.
+  assert.ok(edSrc.includes('Math.abs(target - current) < Math.max(1, lineHeightPx() * 0.5)'), 'centring has a dead zone');
+  // A superseded programmatic scroll must not park the typewriter.
+  assert.ok(edSrc.includes('const programmaticAtRef = React.useRef(-1e9);'), 'programmatic writes are stamped');
+  assert.ok(edSrc.includes('nowMs() - programmaticAtRef.current < 150'), 'their scroll events are ignored');
+  assert.ok(edSrc.includes('if (ta.scrollTop !== 0) ta.scrollTop = 0;'), 'input pins the internal offset back');
+});
+
 // --- summary ---------------------------------------------------------------
 console.log('');
 if (failed) {
