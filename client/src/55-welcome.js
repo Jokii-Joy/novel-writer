@@ -345,6 +345,10 @@
           novels.length === 0
             ? '还没有小说。新建一部，或者把已有的 txt / md / docx / epub 导入进来。'
             : `共 ${novels.length} 部作品、${stats.count} 个章节、${fmtWords(stats.total)} 字。`,
+          // R108: the build the browser actually loaded. When a fix "does not
+          // take", the first question is whether the page is still running the
+          // previous bundle — this answers it without opening devtools.
+          NW.h('span', { className: 'nw-welcome-build' }, ' · v' + (NW.version || '?')),
         ),
       ),
       NW.h(
@@ -828,6 +832,9 @@
    therefore rendered as a grey capsule with the summary text floating inside
    it. The header keeps its own name now. */
 .nw-welcome-lead{margin:0;font-size:var(--nw-fs-second);line-height:1.6;color:var(--nw-fg-soft);}
+/* R108: the loaded build, so "the fix did not take" can be told apart from
+   "the page is still running yesterday's bundle" without devtools. */
+.nw-welcome-build{font-variant-numeric:tabular-nums;opacity:.62;white-space:nowrap;}
 .nw-welcome-actions{display:flex;align-items:center;gap:var(--nw-sp-2);flex-wrap:wrap;}
 
 /* min(280px,100%) — a plain minmax(280px,1fr) overflows as soon as the panel

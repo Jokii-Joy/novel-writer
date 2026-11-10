@@ -378,6 +378,23 @@ check('R107: 打字时视口不再自己上下跳', () => {
   assert.ok(edSrc.includes('if (ta.scrollTop !== 0) ta.scrollTop = 0;'), 'input pins the internal offset back');
 });
 
+check('R108: 删除时高度与文字同一帧落定', () => {
+  const edSrc = read('60-editor.js');
+  // The height must be applied inside handleInput, not one frame later.
+  assert.ok(
+    edSrc.includes('if (!composingRef.current) autosizeWrite(autosizeRead(resolveScroller(false)));'),
+    'handleInput applies the height synchronously'
+  );
+  // And the R107 offset pin must still be part of autosizeWrite.
+  assert.ok(edSrc.includes('if (ta.scrollTop !== 0) ta.scrollTop = 0;'), 'internal offset is pinned');
+});
+
+check('R108: 首页显示当前加载的构建号', () => {
+  const src = read('55-welcome.js');
+  assert.ok(src.includes("' · v' + (NW.version || '?')"), 'the loaded version is printed');
+  assert.ok(src.includes('.nw-welcome-build{'), 'it has its own quiet style');
+});
+
 // --- summary ---------------------------------------------------------------
 console.log('');
 if (failed) {

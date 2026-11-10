@@ -4018,11 +4018,15 @@ const SEL_EMIT_MS = 120;
       // was about the words that no longer exist as a range.
       hideSelBtn();
       valueRef.current = ta.value;
-      // R107: the caret may now sit a line below the box for one frame; the
-      // browser scrolls the textarea internally to reveal it, which reads as
-      // the text jumping. Pin the offset back here — the measure pass grows the
-      // box properly on the next frame.
-      if (ta.scrollTop !== 0) ta.scrollTop = 0;
+      // R108: apply the new height in this same task, before the browser paints.
+      // Waiting for the next frame painted the column once at its old height —
+      // on a deletion that is a blank strip that then snapped up, which read as
+      // the page flashing every time a character was removed (and the more was
+      // removed, the bigger the snap). Reading scrollHeight here forces the very
+      // layout the frame pass would force anyway, just earlier, so it is the
+      // same cost; autosizeWrite also pins the textarea's internal offset back
+      // to zero (R107). During IME composition the frame pass owns it instead.
+      if (!composingRef.current) autosizeWrite(autosizeRead(resolveScroller(false)));
       dirtyRef.current = true;
       typedAtRef.current = nowMs();
       // R68/R70: typing ends the sideways-arrow parking — a keystroke is

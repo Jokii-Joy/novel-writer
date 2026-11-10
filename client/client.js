@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.29',
+      version: '1.6.30',
     };
     NW.ReactDOM = null;
 
@@ -9161,6 +9161,10 @@ window.__ModuleLoader__.load({
           novels.length === 0
             ? '还没有小说。新建一部，或者把已有的 txt / md / docx / epub 导入进来。'
             : `共 ${novels.length} 部作品、${stats.count} 个章节、${fmtWords(stats.total)} 字。`,
+          // R108: the build the browser actually loaded. When a fix "does not
+          // take", the first question is whether the page is still running the
+          // previous bundle — this answers it without opening devtools.
+          NW.h('span', { className: 'nw-welcome-build' }, ' · v' + (NW.version || '?')),
         ),
       ),
       NW.h(
@@ -9644,6 +9648,9 @@ window.__ModuleLoader__.load({
    therefore rendered as a grey capsule with the summary text floating inside
    it. The header keeps its own name now. */
 .nw-welcome-lead{margin:0;font-size:var(--nw-fs-second);line-height:1.6;color:var(--nw-fg-soft);}
+/* R108: the loaded build, so "the fix did not take" can be told apart from
+   "the page is still running yesterday's bundle" without devtools. */
+.nw-welcome-build{font-variant-numeric:tabular-nums;opacity:.62;white-space:nowrap;}
 .nw-welcome-actions{display:flex;align-items:center;gap:var(--nw-sp-2);flex-wrap:wrap;}
 
 /* min(280px,100%) — a plain minmax(280px,1fr) overflows as soon as the panel
@@ -13910,11 +13917,15 @@ const SEL_EMIT_MS = 120;
       // was about the words that no longer exist as a range.
       hideSelBtn();
       valueRef.current = ta.value;
-      // R107: the caret may now sit a line below the box for one frame; the
-      // browser scrolls the textarea internally to reveal it, which reads as
-      // the text jumping. Pin the offset back here — the measure pass grows the
-      // box properly on the next frame.
-      if (ta.scrollTop !== 0) ta.scrollTop = 0;
+      // R108: apply the new height in this same task, before the browser paints.
+      // Waiting for the next frame painted the column once at its old height —
+      // on a deletion that is a blank strip that then snapped up, which read as
+      // the page flashing every time a character was removed (and the more was
+      // removed, the bigger the snap). Reading scrollHeight here forces the very
+      // layout the frame pass would force anyway, just earlier, so it is the
+      // same cost; autosizeWrite also pins the textarea's internal offset back
+      // to zero (R107). During IME composition the frame pass owns it instead.
+      if (!composingRef.current) autosizeWrite(autosizeRead(resolveScroller(false)));
       dirtyRef.current = true;
       typedAtRef.current = nowMs();
       // R68/R70: typing ends the sideways-arrow parking — a keystroke is
