@@ -236,7 +236,10 @@ check('「继续写」恢复精确光标位置', () => {
   assert.ok(edSrc.includes('function readCaret('), 'caret can be read back');
   assert.ok(edSrc.includes('function flushCaretNow('), 'caret is flushed on unload/switch');
   assert.ok(edSrc.includes('const savedCaret = readCaret(nextId)'), 'chapter load restores it');
-  assert.ok(edSrc.includes('scrollOffsetToCenter(target)'), 'restored caret is scrolled into view');
+  // R103/R105: the restored offset is re-settled by the measure pass (a single
+  // scroll on first paint lands at 0), and that pass now scrolls the nearest
+  // edge instead of re-centring and re-measuring on every retry.
+  assert.ok(edSrc.includes('landPendingRef.current = caretAt;'), 'restored caret is scrolled into view');
 });
 
 check('R102: 恢复光标要等布局稳定，且保存前先落盘', () => {
@@ -316,6 +319,29 @@ check('没有「依赖数组读到了后声明的 const」的 TDZ 崩溃', () =>
     });
   });
   assert.deepEqual(problems, [], 'no dependency array reads a later const');
+});
+
+check('R105: 保存失败会重开连接重试一次，并给出可行动的原因', () => {
+  const dbSrc = read('10-db.js');
+  const appSrc = read('90-app.js');
+  const edSrc = read('60-editor.js');
+  // A closed/blocked IndexedDB connection used to make every later save fail
+  // until the panel was reloaded. writeBatch drops the cached connection and
+  // retries exactly once; a real quota error still fails, but is explained.
+  assert.ok(dbSrc.includes('function writeBatch(ops, retried)'), 'writeBatch can retry');
+  assert.ok(dbSrc.includes('return writeBatch(ops, true);'), 'the write is retried once');
+  assert.ok(dbSrc.includes('lastWriteError = err;'), 'the underlying error is kept');
+  assert.ok(dbSrc.includes("'（' + lastWriteError.message + '）'"), 'the error can name the cause');
+  assert.ok(appSrc.includes('存储空间不足，正文没有写进去'), 'a full quota is explained');
+  // The shake came from re-running the height dance on every landing pass and
+  // from the browser's own focus scroll fighting ours.
+  const settleStart = edSrc.indexOf('function settleLanding(');
+  const settleEnd = edSrc.indexOf('// ------------------------------------------------------------ selection --');
+  assert.ok(settleStart > 0 && settleEnd > settleStart, 'settleLanding is present');
+  const settle = edSrc.slice(settleStart, settleEnd);
+  assert.ok(!settle.includes('invalidateAutosize()'), 'landing no longer collapses the column');
+  assert.ok(settle.includes('ensureCaretVisible()'), 'landing scrolls the nearest edge');
+  assert.ok(edSrc.includes('ta.focus({ preventScroll: true })'), 'focus does not fight our scroll');
 });
 
 // --- summary ---------------------------------------------------------------

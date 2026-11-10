@@ -115,6 +115,8 @@
   };
 
   let dbPromise = null;
+  /** R105: the error behind the last failed batch, for a useful toast. */
+  let lastWriteError = null;
   let subscribers = [];
   /** Keeps version timestamps strictly increasing even inside one millisecond. */
   let lastVersionStamp = 0;
@@ -332,7 +334,7 @@
    * Runs a batch of synchronous operations inside one transaction.
    * ops: [{store, type:'put'|'delete'|'clear', value?, key?}]
    */
-  function writeBatch(ops) {
+  function writeBatch(ops, retried) {
     if (!ops || ops.length === 0) return Promise.resolve(true);
     return openDb()
       .then(
@@ -342,7 +344,13 @@
             for (let i = 0; i < ops.length; i += 1) {
               if (names.indexOf(ops[i].store) < 0) names.push(ops[i].store);
             }
-            const tx = db.transaction(names, 'readwrite');
+            let tx;
+            try {
+              tx = db.transaction(names, 'readwrite');
+            } catch (err) {
+              reject(err);
+              return;
+            }
             let failed = null;
             tx.oncomplete = () => resolve(true);
             tx.onerror = () => reject(failed || tx.error || new Error('写入失败'));
@@ -366,7 +374,20 @@
             }
           }),
       )
-      .catch(() => false);
+      .catch((err) => {
+        // R105: a closed or blocked connection (browser eviction, another
+        // window upgrading the schema, an aborted transaction) makes every
+        // later write fail with the same error, which used to surface as a
+        // permanent 「保存失败」 until the panel was reloaded. Drop the cached
+        // connection and retry exactly once; a real quota error fails again
+        // and is reported with its message.
+        if (retried) {
+          lastWriteError = err;
+          return false;
+        }
+        dbPromise = null;
+        return writeBatch(ops, true);
+      });
   }
 
   async function encryptionActive() {
@@ -1133,7 +1154,10 @@
     // transaction) into `false`. Returning quietly here left the new text in
     // memory only: switching chapters or reloading lost it while the UI still
     // said 已保存. Throwing lands in `saveChapter`'s catch, which sets 'error'.
-    if (!ok) throw new Error('保存正文失败：IndexedDB 写入未完成');
+    if (!ok) {
+      const detail = lastWriteError && lastWriteError.message ? '（' + lastWriteError.message + '）' : '';
+      throw new Error('保存正文失败：IndexedDB 写入未完成' + detail);
+    }
     if (next.novelId) await touchNovel(next.novelId);
     notify();
   }

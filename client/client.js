@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.26',
+      version: '1.6.27',
     };
     NW.ReactDOM = null;
 
@@ -556,6 +556,8 @@ window.__ModuleLoader__.load({
   };
 
   let dbPromise = null;
+  /** R105: the error behind the last failed batch, for a useful toast. */
+  let lastWriteError = null;
   let subscribers = [];
   /** Keeps version timestamps strictly increasing even inside one millisecond. */
   let lastVersionStamp = 0;
@@ -773,7 +775,7 @@ window.__ModuleLoader__.load({
    * Runs a batch of synchronous operations inside one transaction.
    * ops: [{store, type:'put'|'delete'|'clear', value?, key?}]
    */
-  function writeBatch(ops) {
+  function writeBatch(ops, retried) {
     if (!ops || ops.length === 0) return Promise.resolve(true);
     return openDb()
       .then(
@@ -783,7 +785,13 @@ window.__ModuleLoader__.load({
             for (let i = 0; i < ops.length; i += 1) {
               if (names.indexOf(ops[i].store) < 0) names.push(ops[i].store);
             }
-            const tx = db.transaction(names, 'readwrite');
+            let tx;
+            try {
+              tx = db.transaction(names, 'readwrite');
+            } catch (err) {
+              reject(err);
+              return;
+            }
             let failed = null;
             tx.oncomplete = () => resolve(true);
             tx.onerror = () => reject(failed || tx.error || new Error('写入失败'));
@@ -807,7 +815,20 @@ window.__ModuleLoader__.load({
             }
           }),
       )
-      .catch(() => false);
+      .catch((err) => {
+        // R105: a closed or blocked connection (browser eviction, another
+        // window upgrading the schema, an aborted transaction) makes every
+        // later write fail with the same error, which used to surface as a
+        // permanent 「保存失败」 until the panel was reloaded. Drop the cached
+        // connection and retry exactly once; a real quota error fails again
+        // and is reported with its message.
+        if (retried) {
+          lastWriteError = err;
+          return false;
+        }
+        dbPromise = null;
+        return writeBatch(ops, true);
+      });
   }
 
   async function encryptionActive() {
@@ -1574,7 +1595,10 @@ window.__ModuleLoader__.load({
     // transaction) into `false`. Returning quietly here left the new text in
     // memory only: switching chapters or reloading lost it while the UI still
     // said 已保存. Throwing lands in `saveChapter`'s catch, which sets 'error'.
-    if (!ok) throw new Error('保存正文失败：IndexedDB 写入未完成');
+    if (!ok) {
+      const detail = lastWriteError && lastWriteError.message ? '（' + lastWriteError.message + '）' : '';
+      throw new Error('保存正文失败：IndexedDB 写入未完成' + detail);
+    }
     if (next.novelId) await touchNovel(next.novelId);
     notify();
   }
@@ -11827,9 +11851,12 @@ const SEL_EMIT_MS = 120;
         landPendingRef.current = null;
         return;
       }
-      invalidateAutosize();
-      autosizeWrite(autosizeRead(v));
-      scrollOffsetToCenter(target);
+      // R105: do not redo the autosize dance here. `refresh` already wrote the
+      // height for this pass; measuring again with height:auto collapsed the
+      // column for a frame on every retry, which read as the page shaking
+      // while typing. With a real viewport, a gentle "nearest" scroll is
+      // enough to bring the caret back on screen.
+      ensureCaretVisible();
       const m = measureCaret(target, v);
       if (!m) return;
       const top = sc.scrollTop || 0;
@@ -14183,7 +14210,18 @@ const SEL_EMIT_MS = 120;
           const saved = id ? readCaret(id) : null;
           const at = saved == null ? ta.value.length : Math.min(saved, ta.value.length);
           try {
-            ta.focus();
+            // R105: keep the browser from doing its own jump-scroll to the
+            // insertion point. Our landing pass decides the final position;
+            // two competing scrolls read as the page shaking on open.
+            ta.focus({ preventScroll: true });
+          } catch (err) {
+            try {
+              ta.focus();
+            } catch (err2) {
+              /* ignore */
+            }
+          }
+          try {
             ta.setSelectionRange(at, at);
           } catch (err) {
             /* ignore */
@@ -19694,7 +19732,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         } catch (err) {
           if (aliveRef.current) {
             setSaveState('error');
-            pushToast(errText(err, '保存失败'), 'error');
+            const message = err && err.message ? String(err.message) : '';
+            // R105: name the actionable cause instead of a generic failure.
+            // A full quota never clears on retry, so tell the writer what to do.
+            if (/quota|storage|空间/i.test(message)) {
+              pushToast('存储空间不足，正文没有写进去。请先导出备份，再清理旧版本快照。', 'error');
+            } else {
+              pushToast(errText(err, '保存失败'), 'error');
+            }
           }
           // R99: the editor keys its "clean" state and the localStorage draft
           // off this promise. Swallowing the error here told it the write had

@@ -2537,7 +2537,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         } catch (err) {
           if (aliveRef.current) {
             setSaveState('error');
-            pushToast(errText(err, '保存失败'), 'error');
+            const message = err && err.message ? String(err.message) : '';
+            // R105: name the actionable cause instead of a generic failure.
+            // A full quota never clears on retry, so tell the writer what to do.
+            if (/quota|storage|空间/i.test(message)) {
+              pushToast('存储空间不足，正文没有写进去。请先导出备份，再清理旧版本快照。', 'error');
+            } else {
+              pushToast(errText(err, '保存失败'), 'error');
+            }
           }
           // R99: the editor keys its "clean" state and the localStorage draft
           // off this promise. Swallowing the error here told it the write had

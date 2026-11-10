@@ -6,8 +6,16 @@
 一个 DSH 双半插件（Host + Client）。左侧栏点书本图标进入 **中央面板**（不是右侧抽屉），
 左目录 / 右编辑区的沉浸式布局，数据全部留在本机 IndexedDB。
 
-- 包名：`@local/novel-writer` ｜ 版本：1.6.26 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
+- 包名：`@local/novel-writer` ｜ 版本：1.6.27 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第一百零五轮（R105）**保存不再卡死、打字不再晃**：① IndexedDB 连接一旦被浏览器回收或被别的窗口
+  阻塞，`openDb()` 仍返回缓存的旧连接，之后每次写入都失败——表现为「小说保存失败」，刷新面板才好。
+  现在 `writeBatch` 失败时丢掉缓存连接、**重开并重试一次**；仍失败则把底层错误带进提示，配额不足时
+  直接说「存储空间不足，正文没有写进去」。② 晃动来自落点逻辑：`settleLanding` 每轮都
+  `invalidateAutosize()` + 重新 autosize（两次强制回流，整列高度瞬间塌一下），而 `revealCaret` 的
+  `focus()` 又让浏览器自己滚一次，和脚本滚动互相抢。现在落点只做「最近边缘」滚动（`ensureCaretVisible`），
+  不再重做高度；聚焦用 `focus({ preventScroll: true })`。`verify-welcome-stats` 22 → **23** 项。
+
 - 第一百零四轮（R104）**光标前面的字不再「消失」**：R103 在面板还没有真实视口时（`clientHeight` 为 0）
   仍然按「居中」计算滚动，`m.top + h/2 - 0` 把光标推到视口顶边，光标之前的整段正文就滚到了视野外——
   看起来像字被吃掉了。现在：① `scrollOffsetToCenter` 在视口高度为 0 时直接放弃，等布局真正成形；

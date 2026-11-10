@@ -1959,9 +1959,12 @@ const SEL_EMIT_MS = 120;
         landPendingRef.current = null;
         return;
       }
-      invalidateAutosize();
-      autosizeWrite(autosizeRead(v));
-      scrollOffsetToCenter(target);
+      // R105: do not redo the autosize dance here. `refresh` already wrote the
+      // height for this pass; measuring again with height:auto collapsed the
+      // column for a frame on every retry, which read as the page shaking
+      // while typing. With a real viewport, a gentle "nearest" scroll is
+      // enough to bring the caret back on screen.
+      ensureCaretVisible();
       const m = measureCaret(target, v);
       if (!m) return;
       const top = sc.scrollTop || 0;
@@ -4315,7 +4318,18 @@ const SEL_EMIT_MS = 120;
           const saved = id ? readCaret(id) : null;
           const at = saved == null ? ta.value.length : Math.min(saved, ta.value.length);
           try {
-            ta.focus();
+            // R105: keep the browser from doing its own jump-scroll to the
+            // insertion point. Our landing pass decides the final position;
+            // two competing scrolls read as the page shaking on open.
+            ta.focus({ preventScroll: true });
+          } catch (err) {
+            try {
+              ta.focus();
+            } catch (err2) {
+              /* ignore */
+            }
+          }
+          try {
             ta.setSelectionRange(at, at);
           } catch (err) {
             /* ignore */
