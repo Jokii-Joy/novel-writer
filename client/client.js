@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.31',
+      version: '1.6.32',
     };
     NW.ReactDOM = null;
 
@@ -7282,6 +7282,13 @@ window.__ModuleLoader__.load({
     const limitSentences = Math.max(1, Number(maxSentences) || 1);
     let src = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
     src = src.replace(/^[\s\u3000]+/, '');
+    // 摘要最多一两句，没必要把整章正文都归一化一遍；只取开头一段，
+    // 后面还有内容时依然让调用方补省略号。
+    let more = false;
+    if (src.length > 2400) {
+      src = src.slice(0, 2400);
+      more = true;
+    }
     const flat = src.replace(/[\s\u3000]+/g, ' ');
     if (!flat.trim()) return { text: '', cut: false };
 
@@ -7334,7 +7341,7 @@ window.__ModuleLoader__.load({
       }
     }
     if (i < flat.length) cut = true;
-    return { text: out.replace(/\s+$/, ''), cut: cut };
+    return { text: out.replace(/\s+$/, ''), cut: cut || more };
   }
 
   // ------------------------------------------------------------ chapter row --
@@ -7490,6 +7497,9 @@ window.__ModuleLoader__.load({
     const indicatorRef = React.useRef(null);
     const scrollRef = React.useRef(null);
     const shelfRef = React.useRef(null);
+    // R110: 每章都显示详情后，摘要按「章节 → 已算好的对象」缓存。
+    // 打字只会改当前章，其余行直接命中缓存，ShelfRow 的 memo 也不会被新对象打穿。
+    const detailCacheRef = React.useRef(new Map());
     const menuRef = React.useRef(null);
     const sentTermRef = React.useRef('');
     const apiRef = React.useRef({});
@@ -7644,12 +7654,12 @@ window.__ModuleLoader__.load({
     const activeChapterId = P.activeChapterId;
 
     // 340px 以上放得下「首次编辑 2026-11-08 21:04」两段；再窄就缩成
-    // 「首次 11-08 21:04」，摘要字数也跟着可用宽度走。
+    // 「首次 11-08 21:04」。摘要窄栏一句、宽栏两句，字数上限只防超长句，
+    // 真正的换行/省略交给 -webkit-line-clamp；不按像素算字数，
+    // 否则拖一次侧栏就会把整本书的摘要重算几十遍。
     const detailWide = detailWidth >= 340;
-    const detailChars = Math.max(
-      30,
-      Math.min(140, Math.floor((Math.max(detailWidth, 220) - 64) / 12) * 2 - 4),
-    );
+    const detailChars = detailWide ? 120 : 60;
+    const detailSentences = detailWide ? 2 : 1;
 
     // ---------------------------------------------------- drag indicator ----
     const placeIndicator = (rect, before) => {
@@ -7876,8 +7886,24 @@ window.__ModuleLoader__.load({
     };
 
     // ------------------------------------------------------ row detail -----
-    // R109: 只给当前章算摘要/时间，其余行传 detail:null，memo 不会重渲。
+    // R110: 每章都显示首末时间与开头两句。摘要只算一次：缓存键带上会影响
+    // 结果的宽度档与正文/时间戳，其余行复用同一个对象，ShelfRow.memo 不失效。
     const makeDetail = (ch) => {
+      const cache = detailCacheRef.current;
+      const cacheKey = String(ch.id);
+      const cached = cache.get(cacheKey);
+      if (
+        cached &&
+        cached.chars === detailChars &&
+        cached.wide === detailWide &&
+        cached.content === ch.content &&
+        cached.locked === !!ch.locked &&
+        cached.updatedAt === ch.updatedAt &&
+        cached.firstEditAt === ch.firstEditAt &&
+        cached.createdAt === ch.createdAt
+      ) {
+        return cached.value;
+      }
       const firstAt = Number(ch.firstEditAt) || Number(ch.createdAt) || 0;
       const lastAt = Number(ch.updatedAt) || 0;
       const first = fmtMoment(firstAt, detailWide);
@@ -7889,10 +7915,10 @@ window.__ModuleLoader__.load({
       } else if (!String(ch.content == null ? '' : ch.content).replace(/\s+/g, '')) {
         placeholder = tr('还没有正文');
       } else {
-        const got = firstSentences(ch.content, detailChars, 2);
+        const got = firstSentences(ch.content, detailChars, detailSentences);
         excerpt = got.text + (got.cut ? '…' : '');
       }
-      return {
+      const value = {
         wide: detailWide,
         first: first,
         last: last,
@@ -7903,6 +7929,17 @@ window.__ModuleLoader__.load({
         excerpt: excerpt,
         placeholder: placeholder,
       };
+      cache.set(cacheKey, {
+        chars: detailChars,
+        wide: detailWide,
+        content: ch.content,
+        locked: !!ch.locked,
+        updatedAt: ch.updatedAt,
+        firstEditAt: ch.firstEditAt,
+        createdAt: ch.createdAt,
+        value: value,
+      });
+      return value;
     };
 
     // -------------------------------------------------------- tree rows ----
@@ -7928,7 +7965,7 @@ window.__ModuleLoader__.load({
               hasKids,
               collapsed,
               active: isActive,
-              detail: isActive ? makeDetail(ch) : null,
+              detail: makeDetail(ch),
               menuOpen: !!(menu && menu.kind === 'chapter' && sameId(menu.id, ch.id)),
               api,
             }),
@@ -7969,7 +8006,7 @@ window.__ModuleLoader__.load({
               hasKids: false,
               collapsed: false,
               active: isActive,
-              detail: isActive ? makeDetail(ch) : null,
+              detail: makeDetail(ch),
               menuOpen: !!(menu && menu.kind === 'chapter' && sameId(menu.id, ch.id)),
               api,
             }),
@@ -8804,15 +8841,16 @@ window.__ModuleLoader__.load({
 /* 到了目标字数，那一串「1200/3000」转成绿色。 */
 .nw-shelf-row-meta[data-done="1"]{color:var(--nw-ok);}
 
-/* --------------------------------------- 选中章详情（R109） ---- */
-/* 只在当前章节行出现：一行首末编辑时间 + 最多两行正文开头。
-   时间与摘要都随侧栏宽度换精度/长度（见 fmtMoment / firstSentences）。 */
+/* ------------------------------------- 章节详情（R109/R110） ---- */
+/* 不用点开：每章名字下方都有一行首末编辑时间 + 正文开头一两句。
+   字号比正文小一档（11px）；窄栏摘要只留一行、宽栏两行，
+   时间精度与摘要句数随栏宽换档（见 fmtMoment / firstSentences）。 */
 .nw-shelf-row-detail{
   display:flex;flex-direction:column;gap:2px;
   /* caret 20px + 行内 gap 8px：与标题文字左对齐。 */
-  padding:0 0 6px 28px;
+  padding:0 0 5px 28px;
   min-width:0;
-  font-size:var(--nw-fs-tiny);line-height:1.5;color:var(--nw-fg-soft);
+  font-size:11px;line-height:1.45;color:var(--nw-fg-soft);
   cursor:default;
 }
 .nw-shelf-detail-times{
@@ -8826,6 +8864,10 @@ window.__ModuleLoader__.load({
   display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
   min-width:0;max-height:3em;overflow:hidden;
   color:var(--nw-fg-soft);overflow-wrap:anywhere;
+}
+/* 窄栏放不下两句，摘要收成一行，把高度让给下一章。 */
+.nw-shelf-row-detail[data-wide="0"] .nw-shelf-detail-excerpt{
+  -webkit-line-clamp:1;max-height:1.45em;
 }
 .nw-shelf-detail-excerpt.is-empty{opacity:.72;}
 

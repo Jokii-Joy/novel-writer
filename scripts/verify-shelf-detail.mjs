@@ -1,18 +1,20 @@
 #!/usr/bin/env node
 /**
- * R109: the chapter row's detail block.
+ * R110: the chapter row's detail block.
  *
  *   node scripts/verify-shelf-detail.mjs
  *
- * Clicking a chapter in the shelf now shows, under its name, when it was
- * first / last edited and the opening one or two sentences of the body.
- * Two things here are easy to break without a screenshot:
+ * Every chapter in the shelf now shows, under its name, when it was first /
+ * last edited and the opening one or two sentences of the body — no click
+ * needed. Three things here are easy to break without a screenshot:
  *
  *   - the excerpt must cut on sentence boundaries (and never glue English
  *     sentences together as "world.Next", which is what a naive
  *     whitespace-collapse does);
- *   - the detail must hang under the *active* row only — expanding all 2000
- *     rows would turn the shelf into a wall of text.
+ *   - every row must get a detail, but the excerpt must be cached per
+ *     chapter — otherwise typing one word re-scans the whole book;
+ *   - the type must stay smaller than the title and adapt to the shelf
+ *     width (one line narrow, two lines wide).
  *
  * This script loads the real 50-shelf.js in a stub, patches in a test hook,
  * and pins both the pure functions and the wiring in 90-app/10-db.
@@ -161,16 +163,36 @@ check('没有句号的整段：按字数截断', () => {
   assert.equal(got.cut, true);
 });
 
+check('超长正文只归一化开头一段，后面还有内容就补省略号', () => {
+  const got = T.firstSentences('短句。' + 'x'.repeat(5000), 10000, 2);
+  assert.equal(got.text.slice(0, 3), '短句。');
+  assert.ok(got.text.length <= 2400, 'only the opening stretch is scanned');
+  assert.equal(got.cut, true);
+});
+
 check('空正文/纯空白返回空串，由调用方给占位文案', () => {
   assert.deepEqual(T.firstSentences('', 80, 2), { text: '', cut: false });
   assert.deepEqual(T.firstSentences('  \n\n　', 80, 2), { text: '', cut: false });
 });
 
 // --- wiring / static checks ------------------------------------------------
-check('详情块只挂在 active 行上（主树 + 孤儿兜底两处）', () => {
-  const hits = shelfSrc.split('detail: isActive ? makeDetail(ch) : null').length - 1;
-  assert.equal(hits, 2, `expected 2 active-only detail hooks, found ${hits}`);
+check('不用点开：每一章都带详情（主树 + 孤儿兜底两处）', () => {
+  const hits = shelfSrc.split('detail: makeDetail(ch)').length - 1;
+  assert.equal(hits, 2, `expected 2 detail hooks, found ${hits}`);
+  assert.ok(!shelfSrc.includes('isActive ? makeDetail'), 'detail is not gated on the active row');
   assert.ok(shelfSrc.includes("if (detail) classes.push('has-detail');"), 'row marks itself has-detail');
+});
+
+check('摘要按章缓存：正文/宽度/时间戳变了才重算', () => {
+  assert.ok(shelfSrc.includes('const detailCacheRef = React.useRef(new Map());'), 'per-chapter detail cache exists');
+  assert.ok(shelfSrc.includes('cached.chars === detailChars'), 'cache misses when the width bucket changes');
+  assert.ok(shelfSrc.includes('cached.content === ch.content'), 'cache misses when the body changes');
+  assert.ok(shelfSrc.includes('cached.updatedAt === ch.updatedAt'), 'cache refreshes the last-edited stamp');
+  assert.ok(shelfSrc.includes('cached.value'), 'cache keeps the same detail object so ShelfRow.memo holds');
+  assert.ok(
+    shelfSrc.includes('firstSentences(ch.content, detailChars, detailSentences)'),
+    'narrow rows ask for one sentence, wide rows for two',
+  );
 });
 
 check('行结构：第一行独立成块，动作条锚在它里面', () => {
@@ -178,11 +200,17 @@ check('行结构：第一行独立成块，动作条锚在它里面', () => {
   assert.ok(shelfSrc.includes("'aria-level': p.depth + 1"), 'treeitem keeps its aria-level');
 });
 
-check('详情用两行截断 + 12px 小字，并随宽度换时间精度', () => {
+check('详情用 11px 更小字，窄栏一行、宽栏两行，并随宽度换时间精度', () => {
   const css = shelfSrc.slice(shelfSrc.indexOf('NW.CSS_PARTS.push('));
   assert.ok(css.includes('.nw-shelf-row-detail{'), 'detail CSS block exists');
-  assert.ok(css.includes('font-size:var(--nw-fs-tiny)'), 'detail uses the tiny type token');
-  assert.ok(css.includes('-webkit-line-clamp:2'), 'excerpt clamps to two lines');
+  assert.ok(css.includes('font-size:11px'), 'detail type is smaller than the 12px token');
+  assert.ok(css.includes('line-height:1.45'), 'detail line-height tightens with the smaller type');
+  assert.ok(css.includes('-webkit-line-clamp:2'), 'wide rows clamp to two lines');
+  assert.ok(
+    css.includes('.nw-shelf-row-detail[data-wide="0"] .nw-shelf-detail-excerpt'),
+    'narrow rows have their own excerpt rule',
+  );
+  assert.ok(css.includes('-webkit-line-clamp:1'), 'narrow rows clamp to one line');
   assert.ok(css.includes('flex-wrap:wrap'), 'the time line wraps instead of overflowing');
 });
 
