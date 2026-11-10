@@ -1275,6 +1275,8 @@ const SEL_EMIT_MS = 120;
     const selTimerRef = React.useRef(0);
     /** R100: pending caret write (「继续写」 lands where the writer stopped). */
     const caretTimerRef = React.useRef(0);
+    /** R103: caret offset still waiting to be brought into view after a chapter swap. */
+    const landPendingRef = React.useRef(null);
     /** R99: what the highlight mirror was last built from (skip no-op rebuilds). */
     const hlSigRef = React.useRef({ text: null, ranges: '' });
     const [, forceFind] = React.useState(0);
@@ -1921,6 +1923,37 @@ const SEL_EMIT_MS = 120;
       const m = measureCaret(offset, v);
       if (!m) return;
       setScrollTop(m.top + m.height / 2 - (sc.clientHeight || 0) / 2, v);
+    }
+
+    /**
+     * R103: finish a pending chapter landing inside the normal measure pass.
+     * The pane can report a zero-height scroller on its first paint, so a
+     * single scroll lands at 0 and the last line only appeared after a click.
+     * While an offset is pending, every layout change re-fixes the height,
+     * re-scrolls and checks the caret really is inside the viewport; the
+     * moment the writer moves the caret themselves, we stop.
+     */
+    function settleLanding(view) {
+      const target = landPendingRef.current;
+      if (target == null) return;
+      const ta = taRef.current;
+      const v = view || resolveScroller(false);
+      const sc = v && v.el;
+      if (!ta || !sc) return;
+      if ((ta.selectionStart || 0) !== target) {
+        landPendingRef.current = null;
+        return;
+      }
+      invalidateAutosize();
+      autosizeWrite(autosizeRead(v));
+      scrollOffsetToCenter(target);
+      const m = measureCaret(target, v);
+      if (!m) return;
+      const top = sc.scrollTop || 0;
+      const bottom = top + (sc.clientHeight || 0);
+      if (m.top >= top - 2 && m.top + m.height <= bottom + 2) {
+        landPendingRef.current = null;
+      }
     }
 
     // ------------------------------------------------------------ selection --
@@ -2648,6 +2681,9 @@ const SEL_EMIT_MS = 120;
       }
       // ---------- write phase ----------
       autosizeWrite(height);
+      // R103: a chapter landing may still be pending (first paint had no real
+      // viewport). Re-fix and verify here, where height and width are final.
+      settleLanding(view);
       if (scrollTarget != null) setScrollTop(scrollTarget, view);
       paintCaret(caretPlan);
       paintFocus(view, focusOrigin);
@@ -4251,6 +4287,37 @@ const SEL_EMIT_MS = 120;
           const ta = taRef.current;
           if (ta) ta.focus();
         },
+        /**
+         * R103: put the caret where the writer stopped and make sure it is on
+         * screen. "继续写" switches the view while the pane is still laying out,
+         * so retry across a few frames; focusing also lets the browser scroll
+         * the insertion point into view by itself.
+         */
+        revealCaret() {
+          const land = () => {
+            const ta = taRef.current;
+            if (!ta) return;
+            const id = chapterIdRef.current;
+            const saved = id ? readCaret(id) : null;
+            const at = saved == null ? ta.value.length : Math.min(saved, ta.value.length);
+            try {
+              ta.focus();
+              ta.setSelectionRange(at, at);
+            } catch (err) {
+              /* ignore */
+            }
+            invalidateAutosize();
+            autosize();
+            scrollOffsetToCenter(at);
+            emitSelection();
+          };
+          land();
+          if (typeof window.requestAnimationFrame === 'function') {
+            window.requestAnimationFrame(land);
+          }
+          window.setTimeout(land, 60);
+          window.setTimeout(land, 200);
+        },
         getSelection() {
           const ta = taRef.current;
           if (!ta) return { start: 0, end: 0, text: '' };
@@ -4374,6 +4441,9 @@ const SEL_EMIT_MS = 120;
         // R100: land on the sentence the writer stopped at. Clamp because a
         // recovered draft can be shorter than the text the offset came from.
         const savedCaret = readCaret(nextId);
+        // R103: without a saved offset a plain chapter open starts at the top
+        // (browsing an old chapter should not jump to its end); the "继续写"
+        // path asks for the end explicitly via api.revealCaret().
         const caretAt = savedCaret == null ? 0 : Math.min(savedCaret, body.length);
         try {
           ta.setSelectionRange(caretAt, caretAt);
@@ -4405,21 +4475,22 @@ const SEL_EMIT_MS = 120;
         // R100: 「继续写」 restores the exact caret, then centers it. Done after
         // autosize so the measurement is final — the typewriter padding above
         // would otherwise leave the restored line below the fold.
+        // R103: settle the landing through the measure pass, which re-fixes
+        // the height and verifies the caret is on screen.
         if (savedCaret != null && caretAt > 0) {
           // R102: the first paint of a freshly mounted editor can still have a
           // zero-height scroller (the panel was just switched in). A scroll
           // target clamped to 0 leaves the writer at the top of the chapter and
-          // their last sentence only appears after a click; land once now and
-          // twice more as layout settles. Every attempt bails the moment the
-          // writer moves the caret themselves.
+          // their last sentence only appears after a click.
+          // R103: the pending offset is settled by the normal measure pass,
+          // which re-fixes the height and verifies the caret is on screen; the
+          // retries below just give layout a few chances to become real.
+          landPendingRef.current = caretAt;
           const land = () => {
             const ta2 = taRef.current;
             if (!ta2 || chapterIdRef.current !== nextId) return;
             if ((ta2.selectionStart || 0) !== caretAt) return;
-            invalidateAutosize();
-            autosize();
-            scrollOffsetToCenter(caretAt);
-            emitSelection();
+            scheduleMeasure(false);
           };
           land();
           if (typeof window.requestAnimationFrame === 'function') {

@@ -236,7 +236,7 @@ check('「继续写」恢复精确光标位置', () => {
   assert.ok(edSrc.includes('function readCaret('), 'caret can be read back');
   assert.ok(edSrc.includes('function flushCaretNow('), 'caret is flushed on unload/switch');
   assert.ok(edSrc.includes('const savedCaret = readCaret(nextId)'), 'chapter load restores it');
-  assert.ok(edSrc.includes('scrollOffsetToCenter(caretAt)'), 'restored caret is scrolled into view');
+  assert.ok(edSrc.includes('scrollOffsetToCenter(target)'), 'restored caret is scrolled into view');
 });
 
 check('R102: 恢复光标要等布局稳定，且保存前先落盘', () => {
@@ -252,6 +252,24 @@ check('R102: 恢复光标要等布局稳定，且保存前先落盘', () => {
   // A fast 首页 → 继续写 must not read the chapter before the unmount write lands.
   assert.ok(appSrc.includes('await flushEditor();'), 'chapter open waits for the editor flush');
   assert.ok(appSrc.includes('pendingSaveRef.current = pending;'), 'flush waits for the in-flight save');
+});
+
+check('R103: 「继续写」聚焦并真正把最后一行带进视野', () => {
+  const edSrc = read('60-editor.js');
+  const appSrc = read('90-app.js');
+  // The pane can report a zero-height scroller on first paint. A pending
+  // landing is re-settled by every measure pass until the caret is inside the
+  // viewport, instead of relying on one scroll + a click to fix it.
+  assert.ok(edSrc.includes('const landPendingRef = React.useRef(null);'), 'a landing can be pending');
+  assert.ok(edSrc.includes('function settleLanding('), 'the measure pass finishes the landing');
+  assert.ok(edSrc.includes('landPendingRef.current = caretAt;'), 'chapter load arms the pending landing');
+  assert.ok(edSrc.includes('m.top >= top - 2 && m.top + m.height <= bottom + 2'), 'landing is verified on screen');
+  // "继续写" must focus the textarea: without focus the custom caret is not
+  // painted and the browser never scrolls the insertion point into view.
+  assert.ok(edSrc.includes('revealCaret() {'), 'the editor exposes revealCaret');
+  assert.ok(/revealCaret\(\) \{[\s\S]{0,900}?ta\.focus\(\)/.test(edSrc), 'revealCaret focuses the textarea');
+  assert.ok(appSrc.includes('revealEditorCaretSoon'), 'the resume gesture asks for the caret');
+  assert.ok(appSrc.includes('api.revealCaret()'), 'the request reaches the editor');
 });
 
 check('没有「依赖数组读到了后声明的 const」的 TDZ 崩溃', () => {

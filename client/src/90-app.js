@@ -2631,6 +2631,29 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [activeChapterId, flushEditor, snapshotVersion, pushToast],
     );
 
+    // R103: "继续写" flips the pane back while the editor is still mounting.
+    // Ask it to reveal the caret across the next frames — it focuses the
+    // textarea and scrolls the insertion point into view once layout is real.
+    const revealEditorCaretSoon = useCallback(() => {
+      let tries = 0;
+      const run = () => {
+        const api = editorRef.current;
+        if (api && typeof api.revealCaret === 'function') {
+          api.revealCaret();
+          return;
+        }
+        tries += 1;
+        if (tries < 8 && typeof window.requestAnimationFrame === 'function') {
+          window.requestAnimationFrame(run);
+        }
+      };
+      if (typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(run);
+      } else {
+        run();
+      }
+    }, []);
+
     const selectNovel = useCallback(
       async (id) => {
         setActiveNovelId(id == null ? null : id);
@@ -4258,14 +4281,17 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                   const open = chapterRef.current;
                   if (open && chapterId != null && String(open.id) === String(chapterId)) {
                     setView('write');
+                    revealEditorCaretSoon();
                     return;
                   }
-                  if (chapterId != null) selectChapter(chapterId);
+                  if (chapterId != null) selectChapter(chapterId).then(revealEditorCaretSoon);
                   else selectNovel(novelId);
                 },
                 onResume: () => {
-                  if (chapter) setView('write');
-                  else if (novels.length > 0) selectNovel(novels[0].id);
+                  if (chapter) {
+                    setView('write');
+                    revealEditorCaretSoon();
+                  } else if (novels.length > 0) selectNovel(novels[0].id);
                 },
                 onNewNovel: createNovel,
                 onImport: importNow,
