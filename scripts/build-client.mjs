@@ -98,6 +98,18 @@ if (paste.status !== 0) {
   process.exit(1);
 }
 
+// R114: immersive mode is supposed to leave nothing on the page but the prose.
+// The 修改建议 entry lives in four places (editor selection button, dock row,
+// Alt+A, app callbacks); one missed gate puts a floating button back on the
+// page. Static checks are enough for that contract.
+const adviceImmersive = spawnSync(process.execPath, [join(here, 'verify-advice-immersive.mjs')], {
+  stdio: 'inherit',
+});
+if (adviceImmersive.status !== 0) {
+  console.error('build-client: 修改建议 can reappear in immersive mode');
+  process.exit(1);
+}
+
 // R109: the detail under an active chapter is a pure text pipeline (two
 // timestamps + a sentence-trimmed excerpt), so it runs in plain Node with a
 // React stub. A bad cut puts a half character under every row the writer

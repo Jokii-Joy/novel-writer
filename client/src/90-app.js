@@ -4356,11 +4356,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     // how much of the leftover width the advice column may take.
                     // --nw-width is set on .nw-surface (inside the paper), so it
                     // cannot be read from here.
-                    'data-advice': adviceOpen && !immersive ? '1' : '0',
+                    // R114: 沉浸模式也可以打开建议栏；data-advice 只由栏开关决定。
+                    'data-advice': adviceOpen ? '1' : '0',
                     // R73: the selection window pins the paper the same way the
                     // advice column does — 并排 means two columns, not one on top
                     // of the other.
-                    'data-selwin': selAdvice && !immersive ? '1' : '0',
+                    // R114: 选中改写窗口同理，沉浸模式里也要能并排看原文。
+                    'data-selwin': selAdvice ? '1' : '0',
                     // R43 ③: the bench's idea of the page measure has to match
                     // what the editor actually lays out. Immersive mode raises
                     // --nw-width to at least 880px (60-editor.js:640), so feeding
@@ -4491,7 +4493,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       onSave: saveNotes,
                     }),
                   ),
-                  adviceOpen && !immersive
+                  adviceOpen
                     ? h(NW.Advice, {
                         key: 'advice-' + String(chapter.id),
                         chapter: chapter,
@@ -4513,7 +4515,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                   // R73: the selection window. Keyed on the range so asking again
                   // about different words starts a fresh read instead of showing
                   // the previous selection's cards.
-                  selAdvice && !immersive
+                  selAdvice
                     ? h(NW.SelectionAdvice, {
                         key: 'seladvice-' + String(chapter.id) + '-' + String(selAdvice.start) + '-' + String(selAdvice.end),
                         chapter: chapter,
@@ -4546,11 +4548,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           //
           // R83: 修改建议栏展开时整块坞不渲染。栏占着右侧车道，圆钮正好压在
           // 建议卡片的下沿；收起状态下它也没有一个动作可点（修改建议正是打开
-          // 这一栏的入口），先让位，关掉栏再回来。沉浸模式下栏不出现，坞照旧。
+          // 这一栏的入口），先让位，关掉栏再回来。R114: 沉浸模式里栏也能打开，
+          // 坞同样让位，不让圆钮压在建议卡片下沿。
           // R98: 选中改写窗口是同一个车道的另一种形态，同样让位——否则圆钮浮在
           // 窗口的卡片上面，看起来像窗口里多出来一个按钮。
           view === 'write' || immersive
-            ? (adviceOpen || selAdvice) && !immersive
+            ? adviceOpen || selAdvice
               ? null
               : dock
             : null,
@@ -4879,6 +4882,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         // 修改建议 toggles the advice column beside the paper, so its row stays
         // lit while that column is open.
         item('typeset', NW.t('一键排版'), p.onTypeset, true),
+        // R114: 沉浸模式也保留「修改建议」入口；栏和选区窗口都能并排显示。
         item('sparkle', NW.t('修改建议'), p.onAdvice, true),
         item('proofread', NW.t('AI 校对'), p.onProofread, true),
         item('book', NW.t('读一遍'), p.onRead, true),
