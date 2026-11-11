@@ -580,6 +580,100 @@
     { w: 18, h: 146, n: 7 },
   ];
 
+  // R115: marks drawn for this one surface. The shared SidebarIcon is tuned for
+  // 16px list rows; at the top of the lock screen its quill collapses into a
+  // block, so the lock keeps its own thinner strokes and a bookmark that still
+  // reads at 18px.
+  function LockMark() {
+    return h(
+      'svg',
+      {
+        className: 'nw-lock-mark',
+        viewBox: '0 0 24 24',
+        width: 18,
+        height: 18,
+        fill: 'none',
+        'aria-hidden': 'true',
+        focusable: 'false',
+      },
+      h('path', {
+        d: 'M3.4 6.4c2.7-1.2 5.4-1.2 8.1 0v11.5c-2.7-1.1-5.4-1.1-8.1 0V6.4Z',
+        stroke: 'currentColor',
+        strokeWidth: 1.35,
+        strokeLinejoin: 'round',
+      }),
+      h('path', {
+        d: 'M11.9 6.4c2.6-1.2 5.3-1.2 8 0v11.5c-2.7-1.1-5.4-1.1-8 0V6.4Z',
+        stroke: 'currentColor',
+        strokeWidth: 1.35,
+        strokeLinejoin: 'round',
+      }),
+      h('path', {
+        d: 'M14.6 5.1h3.1v4.6l-1.55-1.15L14.6 9.7V5.1Z',
+        fill: 'currentColor',
+      }),
+    );
+  }
+
+  function LockPadlock() {
+    return h(
+      'svg',
+      {
+        className: 'nw-lock-padlock',
+        viewBox: '0 0 20 20',
+        width: 12,
+        height: 12,
+        fill: 'none',
+        'aria-hidden': 'true',
+        focusable: 'false',
+      },
+      h('rect', {
+        x: 4.6,
+        y: 8.8,
+        width: 10.8,
+        height: 7.4,
+        rx: 1.7,
+        stroke: 'currentColor',
+        strokeWidth: 1.25,
+      }),
+      h('path', {
+        d: 'M7.2 8.8V6.9a2.8 2.8 0 0 1 5.6 0v1.9',
+        stroke: 'currentColor',
+        strokeWidth: 1.25,
+        strokeLinecap: 'round',
+      }),
+      h('circle', { cx: 10, cy: 12, r: 0.95, fill: 'currentColor' }),
+      h('path', {
+        d: 'M10 12.7v1.4',
+        stroke: 'currentColor',
+        strokeWidth: 1.3,
+        strokeLinecap: 'round',
+      }),
+    );
+  }
+
+  function LockArrow() {
+    return h(
+      'svg',
+      {
+        className: 'nw-lock-arrow',
+        viewBox: '0 0 20 20',
+        width: 18,
+        height: 18,
+        fill: 'none',
+        'aria-hidden': 'true',
+        focusable: 'false',
+      },
+      h('path', {
+        d: 'M4 10h11.2M10.6 5.5 15.2 10l-4.6 4.5',
+        stroke: 'currentColor',
+        strokeWidth: 1.75,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      }),
+    );
+  }
+
   NW.dialogs.Lock = function Lock(props) {
     const p = props || {};
     const [password, setPassword] = useState('');
@@ -636,7 +730,7 @@
         h(
           'div',
           { className: 'nw-lock-brand' },
-          h(NW.SidebarIcon, { size: 16 }),
+          h(LockMark),
           h('span', null, night ? NW.t('精神空间 · 深夜书房') : NW.t('精神空间 · 书房')),
         ),
         h(
@@ -688,7 +782,7 @@
               disabled: busy,
               'aria-label': NW.t('解锁'),
             },
-            busy ? '…' : '→',
+            busy ? h('span', { className: 'nw-lock-go-spinner', 'aria-hidden': 'true' }) : h(LockArrow),
           ),
         ),
         error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
@@ -709,7 +803,7 @@
       h(
         'div',
         { className: 'nw-lock-meta' },
-        h('span', { className: 'nw-lock-meta-item' }, NW.icon('lock', { size: 11 }), NW.t('本地加密 · AES-256-GCM')),
+        h('span', { className: 'nw-lock-meta-item' }, h(LockPadlock), NW.t('本地加密 · AES-256-GCM')),
         h('span', { className: 'nw-lock-meta-item' }, NW.t('内容不上传')),
       ),
       h(
@@ -739,7 +833,7 @@
                   height: book.h + 'px',
                   '--nw-lock-book': 'var(--nw-lock-b' + book.n + ')',
                 },
-              }),
+              }, h('i', { className: 'nw-lock-spine-label' })),
             ),
           ),
           h('span', { className: 'nw-lock-bookend' }),

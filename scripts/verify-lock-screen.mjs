@@ -128,6 +128,27 @@ check('书房场景：书架、书脊、黄铜灯都在，且对读屏隐藏', (
   assert.equal(shelf.props['aria-hidden'], 'true', 'the scene is decorative');
 });
 
+check('图标是锁屏专用线稿：书标、锁、箭头和忙碌环都不借字体', () => {
+  const { nodes } = renderLock(false);
+  const componentNames = nodes
+    .filter((node) => typeof node.type === 'function')
+    .map((node) => node.type.name);
+  assert.ok(componentNames.includes('LockMark'), 'the brand draws its own book mark');
+  assert.ok(componentNames.includes('LockPadlock'), 'the meta row draws its own padlock');
+  const go = nodes.find(
+    (node) => node.type === 'button' && String(node.props.className || '').includes('nw-lock-go'),
+  );
+  assert.ok(go, 'unlock button exists');
+  const arrow = go.props.children;
+  assert.ok(arrow && typeof arrow.type === 'function' && arrow.type.name === 'LockArrow', 'the arrow is an SVG, not a text glyph');
+  assert.ok(dialogsSrc.includes("className: 'nw-lock-go-spinner'"), 'busy state has a ring');
+  assert.ok(!dialogsSrc.includes("busy ? '…' : '→'"), 'the old text arrow is gone');
+  assert.ok(cssSrc.includes('.nw-lock-mark{width:18px'), 'the mark keeps the 18px optical size');
+  assert.ok(cssSrc.includes('@keyframes nw-lock-spin'), 'the busy ring actually spins');
+  assert.ok(cssSrc.includes('prefers-reduced-motion: reduce'), 'reduced motion is respected');
+  assert.ok(cssSrc.includes('.nw-lock-spine-label{'), 'book spines gained a label block');
+});
+
 check('夜间文案跟着 night 切换，不在地铁里说「深夜书房」', () => {
   const day = renderLock(false);
   const night = renderLock(true);

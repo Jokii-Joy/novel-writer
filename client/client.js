@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.36',
+      version: '1.6.37',
     };
     NW.ReactDOM = null;
 
@@ -6359,6 +6359,7 @@ window.__ModuleLoader__.load({
   font-size:11px;font-weight:600;letter-spacing:.22em;color:var(--nw-fg-soft);
 }
 .nw-lock-brand svg{color:var(--nw-brand);flex:0 0 auto;}
+.nw-lock-mark{width:18px;height:18px;display:block;}
 .nw-lock-clock{text-align:right;font-variant-numeric:tabular-nums;flex:0 0 auto;}
 .nw-lock-clock b{display:block;font-size:22px;font-weight:200;letter-spacing:.08em;color:var(--nw-fg);}
 .nw-lock-clock small{display:block;margin-top:7px;font-size:9.5px;font-weight:500;letter-spacing:.2em;color:var(--nw-fg-soft);}
@@ -6398,7 +6399,6 @@ window.__ModuleLoader__.load({
   flex:0 0 auto;width:46px;height:46px;border:0;
   border-radius:var(--nw-lock-go-radius,50%);
   background:var(--nw-brand);color:var(--nw-on-brand);
-  font-family:var(--nw-ui-font);font-size:19px;line-height:1;
   display:grid;place-items:center;cursor:pointer;
   box-shadow:0 8px 22px color-mix(in srgb,var(--nw-brand) 30%,transparent);
   transition:filter var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
@@ -6406,6 +6406,17 @@ window.__ModuleLoader__.load({
 }
 .nw-lock-go:hover:not(:disabled){filter:brightness(1.06);}
 .nw-lock-go:disabled{cursor:default;opacity:.72;}
+.nw-lock-go svg{display:block;}
+.nw-lock-go-spinner{
+  width:15px;height:15px;border-radius:50%;
+  border:1.5px solid color-mix(in srgb,currentColor 32%,transparent);
+  border-top-color:currentColor;
+  animation:nw-lock-spin .8s linear infinite;
+}
+@keyframes nw-lock-spin{to{transform:rotate(360deg);}}
+@media (prefers-reduced-motion: reduce){
+  .nw-lock-go-spinner{animation-duration:2.4s;}
+}
 /* Shared by every password/error dialog, so keep its generic box intact. */
 .nw-lock-error{
   width:100%;margin-top:var(--nw-sp-1);padding:8px 12px;border-radius:var(--nw-r-control);
@@ -6432,6 +6443,7 @@ window.__ModuleLoader__.load({
 }
 .nw-lock-meta-item{display:flex;align-items:center;gap:7px;}
 .nw-lock-meta-item svg{opacity:.8;flex:0 0 auto;}
+.nw-lock-padlock{display:block;}
 
 /* --------------------------------------------------------------- shelf --- */
 .nw-lock-shelf{
@@ -6465,7 +6477,17 @@ window.__ModuleLoader__.load({
   box-shadow:
     inset -3px 0 0 color-mix(in srgb,var(--nw-fg) 22%,transparent),
     inset 1px 0 0 color-mix(in srgb,var(--nw-fg) 8%,transparent),
+    inset 0 2px 0 rgba(230,205,160,.20),
+    inset 0 -2px 0 color-mix(in srgb,#000 22%,transparent),
     inset 0 -60px 80px color-mix(in srgb,#000 16%,transparent);
+}
+.nw-lock-spine-label{
+  position:absolute;left:4px;right:4px;top:34%;height:22px;border-radius:1px;
+  background:linear-gradient(180deg,
+    color-mix(in srgb,var(--nw-lock-book) 58%,#f4e6c9),
+    color-mix(in srgb,var(--nw-lock-book) 74%,#d8c29a));
+  box-shadow:inset 0 0 0 1px rgba(255,242,214,.18);
+  opacity:.55;pointer-events:none;
 }
 .nw-lock-spine::before{
   content:"";position:absolute;left:5px;right:5px;top:20px;height:1px;
@@ -26766,6 +26788,100 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     { w: 18, h: 146, n: 7 },
   ];
 
+  // R115: marks drawn for this one surface. The shared SidebarIcon is tuned for
+  // 16px list rows; at the top of the lock screen its quill collapses into a
+  // block, so the lock keeps its own thinner strokes and a bookmark that still
+  // reads at 18px.
+  function LockMark() {
+    return h(
+      'svg',
+      {
+        className: 'nw-lock-mark',
+        viewBox: '0 0 24 24',
+        width: 18,
+        height: 18,
+        fill: 'none',
+        'aria-hidden': 'true',
+        focusable: 'false',
+      },
+      h('path', {
+        d: 'M3.4 6.4c2.7-1.2 5.4-1.2 8.1 0v11.5c-2.7-1.1-5.4-1.1-8.1 0V6.4Z',
+        stroke: 'currentColor',
+        strokeWidth: 1.35,
+        strokeLinejoin: 'round',
+      }),
+      h('path', {
+        d: 'M11.9 6.4c2.6-1.2 5.3-1.2 8 0v11.5c-2.7-1.1-5.4-1.1-8 0V6.4Z',
+        stroke: 'currentColor',
+        strokeWidth: 1.35,
+        strokeLinejoin: 'round',
+      }),
+      h('path', {
+        d: 'M14.6 5.1h3.1v4.6l-1.55-1.15L14.6 9.7V5.1Z',
+        fill: 'currentColor',
+      }),
+    );
+  }
+
+  function LockPadlock() {
+    return h(
+      'svg',
+      {
+        className: 'nw-lock-padlock',
+        viewBox: '0 0 20 20',
+        width: 12,
+        height: 12,
+        fill: 'none',
+        'aria-hidden': 'true',
+        focusable: 'false',
+      },
+      h('rect', {
+        x: 4.6,
+        y: 8.8,
+        width: 10.8,
+        height: 7.4,
+        rx: 1.7,
+        stroke: 'currentColor',
+        strokeWidth: 1.25,
+      }),
+      h('path', {
+        d: 'M7.2 8.8V6.9a2.8 2.8 0 0 1 5.6 0v1.9',
+        stroke: 'currentColor',
+        strokeWidth: 1.25,
+        strokeLinecap: 'round',
+      }),
+      h('circle', { cx: 10, cy: 12, r: 0.95, fill: 'currentColor' }),
+      h('path', {
+        d: 'M10 12.7v1.4',
+        stroke: 'currentColor',
+        strokeWidth: 1.3,
+        strokeLinecap: 'round',
+      }),
+    );
+  }
+
+  function LockArrow() {
+    return h(
+      'svg',
+      {
+        className: 'nw-lock-arrow',
+        viewBox: '0 0 20 20',
+        width: 18,
+        height: 18,
+        fill: 'none',
+        'aria-hidden': 'true',
+        focusable: 'false',
+      },
+      h('path', {
+        d: 'M4 10h11.2M10.6 5.5 15.2 10l-4.6 4.5',
+        stroke: 'currentColor',
+        strokeWidth: 1.75,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      }),
+    );
+  }
+
   NW.dialogs.Lock = function Lock(props) {
     const p = props || {};
     const [password, setPassword] = useState('');
@@ -26822,7 +26938,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         h(
           'div',
           { className: 'nw-lock-brand' },
-          h(NW.SidebarIcon, { size: 16 }),
+          h(LockMark),
           h('span', null, night ? NW.t('精神空间 · 深夜书房') : NW.t('精神空间 · 书房')),
         ),
         h(
@@ -26874,7 +26990,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               disabled: busy,
               'aria-label': NW.t('解锁'),
             },
-            busy ? '…' : '→',
+            busy ? h('span', { className: 'nw-lock-go-spinner', 'aria-hidden': 'true' }) : h(LockArrow),
           ),
         ),
         error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
@@ -26895,7 +27011,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       h(
         'div',
         { className: 'nw-lock-meta' },
-        h('span', { className: 'nw-lock-meta-item' }, NW.icon('lock', { size: 11 }), NW.t('本地加密 · AES-256-GCM')),
+        h('span', { className: 'nw-lock-meta-item' }, h(LockPadlock), NW.t('本地加密 · AES-256-GCM')),
         h('span', { className: 'nw-lock-meta-item' }, NW.t('内容不上传')),
       ),
       h(
@@ -26925,7 +27041,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                   height: book.h + 'px',
                   '--nw-lock-book': 'var(--nw-lock-b' + book.n + ')',
                 },
-              }),
+              }, h('i', { className: 'nw-lock-spine-label' })),
             ),
           ),
           h('span', { className: 'nw-lock-bookend' }),

@@ -219,6 +219,7 @@
   font-size:11px;font-weight:600;letter-spacing:.22em;color:var(--nw-fg-soft);
 }
 .nw-lock-brand svg{color:var(--nw-brand);flex:0 0 auto;}
+.nw-lock-mark{width:18px;height:18px;display:block;}
 .nw-lock-clock{text-align:right;font-variant-numeric:tabular-nums;flex:0 0 auto;}
 .nw-lock-clock b{display:block;font-size:22px;font-weight:200;letter-spacing:.08em;color:var(--nw-fg);}
 .nw-lock-clock small{display:block;margin-top:7px;font-size:9.5px;font-weight:500;letter-spacing:.2em;color:var(--nw-fg-soft);}
@@ -258,7 +259,6 @@
   flex:0 0 auto;width:46px;height:46px;border:0;
   border-radius:var(--nw-lock-go-radius,50%);
   background:var(--nw-brand);color:var(--nw-on-brand);
-  font-family:var(--nw-ui-font);font-size:19px;line-height:1;
   display:grid;place-items:center;cursor:pointer;
   box-shadow:0 8px 22px color-mix(in srgb,var(--nw-brand) 30%,transparent);
   transition:filter var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
@@ -266,6 +266,17 @@
 }
 .nw-lock-go:hover:not(:disabled){filter:brightness(1.06);}
 .nw-lock-go:disabled{cursor:default;opacity:.72;}
+.nw-lock-go svg{display:block;}
+.nw-lock-go-spinner{
+  width:15px;height:15px;border-radius:50%;
+  border:1.5px solid color-mix(in srgb,currentColor 32%,transparent);
+  border-top-color:currentColor;
+  animation:nw-lock-spin .8s linear infinite;
+}
+@keyframes nw-lock-spin{to{transform:rotate(360deg);}}
+@media (prefers-reduced-motion: reduce){
+  .nw-lock-go-spinner{animation-duration:2.4s;}
+}
 /* Shared by every password/error dialog, so keep its generic box intact. */
 .nw-lock-error{
   width:100%;margin-top:var(--nw-sp-1);padding:8px 12px;border-radius:var(--nw-r-control);
@@ -292,6 +303,7 @@
 }
 .nw-lock-meta-item{display:flex;align-items:center;gap:7px;}
 .nw-lock-meta-item svg{opacity:.8;flex:0 0 auto;}
+.nw-lock-padlock{display:block;}
 
 /* --------------------------------------------------------------- shelf --- */
 .nw-lock-shelf{
@@ -325,7 +337,17 @@
   box-shadow:
     inset -3px 0 0 color-mix(in srgb,var(--nw-fg) 22%,transparent),
     inset 1px 0 0 color-mix(in srgb,var(--nw-fg) 8%,transparent),
+    inset 0 2px 0 rgba(230,205,160,.20),
+    inset 0 -2px 0 color-mix(in srgb,#000 22%,transparent),
     inset 0 -60px 80px color-mix(in srgb,#000 16%,transparent);
+}
+.nw-lock-spine-label{
+  position:absolute;left:4px;right:4px;top:34%;height:22px;border-radius:1px;
+  background:linear-gradient(180deg,
+    color-mix(in srgb,var(--nw-lock-book) 58%,#f4e6c9),
+    color-mix(in srgb,var(--nw-lock-book) 74%,#d8c29a));
+  box-shadow:inset 0 0 0 1px rgba(255,242,214,.18);
+  opacity:.55;pointer-events:none;
 }
 .nw-lock-spine::before{
   content:"";position:absolute;left:5px;right:5px;top:20px;height:1px;
