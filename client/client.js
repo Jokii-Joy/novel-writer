@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.37',
+      version: '1.6.38',
     };
     NW.ReactDOM = null;
 
@@ -6343,9 +6343,9 @@ window.__ModuleLoader__.load({
 .nw-root[data-theme="night"] .nw-lock{
   --nw-lock-warm:rgba(255,176,96,.14);--nw-lock-shelfglow:rgba(255,176,96,.12);
   --nw-lock-board:#4a3826;--nw-lock-board-edge:#2b1d12;--nw-lock-shadow:rgba(0,0,0,.55);
-  --nw-lock-b1:#5e1b17;--nw-lock-b2:#24313d;--nw-lock-b3:#3b3a25;--nw-lock-b4:#8a6a45;
-  --nw-lock-b5:#d9c9ad;--nw-lock-b6:#4a1a22;--nw-lock-b7:#1f3a37;--nw-lock-b8:#6f2420;
-  --nw-lock-b9:#2a2622;--nw-lock-b10:#8f7a4e;--nw-lock-b11:#3d2a1f;--nw-lock-b12:#556b62;
+  --nw-lock-b1:#5e1b17;--nw-lock-b2:#3d2b22;--nw-lock-b3:#3b3a25;--nw-lock-b4:#8a6a45;
+  --nw-lock-b5:#d9c9ad;--nw-lock-b6:#4a1a22;--nw-lock-b7:#4f5a3d;--nw-lock-b8:#6f2420;
+  --nw-lock-b9:#2a2622;--nw-lock-b10:#8f7a4e;--nw-lock-b11:#3d2a1f;--nw-lock-b12:#6b3b2e;
   --nw-lock-lamp-filter:drop-shadow(0 0 26px rgba(255,192,112,.26)) drop-shadow(0 12px 18px rgba(0,0,0,.50));
 }
 
@@ -6703,7 +6703,7 @@ window.__ModuleLoader__.load({
   background:
     radial-gradient(120% 140% at 18% 0%, rgba(255,255,255,.10), transparent 62%),
     linear-gradient(160deg,#2c2c2e,#151517);
-  box-shadow:inset 0 -12px 20px -14px rgba(122,170,255,.7);
+  box-shadow:inset 0 -12px 20px -14px rgba(224,164,106,.7);
 }
 /* on a dark chip the default black hairline disappears, so the frame of the
    swatch itself lightens for that palette */
@@ -10832,17 +10832,18 @@ const SEL_EMIT_MS = 120;
   --nw-texture:none;
 }
 .nw-surface[data-theme="night"]{
-  /* R88: same host-dark ground as the shell (neutral-bluish-950 paper, 50 ink,
-     deepseek-400 accent, white-alpha rules) so the page and the chrome agree. */
+  /* R88: same host-dark ground as the shell (neutral-950 paper, off-white ink,
+     white-alpha rules) so the page and the chrome agree. R116: the accent,
+     highlight and find colours are warm brass instead of the host's blue. */
   --nw-bg:#151517;--nw-fg:#f9fafb;--nw-soft:#adb2b8;--nw-rule:#2c2c2e;
   --nw-caret-color:#f9fafb;--nw-caret:#f9fafb;--nw-sel:rgba(249,250,251,.16);
-  --nw-accent:#7aaaff;
+  --nw-accent:#e0a46a;
   --nw-scroll-thumb:rgba(249,250,251,.18);--nw-scroll-thumb-hover:rgba(249,250,251,.32);
   --nw-panel:#232324;--nw-panel-border:#ffffff1f;--nw-panel-shadow:0 8px 24px rgba(0,0,0,.5);
   --nw-btn-bg:#2c2c2e;--nw-btn-fg:#f9fafb;--nw-btn-border:#ffffff1f;--nw-btn-hover:#353638;
-  --nw-hl-bg:rgba(122,170,255,.28);--nw-hl-active:rgba(122,170,255,.46);
-  --nw-mark-comment:#f0b46a;
-  --nw-find-bg:rgba(122,170,255,.16);--nw-find-active:rgba(122,170,255,.30);--nw-find-ring:rgba(122,170,255,.86);
+  --nw-hl-bg:rgba(224,164,106,.28);--nw-hl-active:rgba(224,164,106,.46);
+  --nw-mark-comment:#35c58a;
+  --nw-find-bg:rgba(224,164,106,.16);--nw-find-active:rgba(224,164,106,.30);--nw-find-ring:rgba(224,164,106,.86);
   --nw-empty-glyph:rgba(249,250,251,.16);
   --nw-texture:none;
 }
@@ -33388,7 +33389,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   // Values (docs/CONTRACT-R5.md section 2):
   //   claude     paper #faf4e9 ink #1b1813 terracotta #c4532f rule #e6dccb
   //   eye        paper #cce8cf ink #1f2a20 accent #2f6b3c
-  //   night      paper #151517 ink #f9fafb accent #7aaaff (host dark palette)
+  //   night      paper #151517 ink #f9fafb accent #e0a46a (warm brass, R116)
   //   newspaper  paper #ecdfbe ink #1a1913 accent #8c2b22 serif, r2
   //   magazine   paper #ffffff ink #14171a accent #d0021b sans, r14
   // ===========================================================================
@@ -33433,18 +33434,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
 /* ============================================================= night ====== */
 .nw-root[data-theme="night"]{
-  /* R88: the dark palette is the host's own dark theme (body[data-ds-dark-theme]
-     in @deepseek-ai/dsh-client-ui-theme), so the plugin reads as a panel of the
-     host instead of a warm-brown island: base neutral-bluish-950, raised layers
-     875/850/800, white-alpha borders, neutral-bluish-50 text and deepseek-400
-     as the interactive accent. */
+  /* R88: the dark palette follows the host's dark theme so the plugin reads as
+     a panel of the host: base neutral-950, raised layers 875/850/800,
+     white-alpha borders and off-white text. R116 replaced the host's blue
+     accent with a warm brass one — the blue fought the lock-screen lamp and
+     the paper tones, and the brass sits between them without going sepia. */
   --dsw-alias-bg-base:#151517;
   --dsw-alias-bg-layer-1:#232324;
   --dsw-alias-bg-layer-2:#2c2c2e;
   --dsw-alias-bg-overlay:#232324;
   --dsw-alias-border-l1:#ffffff0f;
   --dsw-alias-border-l2:#ffffff1f;
-  --dsw-alias-brand-primary:#7aaaff;
+  --dsw-alias-brand-primary:#e0a46a;
   --dsw-alias-label-primary:#f9fafb;
   --dsw-alias-label-secondary:#cfd3d6;
   --dsw-alias-state-error-primary:#f25a5a;
@@ -33452,8 +33453,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   --dsw-alias-state-success-primary:#22c55e;
   --dsw-alias-state-warn-primary:#f59e0b;
   --dsw-specific-sidebar-fill:#1b1b1c;
-  /* On the light-blue accent the host pairs a dark label; #fff would drop to
-     ~2:1, so filled controls switch their foreground instead. */
+  /* The brass accent is light enough that it keeps the dark label the host
+     pairs with its own blue: #fff would drop to ~2:1. */
   --nw-on-brand:#0f1115;
   /* On a dark ground the paper-on-paper shadows vanish unless they deepen. */
   --nw-shadow-1:0 1px 2px rgba(0,0,0,.42);

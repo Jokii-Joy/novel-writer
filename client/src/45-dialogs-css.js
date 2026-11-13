@@ -203,9 +203,9 @@
 .nw-root[data-theme="night"] .nw-lock{
   --nw-lock-warm:rgba(255,176,96,.14);--nw-lock-shelfglow:rgba(255,176,96,.12);
   --nw-lock-board:#4a3826;--nw-lock-board-edge:#2b1d12;--nw-lock-shadow:rgba(0,0,0,.55);
-  --nw-lock-b1:#5e1b17;--nw-lock-b2:#24313d;--nw-lock-b3:#3b3a25;--nw-lock-b4:#8a6a45;
-  --nw-lock-b5:#d9c9ad;--nw-lock-b6:#4a1a22;--nw-lock-b7:#1f3a37;--nw-lock-b8:#6f2420;
-  --nw-lock-b9:#2a2622;--nw-lock-b10:#8f7a4e;--nw-lock-b11:#3d2a1f;--nw-lock-b12:#556b62;
+  --nw-lock-b1:#5e1b17;--nw-lock-b2:#3d2b22;--nw-lock-b3:#3b3a25;--nw-lock-b4:#8a6a45;
+  --nw-lock-b5:#d9c9ad;--nw-lock-b6:#4a1a22;--nw-lock-b7:#4f5a3d;--nw-lock-b8:#6f2420;
+  --nw-lock-b9:#2a2622;--nw-lock-b10:#8f7a4e;--nw-lock-b11:#3d2a1f;--nw-lock-b12:#6b3b2e;
   --nw-lock-lamp-filter:drop-shadow(0 0 26px rgba(255,192,112,.26)) drop-shadow(0 12px 18px rgba(0,0,0,.50));
 }
 
@@ -563,7 +563,7 @@
   background:
     radial-gradient(120% 140% at 18% 0%, rgba(255,255,255,.10), transparent 62%),
     linear-gradient(160deg,#2c2c2e,#151517);
-  box-shadow:inset 0 -12px 20px -14px rgba(122,170,255,.7);
+  box-shadow:inset 0 -12px 20px -14px rgba(224,164,106,.7);
 }
 /* on a dark chip the default black hairline disappears, so the frame of the
    swatch itself lightens for that palette */

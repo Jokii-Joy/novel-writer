@@ -17,7 +17,7 @@
   // Values (docs/CONTRACT-R5.md section 2):
   //   claude     paper #faf4e9 ink #1b1813 terracotta #c4532f rule #e6dccb
   //   eye        paper #cce8cf ink #1f2a20 accent #2f6b3c
-  //   night      paper #151517 ink #f9fafb accent #7aaaff (host dark palette)
+  //   night      paper #151517 ink #f9fafb accent #e0a46a (warm brass, R116)
   //   newspaper  paper #ecdfbe ink #1a1913 accent #8c2b22 serif, r2
   //   magazine   paper #ffffff ink #14171a accent #d0021b sans, r14
   // ===========================================================================
@@ -62,18 +62,18 @@
 
 /* ============================================================= night ====== */
 .nw-root[data-theme="night"]{
-  /* R88: the dark palette is the host's own dark theme (body[data-ds-dark-theme]
-     in @deepseek-ai/dsh-client-ui-theme), so the plugin reads as a panel of the
-     host instead of a warm-brown island: base neutral-bluish-950, raised layers
-     875/850/800, white-alpha borders, neutral-bluish-50 text and deepseek-400
-     as the interactive accent. */
+  /* R88: the dark palette follows the host's dark theme so the plugin reads as
+     a panel of the host: base neutral-950, raised layers 875/850/800,
+     white-alpha borders and off-white text. R116 replaced the host's blue
+     accent with a warm brass one — the blue fought the lock-screen lamp and
+     the paper tones, and the brass sits between them without going sepia. */
   --dsw-alias-bg-base:#151517;
   --dsw-alias-bg-layer-1:#232324;
   --dsw-alias-bg-layer-2:#2c2c2e;
   --dsw-alias-bg-overlay:#232324;
   --dsw-alias-border-l1:#ffffff0f;
   --dsw-alias-border-l2:#ffffff1f;
-  --dsw-alias-brand-primary:#7aaaff;
+  --dsw-alias-brand-primary:#e0a46a;
   --dsw-alias-label-primary:#f9fafb;
   --dsw-alias-label-secondary:#cfd3d6;
   --dsw-alias-state-error-primary:#f25a5a;
@@ -81,8 +81,8 @@
   --dsw-alias-state-success-primary:#22c55e;
   --dsw-alias-state-warn-primary:#f59e0b;
   --dsw-specific-sidebar-fill:#1b1b1c;
-  /* On the light-blue accent the host pairs a dark label; #fff would drop to
-     ~2:1, so filled controls switch their foreground instead. */
+  /* The brass accent is light enough that it keeps the dark label the host
+     pairs with its own blue: #fff would drop to ~2:1. */
   --nw-on-brand:#0f1115;
   /* On a dark ground the paper-on-paper shadows vanish unless they deepen. */
   --nw-shadow-1:0 1px 2px rgba(0,0,0,.42);

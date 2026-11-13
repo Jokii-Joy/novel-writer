@@ -428,17 +428,18 @@ const SEL_EMIT_MS = 120;
   --nw-texture:none;
 }
 .nw-surface[data-theme="night"]{
-  /* R88: same host-dark ground as the shell (neutral-bluish-950 paper, 50 ink,
-     deepseek-400 accent, white-alpha rules) so the page and the chrome agree. */
+  /* R88: same host-dark ground as the shell (neutral-950 paper, off-white ink,
+     white-alpha rules) so the page and the chrome agree. R116: the accent,
+     highlight and find colours are warm brass instead of the host's blue. */
   --nw-bg:#151517;--nw-fg:#f9fafb;--nw-soft:#adb2b8;--nw-rule:#2c2c2e;
   --nw-caret-color:#f9fafb;--nw-caret:#f9fafb;--nw-sel:rgba(249,250,251,.16);
-  --nw-accent:#7aaaff;
+  --nw-accent:#e0a46a;
   --nw-scroll-thumb:rgba(249,250,251,.18);--nw-scroll-thumb-hover:rgba(249,250,251,.32);
   --nw-panel:#232324;--nw-panel-border:#ffffff1f;--nw-panel-shadow:0 8px 24px rgba(0,0,0,.5);
   --nw-btn-bg:#2c2c2e;--nw-btn-fg:#f9fafb;--nw-btn-border:#ffffff1f;--nw-btn-hover:#353638;
-  --nw-hl-bg:rgba(122,170,255,.28);--nw-hl-active:rgba(122,170,255,.46);
-  --nw-mark-comment:#f0b46a;
-  --nw-find-bg:rgba(122,170,255,.16);--nw-find-active:rgba(122,170,255,.30);--nw-find-ring:rgba(122,170,255,.86);
+  --nw-hl-bg:rgba(224,164,106,.28);--nw-hl-active:rgba(224,164,106,.46);
+  --nw-mark-comment:#35c58a;
+  --nw-find-bg:rgba(224,164,106,.16);--nw-find-active:rgba(224,164,106,.30);--nw-find-ring:rgba(224,164,106,.86);
   --nw-empty-glyph:rgba(249,250,251,.16);
   --nw-texture:none;
 }

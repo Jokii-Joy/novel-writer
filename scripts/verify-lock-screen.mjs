@@ -84,6 +84,8 @@ new Function('NW', 'React', 'h', 'window', 'document', read('95-dialogs.js'))(
 
 const dialogsSrc = read('95-dialogs.js');
 const cssSrc = read('45-dialogs-css.js');
+const shellSrc = read('98-shell-theme.js');
+const editorSrc = read('60-editor.js');
 const appSrc = read('90-app.js');
 
 function collect(node, out) {
@@ -176,6 +178,23 @@ check('五套主题各有自己的书脊/书架/灯光变量', () => {
   assert.ok(cssSrc.includes('--nw-lock-b1:'), 'book spine palette exists');
   assert.ok(cssSrc.includes('--nw-lock-lamp-filter:'), 'lamp glow follows the theme');
   assert.ok(cssSrc.includes('--nw-lock-board:'), 'shelf follows the theme');
+});
+
+check('夜间改成暖铜：锁屏、按钮、焦点和正文高亮都不再借蓝色', () => {
+  assert.ok(shellSrc.includes('--dsw-alias-brand-primary:#e0a46a'), 'night accent is brass');
+  assert.ok(editorSrc.includes('--nw-accent:#e0a46a'), 'editor accent is brass');
+  assert.ok(!shellSrc.includes('#7aaaff'), 'no blue left in the shell palette');
+  assert.ok(!editorSrc.includes('rgba(122,170,255'), 'no blue left in editor highlights');
+  assert.ok(!cssSrc.includes('rgba(122,170,255'), 'no blue left in dialog chrome');
+  const start = cssSrc.indexOf('.nw-root[data-theme="night"] .nw-lock{');
+  const end = cssSrc.indexOf('/* ---------------------------------------------------------------- head --- */');
+  const night = cssSrc.slice(start, end);
+  for (const warm of ['--nw-lock-b2:#3d2b22', '--nw-lock-b7:#4f5a3d', '--nw-lock-b12:#6b3b2e']) {
+    assert.ok(night.includes(warm), `night spine palette missing ${warm}`);
+  }
+  for (const blue of ['#24313d', '#1f3a37', '#556b62']) {
+    assert.ok(!night.includes(blue), `night spine palette still has ${blue}`);
+  }
 });
 
 check('密码框只保留主题色下划线，不出现原生焦点方框', () => {
