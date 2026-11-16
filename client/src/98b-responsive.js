@@ -91,9 +91,19 @@
      the inline style (the user may have set 300px); it is simply no longer
      taking room from the manuscript. */
   .nw-side{
-    position:absolute;left:0;top:0;bottom:0;z-index:var(--nw-z-panel);
+    position:absolute;left:0;top:0;bottom:0;
+    /* R117: above the bottom bar. The scrim is a sibling element, not the
+       drawer's spread shadow: a shadow paints but cannot receive the tap that
+       closes the drawer. */
+    z-index:calc(var(--nw-z-panel) + 2);
     max-width:min(88%,320px);
     box-shadow:var(--nw-shadow-3);
+  }
+  .nw-side-scrim{
+    position:absolute;inset:0;z-index:calc(var(--nw-z-panel) + 1);
+    margin:0;padding:0;border:0;border-radius:0;
+    background:rgba(0,0,0,.28);cursor:default;
+    -webkit-tap-highlight-color:transparent;
   }
   .nw-splitter{display:none !important;}
 
@@ -104,29 +114,52 @@
     box-shadow:var(--nw-shadow-3);
   }
 
-  /* Reading measure: 48px of gutter on a 520px panel eats a fifth of the line.
-     The dock lane is kept at 88px total (20 + 68) — the floating dock is still
-     there at this width, just closer to the edge. */
-  .nw-surface{--nw-pad-x:20px;--nw-pad-y:32px;--nw-gutter-x:68px;}
+  /* R117: on a phone the manuscript owns the width. The old tier kept the
+     88px lane (20 + 68) because the floating dock lived over the bottom-right
+     of the paper; that left ~204px of text on a 390px screen — ten characters
+     a line. The dock is a real bottom bar now (90-app.js), so the lane is
+     gone and the page reads at the full measure. The edge handle also goes:
+     the bar's 目录 item is the drawer door. */
+  .nw-surface{--nw-pad-x:16px;--nw-pad-y:24px;--nw-gutter-x:0px;}
+  /* 沉浸态在手机上仍要留一点呼吸：没有底栏要避让，但 16px 会贴到屏幕边。 */
+  .nw-surface[data-immersive="1"]{--nw-pad-x:32px;--nw-pad-y:40px;--nw-gutter-x:0px;}
+  .nw-shelfrestore{display:none;}
+  /* Pinned over the top padding on desktop; on a phone the paragraph nav,
+     首页 and 锁定 cover the first line as soon as the writer scrolls. 首页 and
+     锁定 stay reachable in the shelf header, and the 更多 sheet has both. */
+  .nw-surface-acts{display:none;}
 
-  /* R21: the base rule now sets an explicit width, so the narrow tier has to
-     release it.
-     R30 ③: but it must NOT release the right edge too — stretching from 8px to
-     8px would put the card straight across the manuscript. On a panel this
-     small there is no gutter left, so the card stops being a column beside the
-     text and becomes a compact corner card the writer toggles open: bounded
-     width, bounded height, and the page keeps its full measure underneath. */
-  .nw-notes{left:10px;right:auto;top:44px;width:min(248px,calc(100% - 20px));}
-  .nw-notes-card{width:100%;max-height:min(300px,calc(100vh - 200px));}
+  /* The notes card turns into a bottom sheet. It used to open as a 248px card
+     over the first lines with only a hover-revealed close button — unusable on
+     touch. The tab is hidden because 灵感 is a bar item now; the sheet ends
+     exactly where the bar begins, so the two never overlap. */
+  .nw-notes{
+    left:0;right:0;top:auto;bottom:0;width:auto;max-height:min(62vh,440px);
+    align-items:stretch;gap:0;pointer-events:none;
+  }
+  .nw-notes[data-open="1"]{pointer-events:auto;}
+  .nw-notes-tab{display:none;}
+  .nw-notes-card{
+    width:100%;max-height:min(56vh,400px);
+    border-radius:var(--nw-r-card) var(--nw-r-card) 0 0;
+    border-bottom:0;
+    box-shadow:0 -18px 48px rgba(0,0,0,.28);
+  }
+  /* Touch has no hover, so the corner close would stay invisible forever.
+     Keep the state word + close button on screen and start the note below
+     them; otherwise the first line runs under the button. */
+  .nw-notes-tools{opacity:1;}
+  .nw-notes-input{padding-top:38px;}
 
-  /* Below the shelf overlay (34) and the advice overlay (33): when the shelf is
-     lifted out of the flow it must be able to cover the dock, otherwise its
-     bottom buttons are unreachable on a phone-sized panel. */
-  .nw-dock{right:10px;bottom:46px;z-index:var(--nw-z-panel);}
-  .nw-notes-tabtxt{display:none;}
+  /* Below the shelf overlay: when the shelf is lifted out of the flow it must
+     be able to cover the dock, otherwise its bottom buttons are unreachable on
+     a phone-sized panel. The compact bar is in flow, so it keeps its own box. */
+  .nw-dock:not(.nw-dock-bar){right:10px;bottom:46px;z-index:var(--nw-z-panel);}
 
+  /* Save state is the one thing that must stay visible; the word counters and
+     the auto-save sentence are desktop wallpaper on a 390px bar. */
   .nw-status{padding:0 var(--nw-sp-2);font-size:12px;flex-wrap:wrap;row-gap:2px;height:auto;min-height:var(--nw-h-status);}
-  .nw-status .nw-status-mid{gap:var(--nw-sp-1) !important;}
+  .nw-status .nw-status-mid,.nw-status .nw-status-sync{display:none;}
 }
 
 /* Touch and coarse pointers: no hover, so anything that only appears on hover has

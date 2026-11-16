@@ -129,7 +129,7 @@ plugin_manager action=install_bundle target=<本仓库绝对路径>
 
 ```bash
 curl http://127.0.0.1:<web端口>/novel-writer/api/ping
-# {"ok":true,"data":{"name":"novel-writer","version":"1.6.38",...}}
+# {"ok":true,"data":{"name":"novel-writer","version":"1.6.39",...}}
 ```
 
 改 Host 代码后要**重载插件**（Node 模块已缓存）：
@@ -147,9 +147,10 @@ node scripts/build-client.mjs    # client/src/*.js → client/client.js（含加
 
 ## 手机端
 
-APK 在 [`dist/精神空间.apk`](dist/精神空间.apk)（约 0.54 MB，Android 7.0+，无需 Gradle 构建）。
-源码在 `app/`，用 `node tools/build-apk.mjs` 重新打包。当前 `versionCode 2 / versionName 1.1.0`，
-直接覆盖安装即可升级（同一个 debug 签名，数据与配对记录都保留）。
+手机端推荐直接在手机上打开 DSH 的网页版，再进入本插件：R117 起界面按 `.nw-root`
+的实际宽度切到手机布局（底栏、满宽正文、抽屉书架、瞬时翻页），不再需要单独的壳。
+仓库**不再附带独立 APK**（原 `dist/精神空间.apk` 已移除）。下面保留的局域网同步与
+手机 AI 说明对应旧 Android App，仅作归档参考。
 
 配对：桌面「设置 → 手机同步」生成地址与配对码 → 手机「配对」里手填（扫码为备选）。
 **配对成功就开始自动同步**：应用起动、回到书架、每次编辑之后都会各推一次，后台服务每 45 秒再跑一轮；

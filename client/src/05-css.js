@@ -271,7 +271,9 @@
       h('span', null, h('i', { className: 'nw-dot', 'data-state': s.saveState || 'idle' }), s.saveText || ''),
       h('span', { className: 'nw-spacer', style: { flex: 1 } }),
       s.middle || null,
-      h('span', null, s.syncText || ''),
+      // R117: the save folder / auto-save sentence is desktop wallpaper on a
+      // phone status bar; the narrow tier hides it by this class.
+      h('span', { className: 'nw-status-sync' }, s.syncText || ''),
       h('span', null, s.wordText || ''),
       h('span', null, s.counterText || ''),
     );

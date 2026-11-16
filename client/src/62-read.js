@@ -412,10 +412,21 @@
   .nw-mark-pop{animation:none;}
   .nw-mark-side{transition:none;}
 }
-@media (max-width: 560px){
+/* R117：手机单栏档。这里原本是 @media (max-width:560px)——按**窗口**断点，
+   但插件挂在宿主侧栏里，栏宽可能比窗口窄得多（桌面分栏时也一样），按窗口判
+   会把手机样式漏掉。.nw-read 在 .nw-root 内，而 .nw-root 是 container:nw，
+   所以改按容器宽判，和 60-editor / 98b-responsive 的断点同一条基准。 */
+@container nw (max-width: 560px){
   .nw-read-bar{padding-top:var(--nw-sp-2);}
-  .nw-read-stage{padding:0 clamp(16px,5vw,28px);}
-  .nw-read-foot{padding-left:clamp(16px,5vw,28px);padding-right:clamp(16px,5vw,28px);}
+  .nw-read-stage{padding:0 14px;}
+  .nw-read-foot{padding-left:14px;padding-right:14px;}
+  /* 瞬时翻页：go() 在 compact 下不再 set data-turn，这里再兜一层，防止别的
+     路径（比如旧版本残留、或未来某处补了 data-turn）又触发 .22s 透明度过渡。 */
+  .nw-read-flow{transition:none;}
+  .nw-read-stage[data-turn="1"] .nw-read-flow{opacity:1;}
+  /* 没有页边可放批注签；paintGutter 也已提前返回，这里只是不让空层挡住
+     正文的点击/滑动命中。 */
+  .nw-read-gutter{display:none;}
 }
 `);
 
@@ -479,6 +490,12 @@
     // R55：一页有多宽（单页 = 一栏 + 栏距，对开 = 两栏 + 两个栏距里的一整段）。
     // 由 measure() 算好后放进 layout，凡是「翻一页」都读它，别再各自拼 w+gap。
     const step = layout.step || (layout.w + layout.gap);
+    // R117：手机上的「读一遍」是单栏窄页。这个尺寸下，翻页动画、滚动结束的
+    // 回正吸附、页边批注签重画都只是在和手指抢帧：一次翻页要跑 190–560ms 的
+    // rAF，一次松手要再跑一段吸附，滚动时每 90ms 还要 querySelectorAll 整页
+    // 标注再绝对定位。单栏窄页没有第二栏要对齐，也没有页边可以放签，所以
+    // 直接读成「瞬时翻页 + 不吸附 + 不画签」，把滚动留给浏览器合成。
+    const compact = layout.w > 0 && (layout.cols || 1) === 1 && layout.w < 600;
 
     const close = React.useCallback(() => {
       if (typeof p.onClose === 'function') p.onClose();
@@ -615,6 +632,14 @@
       setPage(next);
       const stage = stageRef.current;
       if (!stage) return;
+      // R117：窄单栏直接落到下一页。不设 data-turn（那是透明度过渡的开关），
+      // 也不进 slideToPage 的 rAF 动画——手机上这两种开销换不来「纸质翻页」
+      // 的感觉，只会让翻页慢半拍。
+      if (compact) {
+        clearTurns();
+        scrollToPage(next);
+        return;
+      }
       const still = typeof window.matchMedia === 'function'
         && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       if (still) {
@@ -631,7 +656,7 @@
       clearTurns();
       stage.setAttribute('data-turn', '1');
       slideToPage(next);
-    }, [maxPage, scrollToPage, slideToPage]);
+    }, [compact, maxPage, scrollToPage, slideToPage]);
 
     React.useEffect(() => () => clearTurns(), []);
 
@@ -1066,6 +1091,9 @@
       // 节点上——不扫一遍的话，改完字之后会有一句话一直亮着，像被选中了一样。
       const stale = flow ? flow.querySelectorAll('.nw-mark[data-hover]') : [];
       for (let i = 0; i < stale.length; i += 1) stale[i].removeAttribute('data-hover');
+      // R117：手机单栏不画页边签——没有页边，签只能压在字上。层已经清空，
+      // 直接返回，省掉整页标注的查询与绝对定位。
+      if (compact) return;
       if (!stage || !flow) return;
       const w = layout.w;
       if (!w) return;
@@ -1199,7 +1227,7 @@
         });
         layer.appendChild(btn);
       }
-    }, [layout.w, layout.cols, layout.gap, marks, openMark]);
+    }, [compact, layout.w, layout.cols, layout.gap, marks, openMark]);
 
     // 滚动停下来之后重算一次：手指拖到半页时，签要跟着字走，不能停在旧行上。
 
@@ -1322,6 +1350,11 @@
             pageRef.current = index;
             setPage(index);
           }
+          // R117：手机上手指拖到半页就让它停在半页，页码已经跟上了。松手后
+          // 再跑一段 190ms 的 rAF 把页面「吸」回整页，看文字的人只会觉得
+          // 页面在手下自己动了一下——这就是卡顿感的一部分。下一次翻页或
+          // 点目录会瞬时对齐，不需要在这里补。
+          if (compact) return;
           // 手指停下来之后把页面对齐到整页：多栏布局没有 scroll-snap 可依（页
           // 不是元素），停在半页上读起来像被人挪了一下椅子。吸附也走同一条滑
           // 动，短距离 190ms，读起来是「轻轻一推」而不是突然跳过去。
@@ -1338,7 +1371,7 @@
         window.clearTimeout(snapTimer);
         flow.removeEventListener('scroll', onScroll);
       };
-    }, [step, scrollToPage, slideToPage]);
+    }, [compact, step, scrollToPage, slideToPage]);
 
     // 滚轮 / 触控板：竖着滚也要翻页。横向滚动容器对竖向滚轮没有反应，
     // 而看书的人不会先想一想该往哪个方向滚。
@@ -1520,6 +1553,8 @@
     }, [paintGutter, body]);
 
     React.useEffect(() => {
+      // R117：手机单栏没有页边签可跟，不需要在滚动时反复排一次签。
+      if (compact) return undefined;
       const flow = flowRef.current;
       if (!flow) return undefined;
       let timer = 0;
@@ -1537,7 +1572,7 @@
         flow.removeEventListener('scroll', relayout);
         window.removeEventListener('resize', relayout);
       };
-    }, []);
+    }, [compact]);
 
     const flowStyle = {
       fontSize: fontSize + 'px',

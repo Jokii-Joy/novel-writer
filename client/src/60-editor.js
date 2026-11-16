@@ -4403,6 +4403,10 @@ const SEL_EMIT_MS = 120;
           const ta = taRef.current;
           if (ta) ta.focus();
         },
+        /** R117: the phone bar hides the corner capsule, so 段落 needs a door. */
+        openParaNav() {
+          openParaNav();
+        },
         /**
          * R103: put the caret where the writer stopped and make sure it is on
          * screen. "继续写" switches the view while the pane is still laying out,

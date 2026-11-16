@@ -971,6 +971,88 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 }
 .nw-dock-fab[aria-expanded="true"] .nw-dock-fabicon{transform:rotate(90deg);}
 
+/* ---- R117: phone bottom bar ----------------------------------------------
+   The floating dock reserves a lane on the right of every line (88px total on
+   a phone) so its FAB never sits on a character. That is the wrong trade on a
+   390px screen: the lane is always there, the dock is only needed sometimes,
+   and the manuscript lost a third of its width for it.
+
+   So at phone width the same five actions become a real bottom bar inside
+   .nw-main's flex column. It owns its height, the editor gets the rest, and
+   nothing floats over the text. The FAB and its ladder of rows do not render
+   at all in this mode (see Dock's compact branch); these selectors only paint
+   the bar and its 「更多」 sheet. */
+.nw-dock.nw-dock-bar{
+  position:relative;left:auto;right:auto;top:auto;bottom:auto;
+  flex:0 0 auto;width:100%;
+  flex-direction:row;align-items:stretch;justify-content:space-between;
+  gap:2px;
+  padding:5px 6px calc(5px + env(safe-area-inset-bottom, 0px));
+  background:var(--nw-panel);
+  border:0;
+  border-top:1px solid var(--nw-line-soft);
+  box-shadow:0 -1px 0 color-mix(in srgb, var(--nw-fg) 3%, transparent);
+  z-index:var(--nw-z-float);
+  /* The sheet's backdrop is fixed and z-index:0; isolate the bar so it cannot
+     compete with anything outside it, and lift the items above that backdrop
+     (negative z-index would paint them under the bar's own background). */
+  isolation:isolate;
+}
+/* Immersive keeps the bar out of the picture: the App only passes compact for
+   non-immersive, so this is a safety net for a mid-session immersive toggle. */
+.nw-dock.nw-dock-bar[data-immersive="1"]{
+  background:transparent;border-top-color:transparent;box-shadow:none;
+}
+.nw-dock-baritem{
+  position:relative;z-index:1;
+  flex:1 1 0;min-width:0;height:48px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:2px;padding:0 1px;border:0;border-radius:var(--nw-r-control);
+  background:transparent;color:var(--nw-fg-soft);
+  font-family:var(--nw-ui-font);font-size:11px;line-height:1;letter-spacing:.01em;
+  cursor:pointer;-webkit-tap-highlight-color:transparent;
+}
+.nw-dock-baritem[data-active="1"]{
+  color:var(--nw-brand);
+  background:color-mix(in srgb, var(--nw-brand) 9%, transparent);
+}
+.nw-dock-baritem[data-blocked="1"]{opacity:.45;}
+.nw-dock-baritem:active{filter:brightness(.97);}
+.nw-dock-baricon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;}
+.nw-dock-barname{white-space:nowrap;font-weight:500;}
+/* The sheet floats above the bar, not over the status bar, and only exists as
+   long as its own state. The backdrop is a button so a tap anywhere closes it
+   — the same behaviour as the desktop dock's outside-click, but one layer. */
+.nw-dock-sheetback{
+  position:fixed;inset:0;z-index:0;
+  margin:0;padding:0;border:0;border-radius:0;
+  background:rgba(10, 8, 6, .18);
+  cursor:default;
+}
+.nw-dock-sheet{
+  position:absolute;left:8px;right:8px;bottom:calc(100% + 8px);z-index:2;
+  display:grid;grid-template-columns:repeat(3, minmax(0, 1fr));gap:6px;
+  padding:10px;border-radius:14px;
+  border:1px solid var(--nw-line);
+  background:var(--nw-panel);
+  box-shadow:0 -12px 32px -14px color-mix(in srgb, var(--nw-fg) 22%, transparent),
+    var(--nw-shadow-3);
+  animation:nw-dock-rise .18s var(--nw-ease-pop, cubic-bezier(.22,1.16,.36,1)) both;
+}
+.nw-dock-sheetitem{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:6px;height:58px;padding:0 2px;
+  border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
+  background:color-mix(in srgb, var(--nw-fg) 4%, var(--nw-panel));
+  color:var(--nw-fg);
+  font-family:var(--nw-ui-font);font-size:11px;line-height:1;
+  cursor:pointer;-webkit-tap-highlight-color:transparent;
+}
+.nw-dock-sheetitem[data-blocked="1"]{opacity:.5;}
+.nw-dock-sheetitem:active{filter:brightness(.97);}
+.nw-dock-sheeticon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;color:var(--nw-fg-soft);}
+.nw-dock-sheetname{white-space:nowrap;font-weight:500;}
+
 @media (prefers-reduced-motion: reduce){
   .nw-dock-menu,
   .nw-dock-menu[data-open="1"] .nw-dock-btn{animation:none;}
@@ -1279,7 +1361,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      */
     const [lanSync, setLanSync] = useState({ books: 0, lastPushAt: 0, pulledAt: 0, pulled: 0, peers: 0, lastSyncAt: 0, lan: null, stats: null });
     /** Studio's own sidebar (the chapter tree) can be hidden independently of the host rail. */
-    const [shelfOpen, setShelfOpen] = useState(() => lsGet(LS_SHELF_OPEN) !== '0');
+    const [shelfOpen, setShelfOpen] = useState(() => {
+      const raw = lsGet(LS_SHELF_OPEN);
+      if (raw != null) return raw !== '0';
+      // R117: on a phone the shelf is a drawer over the manuscript, so opening
+      // to a drawer that hides the page is not a useful first screen. Desktop
+      // keeps the old open-by-default behaviour.
+      return !(typeof window !== 'undefined' && window.innerWidth <= 560);
+    });
     /**
      * 修改建议 column (R12 ②). Off by default: it costs a model call and most
      * sessions are spent writing, not reviewing.
@@ -1449,6 +1538,46 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // whose editor has already unmounted (the 首页 → 继续写 race).
     const pendingSaveRef = useRef(null);
     const rootRef = useRef(null);
+    /**
+     * R117: whether the studio is in phone layout. The CSS breakpoint alone is
+     * not enough here: the dock changes *shape* on a phone (five floating rows +
+     * FAB become a five-slot bottom bar with its own sheet), which is a DOM
+     * decision, not a style one. Measured from `.nw-root` — the host rail may
+     * leave the panel much narrower than the phone viewport, and the container
+     * queries in 98b-responsive.js are keyed to this same box.
+     */
+    const [narrow, setNarrow] = useState(() => (typeof window !== 'undefined' ? window.innerWidth <= 560 : false));
+    useEffect(() => {
+      const read = () => {
+        const node = rootRef.current;
+        const w = node && node.clientWidth ? node.clientWidth : window.innerWidth;
+        setNarrow(w <= 560);
+      };
+      read();
+      const node = rootRef.current;
+      let ro = null;
+      if (node && typeof ResizeObserver === 'function') {
+        ro = new ResizeObserver(read);
+        try {
+          ro.observe(node);
+        } catch (err) {
+          /* very old engine: fall back to the resize listener below */
+        }
+      }
+      window.addEventListener('resize', read);
+      return () => {
+        if (ro) {
+          try {
+            ro.disconnect();
+          } catch (err) {
+            /* ignore */
+          }
+        }
+        window.removeEventListener('resize', read);
+      };
+      // The root node is replaced by the lock screen / boot error screens, so
+      // re-measure when one of those hands the panel back.
+    }, [ready, bootError, locked]);
     const aliveRef = useRef(true);
     /** R82: last chapter-open request; a slower earlier open must not win. */
     const chapterOpenSeqRef = useRef(0);
@@ -4151,6 +4280,22 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // was the one that vanished. It is dimmed down to a hint instead.
     const dock = h(Dock, {
           immersive: immersive,
+          // R117: on a phone the dock is a real bottom bar in the flex column,
+          // not a floating menu over the last line of the page. Immersive keeps
+          // the floating FAB: a permanent strip would defeat "pure canvas".
+          compact: narrow && !immersive,
+          shelfOpen: shelfOpen,
+          notesOpen: notesOpen,
+          onShelf: () => setShelfOpen(true),
+          onNotes: () => setNotesOpen((v) => !v),
+          onHome: () => setView('home'),
+          onLock: doLock,
+          // R117: 段落导航 lived in the corner capsule, which the phone bar
+          // replaces; expose it through 「更多」 so the feature does not vanish.
+          onParaNav: () => {
+            const api = editorRef.current;
+            if (api && typeof api.openParaNav === 'function') api.openParaNav();
+          },
           chapter: chapter,
           dockRef: dockRef,
           // R92: mouse in opens, mouse out closes (touch keeps the click toggle).
@@ -4220,6 +4365,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       h(
         'div',
         { className: 'nw-body' },
+        // R117: on a phone the shelf is a drawer over the page, so tapping
+        // anywhere outside it must close it. The scrim is a real element (the
+        // drawer's spread shadow paints but cannot receive a tap), and it sits
+        // just below the drawer so its own buttons stay live.
+        narrow && showShelf
+          ? h('button', {
+              type: 'button',
+              className: 'nw-side-scrim',
+              tabIndex: -1,
+              'aria-label': NW.t('收起目录'),
+              onClick: () => setShelfOpen(false),
+            })
+          : null,
         showShelf
           ? h(
               'div',
@@ -4832,6 +4990,131 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   function Dock(props) {
     const p = props || {};
     const open = !!p.open;
+    /**
+     * R117: the phone bar's 「更多」 sheet. It is local to the bar because the
+     * bar itself has no collapsed state — the five primary entries are always
+     * on screen, and only the secondary tools need a popover.
+     */
+    const [moreOpen, setMoreOpen] = useState(false);
+    useEffect(() => {
+      if (!p.compact) setMoreOpen(false);
+    }, [p.compact]);
+    useEffect(() => {
+      if (!moreOpen) return undefined;
+      const onPointerDown = (event) => {
+        const node = p.dockRef && p.dockRef.current;
+        if (node && event.target && node.contains(event.target)) return;
+        setMoreOpen(false);
+      };
+      const onKeyDown = (event) => {
+        if (event.key === 'Escape' && !event.defaultPrevented) setMoreOpen(false);
+      };
+      document.addEventListener('pointerdown', onPointerDown, true);
+      document.addEventListener('keydown', onKeyDown, true);
+      return () => {
+        document.removeEventListener('pointerdown', onPointerDown, true);
+        document.removeEventListener('keydown', onKeyDown, true);
+      };
+    }, [moreOpen, p.dockRef]);
+
+    if (p.compact) {
+      const blockedToast = (name) => {
+        if (typeof p.onBlocked === 'function') p.onBlocked(name);
+      };
+      /**
+       * One slot in the bottom bar. The 44px box is the hit target; the icon
+       * and the 11px label are painted inside it, so the bar stays one row
+       * tall and every label remains readable at 390px.
+       */
+      const barItem = (iconName, name, onClick, opts) => {
+        const o = opts || {};
+        const blocked = !!o.needsChapter && !p.chapter;
+        return h(
+          'button',
+          {
+            type: 'button',
+            className: 'nw-dock-baritem',
+            'data-active': o.active ? '1' : '0',
+            'data-blocked': blocked ? '1' : '0',
+            'aria-disabled': blocked ? 'true' : undefined,
+            'aria-label': name,
+            title: blocked ? name + '（先打开一章）' : name,
+            onClick: () => {
+              if (blocked) {
+                blockedToast(name);
+                return;
+              }
+              if (typeof onClick === 'function') onClick();
+            },
+          },
+          h('span', { className: 'nw-dock-baricon', 'aria-hidden': 'true' }, NW.icon(iconName, { size: 20 })),
+          h('span', { className: 'nw-dock-barname' }, name),
+        );
+      };
+      const sheetItem = (iconName, name, onClick, needsChapter) => {
+        const blocked = !!needsChapter && !p.chapter;
+        return h(
+          'button',
+          {
+            type: 'button',
+            className: 'nw-dock-sheetitem',
+            role: 'menuitem',
+            'data-blocked': blocked ? '1' : '0',
+            'aria-disabled': blocked ? 'true' : undefined,
+            'aria-label': name,
+            title: blocked ? name + '（先打开一章）' : name,
+            onClick: () => {
+              if (blocked) {
+                blockedToast(name);
+                return;
+              }
+              setMoreOpen(false);
+              if (typeof onClick === 'function') onClick();
+            },
+          },
+          h('span', { className: 'nw-dock-sheeticon', 'aria-hidden': 'true' }, NW.icon(iconName, { size: 20 })),
+          h('span', { className: 'nw-dock-sheetname' }, name),
+        );
+      };
+      return h(
+        'div',
+        {
+          className: 'nw-dock nw-dock-bar',
+          ref: p.dockRef,
+          'data-immersive': p.immersive ? '1' : '0',
+          'data-open': moreOpen ? '1' : '0',
+          role: 'toolbar',
+          'aria-label': NW.t('写作工具'),
+        },
+        moreOpen
+          ? h('button', {
+              type: 'button',
+              className: 'nw-dock-sheetback',
+              tabIndex: -1,
+              'aria-label': NW.t('关闭更多工具'),
+              onClick: () => setMoreOpen(false),
+            })
+          : null,
+        moreOpen
+          ? h(
+              'div',
+              { className: 'nw-dock-sheet', role: 'menu', 'aria-label': NW.t('更多工具') },
+              // 二次动作：和桌面坞同一组，只是收进「更多」。
+              sheetItem('typeset', NW.t('一键排版'), p.onTypeset, true),
+              sheetItem('list', NW.t('段落'), p.onParaNav, true),
+              sheetItem('proofread', NW.t('AI 校对'), p.onProofread, true),
+              sheetItem('send', NW.t('投稿'), p.onSubmit, true),
+              sheetItem('home', NW.t('首页'), p.onHome, false),
+              sheetItem('lock', NW.t('锁定'), p.onLock, false),
+            )
+          : null,
+        barItem('list', NW.t('目录'), p.onShelf, { active: p.shelfOpen }),
+        barItem('pencil', NW.t('灵感'), p.onNotes, { active: p.notesOpen, needsChapter: true }),
+        barItem('sparkle', NW.t('建议'), p.onAdvice, { needsChapter: true }),
+        barItem('book', NW.t('读一遍'), p.onRead, { needsChapter: true }),
+        barItem('more', NW.t('更多'), () => setMoreOpen((v) => !v), { active: moreOpen }),
+      );
+    }
 
     /**
      * One action row. `disabled` is still gone (R58): a disabled button fires
