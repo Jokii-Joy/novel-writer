@@ -16790,6 +16790,11 @@ const SEL_EMIT_MS = 120;
 .nw-read-face{
   position:absolute;inset:0;overflow:hidden;
   backface-visibility:hidden;
+  /* R160：自由边是弧的，不是刀切的一条直线。纸被掀起来的时候，靠折痕的地方
+     已经转过去了，自由边还留在原地往外鼓——鼓出来这十来个像素，是「这是纸」
+     最直接的一条线索。用一个大椭圆把整面裁一下，中段外鼓、上下角收回去：
+     只在摆纸的时候由 CSS 定一次，翻页过程里不动，所以不进每帧预算。 */
+  clip-path:ellipse(100% 180% at 0% 50%);
   background-color:var(--nw-read-flip);
   background-image:
     var(--nw-texture, none),
@@ -16799,6 +16804,40 @@ const SEL_EMIT_MS = 120;
   box-shadow:none;
 }
 .nw-read-face[data-face="back"]{transform:rotateY(180deg);}
+/* R160：纸面上的弧度。刚体平面转起来的时候，整面纸是一块平色，看过去像一块
+   塑料片；真纸是卷着走的——靠近折痕的地方已经转过去了，靠自由边的地方还迎着
+   光，中间顺出一道亮带。这里在整面上压一道横跨「折痕 → 自由边」的渐变，强度
+   由 poseFlip 每帧写进 --nw-bend（纸贴平与落定时为 0）。只是一层透明度渐变，
+   合成器画得完，不进布局。 */
+.nw-read-face::before{
+  content:'';position:absolute;inset:0;pointer-events:none;
+  opacity:var(--nw-bend, 0);
+  background:linear-gradient(to right,
+    color-mix(in srgb, var(--nw-fg) 14%, transparent) 0,
+    transparent 27%,
+    color-mix(in srgb, #fff 16%, transparent) 47%,
+    color-mix(in srgb, #fff 24%, transparent) 60%,
+    transparent 82%,
+    color-mix(in srgb, var(--nw-fg) 9%, transparent) 100%);
+}
+/* 折痕在右边的那几种摆法（背面朝外 / 单页往回翻），自由边换到左边，椭圆的
+   圆心也跟着换到右边。 */
+.nw-read-flip[data-dir="back"] .nw-read-face[data-face="front"],
+.nw-read-flip[data-dir="fwd"] .nw-read-face[data-face="back"],
+.nw-read-flip[data-single="1"] .nw-read-face[data-face="back"]{
+  clip-path:ellipse(100% 180% at 100% 50%);
+}
+.nw-read-flip[data-dir="back"] .nw-read-face[data-face="front"]::before,
+.nw-read-flip[data-dir="fwd"] .nw-read-face[data-face="back"]::before,
+.nw-read-flip[data-single="1"] .nw-read-face[data-face="back"]::before{
+  background:linear-gradient(to left,
+    color-mix(in srgb, var(--nw-fg) 14%, transparent) 0,
+    transparent 27%,
+    color-mix(in srgb, #fff 16%, transparent) 47%,
+    color-mix(in srgb, #fff 24%, transparent) 60%,
+    transparent 82%,
+    color-mix(in srgb, var(--nw-fg) 9%, transparent) 100%);
+}
 /* R159: 纸的自由边。两面同色同纹理，纸在空中原本只剩「字被压扁」这一条
    线索，看过去像整页在滑而不是一张纸在翻。真纸的切口会压出一道极窄的暗
    边：这里沿自由边画 1px 实线 + 24px 收进去的软影。自由边永远在折线的对
@@ -16824,6 +16863,86 @@ const SEL_EMIT_MS = 120;
     rgba(0,0,0,0.032) 2px,
     rgba(0,0,0,0.012) 10px,
     rgba(0,0,0,0) 24px);
+}
+/* R160：纸不是硬卡纸。用户的原话是「纸要柔体，有弯曲」——真纸翻起来的时候
+   自由边先卷一点，那条边从来不是一条直线：纸的厚度、卷起来的亮边、切口压在
+   一起，全在自由边外侧这三十来 px 里。
+   试过把正文本身分段折起来（facets）：每一道接缝都会让字重影或者折出一道
+   硬棱，看着像被折过的复印件，而且多加一份副本要重排一次正文（实测 3.5ms
+   一份，纸里的副本装着五章，翻一次要多花 60-80ms）。所以正文仍然是刚体平面，
+   卷只给纸的**边缘**：沿自由边三层条带（34/22/12px），翻页时每帧只改它们的
+   scaleX 与 opacity，幅度跟 sin 走——贴平与落定归零，立起来的半程最厚。
+   宽度一律不动：改宽度会重排纸里那两栏正文，一帧能卡 200ms。 */
+.nw-read-roll{
+  position:absolute;top:0;bottom:0;right:0;width:40px;
+  pointer-events:none;overflow:hidden;
+  transform-origin:right center;
+}
+.nw-read-roll > i{
+  position:absolute;top:0;bottom:0;right:0;display:block;
+  width:100%;transform-origin:right center;opacity:0;
+  transform:scaleX(0.5);
+}
+/* 第一层画完整的一道卷边：切口那一线略暗、纸的厚度泛一点高光、弧顶最亮、
+   再往里是折痕的暗，最后化进纸面。四段都取自主题色，换主题不用改这里。 */
+.nw-read-roll > i[data-seg="1"]{
+  background:linear-gradient(to left,
+    color-mix(in srgb, var(--nw-fg) 24%, var(--nw-read-flip)) 0,
+    color-mix(in srgb, #fff 34%, var(--nw-read-flip)) 7%,
+    color-mix(in srgb, #fff 56%, var(--nw-read-flip)) 30%,
+    color-mix(in srgb, var(--nw-fg) 10%, var(--nw-read-flip)) 72%,
+    transparent 100%);
+}
+.nw-read-roll > i[data-seg="2"]{
+  width:58%;
+  background:linear-gradient(to left,
+    transparent 0,
+    color-mix(in srgb, #fff 34%, transparent) 22%,
+    transparent 100%);
+}
+.nw-read-roll > i[data-seg="3"]{
+  width:26%;
+  background:linear-gradient(to left,
+    color-mix(in srgb, var(--nw-fg) 20%, transparent) 0,
+    transparent 100%);
+}
+/* 折线在左边的时候（回翻的正面、前翻的背面、单栏的背面），整条卷边翻到左缘，
+   渐变方向也跟着反过来——与 .nw-read-shade / ::after 用同一组选择器。 */
+.nw-read-flip[data-dir="back"] .nw-read-face[data-face="front"] .nw-read-roll,
+.nw-read-flip[data-dir="fwd"] .nw-read-face[data-face="back"] .nw-read-roll,
+.nw-read-flip[data-single="1"] .nw-read-face[data-face="back"] .nw-read-roll{
+  right:auto;left:0;
+  transform-origin:left center;
+}
+.nw-read-flip[data-dir="back"] .nw-read-face[data-face="front"] .nw-read-roll > i,
+.nw-read-flip[data-dir="fwd"] .nw-read-face[data-face="back"] .nw-read-roll > i,
+.nw-read-flip[data-single="1"] .nw-read-face[data-face="back"] .nw-read-roll > i{
+  right:auto;left:0;transform-origin:left center;
+}
+.nw-read-flip[data-dir="back"] .nw-read-face[data-face="front"] .nw-read-roll > i[data-seg="1"],
+.nw-read-flip[data-dir="fwd"] .nw-read-face[data-face="back"] .nw-read-roll > i[data-seg="1"],
+.nw-read-flip[data-single="1"] .nw-read-face[data-face="back"] .nw-read-roll > i[data-seg="1"]{
+  background:linear-gradient(to right,
+    color-mix(in srgb, var(--nw-fg) 24%, var(--nw-read-flip)) 0,
+    color-mix(in srgb, #fff 34%, var(--nw-read-flip)) 7%,
+    color-mix(in srgb, #fff 56%, var(--nw-read-flip)) 30%,
+    color-mix(in srgb, var(--nw-fg) 10%, var(--nw-read-flip)) 72%,
+    transparent 100%);
+}
+.nw-read-flip[data-dir="back"] .nw-read-face[data-face="front"] .nw-read-roll > i[data-seg="2"],
+.nw-read-flip[data-dir="fwd"] .nw-read-face[data-face="back"] .nw-read-roll > i[data-seg="2"],
+.nw-read-flip[data-single="1"] .nw-read-face[data-face="back"] .nw-read-roll > i[data-seg="2"]{
+  background:linear-gradient(to right,
+    transparent 0,
+    color-mix(in srgb, #fff 34%, transparent) 22%,
+    transparent 100%);
+}
+.nw-read-flip[data-dir="back"] .nw-read-face[data-face="front"] .nw-read-roll > i[data-seg="3"],
+.nw-read-flip[data-dir="fwd"] .nw-read-face[data-face="back"] .nw-read-roll > i[data-seg="3"],
+.nw-read-flip[data-single="1"] .nw-read-face[data-face="back"] .nw-read-roll > i[data-seg="3"]{
+  background:linear-gradient(to right,
+    color-mix(in srgb, var(--nw-fg) 20%, transparent) 0,
+    transparent 100%);
 }
 /* 这一页自己的字：一份只读副本，栏宽/行高/字号与正文完全一致。
    R147：纸长到整页高了，副本仍只占正文带——上下按带的偏移内缩，分栏高度
@@ -16993,13 +17112,18 @@ const SEL_EMIT_MS = 120;
 .nw-read-cast{
   position:absolute;left:50%;
   top:var(--nw-read-band-top, 54px);bottom:var(--nw-read-band-bottom, 52px);
-  width:var(--nw-read-box, 680px);transform:translateX(-50%);
+  width:300px;transform:translateX(-50%);
   pointer-events:none;z-index:2;opacity:0;contain:paint;
-  background-image:radial-gradient(ellipse at center,
-    color-mix(in srgb, var(--nw-fg) 30%, transparent) 0,
-    color-mix(in srgb, var(--nw-fg) 13%, transparent) 42%,
-    transparent 72%);
-  filter:blur(7px);transform-origin:center;will-change:transform,opacity;
+  /* R160：落影改成贴着自由边走的一道接触影。旧版是一整个书页宽的椭圆，纸抬起来
+     以后影子大半被纸自己盖住，剩下的一点又摊得很薄，读者看不到「一页正从纸上
+     过去」。纸越高，影越窄越深——尺寸由 poseFlip 每帧写，只有 transform。 */
+  background-image:linear-gradient(to right,
+    transparent 0,
+    color-mix(in srgb, var(--nw-fg) 8%, transparent) 26%,
+    color-mix(in srgb, var(--nw-fg) 19%, transparent) 58%,
+    color-mix(in srgb, var(--nw-fg) 7%, transparent) 88%,
+    transparent 100%);
+  filter:blur(10px);transform-origin:center;will-change:transform,opacity;
 }
 /* One paged copy of the manuscript, used only by the leaf and the cover. It has
    to break its columns exactly like .nw-read-flow or the leaf would not line up
@@ -17640,6 +17764,7 @@ const SEL_EMIT_MS = 120;
       const leaf = leafRef.current;
       if (leaf) {
         leaf.style.transform = 'rotateY(0deg)';
+        leaf.style.setProperty('--nw-bend', '0');
         if (edgeRef.current) edgeRef.current.style.opacity = '0';
       }
       const fs = frontShadeRef.current;
@@ -17652,10 +17777,20 @@ const SEL_EMIT_MS = 120;
         bs.style.opacity = '0';
         bs.style.transform = 'scaleX(0)';
       }
-      const ff = frontFaceRef.current;
-      if (ff) ff.style.visibility = 'visible';
-      const bf = backFaceRef.current;
-      if (bf) bf.style.visibility = 'hidden';
+      // R160：卷边归零。纸收走了，边缘就不该还留着一道卷起来的亮边。
+      const rollSegs = poseGeomRef.current && poseGeomRef.current.segs;
+      if (rollSegs) {
+        for (let i = 0; i < rollSegs.length; i += 1) {
+          const seg = rollSegs[i];
+          if (seg) seg.style.opacity = '0';
+        }
+      }
+      // R160：这里原先还有一段「收纸之后把正脸写回 visible、背面写 hidden」的收尾。
+      // 它是 R158 之前留下的：那时以为落地后要把纸复位成正面朝上，可 .nw-read-flip
+      // 平时是 visibility:hidden，子元素这句 visible 会把纸重新点亮——上面刚清掉的
+      // inline 值又被写回去，于是每翻完一页，一张白纸就永久盖在左半页上，正文还是
+      // 上一页的开头。读者看到的就是「左右字体不一样」。收纸只清不写，翻页开始时
+      // armFlip 会自己把两面点亮。
       const cover = coverRef.current;
       if (cover) {
         cover.removeAttribute('data-on');
@@ -17735,6 +17870,8 @@ const SEL_EMIT_MS = 120;
         leafW: leafW,
         mirrorFront: side < 0,
         mirrorBack: spreadFwd || single,
+        // R160：卷边的三层条带，摆纸时取一次，之后每帧只写它们的 transform。
+        segs: Array.prototype.slice.call(wrap.querySelectorAll('.nw-read-roll > i')),
       };
       // 半个对开：书缝在正文第 w+gap/2 列（w 已是「一页两栏 + 页内一缝」）。
       const spineAt = layout.w + layout.gap / 2;
@@ -17769,6 +17906,9 @@ const SEL_EMIT_MS = 120;
       const side = g && g.dir ? g.dir : 1;
       const leafW = g && g.leafW ? g.leafW : 500;
       leaf.style.transform = 'rotateY(' + angleDeg.toFixed(2) + 'deg)';
+      // R160：纸面的弧度（.nw-read-face::before 的透明度）。贴平与落定时 0，
+      // 立起来的半程最明显。
+      leaf.style.setProperty('--nw-bend', swing.toFixed(3));
       // turn.js 的 gradientSize：纸越侧过去，折线旁的明暗带越宽；贴平或落定
       // 时 sin=0，带子消失。R159：宽度不用改——两道渐变条铺满整面，用
       // scaleX 压出来。改宽度会重排纸里的正文（两列排版），那是翻页中途卡
@@ -17784,6 +17924,20 @@ const SEL_EMIT_MS = 120;
       if (backShade) {
         backShade.style.transform = 'scaleX(' + (gmirrorB * swing).toFixed(4) + ')';
         backShade.style.opacity = swing.toFixed(3);
+      }
+      // R160：自由边卷起来一点。三层条带一起跟 sin 走——纸贴平或落定的时候
+      // 归零，立起来的半程最厚（那时自由边正对读者，卷边最该被看见）。这里
+      // 只有 transform 与 opacity，合成器就能画完，不进布局。
+      const segs = g && g.segs;
+      if (segs && segs.length) {
+        const curl = Math.max(0, Math.min(1, swing));
+        const breathe = 0.34 + 0.66 * curl;
+        for (let i = 0; i < segs.length; i += 1) {
+          const seg = segs[i];
+          if (!seg) continue;
+          seg.style.transform = 'scaleX(' + breathe.toFixed(4) + ')';
+          seg.style.opacity = (0.92 * curl).toFixed(3);
+        }
       }
       // R157: 90 度附近纸是侧着的，投影为零。这道切口只在这个角度窗口里浮现，
       // 越接近正侧越实（rise=0.5），离开 ±22 度就完全隐去。
@@ -17808,11 +17962,13 @@ const SEL_EMIT_MS = 120;
       const cast = castRef.current;
       if (cast) {
         const base = angleDeg * Math.PI / 180;
-        const flat = Math.abs(Math.cos(base));
-        const shift = Math.cos(base) * side * leafW * 0.34;
-        cast.style.opacity = (0.62 * swing).toFixed(3);
-        cast.style.transform = 'translateX(-50%) translateX(' + shift.toFixed(2)
-          + 'px) scaleX(' + (0.42 + 0.58 * flat).toFixed(3) + ')';
+        // 自由边的投影位置（相对书脊）：纸立起来，边就往书脊收；影跟着它走。
+        const edgeX = Math.cos(base) * side * leafW;
+        // 纸越侧过去，影子越散、越浅；贴平或落定时 sin=0，影子收干净。
+        const smear = 0.42 + 0.58 * swing;
+        cast.style.opacity = (0.55 * swing).toFixed(3);
+        cast.style.transform = 'translateX(-50%) translateX(' + edgeX.toFixed(2)
+          + 'px) scaleX(' + (side * smear).toFixed(3) + ')';
       }
     }, []);
 
@@ -19701,6 +19857,12 @@ const SEL_EMIT_MS = 120;
         ref: (el) => { shadeRef.current = el; },
         'aria-hidden': 'true',
       }),
+      // R160：自由边的卷边（三层条带，见 CSS）。放在页脚之前，让页码压在
+      // 卷边上面——页码永远要看得清，纸的边可以是软的。
+      h('div', { className: 'nw-read-roll', 'data-roll': face, 'aria-hidden': 'true' },
+        h('i', { 'data-seg': '1', key: 's1' }),
+        h('i', { 'data-seg': '2', key: 's2' }),
+        h('i', { 'data-seg': '3', key: 's3' })),
       faceFoot(face + '-foot', folio),
       faceHead(face + '-head', folio),
     );
