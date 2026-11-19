@@ -510,7 +510,10 @@
     const [failed, setFailed] = React.useState(!wantVideo);
     const [glassOn, setGlassOn] = React.useState(true);
 
-    const urls = React.useMemo(() => {
+    // The host route streams the clip and costs no memory until it plays; the
+    // inlined copy (46-scene-media.js) is what a refresh can always reach. Try
+    // the route, fall back to the bytes the bundle carries.
+    const routes = React.useMemo(() => {
       if (!wantVideo) return { far: '', glass: '' };
       try {
         const make = typeof NW.apiUrl === 'function' ? NW.apiUrl : () => '';
@@ -519,6 +522,33 @@
         return { far: '', glass: '' };
       }
     }, [wantVideo]);
+    const media = (NW.SCENE_MEDIA || {});
+    const inline = React.useMemo(
+      () => ({ far: media.forest || '', glass: media.glass || '' }),
+      [media.forest, media.glass],
+    );
+    const [urls, setUrls] = React.useState(() => ({
+      far: routes.far || inline.far,
+      glass: routes.glass || inline.glass,
+    }));
+
+    // A missing route answers 200 + JSON (the host's error envelope), which a
+    // <video> reports as a decode error rather than a 404 — so the swap is
+    // driven by the element's own failure, plus a watchdog for the case where
+    // nothing fires at all.
+    const demote = React.useCallback(
+      (kind) => {
+        setUrls((cur) => {
+          const route = routes[kind];
+          const fallback = inline[kind];
+          if (route && cur[kind] === route && fallback) return Object.assign({}, cur, { [kind]: fallback });
+          if (kind === 'far') setFailed(true);
+          else setGlassOn(false);
+          return cur;
+        });
+      },
+      [routes, inline],
+    );
 
     React.useEffect(() => {
       if (!urls.far) {
@@ -542,8 +572,14 @@
         const attempt = el.play();
         if (attempt && typeof attempt.catch === 'function') attempt.catch(onFail || (() => {}));
       };
-      play(far, () => setFailed(true));
-      play(glass, () => setGlassOn(false));
+      play(far, () => demote('far'));
+      play(glass, () => demote('glass'));
+      const watch = window.setTimeout(() => {
+        const stuck = (el) => el && el.readyState < 2;
+        if (stuck(far)) demote('far');
+        if (stuck(glass)) demote('glass');
+      }, 1600);
+      cleanups.push(() => window.clearTimeout(watch));
       const onHide = () => {
         const els = [far, glass].filter(Boolean);
         if (document.hidden) {
@@ -560,7 +596,7 @@
       document.addEventListener('visibilitychange', onHide);
       cleanups.push(() => document.removeEventListener('visibilitychange', onHide));
       return () => cleanups.forEach((fn) => fn());
-    }, [urls.far, urls.glass, running]);
+    }, [urls.far, urls.glass, running, demote]);
 
     if (failed) {
       return h(
@@ -863,7 +899,7 @@
 /* 窗外：真实的树，真实的风。A rainy afternoon, not a night: lift the clip
    toward the paper's own value so the glass reads as daylight behind it. */
 .nw-scene-far{
-  filter:brightness(1.06) saturate(1.1) contrast(1.03);
+  filter:brightness(1.32) saturate(1.24) contrast(1.06);
   transform:scale(1.04);
 }
 /* 玻璃：rain running down the pane, screened over the forest. Screen keeps the
@@ -871,8 +907,8 @@
    through the water instead of being covered by it. */
 .nw-scene-glass{
   mix-blend-mode:screen;
-  opacity:.66;
-  filter:brightness(1.14) contrast(1.06);
+  opacity:.34;
+  filter:brightness(1.15) contrast(1.25);
   transform:scale(1.07);
 }
 /* One sky reflection on the glass and only a whisper of edge darkening: the
@@ -881,7 +917,7 @@
   position:absolute;inset:0;pointer-events:none;
   background:
     radial-gradient(120% 90% at 16% 2%, rgba(255,255,255,.17) 0%, rgba(255,255,255,.05) 44%, rgba(255,255,255,0) 72%),
-    linear-gradient(180deg, rgba(6,10,10,.09) 0%, rgba(6,10,10,0) 20%, rgba(6,10,10,0) 76%, rgba(6,10,10,.13) 100%);
+    linear-gradient(180deg, rgba(6,10,10,.06) 0%, rgba(6,10,10,0) 18%, rgba(6,10,10,0) 78%, rgba(6,10,10,.11) 100%);
 }
 /* The sill the paper stands on: slate, no wood, never lighter than the glass.
    It has to be nearly opaque, or the droplets keep showing through and the

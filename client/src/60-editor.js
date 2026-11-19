@@ -1120,6 +1120,9 @@ const SEL_EMIT_MS = 120;
       total: 0,
       fresh: -1,
       back: false,
+      // R166: the size and type of one page, so a card can be a true miniature
+      // of the sheet instead of a truncated summary of it.
+      geo: null,
     });
 
     const chapter = p.chapter || null;
@@ -1193,7 +1196,18 @@ const SEL_EMIT_MS = 120;
     // from a page coming back without re-measuring anything).
     const pageMirrorRef = React.useRef(null);
     const pageSigRef = React.useRef('');
-    const pageStateRef = React.useRef({ list: [], finished: 0, total: 0, fresh: -1, back: false });
+    const pageStateRef = React.useRef({
+      list: [],
+      finished: 0,
+      total: 0,
+      fresh: -1,
+      back: false,
+      geo: null,
+    });
+    // R166: the pile itself (the flight animations need its cards' final
+    // positions) and the sheet clone currently in the air.
+    const pileRef = React.useRef(null);
+    const flyingRef = React.useRef(null);
     // The sheet is asked for one settle animation per finished page; a page
     // coming back must not animate it, or the desk would twitch on every
     // upward scroll.
@@ -1645,7 +1659,12 @@ const SEL_EMIT_MS = 120;
       const own = scrollRef.current;
       if (own && own.clientWidth) {
         const r = own.getBoundingClientRect();
-        paneRight = r.left + (own.clientLeft || 0) + own.clientWidth;
+        const ownRight = r.left + (own.clientLeft || 0) + own.clientWidth;
+        // R166: with the window on, `.nw-scroll` *is* the sheet, so its right
+        // edge sits well inside the pane. Measuring the dock against it made the
+        // lane think the dock was touching the text and squeezed the column to
+        // 336px. Measure against whichever edge is further out.
+        paneRight = sceneOn ? Math.max(paneRight, ownRight) : ownRight;
       }
       const pageRight = page.getBoundingClientRect().right;
       const blank = Math.max(0, paneRight - pageRight);
@@ -3040,11 +3059,23 @@ const SEL_EMIT_MS = 120;
       if (list.length > 1 && list[list.length - 1].start >= len) list.pop();
       for (let i = 0; i < list.length; i += 1) {
         const raw = text.slice(list[i].start, list[i].end);
+        // R166: the card keeps the page itself (minus the trailing blank
+        // lines a page break leaves behind); `cardTextOf` survives only as the
+        // one-line label used by the tooltip and the screen reader.
+        list[i].raw = raw.replace(/\s+$/, '');
         list[i].text = cardTextOf(raw);
-        list[i].blank = !list[i].text;
+        list[i].blank = !list[i].raw;
         list[i].head = chapterTitle || '';
       }
-      publishPages({ list, total: list.length }, m);
+      const geo = {
+        w: Math.round(colW),
+        h: Math.round(m.height),
+        fs: parseFloat(cs.fontSize) || 20,
+        lh: m.lh,
+        ls: cs.letterSpacing === 'normal' ? '0px' : cs.letterSpacing,
+        ws: cs.wordSpacing === 'normal' ? '0px' : cs.wordSpacing,
+      };
+      publishPages({ list, total: list.length, geo }, m);
     }
 
     /** Copy the page numbers into React state, but only when they moved. */
@@ -3068,7 +3099,14 @@ const SEL_EMIT_MS = 120;
       if (same) return;
       const fresh = finished > prev.finished ? finished - 1 : -1;
       const back = finished < prev.finished;
-      const value = { list: next.list, finished, total: next.total, fresh, back };
+      const value = {
+        list: next.list,
+        finished,
+        total: next.total,
+        fresh,
+        back,
+        geo: next.geo || prev.geo || null,
+      };
       pageStateRef.current = value;
       setPageState(value);
       if (fresh >= 0) flashSettle(false);
@@ -3099,6 +3137,124 @@ const SEL_EMIT_MS = 120;
       }, isBack ? 420 : 560);
     }
 
+    /** R166: does this reader want things to move? */
+    function motionOK() {
+      try {
+        return !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      } catch (error) {
+        return true;
+      }
+    }
+
+    /** The mouth of the sheet: the top edge of the paper, where pages leave. */
+    function sheetTopRect() {
+      const sc = scrollRef.current;
+      if (!sc) return null;
+      const r = sc.getBoundingClientRect();
+      if (!r.width) return null;
+      return { x: r.left, y: r.top, w: r.width, h: Math.max(48, Math.min(150, r.height * 0.22)) };
+    }
+
+    /**
+     * R166: the page that just left the top of the sheet falls onto the pile.
+     *
+     * The card is the page itself (its own miniature), so this is a FLIP rather
+     * than a clone: measure where the card landed, put it back up at the paper's
+     * top edge, and let it drop. Only `transform` / `opacity` animate.
+     */
+    function flyLand() {
+      const pile = pileRef.current;
+      const from = sheetTopRect();
+      if (!pile || !from || !motionOK()) return;
+      const cards = pile.querySelectorAll('.nw-card');
+      const card = cards.length ? cards[cards.length - 1] : null;
+      if (!card) return;
+      const to = card.getBoundingClientRect();
+      if (!to.width || !to.height) return;
+      const k = Number(card.style.getPropertyValue('--i')) || 0;
+      const dx = from.x + from.w / 2 - (to.left + to.width / 2);
+      const dy = from.y + from.h / 2 - (to.top + to.height / 2);
+      const scale = Math.max(0.4, Math.min(1.7, (from.w / to.width) * 0.62));
+      const anim = card.animate(
+        [
+          {
+            transform: 'translate(' + dx.toFixed(1) + 'px,' + dy.toFixed(1) + 'px) scale(' +
+              scale.toFixed(3) + ') rotate(-2.8deg)',
+            opacity: 0.2,
+            filter: 'blur(1px)',
+          },
+          {
+            transform: 'translate(0px,0px) scale(1) rotate(' + (k * -0.7).toFixed(2) + 'deg)',
+            opacity: 1,
+            filter: 'blur(0px)',
+          },
+        ],
+        { duration: 520, easing: 'cubic-bezier(.22,.72,.24,1)' },
+      );
+      anim.onfinish = () => {
+        try {
+          anim.cancel();
+        } catch (error) {
+          // already detached
+        }
+      };
+    }
+
+    /**
+     * R166: and a page taken back travels the other way — the top sheet lifts
+     * off the pile, shrinks into the mouth of the paper and dissolves.
+     */
+    function flyBack(el) {
+      const to = sheetTopRect();
+      if (!to || !motionOK()) return;
+      const flying = flyingRef.current;
+      if (flying) {
+        try {
+          flying.remove();
+        } catch (error) {
+          // already gone
+        }
+        flyingRef.current = null;
+      }
+      const pile = pileRef.current;
+      const cards = pile ? pile.querySelectorAll('.nw-card') : [];
+      const card = el || (cards.length ? cards[cards.length - 1] : null);
+      if (!card) return;
+      const from = card.getBoundingClientRect();
+      if (!from.width || !from.height) return;
+      const clone = card.cloneNode(true);
+      clone.classList.add('nw-fly');
+      clone.removeAttribute('data-fresh');
+      clone.removeAttribute('style');
+      clone.style.left = from.left + 'px';
+      clone.style.top = from.top + 'px';
+      clone.style.width = from.width + 'px';
+      clone.style.height = from.height + 'px';
+      document.body.appendChild(clone);
+      const dx = to.x + to.w / 2 - (from.left + from.width / 2);
+      const dy = to.y + to.h / 2 - (from.top + from.height / 2);
+      const scale = Math.max(0.55, Math.min(2.4, (to.w / from.width) * 0.74));
+      const anim = clone.animate(
+        [
+          { transform: 'translate(0px,0px) scale(1) rotate(0deg)', opacity: 1, filter: 'blur(0px)' },
+          {
+            transform: 'translate(' + dx.toFixed(1) + 'px,' + dy.toFixed(1) + 'px) scale(' +
+              scale.toFixed(3) + ') rotate(2.2deg)',
+            opacity: 0.1,
+            filter: 'blur(1.6px)',
+          },
+        ],
+        { duration: 520, easing: 'cubic-bezier(.32,.68,.3,1)' },
+      );
+      const done = () => {
+        if (flyingRef.current === clone) flyingRef.current = null;
+        clone.remove();
+      };
+      anim.onfinish = done;
+      anim.oncancel = done;
+      flyingRef.current = clone;
+    }
+
     /** Re-read the page count after a scroll — arithmetic only, no measuring. */
     function syncFinished() {
       const sc = scrollRef.current;
@@ -3108,12 +3264,17 @@ const SEL_EMIT_MS = 120;
       if (!m) return;
       const finished = finishedCount(sc, m);
       if (finished === prev.finished) return;
+      // R166: a page coming back to the sheet travels, it does not blink out.
+      // A jump of several pages (Ctrl+Home, clicking a card far down) is a
+      // scroll, not a sheet leaving: only a single step gets a flight.
+      if (prev.finished - finished === 1) flyBack();
       const value = {
         list: prev.list,
         total: prev.total,
         finished,
         fresh: finished > prev.finished ? finished - 1 : -1,
         back: finished < prev.finished,
+        geo: prev.geo,
       };
       pageStateRef.current = value;
       setPageState(value);
@@ -3122,10 +3283,13 @@ const SEL_EMIT_MS = 120;
     }
 
     /** Put page `n` back on the sheet (the pile is clickable). */
-    function bringBackPage(n) {
+    function bringBackPage(n, el) {
       const sc = scrollRef.current;
       const m = pageMetrics(null);
       if (!sc || !m) return;
+      // R166: the card you clicked is the one that flies back, not whichever
+      // card happens to be on top after the scroll has already started.
+      flyBack(el || null);
       const target = Math.round(m.padTop + n * m.height);
       sc.scrollTo({ top: target, behavior: 'smooth' });
     }
@@ -5480,30 +5644,72 @@ const SEL_EMIT_MS = 120;
     // The cards are buttons, so they are reachable by keyboard and a tap puts
     // that page back on the sheet.
     const PILE_SHOWN = 8;
+    // R166: a card is a true miniature of the page — the card's inner width
+    // (152 − 12 − 12) over the page's text width. Every card carries the whole
+    // page, not a summary of it.
+    const CARD_INNER_W = 128;
+    const pageGeo = pageState.geo;
     const pileList = pageState.list.slice(0, Math.min(pageState.finished, PILE_SHOWN));
     const pile = pageState.finished > 0
       ? h(
           'div',
-          { className: 'nw-pile' },
+          { className: 'nw-pile', ref: pileRef },
           pileList.map((page, k) => h(
             'button',
             {
               key: 'page-' + page.n,
               type: 'button',
               className: 'nw-card',
-              style: { '--i': k },
+              // R166: the card keeps the page's own proportion — a 760px page and
+              // an 880px page are not the same shape, and a fixed 204px card left
+              // the text floating in the top half once the sheet got wider.
+              style: {
+                '--i': k,
+                '--card-h': pageGeo
+                  ? Math.round(CARD_INNER_W * (pageGeo.h / Math.max(1, pageGeo.w))) + 46 + 'px'
+                  : undefined,
+              },
               'data-fresh': pageState.fresh === page.n ? '1' : undefined,
               title: NW.t('第') + (page.n + 1) + NW.t('页') + ' · ' + NW.t('拿回桌上'),
               'aria-label': NW.t('第') + (page.n + 1) + NW.t('页') + ' · ' + NW.t('拿回桌上'),
-              onClick: () => bringBackPage(page.n),
+              onClick: (ev) => bringBackPage(page.n, ev && ev.currentTarget ? ev.currentTarget : null),
             },
             h('span', { className: 'nw-card-head' }, page.head || chapterTitle || NW.t('这一页')),
-            h('span', { className: 'nw-card-body', 'aria-hidden': 'true' }, page.text || ' '),
+            h(
+              'span',
+              {
+                className: 'nw-card-sheet',
+                'aria-hidden': 'true',
+                style: pageGeo
+                  ? {
+                    width: pageGeo.w + 'px',
+                    height: pageGeo.h + 'px',
+                    fontSize: pageGeo.fs + 'px',
+                    lineHeight: pageGeo.lh + 'px',
+                    letterSpacing: pageGeo.ls || '0px',
+                    wordSpacing: pageGeo.ws || '0px',
+                    transform: 'scale(' + (CARD_INNER_W / Math.max(1, pageGeo.w)).toFixed(4) + ')',
+                  }
+                  : null,
+              },
+              String(page.raw || page.text || ' ').split(/\n{2,}/).map((para, i) => h(
+                'p',
+                { key: i, className: 'nw-card-para' },
+                para || ' ',
+              )),
+            ),
             h('span', { className: 'nw-card-foot' }, String(page.n + 1)),
           )),
           h('div', { className: 'nw-pile-count' }, NW.t('已写') + ' ' + pageState.finished + ' ' + NW.t('页')),
         )
       : null;
+
+    // R166: a finished page lands on the pile with a fall, not a pop.
+    React.useEffect(() => {
+      if (pageState.fresh < 0) return undefined;
+      const id = window.requestAnimationFrame(() => flyLand());
+      return () => window.cancelAnimationFrame(id);
+    }, [pageState.fresh]);
 
     const body = chapter
       ? h(

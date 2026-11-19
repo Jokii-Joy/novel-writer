@@ -121,7 +121,7 @@
 }
 .nw-card{
   position:absolute;left:0;bottom:calc(var(--i, 0) * 7px);
-  width:152px;height:204px;
+  width:152px;height:var(--card-h, 204px);
   padding:11px 12px 15px;box-sizing:border-box;
   overflow:hidden;text-align:left;
   border:0;border-radius:1px;appearance:none;
@@ -137,47 +137,75 @@
   cursor:pointer;
   z-index:calc(20 - var(--i, 0));
 }
+/* R166: hovering a card opens it into a readable page — the card is the whole
+   page in miniature, so the peek is the same object, just closer. */
 .nw-card:hover,
 .nw-card:focus-visible{
-  transform:translateY(-10px) rotate(0deg) scale(1.9);
+  transform:translate(26px,-6px) rotate(0deg) scale(3.05);
+  transform-origin:left bottom;
   box-shadow:
     0 0 0 1px rgba(120,100,70,.16),
     0 1px 0 0 rgba(255,255,255,.9) inset,
-    0 26px 40px -22px rgba(0,0,0,.6);
-  z-index:40;
+    0 40px 70px -30px rgba(0,0,0,.7);
+  z-index:60;
   outline:none;
 }
 .nw-card:focus-visible{box-shadow:0 0 0 2px var(--nw-find-ring), 0 26px 40px -22px rgba(0,0,0,.6);}
 .nw-card-head{
+  position:absolute;left:10px;right:10px;top:5px;
   font-size:8px;line-height:1.3;letter-spacing:.16em;text-transform:none;
   color:rgba(122,92,58,.8);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  margin-bottom:6px;
 }
-.nw-card-body{
-  font-size:7.6px;line-height:1.82;letter-spacing:.01em;text-indent:2em;
-  color:rgba(52,47,40,.62);
-  word-break:break-all;
-  -webkit-mask-image:linear-gradient(180deg,#000 0,#000 74%,rgba(0,0,0,.05) 100%);
-  mask-image:linear-gradient(180deg,#000 0,#000 74%,rgba(0,0,0,.05) 100%);
+/* R166: the page itself. Laid out at the real measure and type size, then
+   scaled down — so the card has the same line breaks, the same paragraphs and
+   the same amount of text as the sheet it came from. */
+.nw-card-sheet{
+  position:absolute;left:12px;top:19px;
+  transform-origin:top left;
+  overflow:hidden;
+  pointer-events:none;
+  background-image:linear-gradient(179deg,#fffdf7 0%,#fbf5e7 70%,#f5ecda 100%);
+  box-shadow:0 0 0 1px rgba(118,98,68,.10);
+}
+.nw-card-para{
+  margin:0;padding:0;
+  /* the manuscript carries its own ideographic indents; adding 2em here would
+     indent every paragraph twice and break the line-for-line likeness */
+  text-indent:0;
+  white-space:pre-wrap;
+  word-break:break-word;
+  color:rgba(44,40,34,.92);
+}
+.nw-fly{
+  position:fixed !important;
+  z-index:200;
+  margin:0;padding:11px 12px 15px;box-sizing:border-box;
+  pointer-events:none;
+  transform-origin:50% 50%;
+  border-radius:1px;
+  background-image:linear-gradient(176deg,#fffdf6 0%,#fbf5e7 58%,#f4ead6 100%);
+  box-shadow:0 18px 30px -18px rgba(0,0,0,.55),0 0 0 1px rgba(120,100,70,.18);
+  font-family:var(--nw-reading-font);
 }
 .nw-card-foot{
   position:absolute;left:0;right:0;bottom:6px;text-align:center;
   font-size:7.5px;letter-spacing:.14em;color:rgba(122,92,58,.72);
   font-variant-numeric:tabular-nums;
 }
-/* the sheet that has just been added lifts in from the top-right, the sheet
-   that came back slides under the pile — both are the same card, so the two
-   directions read as one object moving, not as a list re-rendering */
-@keyframes nw-card-in{
-  from{opacity:0;transform:translate(14px,-16px) rotate(-3.4deg) scale(.96);}
-  to{opacity:1;}
-}
-.nw-card[data-fresh="1"]{animation:nw-card-in .42s cubic-bezier(.2,.8,.25,1) 1;}
+/* R166: the flight itself is a Web Animations FLIP (flyLand/flyBack in
+   60-editor.js): the card is measured where it landed, put back at the mouth of
+   the paper, and dropped — so the sheet that leaves and the sheet that comes
+   back are the same object, at the same scale, with the same words on it. */
 .nw-pile-count{
   position:absolute;left:0;bottom:-20px;width:152px;text-align:center;
-  font-size:9.5px;letter-spacing:.16em;color:rgba(236,240,240,.62);
-  text-shadow:0 1px 2px rgba(0,0,0,.35);
+  font-size:9.5px;letter-spacing:.16em;
+  /* 没有窗的时候这张纸趴在浅色面板上，浅色的字会直接消失 */
+  color:var(--nw-fg-faint,rgba(120,128,136,.72));
   font-variant-numeric:tabular-nums;
+}
+.nw-surface[data-scene="1"] .nw-pile-count{
+  color:rgba(236,240,240,.66);
+  text-shadow:0 1px 2px rgba(0,0,0,.35);
 }
 @container nw (max-width: 1060px){
   .nw-pile{display:none;}
