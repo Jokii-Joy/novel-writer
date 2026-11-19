@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       React,
       h,
       CSS_PARTS: [],
-      version: '1.6.39',
+      version: '1.9.0',
     };
     NW.ReactDOM = null;
 
@@ -136,8 +136,8 @@ window.__ModuleLoader__.load({
      97-theme.js only remain as a belt-and-braces fallback for old engines. */
   container-type:inline-size;
   container-name:nw;
-  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
-    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur-theme,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur-theme,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-root *{box-sizing:border-box;}
 .nw-root ::selection{background:color-mix(in srgb, var(--nw-brand) 22%, transparent);}
@@ -289,9 +289,7 @@ window.__ModuleLoader__.load({
       h('span', null, h('i', { className: 'nw-dot', 'data-state': s.saveState || 'idle' }), s.saveText || ''),
       h('span', { className: 'nw-spacer', style: { flex: 1 } }),
       s.middle || null,
-      // R117: the save folder / auto-save sentence is desktop wallpaper on a
-      // phone status bar; the narrow tier hides it by this class.
-      h('span', { className: 'nw-status-sync' }, s.syncText || ''),
+      h('span', null, s.syncText || ''),
       h('span', null, s.wordText || ''),
       h('span', null, s.counterText || ''),
     );
@@ -475,6 +473,18 @@ window.__ModuleLoader__.load({
     fontSize: 20,
     lineHeight: 2,
     pageWidth: 760,
+    /**
+     * R125: 阅读页每页分几栏。2 = 期刊那种双栏（一栏 22–30 字，行短、回头少），
+     * 1 = 传统单栏。面板窄到放不下两栏时会自动退回一栏，不会压成一行十来个字。
+     */
+    readColumns: 2,
+  // R131: 朗读。engine 存在本机偏好里（nw.tts.engine），这里放的是「声音」与
+  // 自定义接口的地址/密钥/模型——它们要跟着设置一起存，换台机器也带得走。
+  ttsEdgeVoice: 'zh-CN-XiaoxiaoNeural',
+  ttsApiUrl: '',
+  ttsApiKey: '',
+  ttsApiModel: 'tts-1',
+  ttsApiVoice: 'alloy',
     /**
      * R100: the daily word goal drives the home-screen ring and the status bar.
      * Kept small on purpose — a goal you can hit on a bad day is what makes the
@@ -2268,7 +2278,7 @@ window.__ModuleLoader__.load({
     const row = Object.assign({ id: wanted || uid('rev'), updatedAt: stamp }, clean);
     if (!row.createdAt) row.createdAt = stamp;
     const ok = await writeBatch([{ store: 'revisions', type: 'put', value: row }]);
-    if (!ok) throw new Error('保存修改建议失败');
+    if (!ok) throw new Error('保存AI建议失败');
     notify();
     return row;
   }
@@ -4342,19 +4352,10 @@ window.__ModuleLoader__.load({
     return api('models', {});
   }
 
-  function proofread(input) {
-    const data = input || {};
-    const payload = {
-      provider: data.provider,
-      model: data.model,
-      text: String(data.text == null ? '' : data.text),
-      mode: data.mode || 'typo',
-    };
-    // R29: only send the writer's brief when there is one — the host already
-    // knows the shipped default and must not be handed an empty override.
-    if (data.rules) payload.rules = String(data.rules);
-    return api('proofread', payload, { timeoutMs: AI_TIMEOUT_MS });
-  }
+  // R118: `proofread` / `proofreadSafe` were removed with the 「AI 校对」 panel.
+  // The mechanical angle now rides inside AI建议 (`revise` with focus `words`),
+  // so the client no longer calls the Host's `proofread` route at all. The route
+  // and `lib/ai.js#proofread` stay for the LAN phone API and verify-host.
 
   /**
    * R34: ask the writer to pick a model, then try that one.
@@ -4370,47 +4371,7 @@ window.__ModuleLoader__.load({
     return { provider: String(picked.provider), model: String(picked.model) };
   }
 
-  /**
-   * `proofread` with automatic model failover.
-   *
-   * The happy path costs exactly one extra request (the model list); that list
-   * is already cached by the Settings dialog in the same tick, so the practical
-   * cost of "always have a fallback" is one fetch per action.
-   */
-  async function proofreadSafe(input) {
-    const body = input || {};
-    let list = null;
-    try {
-      list = await models();
-    } catch (err) {
-      list = null;
-    }
-    const preferred = { provider: body.provider, model: body.model };
-    const call = (candidate) => proofread(Object.assign({}, body, { provider: candidate.provider, model: candidate.model }));
-    const result = await withModelFallback(list, preferred, call, {
-      emptyMessage: NW.t('还没有配置可用的模型，请先在 Harness 里登录一个模型提供方。'),
-      onRetry: body.onRetry,
-    });
-    if (result.ok) return Object.assign({}, result.data, { usedModel: result.used, failovers: result.tried });
-    // Everything failed: offer the picker once. A writer who chose the wrong
-    // model on purpose should not have to go to Settings and come back.
-    const picked = await askModelForRetry({
-      kind: 'proofread',
-      label: 'AI 校对',
-      tried: result.tried,
-      models: list,
-      preferred: preferred,
-    });
-    if (picked) {
-      const second = await call(picked);
-      return Object.assign({}, second, { usedModel: picked, failovers: result.tried });
-    }
-    const err = result.error || new Error(NW.t('模型调用失败'));
-    err.tried = result.tried;
-    throw err;
-  }
-
-  /** `revise` with automatic model failover (same contract as `proofreadSafe`). */
+  /** `revise` with automatic model failover. */
   async function reviseSafe(input) {
     const body = input || {};
     let list = null;
@@ -4428,7 +4389,7 @@ window.__ModuleLoader__.load({
     if (result.ok) return Object.assign({}, result.data, { usedModel: result.used, failovers: result.tried });
     const picked = await askModelForRetry({
       kind: 'revise',
-      label: '修改建议',
+      label: 'AI建议',
       tried: result.tried,
       models: list,
       preferred: preferred,
@@ -4487,8 +4448,8 @@ window.__ModuleLoader__.load({
   // two helpers below let every AI surface retry across the other configured
   // models before giving up.
   //
-  // They live here rather than in each dialog because there are four callers
-  // (proofread, typeset advice, submit.prepare, revise) and the ordering rule is
+  // They live here rather than in each dialog because there are three callers
+  // (typeset advice, submit.prepare, revise) and the ordering rule is
   // identical: the model the writer chose first, then the harness default, then
   // anything else the host knows about.
 
@@ -5252,66 +5213,6 @@ window.__ModuleLoader__.load({
     return { suggestions: suggestions, model: model, emptyReplies: emptyReplies };
   }
 
-  // ---- LAN sync / pairing (R34) ---------------------------------------------
-  // The phone talks to the host over HTTP; these wrappers are what the desktop
-  // side of that conversation calls, so both ends speak the same method names.
-
-  /** Shows a pairing QR: `{payload, svg, token, expiresAt, addresses, port}`. */
-  function pairStart() {
-    return api('pair.start', {});
-  }
-
-  function pairStatus() {
-    return api('pair.status', {});
-  }
-
-  function pairCancel() {
-    return api('pair.cancel', {});
-  }
-
-  function pairAccept(input) {
-    const body = input && typeof input === 'object' ? input : {};
-    return api('pair.accept', {
-      token: String(body.token || ''),
-      deviceId: String(body.deviceId || ''),
-      deviceName: String(body.deviceName || ''),
-      publicKey: String(body.publicKey || ''),
-      address: String(body.address || ''),
-    });
-  }
-
-  function peersList() {
-    return api('pair.peers', {});
-  }
-
-  function peerRemove(id) {
-    return api('pair.remove', { id: String(id || '') });
-  }
-
-  function lanInfo() {
-    return api('pair.info', {});
-  }
-
-  /**
-   * Pushes the whole library into the host's sync mirror.
-   *
-   * `books` is `[{id,title,author,updatedAt,deleted,chapters}]` — the same shape
-   * the merge engine and the phone use. Sending the library whole (rather than a
-   * diff) keeps the contract honest: book-level LWW needs both sides' timestamps,
-   * and a delta would have to reconstruct them anyway.
-   */
-  function syncPush(books) {
-    return api('sync.push', { books: Array.isArray(books) ? books : [] });
-  }
-
-  function syncPull() {
-    return api('sync.pull', {});
-  }
-
-  function syncApply(books) {
-    return api('sync.apply', { books: Array.isArray(books) ? books : [] });
-  }
-
   // ---- client state / password verifier (R80) -------------------------------
   //
   // localStorage and IndexedDB both live in the Harness WebView profile, which a
@@ -5377,6 +5278,10 @@ window.__ModuleLoader__.load({
     clipboard: {
       write: clipboardWrite,
     },
+    /** R131: one paragraph of speech from the host (Edge online / custom API). */
+    tts: {
+      speak: (payload) => api('tts', payload, { timeoutMs: 120000 }),
+    },
     library: {
       get: libraryGet,
       set: librarySet,
@@ -5416,47 +5321,45 @@ window.__ModuleLoader__.load({
       read: inboxRead,
       remove: inboxDelete,
     },
-    pair: {
-      start: pairStart,
-      status: pairStatus,
-      cancel: pairCancel,
-      accept: pairAccept,
-      peers: peersList,
-      remove: peerRemove,
-      info: lanInfo,
-    },
-    sync: {
-      push: syncPush,
-      pull: syncPull,
-      apply: syncApply,
-    },
   };
+
+  /**
+   * R133: 查阅. A lookup is deliberately outside NW.ai — it is a network read,
+   * not an editorial suggestion, and the panel must stay usable when no model
+   * is configured at all.
+   */
+  function searchQuery(engine, query) {
+    return api(
+      'search',
+      { engine: String(engine || 'bing'), query: String(query == null ? '' : query) },
+      { timeoutMs: 20000 },
+    );
+  }
+
+  /*
+   * R133 ②: the model route. Bing is read on the host as material, the answer
+   * comes back as prose plus the links it rested on. The timeout covers both
+   * legs (12s for the RSS read, up to 90s for the model).
+   */
+  function askQuestion(question) {
+    return api('ask', { question: String(question == null ? '' : question) }, { timeoutMs: 120000 });
+  }
+
+  NW.search = { query: searchQuery, ask: askQuestion };
 
   NW.ai = {
     models: models,
-    proofread: proofread,
     revise: revise,
     reviseSelection: reviseSelection,
     reviseSelectionStream: reviseSelectionStream,
     // R91: the chapter-level stream; `reviseSafe` remains the failover fallback.
     reviseStream: reviseStream,
     selftest: selftest,
-    // R34: failover-aware variants. `proofread` / `revise` stay bare so the
-    // dialogs that manage their own picker keep exact control.
-    proofreadSafe: proofreadSafe,
+    // R34: failover-aware variants. `revise` stays bare so the dialogs that
+    // manage their own picker keep exact control.
     reviseSafe: reviseSafe,
     reviseSelectionSafe: reviseSelectionSafe,
     candidates: modelCandidates,
-  };
-
-  /**
-   * R29: the same starter brief the Host ships with, shown in the settings
-   * hint. Duplicated on purpose — reading it back from the Host would need a
-   * round trip to render a hint, and a stale copy in the hint is harmless while
-   * a missing one looks broken.
-   */
-  NW.aiProofreadDefaultRules = function aiProofreadDefaultRules() {
-    return '只找确凿的错别字、词语误用、标点错误与重复字；不改风格、不改剧情、不调整人称或时态；没有把握的地方一律不报。';
   };
 })();
 
@@ -5891,7 +5794,7 @@ window.__ModuleLoader__.load({
   // R20 rebuilt the whole table from scratch. The old set was drawn on a 16×16
   // canvas, which left too little room between strokes: at a 16px render every
   // glyph sat within 1.5…14.5 and the 1.5 stroke turned to mush (the gear grew
-  // four stray ticks, the star-burst "proofread" read as a splat). This set uses
+  // four stray ticks, the old star-burst read as a splat). This set uses
   // a 20×20 grid with a 2-unit optical margin, so the same nominal stroke has
   // 25% more breathing room and corners stay clean.
   //
@@ -5925,6 +5828,24 @@ window.__ModuleLoader__.load({
       'M6.6 4.2v12',
       'M8.8 8.2h4.4',
       'M8.8 11h4.4',
+    ],
+    // 摊开的书：书脊 + 左右两页。用在目录里「读这一章」与「读整本」上，
+    // 与「新建小说」的合上的书区分开。
+    openbook: [
+      'M10 6.1C8.5 5 6.6 4.6 4.2 4.8v9.8c2.4-.2 4.3.2 5.8 1.3',
+      'M10 6.1c1.5-1.1 3.4-1.5 5.8-1.3v9.8c-2.4-.2-4.3.2-5.8 1.3',
+      'M10 6.1v9.8',
+    ],
+    // 喇叭（朗读）。mute 是同一个喇叭加一道斜杠，两个共用外框，切换时不会跳。
+    volume: [
+      'M4.2 8.2h2.6l3.6-3.1v9.8L6.8 11.8H4.2z',
+      'M13.4 7.4a3.4 3.4 0 0 1 0 5.2',
+      'M15.6 5.2a6.4 6.4 0 0 1 0 9.6',
+    ],
+    volumeoff: [
+      'M4.2 8.2h2.6l3.6-3.1v9.8L6.8 11.8H4.2z',
+      'M13.2 7.8l4.4 4.4',
+      'M17.6 7.8l-4.4 4.4',
     ],
     doc: ['M5.2 3.2h6.2l4 4v9.6H5.2z', 'M11.4 3.2v4h4'],
     save: [
@@ -5998,12 +5919,8 @@ window.__ModuleLoader__.load({
     folder: ['M3.2 5.4h5.2l2 2.4h6.4v8.8H3.2z'],
 
     // ---- writing tools -----------------------------------------------------
-    proofread: [
-      'M3.4 6h7',
-      'M3.4 10h7',
-      'M3.4 14h4.2',
-      'M14.2 4.4l1 2.4 2.4 1-2.4 1-1 2.4-1-2.4-2.4-1 2.4-1z',
-    ],
+    // R118: the `proofread` star-burst is gone with the 「AI 校对」 dialog; the
+    // 字词与标点 angle now reuses the same AI建议 card, so no glyph is needed.
     typeset: ['M3.4 5.2h13.2', 'M3.4 9h8.8', 'M3.4 12.8h13.2', 'M3.4 16.6h6.2'],
     typewriter: ['M10 6.6v6.8', 'M3.4 10h4.2', 'M12.4 10h4.2', 'M6.6 3.6h6.8'],
     send: ['M17 3.2L3.4 8.8l5.4 2.4 2.4 5.4z', 'M8.8 11.2l8.2-8'],
@@ -7200,70 +7117,7 @@ window.__ModuleLoader__.load({
   .nw-prep-step[data-now="1"] .nw-prep-dot{animation:none;}
 }
 
-/* ---------------------------------------------------------------- pairing -- */
-/* R34 ③: the phone pairing dialog. The QR arrives as inline SVG from the host,
-   so CSS only has to give it a quiet white plate — a code drawn on a tinted
-   background loses the contrast scanners depend on. */
-.nw-pair{display:flex;flex-direction:column;gap:var(--nw-sp-3);}
-.nw-pair-box{
-  display:flex;align-items:flex-start;gap:var(--nw-sp-4);
-  padding:var(--nw-sp-3);border:1px solid var(--nw-line);border-radius:var(--nw-r-card);
-  background:var(--nw-panel);
-}
-.nw-pair-code{
-  flex:0 0 auto;display:flex;align-items:center;justify-content:center;
-  padding:8px;border-radius:var(--nw-r-control);
-  background:#ffffff; /* deliberately literal: the quiet zone must be paper */
-}
-.nw-pair-code > svg{display:block;width:180px;height:180px;}
-.nw-pair-meta{display:flex;flex-direction:column;gap:6px;min-width:0;}
-.nw-pair-addr{font-size:var(--nw-fs-second);font-weight:600;color:var(--nw-fg);word-break:break-all;}
-.nw-pair-timer{font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);}
-.nw-pair-empty{
-  display:flex;align-items:center;justify-content:center;min-height:120px;
-  border:1px dashed var(--nw-line-strong);border-radius:var(--nw-r-card);
-  font-size:var(--nw-fs-second);color:var(--nw-fg-soft);text-align:center;padding:var(--nw-sp-3);
-}
-.nw-pair-actions{display:flex;gap:var(--nw-sp-2);}
-.nw-pair-peers{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;list-style:none;}
-.nw-pair-peer{
-  display:flex;align-items:center;gap:var(--nw-sp-2);
-  padding:var(--nw-sp-2) var(--nw-sp-3);border:1px solid var(--nw-line-soft);
-  border-radius:var(--nw-r-control);background:var(--nw-surface-1);
-}
-.nw-pair-peername{font-size:var(--nw-fs-second);font-weight:600;color:var(--nw-fg);}
-.nw-pair-peer .nw-hint-block{margin-left:auto;margin-bottom:0;}
-/* R34: the two values the phone form asks for, printed so they can be typed
-   (or copied) instead of scanned. Monospace + user-select:all so one click
-   selects the whole token for a manual copy. */
-.nw-pair-stack{display:flex;flex-direction:column;gap:var(--nw-sp-3);}
-.nw-pair-manual{
-  margin:0;padding:var(--nw-sp-2) var(--nw-sp-3);
-  border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
-  background:var(--nw-sunken);display:flex;flex-direction:column;gap:4px;
-}
-.nw-pair-manual-head{font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);line-height:1.6;}
-.nw-pair-manual-row{display:flex;align-items:baseline;gap:var(--nw-sp-2);min-width:0;}
-.nw-pair-manual-key{flex:0 0 auto;font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);}
-.nw-pair-manual-value{
-  flex:1 1 auto;min-width:0;font-family:var(--nw-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);
-  font-size:var(--nw-fs-second);color:var(--nw-fg);overflow-wrap:anywhere;user-select:all;
-}
-.nw-pair-manual-acts{display:flex;gap:var(--nw-sp-2);margin-top:2px;}
-/* R38: the settings page renders the panel in place — this wrapper gives it a
-   quiet frame of its own instead of the modal's padding, and the peers list a
-   heading that reads as a section rather than a second dialog. */
-.nw-pair-inline{
-  padding:var(--nw-sp-3);border:1px solid var(--nw-line-soft);
-  border-radius:var(--nw-r-card);background:var(--nw-surface-1);
-}
-.nw-pair-inline > .nw-pair-box{background:var(--nw-panel);}
-.nw-pair-inline .nw-pair-actions{align-items:center;flex-wrap:wrap;}
-.nw-pair-subhead{
-  margin:var(--nw-sp-2) 0 0;font-size:var(--nw-fs-micro);font-weight:600;
-  letter-spacing:.02em;color:var(--nw-fg-soft);
-}
-
+/* ----------------------------------------------------------- model picker -- */
 /* R34: model picker shown when every configured model failed. The tried list is
    the useful half — it turns 「打不开」 into 「这三个都不通，各自的原因如下」. */
 .nw-picker-tried{
@@ -7275,10 +7129,6 @@ window.__ModuleLoader__.load({
 .nw-picker-tried > li{display:flex;gap:var(--nw-sp-2);align-items:baseline;font-size:var(--nw-fs-micro);line-height:1.6;}
 .nw-picker-triedname{flex:0 0 auto;color:var(--nw-fg);font-weight:600;}
 .nw-picker-triedmsg{flex:1 1 auto;min-width:0;color:var(--nw-fg-soft);overflow-wrap:anywhere;}
-@media (max-width:520px){
-  .nw-pair-box{flex-direction:column;align-items:center;}
-  .nw-pair-code > svg{width:150px;height:150px;}
-}
 `);
 })();
 
@@ -7659,9 +7509,15 @@ window.__ModuleLoader__.load({
           ? h(
               'span',
               { className: 'nw-row-actions', onClick: (ev) => ev.stopPropagation() },
-              makeIconBtn(icon('child'), tr('新建子章节'), () => api.createChild(ch.id)),
+              // R129: 目录行的「读这一章」——不切编辑器的当前章，只是把阅读页
+              // 开到这一章的那一页；退出阅读后光标仍在原来那一句上。
+              // 行上仍然只放四枚按钮（原来是 新建子章节/重命名/删除/更多）：
+              // 五枚时动作条会从行中间压到标题上，而「新建子章节」在「⋯」里
+              // 一点就有，不该为它挤掉标题。
+              makeIconBtn(icon('openbook'), tr('读这一章'), () => api.readChapter(ch)),
               makeIconBtn(icon('pencil'), tr('重命名'), () => api.rename(ch)),
-              makeIconBtn(icon('trash'), tr('删除'), () => api.remove(ch)),
+              // 删除留在「⋯」里：它本来就在菜单里，行上少一枚按钮，标题就能多
+              // 露出几个字（260px 宽的目录里这一段很值钱）。
               makeIconBtn(icon('more', 15), tr('更多操作'), (ev) => api.openMenu(ev, 'chapter', ch)),
             )
           : null,
@@ -7956,6 +7812,10 @@ window.__ModuleLoader__.load({
     };
     api.createChild = (id) => {
       if (typeof P.onCreateChapter === 'function') P.onCreateChapter(id);
+    };
+    api.readChapter = (ch) => {
+      if (!ch || ch.id == null) return;
+      if (typeof P.onReadChapter === 'function') P.onReadChapter(ch.id);
     };
     api.rename = (ch) => {
       if (typeof P.onRename === 'function') P.onRename('chapter', ch.id, ch.title || '');
@@ -8327,6 +8187,10 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'nw-row-actions', onClick: (ev) => ev.stopPropagation() },
+          // R129：书行上也能直接「读整本」（从第一章读起）。
+          makeIconBtn(icon('openbook'), tr('读整本'), () => {
+            if (typeof P.onReadBook === 'function') P.onReadBook(n.id);
+          }),
           makeIconBtn(icon('pencil'), tr('重命名'), () => {
             if (typeof P.onRename === 'function') P.onRename('novel', n.id, n.title || '');
           }),
@@ -8606,6 +8470,36 @@ window.__ModuleLoader__.load({
           style: { left: menu.x + 'px', top: menu.y + 'px' },
           onClick: (ev) => ev.stopPropagation(),
         },
+        // R129：阅读放在菜单第一项——「读一章」是目录里最常按的那个动作。
+        menu.kind === 'chapter'
+          ? menuItem(
+              'openbook',
+              tr('读这一章'),
+              () => {
+                if (typeof P.onReadChapter === 'function') P.onReadChapter(menu.id);
+                else toast(tr('阅读入口尚未接入'));
+              },
+              false,
+            )
+          : menuItem(
+              'openbook',
+              tr('读整本'),
+              () => {
+                if (typeof P.onReadBook === 'function') P.onReadBook(menu.id);
+                else toast(tr('阅读入口尚未接入'));
+              },
+              false,
+            ),
+        menu.kind === 'chapter'
+          ? menuItem(
+              'child',
+              tr('新建子章节'),
+              () => {
+                if (typeof P.onCreateChapter === 'function') P.onCreateChapter(menu.id);
+              },
+              false,
+            )
+          : null,
         menuItem(
           'download',
           tr('导出'),
@@ -8733,6 +8627,10 @@ window.__ModuleLoader__.load({
           }),
           makeIconBtn(icon('plus', 18), tr('新建章节'), () => {
             if (typeof P.onCreateChapter === 'function') P.onCreateChapter(null);
+          }),
+          // R129: 从这一本书的第一页读起（目录里逐章读的另一半）。
+          makeIconBtn(icon('openbook', 18), tr('读整本'), () => {
+            if (typeof P.onReadBook === 'function') P.onReadBook();
           }),
           makeIconBtn(icon('upload', 18), tr('导入小说'), importNovel),
           makeIconBtn(icon('trash', 18), tr('回收站'), openTrash),
@@ -9653,7 +9551,6 @@ window.__ModuleLoader__.load({
     const resumeRow = rollups.find((row) => row && row.resume) || null;
     const resumeTarget =
       resumeRow && typeof p.onResumeChapter === 'function' ? resumeRow : null;
-    const microEnabled = !!(resumeTarget && typeof p.onMicroGoal === 'function');
 
     const header = NW.h(
       'header',
@@ -9678,13 +9575,11 @@ window.__ModuleLoader__.load({
         'div',
         { className: 'nw-welcome-actions' },
         // R100: 「继续写」 is the one button the home screen exists for — it lands
-        // on the chapter the writer left, not merely on the shelf. 「只写 100 字」
-        // is the same door with a goal small enough to walk through on a bad day.
+        // on the chapter the writer left, not merely on the shelf.
+        // R118: 「只写 100 字」 is gone; the home screen keeps the 今日目标 ring as
+        // its only goal affordance.
         resumeTarget
           ? btn(tr('继续写'), () => p.onResumeChapter(resumeTarget.novel.id, resumeTarget.resume.id), 'primary', 'pencil')
-          : null,
-        microEnabled
-          ? btn(tr('只写 100 字'), () => p.onMicroGoal(resumeTarget.novel.id, resumeTarget.resume.id, 100), 'ghost', 'clock')
           : null,
         btn(tr('新建小说'), () => typeof p.onNewNovel === 'function' && p.onNewNovel(), resumeTarget ? 'ghost' : 'primary', 'plus'),
         btn(tr('导入'), () => typeof p.onImport === 'function' && p.onImport(), 'ghost', 'upload'),
@@ -10403,6 +10298,476 @@ window.__ModuleLoader__.load({
 `);
 })();
 
+/* ==== 56-search.js ==== */
+;(() => {
+  'use strict';
+
+  // ============================================================== 查阅 ======
+  //
+  // R133. A writer in the middle of a paragraph should not have to open a
+  // browser, lose the page, and come back with the sentence cold. 查阅 is one
+  // keystroke away (Alt+S), answers with the model, and closes with Esc. It
+  // never writes into the manuscript, never touches the caret and never keeps
+  // a history — closing it leaves the desk exactly as it was.
+  //
+  // The answer is the point; the links are the receipts. The host reads Bing
+  // first and hands the model five snippets to stand on, so the prose is not
+  // pure recall. When the model is unavailable the panel falls back to those
+  // links instead of an empty pane.
+  // ===========================================================================
+
+  const EXAMPLES = [
+    '民国一块大洋能买什么',
+    '乌篷船为什么叫乌篷',
+    '《故乡》是哪一年写的',
+  ];
+
+  function tr(key, ...args) {
+    return typeof NW.t === 'function' ? NW.t(key, ...args) : key;
+  }
+
+  function hostOf(url) {
+    try {
+      return String(new URL(url).hostname || '').replace(/^www\./i, '');
+    } catch (err) {
+      return '';
+    }
+  }
+
+  function externalUrl(engine, query) {
+    const q = String(query || '').trim();
+    if (!q) return '';
+    const base =
+      engine === 'baidu'
+        ? 'https://www.baidu.com/s?wd='
+        : 'https://www.bing.com/search?q=';
+    return base + encodeURIComponent(q);
+  }
+
+  function openInBrowser(url) {
+    if (!url) return false;
+    try {
+      return !!window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      return false;
+    }
+  }
+
+  /** The model writes markdown; the sheet reads as prose, so strip the syntax. */
+  function readable(text) {
+    const raw = String(text == null ? '' : text);
+    const plain =
+      NW.format && typeof NW.format.markdownToPlain === 'function'
+        ? NW.format.markdownToPlain(raw)
+        : raw;
+    return String(plain).split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+  }
+
+  NW.SearchPanel = function SearchPanel(props) {
+    const open = !!(props && props.open);
+    const onClose = props && typeof props.onClose === 'function' ? props.onClose : function () {};
+
+    const inputRef = React.useRef(null);
+    const seqRef = React.useRef(0);
+    const [query, setQuery] = React.useState('');
+    const [last, setLast] = React.useState('');
+    const [answer, setAnswer] = React.useState('');
+    const [sources, setSources] = React.useState([]);
+    const [note, setNote] = React.useState('');
+    const [busy, setBusy] = React.useState(false);
+    const [slow, setSlow] = React.useState(false);
+    const [error, setError] = React.useState('');
+
+    React.useEffect(() => {
+      if (!open) return undefined;
+      const timer = setTimeout(() => {
+        if (inputRef.current) inputRef.current.focus();
+      }, 30);
+      return () => clearTimeout(timer);
+    }, [open]);
+
+    React.useEffect(() => {
+      if (!open) return undefined;
+      const onKey = (ev) => {
+        if (ev.key === 'Escape') {
+          ev.stopPropagation();
+          ev.preventDefault();
+          onClose();
+        }
+      };
+      document.addEventListener('keydown', onKey, true);
+      return () => document.removeEventListener('keydown', onKey, true);
+    }, [open, onClose]);
+
+    // The model leg takes a while; after four seconds the sheet admits it.
+    React.useEffect(() => {
+      if (!busy) {
+        setSlow(false);
+        return undefined;
+      }
+      const timer = setTimeout(() => setSlow(true), 4000);
+      return () => clearTimeout(timer);
+    }, [busy]);
+
+    function reset() {
+      setAnswer('');
+      setSources([]);
+      setNote('');
+      setError('');
+    }
+
+    function run(explicit) {
+      const q = String(explicit == null ? query : explicit).trim();
+      if (!q) return;
+      // While the model is still thinking, Enter only restarts when the writer
+      // has changed the question — otherwise it is a no-op, not a duplicate call.
+      if (busy && q === last) return;
+      const seq = (seqRef.current += 1);
+      setBusy(true);
+      reset();
+      setLast(q);
+
+      const call =
+        NW.search && typeof NW.search.ask === 'function'
+          ? NW.search.ask(q)
+          : Promise.reject(new Error('模型接口没有加载，刷新一下页面'));
+
+      call
+        .then((data) => {
+          if (seq !== seqRef.current) return;
+          const nextSources = data && Array.isArray(data.sources) ? data.sources : [];
+          setSources(nextSources);
+          setNote(data && data.note ? String(data.note) : '');
+          setAnswer(data && data.answer ? String(data.answer) : '');
+          setBusy(false);
+          if (!(data && data.answer) && !nextSources.length) {
+            setError('这次什么也没找到，换个说法再试');
+          }
+        })
+        .catch((err) => {
+          if (seq !== seqRef.current) return;
+          setBusy(false);
+          setError(err && err.message ? err.message : '没有答上来，再试一次');
+        });
+    }
+
+    function onKeyDown(ev) {
+      if (ev.isComposing || ev.keyCode === 229) return;
+      if (ev.key === 'Enter' && !ev.shiftKey) {
+        ev.preventDefault();
+        run();
+      }
+    }
+
+    if (!open) return null;
+
+    const currentQuery = String(query || '').trim();
+    const shownQuery = last || currentQuery;
+    const answerParts = readable(answer);
+
+    let body;
+    if (busy) {
+      body = h(
+        'div',
+        { className: 'nw-look-wait', 'aria-live': 'polite' },
+        [0, 1, 2].map((i) =>
+          h(
+            'div',
+            { key: 'w' + i, className: 'nw-look-waitrow', style: { animationDelay: i * 90 + 'ms' } },
+            h('span', { className: 'nw-look-waitline nw-look-waitline-title' }),
+            h('span', { className: 'nw-look-waitline' }),
+          ),
+        ),
+        h('div', { className: 'nw-look-waittext' }, slow
+          ? tr('模型正在把材料理成一段话…')
+          : tr('在必应里找材料…')),
+      );
+    } else if (error && !answerParts.length && !sources.length) {
+      body = h(
+        'div',
+        { className: 'nw-look-error', role: 'status' },
+        h('div', null, error),
+        shownQuery
+          ? h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-look-errorbtn',
+                onClick: () => openInBrowser(externalUrl('baidu', shownQuery)),
+              },
+              tr('在百度里打开「{0}」', shownQuery),
+            )
+          : null,
+      );
+    } else if (answerParts.length || sources.length) {
+      body = h(
+        'div',
+        { className: 'nw-look-answerbox' },
+        note ? h('div', { className: 'nw-look-note2' }, note) : null,
+        answerParts.length
+          ? h(
+              'div',
+              { className: 'nw-look-answer' },
+              answerParts.map((part, i) => h('p', { key: 'p' + i }, part)),
+            )
+          : null,
+        sources.length
+          ? h(
+              'div',
+              { className: 'nw-look-srcs' },
+              h('div', { className: 'nw-look-srcshead' }, tr('来源')),
+              sources.map((row, i) =>
+                h(
+                  'a',
+                  {
+                    key: 's' + i,
+                    className: 'nw-look-srcrow',
+                    href: row.url,
+                    target: '_blank',
+                    rel: 'noopener noreferrer',
+                    title: row.title || row.url,
+                  },
+                  h('span', { className: 'nw-look-srctitle' }, row.title || row.url),
+                  h('span', { className: 'nw-look-srchost' }, hostOf(row.url)),
+                ),
+              ),
+            )
+          : null,
+        answerParts.length
+          ? h('div', { className: 'nw-look-disclaimer' }, tr('答案由模型整理，关键处点开来路核一下。'))
+          : null,
+      );
+    } else {
+      body = h(
+        'div',
+        { className: 'nw-look-empty' },
+        h('div', { className: 'nw-look-emptyhead' }, tr('问一件想知道的事，直接给答案')),
+        h('div', { className: 'nw-look-examples' },
+          EXAMPLES.map((text) =>
+            h(
+              'button',
+              {
+                key: text,
+                type: 'button',
+                className: 'nw-look-example',
+                onClick: () => {
+                  setQuery(text);
+                  run(text);
+                },
+              },
+              text,
+            ),
+          ),
+        ),
+        h('div', { className: 'nw-look-note' }, tr('只查资料，不会改动稿子，也不会记住你问过什么。')),
+      );
+    }
+
+    return h(
+      'div',
+      { className: 'nw-look', onMouseDown: (ev) => { if (ev.target === ev.currentTarget) onClose(); } },
+      h(
+        'div',
+        { className: 'nw-look-card', role: 'dialog', 'aria-label': tr('查阅'), 'aria-modal': 'false' },
+        h(
+          'form',
+          {
+            className: 'nw-look-form',
+            onSubmit: (ev) => {
+              ev.preventDefault();
+              run();
+            },
+          },
+          h('span', { className: 'nw-look-ico', 'aria-hidden': 'true' }, NW.icon ? NW.icon('search', { size: 16 }) : null),
+          h('input', {
+            ref: inputRef,
+            className: 'nw-look-input',
+            value: query,
+            placeholder: tr('问一件想知道的事'),
+            'aria-label': tr('查阅'),
+            autoComplete: 'off',
+            spellCheck: false,
+            onChange: (ev) => setQuery(ev.target.value),
+            onKeyDown: onKeyDown,
+          }),
+          query
+            ? h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'nw-look-clear',
+                  'aria-label': tr('清除'),
+                  onClick: () => {
+                    seqRef.current += 1;
+                    setQuery('');
+                    setBusy(false);
+                    reset();
+                    if (inputRef.current) inputRef.current.focus();
+                  },
+                },
+                NW.icon ? NW.icon('x', { size: 13 }) : null,
+              )
+            : h('kbd', { className: 'nw-look-esc' }, 'Esc'),
+        ),
+        h('div', { className: 'nw-look-body' }, body),
+        h(
+          'div',
+          { className: 'nw-look-foot' },
+          h(
+            'span',
+            { className: 'nw-look-src' },
+            busy
+              ? tr('必应 · 模型 · 只读')
+              : answerParts.length
+                ? (sources.length
+                    ? tr('模型整理 · {0} 条来源', sources.length)
+                    : tr('模型整理 · 无外部来源'))
+                : tr('只读，不改稿'),
+          ),
+          h(
+            'div',
+            { className: 'nw-look-links' },
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-look-link',
+                disabled: !shownQuery,
+                onClick: () => openInBrowser(externalUrl('bing', shownQuery)),
+              },
+              tr('在必应打开'),
+            ),
+            h('span', { className: 'nw-look-sep', 'aria-hidden': 'true' }, '·'),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-look-link',
+                disabled: !shownQuery,
+                onClick: () => openInBrowser(externalUrl('baidu', shownQuery)),
+              },
+              tr('在百度打开'),
+            ),
+          ),
+        ),
+      ),
+    );
+  };
+
+  NW.CSS_PARTS.push(`
+/* ================================================================ 查阅 ====
+   A sheet laid on the desk, not a dialog wheeled in: same paper vocabulary as
+   the dock (hairline edge, one soft lift), one accent at a time. The layer is
+   transparent on purpose — the manuscript stays visible and the writer can see
+   where they will return to. */
+.nw-look{position:absolute;inset:0;z-index:var(--nw-z-panel,20);}
+.nw-look-card{
+  position:absolute;left:50%;top:11vh;transform:translateX(-50%);
+  width:min(560px,calc(100% - 56px));max-height:min(68vh,620px);
+  display:flex;flex-direction:column;overflow:hidden;
+  background:var(--nw-panel);color:var(--nw-fg);
+  border:1px solid var(--nw-line-soft);border-radius:14px;
+  box-shadow:var(--nw-shadow-3);
+  font-family:var(--nw-ui-font);
+  animation:nw-look-in 140ms ease-out;
+}
+@keyframes nw-look-in{
+  from{opacity:0;transform:translate(-50%,-6px);}
+  to{opacity:1;transform:translate(-50%,0);}
+}
+.nw-look-form{
+  display:flex;align-items:center;gap:10px;
+  padding:14px 16px;border-bottom:1px solid var(--nw-line-soft);
+}
+.nw-look-ico{display:inline-flex;color:var(--nw-fg-soft);}
+.nw-look-input{
+  flex:1 1 auto;min-width:0;padding:3px 0;border:0;outline:none;background:transparent;
+  color:var(--nw-fg);font:inherit;font-size:15.5px;line-height:1.6;
+}
+.nw-look-input::placeholder{color:color-mix(in srgb, var(--nw-fg) 36%, transparent);}
+.nw-look-esc{
+  flex:0 0 auto;padding:2px 6px;border:1px solid var(--nw-line-soft);border-radius:5px;
+  color:var(--nw-fg-soft);font:11px/1.4 var(--nw-ui-font);letter-spacing:.02em;
+}
+.nw-look-clear{
+  flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+  width:24px;height:24px;padding:0;border:0;border-radius:50%;
+  background:transparent;color:var(--nw-fg-soft);cursor:pointer;
+}
+.nw-look-clear:hover{color:var(--nw-fg);background:color-mix(in srgb, var(--nw-fg) 5%, transparent);}
+.nw-look-body{overflow:auto;min-height:132px;padding:4px 0;}
+.nw-look-answerbox{padding:16px 18px 14px;}
+.nw-look-answer{
+  font-family:var(--nw-reading-font);
+  font-size:14.5px;line-height:1.88;letter-spacing:.01em;
+  color:color-mix(in srgb, var(--nw-fg) 94%, transparent);
+}
+.nw-look-answer p{margin:0 0 10px;white-space:pre-wrap;}
+.nw-look-answer p:last-child{margin-bottom:0;}
+.nw-look-note2{
+  margin:0 0 10px;padding-left:9px;border-left:2px solid var(--nw-line-soft);
+  font-size:11.5px;line-height:1.7;color:var(--nw-fg-soft);
+}
+.nw-look-srcs{
+  margin-top:16px;padding-top:11px;border-top:1px solid var(--nw-line-soft);
+}
+.nw-look-srcshead{
+  font-size:10.5px;letter-spacing:.14em;color:var(--nw-fg-soft);
+  margin-bottom:6px;
+}
+.nw-look-srcrow{
+  display:flex;align-items:baseline;gap:8px;
+  padding:4px 0;text-decoration:none;color:inherit;
+}
+.nw-look-srctitle{
+  flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:12px;color:color-mix(in srgb, var(--nw-fg) 78%, transparent);
+}
+.nw-look-srcrow:hover .nw-look-srctitle{color:var(--nw-brand);}
+.nw-look-srchost{flex:0 0 auto;font-size:10.5px;color:var(--nw-fg-soft);}
+.nw-look-disclaimer{
+  margin-top:12px;font-size:10.5px;line-height:1.6;
+  color:var(--nw-fg-soft);opacity:.85;
+}
+.nw-look-empty{padding:26px 18px 22px;}
+.nw-look-emptyhead{font-size:13px;color:var(--nw-fg-soft);}
+.nw-look-examples{display:flex;flex-direction:column;align-items:flex-start;gap:2px;margin-top:10px;}
+.nw-look-example{
+  border:0;background:transparent;padding:5px 0;color:var(--nw-fg);
+  font:13px/1.6 var(--nw-ui-font);text-align:left;cursor:pointer;opacity:.82;
+}
+.nw-look-example:hover{opacity:1;color:var(--nw-brand);}
+.nw-look-note{margin-top:12px;font-size:11px;color:var(--nw-fg-soft);opacity:.8;}
+.nw-look-error{padding:26px 18px;font-size:13px;line-height:1.7;color:var(--nw-fg-soft);}
+.nw-look-errorbtn{
+  margin-top:10px;padding:5px 2px;border:0;border-bottom:1px solid var(--nw-line-soft);
+  background:transparent;color:var(--nw-fg);font:12.5px/1.5 var(--nw-ui-font);cursor:pointer;
+}
+.nw-look-errorbtn:hover{color:var(--nw-brand);border-bottom-color:currentColor;}
+.nw-look-wait{padding:22px 18px 8px;}
+.nw-look-waitrow{margin-bottom:12px;opacity:.5;animation:nw-look-pulse 900ms ease-in-out infinite alternate;}
+.nw-look-waitline{display:block;height:8px;border-radius:4px;background:color-mix(in srgb, var(--nw-fg) 9%, transparent);}
+.nw-look-waitline-title{width:58%;margin-bottom:6px;height:10px;}
+.nw-look-waitline:not(.nw-look-waitline-title){width:86%;}
+.nw-look-waittext{padding-bottom:14px;font-size:11.5px;color:var(--nw-fg-soft);}
+@keyframes nw-look-pulse{from{opacity:.34;}to{opacity:.62;}}
+.nw-look-foot{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:7px 14px;border-top:1px solid var(--nw-line-soft);
+  font-size:11px;line-height:1.6;color:var(--nw-fg-soft);
+}
+.nw-look-links{display:flex;align-items:center;gap:6px;}
+.nw-look-link{
+  border:0;background:transparent;padding:2px 1px;margin:0;
+  color:var(--nw-fg-soft);font:inherit;cursor:pointer;
+}
+.nw-look-link:hover:not(:disabled){color:var(--nw-brand);}
+.nw-look-link:disabled{opacity:.4;cursor:default;}
+.nw-look-sep{opacity:.5;}
+.nw-look-card :focus-visible{outline:2px solid var(--nw-brand);outline-offset:-2px;}
+`);
+})();
+
 /* ==== 60-editor.js ==== */
 ;(() => {
   'use strict';
@@ -10460,6 +10825,10 @@ window.__ModuleLoader__.load({
   // phone instead) gets taken to the change instead of being left behind.
   const PEER_FOLLOW_IDLE_MS = 3000;
   const MEASURE_MS = 60; // caret measurement / autosize throttle
+  // R135: how long after the last keystroke the lamp drops to 40%, and how long
+  // the dog-ear stays folded when a chapter is reopened on a saved caret.
+  const LAMP_IDLE_MS = 2000;
+  const FOLD_LINGER_MS = 6000;
 // R99: pushing the selection to the App re-renders the whole tree (status bar,
 // shelf). Typing used to do that on every keystroke; 120ms is invisible to the
 // writer but cuts the renders by an order of magnitude.
@@ -10766,8 +11135,8 @@ const SEL_EMIT_MS = 120;
   background-image:var(--nw-texture,none);
   font-family:var(--nw-ui-font,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",system-ui,sans-serif);
   font-size:16px;line-height:1.6;
-  transition:background-color var(--nw-dur) var(--nw-ease, cubic-bezier(.2,.7,.2,1)),
-             color var(--nw-dur) var(--nw-ease, cubic-bezier(.2,.7,.2,1));
+  transition:background-color var(--nw-dur-theme,var(--nw-dur)) var(--nw-ease, cubic-bezier(.2,.7,.2,1)),
+             color var(--nw-dur-theme,var(--nw-dur)) var(--nw-ease, cubic-bezier(.2,.7,.2,1));
   /* Reading measure. --nw-pad-x is the fixed gutter of the writing column;
      --nw-gutter-x is the extra lane kept free for the floating dock pinned to
      the bottom-right of the pane (CONTRACT-R3 section 7: the text's right edge
@@ -10807,6 +11176,8 @@ const SEL_EMIT_MS = 120;
   --nw-bg:#faf4e9;--nw-fg:#1b1813;--nw-soft:#6d6558;--nw-rule:#e6dccb;
   --nw-caret-color:#1b1813;--nw-caret:#1b1813;--nw-sel:rgba(27,24,19,.14);
   --nw-accent:#c4532f;
+  /* R135: the pool of lamp light on the line being written. Warm on paper. */
+  --nw-lamp-ink:rgba(232,171,56,.16);
   --nw-scroll-thumb:rgba(27,24,19,.18);--nw-scroll-thumb-hover:rgba(27,24,19,.32);
   --nw-panel:#fdf8ef;--nw-panel-border:#e6dccb;--nw-panel-shadow:0 8px 24px rgba(64,44,24,.09);
   --nw-btn-bg:#f3ecdf;--nw-btn-fg:#1b1813;--nw-btn-border:#e6dccb;--nw-btn-hover:#eae1d1;
@@ -10824,6 +11195,8 @@ const SEL_EMIT_MS = 120;
   --nw-bg:#cce8cf;--nw-fg:#1f2a20;--nw-soft:#55684f;--nw-rule:#b6d6ba;
   --nw-caret-color:#1f2a20;--nw-caret:#1f2a20;--nw-sel:rgba(31,42,32,.18);
   --nw-accent:#2f6b3c;
+  /* R135: green stock under a warm bulb — the pool stays creamy, not greenish. */
+  --nw-lamp-ink:rgba(255,246,214,.22);
   --nw-scroll-thumb:rgba(31,42,32,.22);--nw-scroll-thumb-hover:rgba(31,42,32,.36);
   --nw-panel:#ddf1de;--nw-panel-border:#b6d6ba;--nw-panel-shadow:0 8px 24px rgba(31,42,32,.14);
   --nw-btn-bg:#c1e0c5;--nw-btn-fg:#1f2a20;--nw-btn-border:#a9cbaa;--nw-btn-hover:#b3d8b8;
@@ -10840,6 +11213,9 @@ const SEL_EMIT_MS = 120;
   --nw-bg:#151517;--nw-fg:#f9fafb;--nw-soft:#adb2b8;--nw-rule:#2c2c2e;
   --nw-caret-color:#f9fafb;--nw-caret:#f9fafb;--nw-sel:rgba(249,250,251,.16);
   --nw-accent:#e0a46a;
+  /* R135: the night sheet is lit by the moon, not a lamp: cool, and half the
+     strength of daylight — a bright pool on a dark page would glare. */
+  --nw-lamp-ink:rgba(150,178,214,.10);
   --nw-scroll-thumb:rgba(249,250,251,.18);--nw-scroll-thumb-hover:rgba(249,250,251,.32);
   --nw-panel:#232324;--nw-panel-border:#ffffff1f;--nw-panel-shadow:0 8px 24px rgba(0,0,0,.5);
   --nw-btn-bg:#2c2c2e;--nw-btn-fg:#f9fafb;--nw-btn-border:#ffffff1f;--nw-btn-hover:#353638;
@@ -10854,6 +11230,8 @@ const SEL_EMIT_MS = 120;
   --nw-bg:#ecdfbe;--nw-fg:#1a1913;--nw-soft:#5a5546;--nw-rule:#d3c8a9;
   --nw-caret-color:#1a1913;--nw-caret:#1a1913;--nw-sel:rgba(26,25,19,.16);
   --nw-accent:#8c2b22;
+  /* R135: newsprint already carries a warm cast; the pool only deepens it. */
+  --nw-lamp-ink:rgba(255,238,190,.20);
   --nw-scroll-thumb:rgba(26,25,19,.20);--nw-scroll-thumb-hover:rgba(26,25,19,.36);
   --nw-panel:#f4ecd6;--nw-panel-border:#d9cfae;--nw-panel-shadow:0 8px 22px rgba(80,64,32,.14);
   --nw-btn-bg:#e4d7b4;--nw-btn-fg:#2a271e;--nw-btn-border:#d3c8a9;--nw-btn-hover:#dbcca6;
@@ -10879,6 +11257,9 @@ const SEL_EMIT_MS = 120;
   --nw-bg:#ffffff;--nw-fg:#14171a;--nw-soft:#6a7078;--nw-rule:#e6e8eb;
   --nw-caret-color:#14171a;--nw-caret:#14171a;--nw-sel:rgba(20,23,26,.14);
   --nw-accent:#d0021b;
+  /* R135: a plate-white magazine is the one theme where a warm pool is a
+     studio light rather than a desk lamp — soft and nearly neutral. */
+  --nw-lamp-ink:rgba(255,241,214,.14);
   --nw-scroll-thumb:rgba(20,23,26,.16);--nw-scroll-thumb-hover:rgba(20,23,26,.30);
   --nw-panel:#ffffff;--nw-panel-border:#e6e8eb;--nw-panel-shadow:0 10px 30px rgba(20,23,26,.08);
   --nw-btn-bg:#fafafa;--nw-btn-fg:#14171a;--nw-btn-border:#e6e8eb;--nw-btn-hover:#f1f2f3;
@@ -10927,7 +11308,9 @@ const SEL_EMIT_MS = 120;
 .nw-page{
   width:min(var(--nw-width,760px),100%);margin:0 auto;padding:var(--nw-pad-y) 0;
   border-radius:var(--nw-r-card);
-  transition:box-shadow var(--nw-dur) var(--nw-ease,ease);
+  transition:box-shadow var(--nw-dur-theme,var(--nw-dur)) var(--nw-ease,ease),
+             background-color var(--nw-dur-theme,var(--nw-dur)) var(--nw-ease,ease),
+             border-color var(--nw-dur-theme,var(--nw-dur)) var(--nw-ease,ease);
 }
 @container nw (min-width: 780px){
   .nw-page{
@@ -11064,6 +11447,49 @@ const SEL_EMIT_MS = 120;
 @keyframes nw-caret-blink-b{0%,49.99%{opacity:1;}50%,100%{opacity:0;}}
 @media (prefers-reduced-motion: reduce){
   .nw-cursor{animation:none;}
+}
+
+/* R135: 光标行的那一点灯光。写作时这一行像被台灯照到，停笔两秒退回四成
+   亮度。它画在墨迹之下（base）、纸之上，所以纸看起来是被照亮的，而不是
+   被高亮选中的。位置完全由 paintLamp() 从同一份光标测量里写入（top /
+   height / --nw-lamp-x），不自己量几何；这里只负责形状与明暗的过渡。 */
+.nw-lamp{
+  position:absolute;left:0;top:0;width:100%;height:0;
+  pointer-events:none;user-select:none;z-index:var(--nw-z-base);
+  background:radial-gradient(340px 100% at var(--nw-lamp-x,40%) 50%,
+    var(--nw-lamp-ink,rgba(232,171,56,.16)) 0%, transparent 72%);
+  opacity:0;transition:opacity var(--nw-dur-long) var(--nw-ease,ease);
+}
+.nw-lamp[data-on="1"]{opacity:1;}
+.nw-lamp[data-on="1"][data-dim="1"]{opacity:.4;}
+
+/* R135: 停笔处的折角。重开一章落回上次停笔那一行时，纸的右缘折起一个小
+   角；敲第一个字、或过六秒，它就展平。折角是纸背面（比纸面深一点点）加
+   一道折痕，不抢正文。 */
+.nw-fold{
+  position:absolute;right:0;top:0;width:12px;height:12px;
+  pointer-events:none;user-select:none;z-index:var(--nw-z-float);
+  opacity:0;transform-origin:100% 0;transform:scale(.72) translateY(-1px);
+  transition:opacity var(--nw-dur-long) var(--nw-ease,ease),
+             transform var(--nw-dur-long) var(--nw-ease,ease);
+}
+.nw-fold[data-on="1"]{opacity:1;transform:none;}
+.nw-fold::before{
+  content:'';position:absolute;inset:0;
+  clip-path:polygon(0 0,0 100%,100% 100%);
+  background:linear-gradient(135deg,
+    color-mix(in srgb,var(--nw-fg) 11%, var(--nw-panel,#fdf8ef)) 0 56%,
+    color-mix(in srgb,var(--nw-fg) 3%, var(--nw-panel,#fdf8ef)) 56% 100%);
+}
+.nw-fold::after{
+  content:'';position:absolute;left:0;top:0;width:17px;height:1px;
+  background:var(--nw-line-soft,rgba(27,24,19,.14));
+  transform-origin:0 0;transform:rotate(45deg);
+}
+/* Without a drawn paper edge (the card only appears at >=780px) a dog-ear has
+    nothing to fold against — it would just be a smudge in the margin. */
+@container nw (max-width:779px){
+  .nw-fold{display:none;}
 }
 
 /* highlight mirror: sits behind the transparent textarea, draws marks only */
@@ -11215,49 +11641,12 @@ const SEL_EMIT_MS = 120;
 }
 .nw-mark-view-btn:hover{background:var(--nw-btn-hover);}
 .nw-mark-view-btn[data-danger="1"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 45%, var(--nw-line-strong));}
-/* R53c：写作区不再有「标记」按钮。左上角那颗铅笔被用户点名去掉了——它常驻在
-   纸面上方，占着一格视觉重量，而标注是低频动作。现在入口改成**右键**：选中一段
-   字，按右键才弹出这张小菜单（浏览器原生菜单被拦下），没选中就还是原生菜单，
-   复制粘贴照旧。看不见的入口，也就不会碍眼。 */
-.nw-mark-menu{
-  position:absolute;z-index:var(--nw-z-float);
-  display:flex;flex-direction:column;gap:1px;
-  width:146px;padding:3px;
-  border-radius:var(--nw-r-control);
-  border:1px solid var(--nw-line-strong);
-  background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
-  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);
-  animation:nw-fade-in .1s var(--nw-ease, ease) both;
-}
-/* 菜单顶上那行小字：有选区就显示要标的那几个字，没选区就说清楚为什么按不动。 */
-.nw-mark-menu-quote{
-  max-width:100%;padding:0 4px 3px;
-  color:var(--nw-soft);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-}
-.nw-mark-menu-btn{
-  display:flex;align-items:center;gap:7px;
-  height:26px;padding:0 7px;border:0;border-radius:var(--nw-r-hair);
-  background:transparent;color:var(--nw-fg);cursor:pointer;
-  font-family:inherit;font-size:var(--nw-fs-tiny);text-align:left;white-space:nowrap;
-}
-.nw-mark-menu-btn:hover{background:var(--nw-btn-hover);}
-.nw-mark-menu-btn:disabled{opacity:.42;cursor:default;background:transparent;}
-/* 菜单里的样本：一段 20px 宽的假字，用真实的那种线画出来，选之前就能看见结果。 */
-.nw-mark-menu-swatch{
-  flex:0 0 auto;width:20px;height:14px;
-  border-radius:2px;
-  background:color-mix(in srgb, var(--nw-fg) 12%, transparent);
-}
-.nw-mark-menu-swatch[data-kind="underline"]{
-  box-shadow:inset 0 -2px 0 var(--nw-mark-underline, var(--nw-brand));
-}
-.nw-mark-menu-swatch[data-kind="strike"]{
-  background-image:linear-gradient(to bottom, transparent calc(50% - 1px), var(--nw-mark-strike, var(--nw-danger)) calc(50% - 1px), var(--nw-mark-strike, var(--nw-danger)) calc(50% + 1px), transparent calc(50% + 1px));
-}
-.nw-mark-menu-swatch[data-kind="comment"]{
-  background:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 28%, transparent);
-  box-shadow:none;
+/* R134：这张卡上「接受」是主按钮——它是裁决里唯一样子会改正文的那一下。 */
+.nw-mark-view-btn[data-primary="1"]{
+  border-color:color-mix(in srgb, var(--nw-brand) 45%, var(--nw-line-strong));
+  background:color-mix(in srgb, var(--nw-brand) 8%, var(--nw-btn-bg));
+  color:var(--nw-brand);
+  font-weight:600;
 }
 
 /* R73：选中文字后浮出的小方钮。一个按钮、一句话，落在指针松开处的右下角。
@@ -11282,44 +11671,6 @@ const SEL_EMIT_MS = 120;
 }
 .nw-selbtn:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
 .nw-selbtn .nw-selbtn-txt{line-height:1;}
-
-/* R77：段落导航。盖在纸面左上角，不往正文里插任何东西，所以滚动、排版都不受影响。 */
-.nw-paranav{
-  position:absolute;left:14px;top:52px;width:272px;max-height:62%;
-  display:flex;flex-direction:column;z-index:var(--nw-z-float);
-  border:1px solid var(--nw-line-strong);border-radius:12px;
-  background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
-  overflow:hidden;animation:nw-fade-in .12s var(--nw-ease,ease) both;
-}
-.nw-paranav-head{
-  display:flex;align-items:center;gap:6px;flex:0 0 auto;
-  padding:8px 10px;border-bottom:1px solid var(--nw-line);
-  font-size:12px;color:var(--nw-fg-soft);
-}
-.nw-paranav-title{font-weight:600;color:var(--nw-fg);}
-.nw-paranav-count{font-size:10px;opacity:.7;font-variant-numeric:tabular-nums;}
-.nw-paranav-x{
-  display:inline-flex;padding:2px;border:0;border-radius:6px;
-  background:transparent;color:var(--nw-fg-soft);cursor:pointer;
-}
-.nw-paranav-x:hover{background:var(--nw-btn-hover,color-mix(in srgb,var(--nw-fg) 6%,transparent));color:var(--nw-fg);}
-.nw-paranav-list{flex:1 1 auto;min-height:0;overflow:auto;padding:4px;}
-.nw-paranav-row{
-  display:flex;gap:7px;width:100%;padding:5px 7px;
-  border:0;border-radius:7px;background:transparent;color:var(--nw-fg);
-  cursor:pointer;text-align:left;font-family:inherit;font-size:12px;
-}
-.nw-paranav-row:hover{background:var(--nw-btn-hover,color-mix(in srgb,var(--nw-fg) 6%,transparent));}
-.nw-paranav-n{
-  flex:0 0 auto;width:18px;text-align:right;padding-top:2px;
-  font-size:10px;opacity:.55;font-variant-numeric:tabular-nums;
-}
-.nw-paranav-t{
-  flex:1 1 auto;min-width:0;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  font-family:var(--nw-reading-font,inherit);
-}
-.nw-paranav-empty{padding:14px 10px;font-size:12px;color:var(--nw-fg-soft);text-align:center;}
 
 /* caret measuring mirror: same box, never painted */
 .nw-caret{
@@ -11499,6 +11850,8 @@ const SEL_EMIT_MS = 120;
     // R16 ③: the lock button lives next to the home button so the writing surface
     // keeps its own controls even when DSH chrome is hidden (immersive).
     const onLock = typeof p.onLock === 'function' ? p.onLock : null;
+    // R133: 查阅 — the one action in the capsule that does not change the page.
+    const onLookup = typeof p.onLookup === 'function' ? p.onLookup : null;
     // R22: keyboard shortcuts for the two most common structural actions. The
     // editor owns the keystrokes because it has focus; the app owns the actions.
     const onNewChapter = typeof p.onNewChapter === 'function' ? p.onNewChapter : null;
@@ -11588,6 +11941,18 @@ const SEL_EMIT_MS = 120;
     const caretRef = React.useRef(null);
     // The painted thick caret (positioned by paintCaret from measureCaret).
     const cursorRef = React.useRef(null);
+    // R135: the lamp that follows the caret's line, and the dog-ear that marks
+    // where the pen was left when a chapter is reopened. Both are painted from
+    // the same measurement plan as the caret, so neither measures on its own.
+    const lampRef = React.useRef(null);
+    const foldRef = React.useRef(null);
+    const lampDimRef = React.useRef(0);
+    // R135: true while the dog-ear should stay folded. Set when a chapter is
+    // reopened on a saved caret, cleared by the first keystroke or by the
+    // six-second timer, whichever comes first.
+    const foldPendingRef = React.useRef(false);
+    const foldTimerRef = React.useRef(0);
+    const lampTimerRef = React.useRef(0);
     // R46: the two veils that fade everything but the line being written.
     const veilTopRef = React.useRef(null);
     const veilBotRef = React.useRef(null);
@@ -11709,46 +12074,17 @@ const SEL_EMIT_MS = 120;
     const [markView, setMarkView] = React.useState(null);
     const markViewRef = React.useRef(null);
     markViewRef.current = markView;
-    // R53：写作区不再有「选字弹条」。标注动作收进左上角的动作胶囊：一个铅笔
-    // 按钮开一张小菜单（下划线 / 删除线 / 批注）。菜单只认**按下那一刻**的选区，
-    // 所以它开着的这段时间里正文选区可以随便变，不会标错地方。
-    // R53c：那个按钮撤了，入口改成右键。
-    const [markMenu, setMarkMenu] = React.useState(null);
-    const markMenuRef = React.useRef(null);
-    markMenuRef.current = markMenu;
+    // R134：写作区不再新建标注。下划线/删除线/批注都在「读一遍」里做，这里只
+    // 认已经存在的标注：点它开一张卡，卡片上只有「接受」和「拒绝」。
     // R73：「选中文字 → 修改建议」的那颗小钮。R53 之所以把选字弹条撤掉，是因为
     // 一条三按钮的横条压在正在选的字上面；这一颗只有一个按钮，落在指针松开处的
     // 右下角，选中一消失它就自己走，所以不需要任何关闭动作。
     const [selBtn, setSelBtn] = React.useState(null);
     const selBtnRef = React.useRef(null);
     selBtnRef.current = selBtn;
-    // R77: 本章段落导航。长章里「跳到第五段」比滚轮可靠得多；列表只在打开时
-    // 扫一遍正文，不跟着每次按键重算。
-    const [paraNav, setParaNav] = React.useState(null);
     /** 页边批注签的容器（.nw-mark-gutter），由 paintGutter() 直接填 DOM。 */
     const gutterRef = React.useRef(null);
 
-    // R53c：菜单现在从右键弹出（没有常驻按钮了）。按下菜单以外的任何地方、
-    // 或按 Escape 都会收起。捕获阶段监听，这样在纸面上按下开始选字时也能先
-    // 把菜单清掉。
-    React.useEffect(() => {
-      if (!markMenu) return undefined;
-      const onDown = (ev) => {
-        const t = ev.target;
-        if (t && typeof t.closest === 'function' && t.closest('.nw-mark-menu')) return;
-        closeMarkMenu();
-      };
-      const onKey = (ev) => {
-        if (ev.key !== 'Escape') return;
-        closeMarkMenu();
-      };
-      document.addEventListener('mousedown', onDown, true);
-      window.addEventListener('keydown', onKey, true);
-      return () => {
-        document.removeEventListener('mousedown', onDown, true);
-        window.removeEventListener('keydown', onKey, true);
-      };
-    }, [markMenu]);
     /** Right-hand blank currently reserved for the floating dock, in px. */
     const dockLaneRef = React.useRef(-1);
 
@@ -13017,6 +13353,138 @@ const SEL_EMIT_MS = 120;
     }
 
     /**
+     * R135: writes the lamp pool. Same contract as paintCaret — style writes
+     * only, no geometry reads, deduped through expando fields so a plain render
+     * never touches the DOM.
+     *
+     * The pool is a band exactly one line tall, centred on the caret's own
+     * column, in the theme's lamp colour (warm for the day themes, a dimmer
+     * cool moonlight for night). Typing keeps it at full strength; two seconds
+     * of stillness drops it to 40% so a paused page is not a lit stage.
+     */
+    function paintLamp(plan) {
+      const el = lampRef.current;
+      if (!el) return;
+      const on = !!(plan && plan.visible);
+      if (on) {
+        // The pool is taller than the line so the falloff spreads above and
+        // below it instead of clipping to a hard one-line band: the line sits
+        // in the upper third of the box, which puts the brightest part on the
+        // text and the fade into the blank paper around it.
+        const lineH = Math.max(8, Math.round(plan.height));
+        const boxH = Math.round(lineH * 2.6);
+        const top = Math.round(plan.top) - Math.round(lineH * 0.8) + 'px';
+        const hh = boxH + 'px';
+        const xx = Math.round(plan.left) + 'px';
+        if (el.__nwLy !== top) {
+          el.style.top = top;
+          el.__nwLy = top;
+        }
+        if (el.__nwLh !== hh) {
+          el.style.height = hh;
+          el.__nwLh = hh;
+        }
+        if (el.__nwLx !== xx) {
+          el.style.setProperty('--nw-lamp-x', xx);
+          el.__nwLx = xx;
+        }
+      }
+      const want = on ? '1' : '0';
+      if (el.getAttribute('data-on') !== want) el.setAttribute('data-on', want);
+      if (on) {
+        const dim = lampDimRef.current ? '1' : '0';
+        if (el.getAttribute('data-dim') !== dim) el.setAttribute('data-dim', dim);
+      }
+    }
+
+    /**
+     * R135: typing wakes the lamp back to full and restarts its two-second
+     * rest timer. Only two style writes at most per keystroke, and none while
+     * the lamp is already at full strength.
+     */
+    function lampTyping() {
+      if (lampDimRef.current !== 0) {
+        lampDimRef.current = 0;
+        const el = lampRef.current;
+        if (el) el.setAttribute('data-dim', '0');
+      }
+      if (lampTimerRef.current) clearTimeout(lampTimerRef.current);
+      lampTimerRef.current = setTimeout(() => {
+        lampTimerRef.current = 0;
+        lampDimRef.current = 1;
+        const el = lampRef.current;
+        if (el) el.setAttribute('data-dim', '1');
+      }, LAMP_IDLE_MS);
+    }
+
+    /** R135: folds the dog-ear down for this chapter opening. */
+    function foldLand() {
+      foldPendingRef.current = true;
+      if (foldTimerRef.current) clearTimeout(foldTimerRef.current);
+      foldTimerRef.current = setTimeout(() => {
+        foldTimerRef.current = 0;
+        foldPendingRef.current = false;
+        const el = foldRef.current;
+        if (el) el.setAttribute('data-on', '0');
+      }, FOLD_LINGER_MS);
+    }
+
+    /** R135: first keystroke (or a click elsewhere) unfolds it at once. */
+    function foldClear() {
+      if (foldTimerRef.current) {
+        clearTimeout(foldTimerRef.current);
+        foldTimerRef.current = 0;
+      }
+      if (!foldPendingRef.current) return;
+      foldPendingRef.current = false;
+      const el = foldRef.current;
+      if (el) el.setAttribute('data-on', '0');
+    }
+
+    /**
+     * R135: writes the dog-ear. `plan` carries the caret line's top in
+     * content coordinates; the corner is pinned to the paper's right edge by
+     * CSS, so only its vertical place is written here (top, never transform —
+     * transform owns the fold/unfold animation).
+     */
+    function paintFold(plan) {
+      const el = foldRef.current;
+      if (!el) return;
+      const on = !!(plan && plan.visible);
+      if (on) {
+        const top = Math.round(plan.top) + 'px';
+        if (el.__nwFy !== top) {
+          el.style.top = top;
+          el.__nwFy = top;
+        }
+      }
+      const want = on ? '1' : '0';
+      if (el.getAttribute('data-on') !== want) el.setAttribute('data-on', want);
+    }
+
+    /** R135: the caret line, or null when the fold is not wanted. */
+    function planFoldPaint(getM) {
+      if (!foldPendingRef.current) return null;
+      return { visible: true, top: (getM() || {}).lineTop || 0 };
+    }
+
+    /**
+     * R135: the lamp follows the line the pen is on. Unlike the caret it stays
+     * lit while a range is selected — you are still on that line, and having
+     * the light blink out every time you select a sentence reads as a flicker.
+     * It is off while the editor is unfocused or an IME is composing.
+     */
+    function planLampPaint(getM) {
+      const ta = taRef.current;
+      if (!ta) return null;
+      if (composingRef.current || !winFocusedRef.current) return null;
+      if (ta !== (ta.ownerDocument || document).activeElement) return null;
+      const m = getM();
+      if (!m) return null;
+      return { left: m.left, top: m.lineTop, height: m.height, visible: true };
+    }
+
+    /**
      * R46/R54b: places the two veils so that the middle of the pane stays
      * unfaded and everything above and below it fades.
      *
@@ -13178,6 +13646,11 @@ const SEL_EMIT_MS = 120;
       };
       const scrollTarget = planCaretScroll(!!wantCenter, view, getM);
       const caretPlan = planCaretPaint(view, getM);
+      // R135: the lamp trails the caret line but survives a selection (the
+      // caret itself hides then); the fold only appears after a chapter lands
+      // on a saved caret.
+      const lampPlan = planLampPaint(getM);
+      const foldPlan = planFoldPaint(getM);
       const focusOrigin = focusOn ? surfaceOrigin(view) : 0;
       // R71: the band is the caret's paragraph. Measured in the read phase
       // (a Range over the caret mirror, no DOM writes) and cached, because
@@ -13199,6 +13672,8 @@ const SEL_EMIT_MS = 120;
       settleLanding(view);
       if (scrollTarget != null) setScrollTop(scrollTarget, view);
       paintCaret(caretPlan);
+      paintLamp(lampPlan);
+      paintFold(foldPlan);
       paintFocus(view, focusOrigin);
       rebuildHighlights();
       emitSelection();
@@ -13392,6 +13867,9 @@ const SEL_EMIT_MS = 120;
       valueRef.current = ta.value;
       dirtyRef.current = true;
       typedAtRef.current = nowMs();
+      // R135: a keystroke both wakes the lamp and unfolds the dog-ear.
+      lampTyping();
+      foldClear();
       // R26: tell the app the buffer is dirty *now*. The debounce is 1200ms and
       // without this the status bar keeps claiming 已保存 for the whole second
       // after a keystroke — the "dirty" branch in the app was unreachable.
@@ -13724,53 +14202,6 @@ const SEL_EMIT_MS = 120;
       for (let i = 0; i < signs.length; i += 1) signs[i].removeAttribute('data-active');
     }
 
-    /**
-     * R53c: the marking menu, opened by right-clicking a selection.
-     *
-     * The range is frozen at the moment the menu opens. The menu never appears
-     * by itself — selecting words used to pop a three-button bar right over the
-     * words being selected, which is what the writer asked to get rid of. Now
-     * it only shows up when the writer asks for it (right-click), and it opens
-     * at the pointer, next to the words instead of at the page corner.
-     */
-    function openMarkMenu(ev) {
-      const ta = taRef.current;
-      if (!ta) return;
-      const a = Number(ta.selectionStart) || 0;
-      const b = Number(ta.selectionEnd) || 0;
-      const start = Math.min(a, b);
-      const end = Math.max(a, b);
-      const text = ta.value.slice(start, end);
-      const hasRange = end > start && !!String(text).trim() && end - start <= 4000;
-      // 右键点在哪，菜单就长在哪。菜单是 .nw-surface 的直接子节点（固定在纸面
-      // 之上，不跟着纸滚），所以坐标按 surface 换算；先右后左、先下后上夹在
-      // 纸面之内。
-      const surf = surfaceRef.current;
-      const surfRect = surf ? surf.getBoundingClientRect() : null;
-      const menuW = 152;
-      const menuH = 132;
-      let x = surfRect && ev ? Number(ev.clientX) - surfRect.left + 2 : 14;
-      let y = surfRect && ev ? Number(ev.clientY) - surfRect.top + 2 : 46;
-      if (surfRect) {
-        if (x + menuW > surfRect.width - 8) x = Math.max(8, x - menuW - 4);
-        if (y + menuH > surfRect.height - 8) y = Math.max(8, y - menuH - 4);
-        x = Math.max(8, Math.min(x, Math.max(8, surfRect.width - menuW - 8)));
-      }
-      setMarkView(null);
-      setMarkMenu({
-        start: start,
-        end: end,
-        quote: String(text || '').slice(0, 240),
-        hasRange: hasRange,
-        x: Math.round(x),
-        y: Math.round(y),
-      });
-    }
-
-    function closeMarkMenu() {
-      setMarkMenu((cur) => (cur ? null : cur));
-    }
-
     // ------------------------------------------------- 选中 → 修改建议 (R73) --
     /**
      * Where the button should sit for a given character offset: just under the
@@ -13917,121 +14348,41 @@ const SEL_EMIT_MS = 120;
       }
     }
 
-    // ------------------------------------------------------ 段落导航 (R77) --
     /**
-     * One row per non-empty line. A chapter of 3000 characters is 10–30 of them,
-     * which is exactly the size a writer can scan; splitting on blank lines
-     * instead would show one row for a whole scene.
+     * R134: 裁决一条标注——接受或拒绝。
+     *
+     * 批注：接受＝用批注写的那句话替换被标注的原文（作者在「读一遍」里写下的
+     * 就是他想让这句话变成的样子）；拒绝＝原文一个字不动。
+     * 删除线：接受＝把被划掉的几个字删掉；拒绝＝原文一个字不动。
+     * 不论选哪个，这条标注都到此为止——裁决过的线不该继续挂在纸上。
+     *
+     * 改文本走 replaceRange，其它标注的位移由 commitSave 里的 save-diff 通道
+     * 自动跟上（commitSave → onMarksShift），这边不手写位移。
      */
-    function openParaNav() {
-      const ta = taRef.current;
-      if (!ta) {
-        setParaNav((cur) => (cur ? null : cur));
+    function decideMarkOf(mark, accept) {
+      if (!mark) return;
+      const kind = String(mark.kind || 'underline');
+      const id = mark.id;
+      if (kind === 'underline') {
+        removeMarkOf(id);
         return;
       }
-      const items = [];
-      const source = ta.value;
-      const re = /[^\n]+/g;
-      let match = re.exec(source);
-      while (match && items.length < 500) {
-        const raw = match[0];
-        const trimmed = raw.trim();
-        if (trimmed) {
-          items.push({ start: match.index, length: raw.length, text: trimmed.slice(0, 26) });
-        }
-        match = re.exec(source);
-      }
-      setParaNav({ items: items });
-    }
-
-    function jumpPara(item) {
-      const api = apiRef.current;
-      if (api && item) {
-        const start = Math.max(0, Number(item.start) || 0);
-        const end = start + Math.max(1, Number(item.length) || 1);
-        if (typeof api.centerRange === 'function') api.centerRange(start, end);
-        if (typeof api.setHighlights === 'function') {
-          api.setHighlights([{ start: start, end: end, id: 'para-anchor', active: true }]);
-        }
-      }
-      setParaNav(null);
       const ta = taRef.current;
       if (ta) {
-        try {
-          ta.focus();
-        } catch (err) {
-          /* the editor may be gone */
+        const len = ta.value.length;
+        const start = clampNum(numOf(mark.start, 0), 0, len);
+        const end = clampNum(numOf(mark.end, start), start, len);
+        if (accept) {
+          if (kind === 'comment') {
+            const note = String(mark.note || '').trim();
+            // 没写字就没什么可替换的：这一条按「拒绝」处理，只把标注收掉。
+            if (note) replaceRange(start, end, note);
+          } else if (kind === 'strike' && end > start) {
+            replaceRange(start, end, '');
+          }
         }
       }
-    }
-
-    /**
-     * R53: create (or retype) a mark over the range the menu was opened on.
-     *
-     * Duplicates are killed at the source: the same words never become two
-     * marks. Marking a span that is already marked just changes its type, and
-     * marking it with the type it already has only puts the card back on it.
-     * The database does the same merge, so a refresh cannot resurrect a twin.
-     */
-    function createMarkOfSelection(kind) {
-      const menu = markMenuRef.current;
-      const ta = taRef.current;
-      if (!menu || !ta) return;
-      if (!menu.hasRange) return;
-      const start = clampNum(menu.start, 0, ta.value.length);
-      const end = clampNum(menu.end, start, ta.value.length);
-      if (end <= start) return;
-      const text = ta.value.slice(start, end);
-      const rows = marksRef.current || [];
-      const existing = rows.find((r) => r && sameSpan(r, { start: start, end: end }));
-      closeMarkMenu();
-      if (existing) {
-        const existingNote = String(existing.note || '').trim();
-        // R53e：写着字的线就是批注，不能靠再点一次「下划线」把它降回一条线——
-        // 那样要么丢掉作者写的话，要么存进去又被 db 判回 comment，界面上闪一下
-        // 等于没反应。有字就只把卡片开出来，线本身不动。
-        if (existingNote && String(kind) !== 'comment') {
-          openMarkView(existing, null);
-          return;
-        }
-        if (String(existing.kind) === String(kind)) {
-          // Nothing to draw: the line is already on the paper. Just show it.
-          openMarkView(existing, null);
-          return;
-        }
-        marksRef.current = rows.map((r) => (r && sameSpan(r, { start: start, end: end })
-          ? Object.assign({}, r, { kind: kind })
-          : r));
-        rebuildHighlights();
-        if (typeof p.onMarkCreate === 'function') {
-          const retyped = p.onMarkCreate(Object.assign({}, existing, { kind: kind }));
-          if (retyped && typeof retyped.catch === 'function') retyped.catch(() => {});
-        }
-        const row = (marksRef.current || []).find((r) => r && sameSpan(r, { start: start, end: end }));
-        if (row) openMarkView(row, null);
-        return;
-      }
-      const id = 'mk-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36);
-      const draft = {
-        id: id,
-        // Without this the row is thrown away by db.cleanMark (which requires a
-        // chapter) — every mark drawn in the writing surface used to vanish.
-        chapterId: chapterIdRef.current || (chapter && chapter.id) || '',
-        kind: kind,
-        start: start,
-        end: end,
-        quote: String(text || '').slice(0, 240),
-        note: '',
-      };
-      // Paint it at once: the app round-trips through IndexedDB before the list
-      // comes back, and a line that appears a beat late reads as "it didn't work".
-      marksRef.current = rows.concat([draft]);
-      rebuildHighlights();
-      if (typeof p.onMarkCreate === 'function') {
-        const created = p.onMarkCreate(draft);
-        if (created && typeof created.catch === 'function') created.catch(() => {});
-      }
-      if (kind === 'comment') openMarkView(draft, null);
+      removeMarkOf(id);
     }
 
     /** Delete a mark from the card, painting the change immediately. */
@@ -14809,10 +15160,6 @@ const SEL_EMIT_MS = 120;
           const ta = taRef.current;
           if (ta) ta.focus();
         },
-        /** R117: the phone bar hides the corner capsule, so 段落 needs a door. */
-        openParaNav() {
-          openParaNav();
-        },
         /**
          * R103: put the caret where the writer stopped and make sure it is on
          * screen. "继续写" switches the view while the pane is still laying out,
@@ -14958,6 +15305,11 @@ const SEL_EMIT_MS = 120;
       // Switching chapters is not typing here: the first peer edit in the new
       // chapter should still be able to show itself.
       typedAtRef.current = -1e9;
+      // R135: the lamp and the dog-ear belong to the outgoing chapter — drop
+      // them here so the incoming one never flashes the previous line's light.
+      // foldLand() below re-arms the fold if this chapter has a saved caret.
+      lampDimRef.current = 0;
+      foldClear();
       // R46: the cached caret line belonged to the old chapter's text.
       focusTopRef.current = -1;
       // R71: so did the cached paragraph band.
@@ -15028,6 +15380,10 @@ const SEL_EMIT_MS = 120;
           // retries below just give layout a few chances to become real.
           landPendingRef.current = caretAt;
           landDeadlineRef.current = Date.now() + 4000;
+          // R135: a chapter reopened exactly where the pen stopped gets a
+          // folded corner on that line. A fresh chapter (no saved caret) does
+          // not — there is nothing to point back at.
+          foldLand();
           const land = () => {
             const ta2 = taRef.current;
             if (!ta2 || chapterIdRef.current !== nextId) return;
@@ -15383,6 +15739,15 @@ const SEL_EMIT_MS = 120;
           window.clearTimeout(noticeTimerRef.current);
           noticeTimerRef.current = 0;
         }
+        // R135: the lamp's rest timer and the dog-ear's linger timer are ours.
+        if (lampTimerRef.current) {
+          window.clearTimeout(lampTimerRef.current);
+          lampTimerRef.current = 0;
+        }
+        if (foldTimerRef.current) {
+          window.clearTimeout(foldTimerRef.current);
+          foldTimerRef.current = 0;
+        }
         flushNow(); // last chance: never lose a debounce window
       };
     }, []);
@@ -15415,81 +15780,23 @@ const SEL_EMIT_MS = 120;
     const matchPos = matchTotal ? Math.min(find.index + 1, matchTotal) : 0;
     const countText = find.notice || (find.query ? matchPos + '/' + matchTotal : '');
 
-    // R53c：标记菜单——从**右键**弹出（角上那颗铅笔已按用户要求撤掉），永远不会
-    // 因为「选中了字」自己冒出来。三行，每行带一小段样本，选之前就能看见画出来
-    // 是什么样。`onMouseDown` preventDefault 是为了保住冻结的选区——菜单被点时
-    // textarea 若失焦，selectionStart/End 就没了。
-    const markMenuBar = markMenu
-      ? h(
-          'div',
-          {
-            className: 'nw-mark-menu',
-            role: 'menu',
-            'aria-label': NW.t('标一下'),
-            // R53c：跟着右键的位置走，不再是左上角那个固定点。
-            style: { left: (markMenu.x || 0) + 'px', top: (markMenu.y || 0) + 'px' },
-            onMouseDown: (ev) => {
-              if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-            },
-          },
-          h(
-            'div',
-            { className: 'nw-mark-menu-quote' },
-            markMenu.hasRange
-              ? '「' + String(markMenu.quote || '').slice(0, 14) + '」'
-              : NW.t('先选中一段字'),
-          ),
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'nw-mark-menu-btn',
-              role: 'menuitem',
-              disabled: !markMenu.hasRange,
-              onClick: () => createMarkOfSelection('underline'),
-            },
-            h('span', { className: 'nw-mark-menu-swatch', 'data-kind': 'underline' }),
-            NW.t('下划线'),
-          ),
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'nw-mark-menu-btn',
-              role: 'menuitem',
-              disabled: !markMenu.hasRange,
-              onClick: () => createMarkOfSelection('strike'),
-            },
-            h('span', { className: 'nw-mark-menu-swatch', 'data-kind': 'strike' }),
-            NW.t('删除线'),
-          ),
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'nw-mark-menu-btn',
-              role: 'menuitem',
-              disabled: !markMenu.hasRange,
-              onClick: () => createMarkOfSelection('comment'),
-            },
-            h('span', { className: 'nw-mark-menu-swatch', 'data-kind': 'comment' }),
-            NW.t('批注'),
-          ),
-        )
-      : null;
-
+    // R134: 编辑页不再新建标注——下划线、删除线、批注都在「读一遍」里做，写作面上
+    // 右键也不再弹那张三行菜单。这里留下的唯一动作是**裁决**：点纸上已有的标注，
+    // 开一张只有「接受 / 拒绝」的卡。
     // R51: the read-only mark card. Deliberately no <textarea> in it: the
     // writing surface is where the line is, so it is where you find out what the
     // line says; writing the note happens in 读一遍, where the whole page is
-    // yours and there is room to think. 删除 is here because deleting is a
-    // reading-time decision — you see the line is wrong and it is gone.
+    // yours and there is room to think.
     //
     // R53g：这张卡上不再有引文，也没有「知道了」。引文是刚点的那句字，正文里就在
     // 眼前，抄一遍只是把同一句话说了两次；「知道了」是为了关掉一张本来不该挡路的
     // 卡而多出来的一个动作——点别处就收，卡片自己会走。批注还留着它那句话本身
-    // （那是这条批注存在的理由），下划线和删除线则只剩一个「删除」。
-    const markIsLine = markView && markView.mark
-      && String(markView.mark.kind) !== 'comment';
+    // （那是这条批注存在的理由）。
+    //
+    // R134：卡片从「删除」升级成裁决——批注与删除线给「接受 / 拒绝」，接受会真的
+    // 改正文（见 decideMarkOf）；下划线没有「该改成什么」的语义，仍只有一个删除。
+    const markKind = markView && markView.mark ? String(markView.mark.kind || 'underline') : '';
+    const markIsLine = markKind === 'strike' || markKind === 'underline';
     const markCard =
       markView && markView.mark
         ? h(
@@ -15506,30 +15813,42 @@ const SEL_EMIT_MS = 120;
                 if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
               },
             },
-            markIsLine
-              ? null
-              : h(
+            markKind === 'comment'
+              ? h(
                 'div',
                 {
                   className: 'nw-mark-view-note',
                   'data-empty': String(markView.mark.note || '').trim() ? '0' : '1',
                 },
                 String(markView.mark.note || '').trim() || NW.t('在「读一遍」里写这句话'),
-              ),
+              )
+              : null,
             h(
               'div',
               { className: 'nw-mark-view-acts' },
-              h('button', {
-                type: 'button',
-                className: 'nw-mark-view-btn',
-                'data-danger': '1',
-                onClick: () => {
-                  // R52: go through removeMarkOf so the line disappears in this
-                  // frame instead of waiting for the list to come back from
-                  // IndexedDB — otherwise 删除 looks like it did nothing.
-                  removeMarkOf(markView.mark.id);
-                },
-              }, NW.t('删除')),
+              markKind === 'underline'
+                ? h('button', {
+                  type: 'button',
+                  className: 'nw-mark-view-btn',
+                  'data-danger': '1',
+                  onClick: () => removeMarkOf(markView.mark.id),
+                }, NW.t('删除'))
+                : h('button', {
+                  type: 'button',
+                  className: 'nw-mark-view-btn',
+                  'data-primary': '1',
+                  title: markKind === 'comment'
+                    ? NW.t('用批注里的话替换原文')
+                    : NW.t('删掉被划掉的这几个字'),
+                  onClick: () => decideMarkOf(markView.mark, true),
+                }, NW.t('接受')),
+              markKind === 'underline'
+                ? null
+                : h('button', {
+                  type: 'button',
+                  className: 'nw-mark-view-btn',
+                  onClick: () => decideMarkOf(markView.mark, false),
+                }, NW.t('拒绝')),
             ),
           )
         : null;
@@ -15658,7 +15977,15 @@ const SEL_EMIT_MS = 120;
           h(
             'div',
             { className: 'nw-stack', ref: stackRef },
+            // R135: a soft pool of light under the line being written. It sits
+            // below the highlight mirror so ink always stays on top of light,
+            // and it is painted from the same plan as the caret — transform and
+            // opacity only, so it costs no extra measurement.
+            h('div', { className: 'nw-lamp', ref: lampRef, 'aria-hidden': 'true' }),
             h('div', { className: 'nw-hl', ref: hlRef, 'aria-hidden': 'true' }),
+            // R135: the dog-ear that says "you stopped here". It folds in when a
+            // chapter reopens on a saved caret and unfolds on the first keystroke.
+            h('div', { className: 'nw-fold', ref: foldRef, 'aria-hidden': 'true' }),
             h('div', { className: 'nw-caret', ref: caretRef, 'aria-hidden': 'true' }),
             // Thick caret: painted from the same mirror measurement the
             // typewriter uses, so its line always matches the centred one.
@@ -15716,6 +16043,9 @@ const SEL_EMIT_MS = 120;
               onFocus: () => {
                 // R71: focusing the manuscript lights its paragraph again.
                 editorFocusedRef.current = true;
+                // R135: arriving at the page also starts the lamp's rest timer —
+                // the line is lit, and if nothing is typed it settles to 40%.
+                lampTyping();
                 scheduleMeasure(false);
                 repaintFocusSoon();
               },
@@ -15731,22 +16061,10 @@ const SEL_EMIT_MS = 120;
                 syncSelBtn();
                 scheduleMeasure(true);
               },
-              // R53c：标注的唯一入口。选中一段字再按右键 → 在指针旁弹出小菜单；
-              // 没选中就原样放行，浏览器自己的复制/粘贴菜单照旧。这样纸面上不
-              // 再需要任何常驻按钮。
-              // 右键直接点在一条已有的线上（且没有选中文字）时，按「看批注」处理：
-              // 那一下的意思几乎总是「这条线写了什么」。
+              // R134：写作面不再新建标注，右键也不再弹菜单。只在「右键点在一条
+              // 已有的线上」时开那张裁决卡；其余情况原样放行，浏览器自己的
+              // 复制/粘贴菜单照旧。
               onContextMenu: (ev) => {
-                const ta = taRef.current;
-                if (!ta) return;
-                const a = Number(ta.selectionStart) || 0;
-                const b = Number(ta.selectionEnd) || 0;
-                const hasRange = Math.max(a, b) - Math.min(a, b) > 0;
-                if (hasRange) {
-                  if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-                  openMarkMenu(ev);
-                  return;
-                }
                 const hit = markAtPoint(ev);
                 if (hit) {
                   if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
@@ -15799,7 +16117,7 @@ const SEL_EMIT_MS = 120;
             h('br'),
             // R77 (B5): 两个「看不见的入口」写在空状态里——它们是这一轮之前
             // 最容易没人发现的功能。
-            NW.t('选中文字：右键标注，或点浮出的「修改建议」'),
+            NW.t('选中文字：右键标注，或点浮出的「AI建议」'),
           ),
         );
 
@@ -15813,8 +16131,8 @@ const SEL_EMIT_MS = 120;
             type: 'button',
             className: 'nw-selbtn',
             style: { left: selBtn.x + 'px', top: selBtn.y + 'px' },
-            title: NW.t('给选中的文字提修改建议'),
-            'aria-label': NW.t('修改建议'),
+            title: NW.t('给选中的文字提AI建议'),
+            'aria-label': NW.t('AI建议'),
             onMouseDown: (ev) => {
               if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
             },
@@ -15825,51 +16143,7 @@ const SEL_EMIT_MS = 120;
             },
           },
           NW.icon('sparkle', { size: 13 }),
-          h('span', { className: 'nw-selbtn-txt' }, NW.t('修改建议')),
-        )
-      : null;
-
-    // R77: 段落导航面板。盖在纸面左上，不在正文里插任何元素。
-    const paraPanel = paraNav
-      ? h(
-          'div',
-          { className: 'nw-paranav', role: 'dialog', 'aria-label': NW.t('段落导航') },
-          h(
-            'div',
-            { className: 'nw-paranav-head' },
-            h('span', { className: 'nw-paranav-title' }, NW.t('段落')),
-            h('span', { className: 'nw-paranav-count' }, String(paraNav.items.length)),
-            h('span', { style: { flex: '1 1 auto' } }),
-            h(
-              'button',
-              {
-                type: 'button',
-                className: 'nw-paranav-x',
-                'aria-label': NW.t('关闭段落导航'),
-                onClick: () => setParaNav(null),
-              },
-              NW.icon('x', { size: 13 }),
-            ),
-          ),
-          h(
-            'div',
-            { className: 'nw-paranav-list' },
-            paraNav.items.length === 0
-              ? h('div', { className: 'nw-paranav-empty' }, NW.t('这一章还没有正文'))
-              : paraNav.items.map((item, index) =>
-                  h(
-                    'button',
-                    {
-                      key: 'p' + index,
-                      type: 'button',
-                      className: 'nw-paranav-row',
-                      onClick: () => jumpPara(item),
-                    },
-                    h('span', { className: 'nw-paranav-n' }, String(index + 1)),
-                    h('span', { className: 'nw-paranav-t' }, item.text),
-                  ),
-                ),
-          ),
+          h('span', { className: 'nw-selbtn-txt' }, NW.t('AI建议')),
         )
       : null;
 
@@ -15900,29 +16174,27 @@ const SEL_EMIT_MS = 120;
       h('div', { className: 'nw-veil nw-veil-top', ref: veilTopRef, 'aria-hidden': 'true' }),
       h('div', { className: 'nw-veil nw-veil-bot', ref: veilBotRef, 'aria-hidden': 'true' }),
       findBar,
-      // R53c：角落胶囊里只剩「回到首页」和「锁定」。原来那颗标记铅笔被用户点名
-      // 去掉了——标注是低频动作，不值得常驻一格视觉重量。入口改成选中字之后按
-      // 右键（见 textarea 的 onContextMenu），菜单开在指针旁边。
+      // R134：角上只剩「查阅」「回到首页」「锁定」。段落导航与标注铅笔都撤了
+      // ——标注改在「读一遍」里做，写作面上只做裁决。
       h(
             'div',
             { className: 'nw-surface-acts' },
-            // R77: 段落导航。长章里「跳到第五段」比滚轮可靠。
-            h(
-              'button',
-              {
-                type: 'button',
-                className: 'nw-actbtn',
-                title: NW.t('段落导航'),
-                'aria-label': NW.t('段落导航'),
-                'aria-expanded': paraNav ? 'true' : 'false',
-                onClick: (ev) => {
-                  if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-                  openParaNav();
-                },
-              },
-              NW.icon('list', { size: 16 }),
-            ),
-            h('span', { className: 'nw-acts-div', 'aria-hidden': 'true' }),
+            onLookup
+              ? h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'nw-actbtn',
+                    title: NW.t('查阅') + ' (Alt+S)',
+                    'aria-label': NW.t('查阅'),
+                    onClick: (ev) => {
+                      if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+                      onLookup();
+                    },
+                  },
+                  NW.icon('search', { size: 16 }),
+                )
+              : null,
             onHome
               ? h(
                   'button',
@@ -15951,9 +16223,7 @@ const SEL_EMIT_MS = 120;
             // 目录 toggle is gone — one button, one meaning, and the corner
             // stops needing a hairline to separate three things.
             onLock ? h('span', { className: 'nw-acts-div', 'aria-hidden': 'true' }) : null,
-            // R53c：这里原来有一颗铅笔按钮（R53 的入口），用户点名去掉了——它常驻
-            // 在纸面上方，为一件事关标注的低频动作占一格视觉重量。入口改到右键
-            // 菜单（见 textarea 的 onContextMenu），没有可见按钮，也就没有遮挡。
+            // R134：标注不再从写作面新建，这里也就没有标注入口了。
             onLock
               ? h(
                   'button',
@@ -15971,9 +16241,7 @@ const SEL_EMIT_MS = 120;
                 )
               : null,
           ),
-      markMenuBar,
       selBtnBar,
-      paraPanel,
     );
   };
 })();
@@ -16122,203 +16390,907 @@ const SEL_EMIT_MS = 120;
 
   NW.CSS_PARTS.push(`
 /* ---- 读一遍 -------------------------------------------------------------
-   The page itself is the whole screen: one column of text per page, paged by
-   scrollLeft inside .nw-read-flow. Nothing here changes the manuscript — it is
-   a view, and closing it puts the writer back exactly where they were. */
+   A printed journal, not a web reader. The reading view is a sheet of paper
+   lying on a darker desk: a running head over each column, page numbers at the
+   outer feet, and — only when the pane is wide enough to open like a book — a
+   hairline crease down the middle. The manuscript is still paged by scrollLeft
+   inside .nw-read-flow; measure() decides how wide a page is and everything
+   below only draws around that box. Nothing here changes the manuscript. */
 .nw-read{
+  /* Paper and desk are both derived from the ink so every palette keeps the
+     same reading: light themes put the page on a darker desk, night lifts the
+     paper a hair instead of painting a white sheet into a dark room. */
+  --nw-read-serif:"Songti SC","Noto Serif SC","Source Han Serif SC","Source Han Serif CN",STSong,SimSun,Georgia,"Times New Roman",serif;
+  --nw-read-desk:color-mix(in srgb, var(--nw-fg) 11%, var(--nw-bg));
+  --nw-read-paper:color-mix(in srgb, var(--nw-fg) 1.5%, var(--nw-bg));
+  --nw-read-edge:color-mix(in srgb, var(--nw-fg) 10%, transparent);
+  --nw-read-rule:color-mix(in srgb, var(--nw-fg) 22%, transparent);
+  --nw-read-rule-soft:color-mix(in srgb, var(--nw-fg) 12%, transparent);
+  --nw-read-muted:color-mix(in srgb, var(--nw-fg) 46%, var(--nw-read-paper));
+  --nw-read-faint:color-mix(in srgb, var(--nw-fg) 68%, var(--nw-read-paper));
+  --nw-read-spine:color-mix(in srgb, var(--nw-fg) 9%, transparent);
+  /* The face of the leaf under the copy it carries: the paper seen in its
+     own shadow, a hair lighter than the sheet so the lifted page reads as a
+     separate sheet even before the shading goes on. */
+  --nw-read-flip:color-mix(in srgb, var(--nw-fg) 3%, var(--nw-read-paper));
+  --nw-read-sheet-pad:30px;
+  --nw-read-gap:48px;
+  /* R141：桌面的空气。纸的上下不再顶到视口边缘——一张摊在桌上的书，上边
+     和左边右边一样，都该看得见桌面。这个值同时是纸的上下缩进、眉题与页脚
+     的落位基准，所以只需改这一处。 */
+  --nw-read-air:18px;
+  /* The band the text columns live in: the stage pads the paper by these,
+     and the turning leaf copies its columns in exactly this box.
+     R141：加了 air 之后，版心要相应往下/往上让出天头地脚（纸顶到首行约 46px，
+     纸底到末行约 40px），否则纸缩进多少，天头就薄多少，读起来像便签纸。 */
+  --nw-read-band-top:64px;
+  --nw-read-band-bottom:58px;
   position:absolute;inset:0;z-index:30;
   display:flex;flex-direction:column;
-  background:var(--nw-bg);color:var(--nw-fg);
-  font-family:var(--nw-reading-font);
+  /* R139：书桌不该有自己的滚动条。翻页流是「一列列排开、靠 scrollLeft 换页」，
+     任何一级祖先露出滚动条都会把「这是网页」写在书页下面。 */
+  overflow:hidden;
+  /* R141：桌面不是一块平涂。一盏灯从上头打下来，桌子中间亮、四角暗；纸摊在
+     这团光里，桌面才成为「桌子」而不是「背景色」。两层：一层从上方来的暖光，
+     一层四角的压暗。都很轻（8% 以内），只在纸离开视口边之后才读得出来。 */
+  /* R143：灯挪到了左上。原来那盏是正顶光（50% -14%），桌面各向等亮，于是纸
+     摆在哪里都像悬在同一块背景色上，桌面没有「离灯多远」这件事。
+     现在有一盏明确的灯：左上一小片暖亮，越往右下越沉，四角最先黑。纸的落影
+     也随之偏右下——光和影必须同向，否则纸读成浮在图上，不读成压在桌上。 */
+  background-color:var(--nw-read-desk);
+  background-image:
+    radial-gradient(76% 56% at 32% 4%, color-mix(in srgb, #fff 14%, transparent) 0, transparent 64%),
+    radial-gradient(132% 112% at 42% 26%, transparent 28%, color-mix(in srgb, var(--nw-fg) 16%, transparent) 100%);
+  color:var(--nw-fg);
+  font-family:var(--nw-read-serif);
   font-size:var(--nw-fs-second);line-height:var(--nw-lh-base);
   animation:nw-fade-in var(--nw-dur, .18s) var(--nw-ease, cubic-bezier(.2,.7,.2,1)) both;
 }
+/* R137: 阅读是「把书摊在桌上」，桌子就是整块屏幕。
+   .nw-root 带 container-type:inline-size（也就是布局隔离），布局隔离会让它
+   成为 fixed 后代的包含块——所以只看下面 .nw-read 的 position:absolute 的话，
+   书最多铺满插件那一列。开卷时把 .nw-root 自己提到 fixed inset:0，面板即
+   视口，absolute 那层覆盖就正好铺满整屏。关闭阅读时这个类随 readOpen 一起
+   撤掉，整个面板回到宿主给它分配的那一列，布局分毫不动。
+   z-index 抬到 1000：宿主外壳的侧栏、工具条都在同一个视口里，书要压在最上面。 */
+.nw-root.nw-reading{position:fixed;inset:0;z-index:1000;}
+/* A dark room reads the other way round: the desk goes *below* the page. */
+.nw-read[data-theme="night"]{
+  --nw-read-desk:color-mix(in srgb, #000 46%, var(--nw-bg));
+  --nw-read-paper:color-mix(in srgb, var(--nw-fg) 2.5%, var(--nw-bg));
+  --nw-read-flip:color-mix(in srgb, var(--nw-fg) 7%, var(--nw-read-paper));
+}
+/* R144：夜里没有窗光，纸边不能变成发光包边。纸垛与两侧书口共用这四个
+   变量；夜盘只换材料，不改几何——亮线压到 5%，缝与底面继续沉下去。 */
+.nw-read[data-theme="night"] .nw-read-block{
+  --nw-read-cut:color-mix(in srgb, var(--nw-read-paper) 58%, #000);
+  --nw-read-cut-line:color-mix(in srgb, #000 34%, transparent);
+  --nw-read-cut-light:color-mix(in srgb, #fff 5%, transparent);
+  --nw-read-cut-shade:color-mix(in srgb, #000 46%, transparent);
+  /* R148：夜里的沓沟不提亮——沟是压出来的，越压越沉。 */
+  --nw-read-cut-deep:color-mix(in srgb, #000 40%, transparent);
+}
 .nw-read-bar{
   flex:0 0 auto;display:flex;align-items:center;gap:var(--nw-sp-3);
-  padding:var(--nw-sp-3) clamp(20px,6vw,64px) 0;
-  font-family:var(--nw-ui-font);font-size:var(--nw-fs-micro);
-  color:var(--nw-soft);
+  padding:14px clamp(30px,7vw,84px) 0;
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);
+  letter-spacing:.12em;color:var(--nw-read-muted);
 }
 .nw-read-bar-name{
   flex:1 1 auto;min-width:0;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  letter-spacing:.08em;
 }
 .nw-read-bar-close{
   flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
   width:var(--nw-h-iconbtn);height:var(--nw-h-iconbtn);
   border:1px solid transparent;border-radius:var(--nw-r-control);
-  background:transparent;color:var(--nw-soft);cursor:pointer;padding:0;
+  background:transparent;color:var(--nw-read-muted);cursor:pointer;padding:0;
 }
 .nw-read-bar-close:hover{color:var(--nw-fg);background:var(--nw-btn-hover);border-color:var(--nw-line-soft);}
+/* R130：朗读。喇叭与它的设置是同一组，所以用一条 .nw-read-speakbar 包起来，
+   设置浮层就挂在它下面——弹层贴着按钮，而不是贴着屏幕边。 */
+.nw-read-speakbar{position:relative;flex:0 0 auto;display:inline-flex;align-items:center;gap:2px;}
+.nw-read-bar-btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:var(--nw-h-iconbtn);height:var(--nw-h-iconbtn);
+  border:1px solid transparent;border-radius:var(--nw-r-control);
+  background:transparent;color:var(--nw-read-muted);cursor:pointer;padding:0;
+}
+.nw-read-bar-btn:hover{color:var(--nw-fg);background:var(--nw-btn-hover);border-color:var(--nw-line-soft);}
+.nw-read-bar-btn[data-on="1"]{
+  color:var(--nw-accent);background:color-mix(in srgb, var(--nw-accent) 10%, transparent);
+  border-color:color-mix(in srgb, var(--nw-accent) 34%, transparent);
+}
+.nw-read-bar-btn[data-narrow="1"]{width:22px;}
+.nw-read-speakmenu{
+  position:absolute;top:calc(100% + 8px);right:0;z-index:9;
+  width:268px;padding:12px;display:flex;flex-direction:column;gap:10px;
+  background:var(--nw-read-paper);color:var(--nw-fg);
+  border:1px solid var(--nw-read-rule-soft);border-radius:var(--nw-r-control);
+  box-shadow:0 18px 40px -20px color-mix(in srgb, var(--nw-fg) 55%, transparent);
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);letter-spacing:normal;
+}
+.nw-read-speakmenu-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.nw-read-speakmenu-label{flex:0 0 auto;color:var(--nw-read-muted);letter-spacing:.08em;}
+.nw-read-speakmenu-chip{
+  border:1px solid var(--nw-read-rule-soft);border-radius:999px;background:transparent;
+  color:var(--nw-read-muted);font:inherit;font-size:11px;line-height:1;padding:5px 9px;cursor:pointer;
+}
+.nw-read-speakmenu-chip[data-on="1"]{
+  color:var(--nw-accent);border-color:color-mix(in srgb, var(--nw-accent) 40%, transparent);
+  background:color-mix(in srgb, var(--nw-accent) 10%, transparent);
+}
+.nw-read-speakmenu select{
+  flex:1 1 auto;min-width:0;max-width:100%;
+  font:inherit;font-size:11px;color:var(--nw-fg);
+  background:var(--nw-read-paper);border:1px solid var(--nw-read-rule-soft);
+  border-radius:var(--nw-r-control);padding:5px 6px;
+}
+.nw-read-speakmenu-note{color:var(--nw-read-faint);line-height:1.6;}
+.nw-read-speakmenu-error{color:var(--nw-danger, #b3261e);}
+/* 正在念的那一段：左侧一根短线把视线钉住，底色只到「能看出这一块是活的」为止。
+   5% 是试出来的：8% 在正文里像被选中，2% 在夜theme下看不见。 */
+.nw-read-p.is-speaking{
+  background:color-mix(in srgb, var(--nw-accent) 5%, transparent);
+  box-shadow:inset 2px 0 0 color-mix(in srgb, var(--nw-accent) 42%, transparent);
+  border-radius:1px;
+}
+/* The stage is the desk. Its padding is the air above/below the paper — the
+   running head and the feet live in it, so the text column starts below the
+   rule and ends above the page number, and measure() only ever sees the flow. */
 .nw-read-stage{
   position:relative;flex:1 1 auto;min-height:0;
   display:flex;justify-content:center;
-  padding:0 clamp(20px,6vw,64px);
+  padding:var(--nw-read-band-top) clamp(30px,7vw,84px) var(--nw-read-band-bottom);
 }
-/* The paged column. Both lengths are written by the component because
-   column-width accepts lengths only, never percentages.
-   R55: they are two different numbers now. --nw-read-col is one text column;
-   --nw-read-box is the page — one column when the pane is narrow, two when it is
-   wide enough to open like a book (see measure()). Keeping them separate is what
-   lets a spread show two columns inside one scrolling box. */
-.nw-read-flow{
+/* R144：一摞有体积的纸，而不是底下一条阴影。
+   顶纸下面还有几百张纸：底缘露出 13px，左右书口各探出 8px。书口不是把底缘
+   的密横纹绕一圈（窄条 + 高亮密线会读成金属包边），而是宽一点、线稀一点、
+   对比低一点的弧面。外轮廓用很大的纵向椭圆半径收进去：两端贴着顶纸，中段
+   才微微鼓出，像真书被摊开后页叠在书口形成的弧。
+   底缘中央另压一团装订暗，左右有切面受光；接触影短而实，远影宽而淡。整摞
+   不动、不进 measure()，两个伪元素也不接指针，翻页仍只动那张顶纸。 */
+.nw-read-block{
+  --nw-read-cut:color-mix(in srgb, var(--nw-read-paper) 95%, var(--nw-read-desk));
+  --nw-read-cut-line:color-mix(in srgb, var(--nw-fg) 8%, transparent);
+  --nw-read-cut-light:color-mix(in srgb, #fff 16%, transparent);
+  --nw-read-cut-shade:color-mix(in srgb, #000 18%, transparent);
+  /* R148：纸沓沟。均匀的 3.4px 横纹读成一把尺子；每隔十几张要有一条压得更实的
+     深沟 + 一线受光，纸垛才是「一沓一沓」叠出来的，不是梳齿。 */
+  --nw-read-cut-deep:color-mix(in srgb, var(--nw-fg) 13%, transparent);
+  position:absolute;left:50%;
+  top:calc(var(--nw-read-air, 18px) + 4px);
+  bottom:calc(var(--nw-read-air, 18px) - 13px);
+  width:calc(var(--nw-read-box, 680px) + var(--nw-read-sheet-pad) * 2);
+  transform:translateX(-50%);
+  border-radius:6px 6px 12px 12px / 4px 4px 8px 8px;
+  background-color:var(--nw-read-cut);
+  background-image:
+    repeating-linear-gradient(to bottom,
+      var(--nw-read-cut-light) 0 .7px,
+      var(--nw-read-cut-line) .7px 1.4px,
+      transparent 1.4px 3.4px),
+    /* R148：一沓纸压出一条深沟，沟底补一线受光；每 13.4px 一组，叠在细纹之上。
+       没有这层，几百张纸读不出「层」，只有均匀条纹。 */
+    repeating-linear-gradient(to bottom,
+      transparent 0 9.6px,
+      var(--nw-read-cut-deep) 9.6px 11px,
+      var(--nw-read-cut-light) 11px 11.7px,
+      transparent 11.7px 13.4px),
+    /* 装订线一直压到纸垛底面；不是浮在纸面上的一道装饰线。 */
+    radial-gradient(18% 70px at 50% 100%,
+      var(--nw-read-cut-shade) 0,
+      transparent 76%),
+    linear-gradient(to right,
+      var(--nw-read-cut-shade) 0,
+      transparent 2.2%, transparent 97.8%,
+      var(--nw-read-cut-shade) 100%),
+    linear-gradient(to bottom,
+      transparent 58%,
+      var(--nw-read-cut-shade) 100%);
+  /* R148：厚度要读得出「层」。顶纸下面先给两道错层台阶——一沓比一沓暗一点、
+     缩进一点，底缘才像逐沓垫起来的纸，而不是一块梯形色块。 */
+  box-shadow:
+    0 3px 0 -1px color-mix(in srgb, var(--nw-read-cut) 94%, #000),
+    0 6px 0 -2px color-mix(in srgb, var(--nw-read-cut) 86%, #000),
+    0 2px 1px color-mix(in srgb, #000 22%, transparent),
+    0 10px 16px -8px color-mix(in srgb, #000 46%, transparent),
+    0 28px 46px -22px color-mix(in srgb, #000 36%, transparent);
+  pointer-events:none;z-index:0;
+}
+.nw-read-block::before,
+.nw-read-block::after{
+  content:'';position:absolute;top:2px;bottom:2px;width:11px;
+  background-color:var(--nw-read-cut);
+  box-shadow:
+    inset 0 1px 1px var(--nw-read-cut-light),
+    inset 0 -2px 3px var(--nw-read-cut-shade),
+    0 5px 7px -6px color-mix(in srgb, #000 45%, transparent);
+}
+.nw-read-block::before{
+  left:-8px;
+  border-radius:64% 3px 6px 64% / 40% 7px 9px 40%;
+  background-image:
+    /* 左书口迎光，靠顶纸的那一指背光。亮面很宽，不做白色细边。 */
+    linear-gradient(to right,
+      var(--nw-read-cut-light) 0,
+      transparent 44%,
+      color-mix(in srgb, var(--nw-fg) 12%, transparent) 100%),
+    /* R148：书口的沓沟比底缘稀一倍：每 22px 一组深沟+受光。 */
+    repeating-linear-gradient(to bottom,
+      transparent 0 16px,
+      var(--nw-read-cut-deep) 16px 17.2px,
+      var(--nw-read-cut-light) 17.2px 17.9px,
+      transparent 17.9px 22px),
+    repeating-linear-gradient(to bottom,
+      transparent 0 3px,
+      var(--nw-read-cut-line) 3px 3.65px,
+      transparent 3.65px 5.8px),
+    linear-gradient(to bottom,
+      var(--nw-read-cut-shade) 0,
+      transparent 4%, transparent 94%,
+      var(--nw-read-cut-shade) 100%);
+}
+.nw-read-block::after{
+  right:-8px;
+  border-radius:3px 64% 64% 6px / 7px 40% 40% 9px;
+  background-image:
+    /* 右侧离灯远，外缘更暗；与左侧不是一张镜像贴纸。 */
+    linear-gradient(to right,
+      color-mix(in srgb, var(--nw-fg) 7%, transparent) 0,
+      transparent 42%,
+      color-mix(in srgb, var(--nw-fg) 16%, transparent) 100%),
+    /* R148：书口的沓沟比底缘稀一倍：每 22px 一组深沟+受光。 */
+    repeating-linear-gradient(to bottom,
+      transparent 0 16px,
+      var(--nw-read-cut-deep) 16px 17.2px,
+      var(--nw-read-cut-light) 17.2px 17.9px,
+      transparent 17.9px 22px),
+    repeating-linear-gradient(to bottom,
+      transparent 0 3px,
+      var(--nw-read-cut-line) 3px 3.65px,
+      transparent 3.65px 5.8px),
+    linear-gradient(to bottom,
+      var(--nw-read-cut-shade) 0,
+      transparent 4%, transparent 94%,
+      var(--nw-read-cut-shade) 100%);
+}
+/* The sheet of paper. Width follows the page box (one column, or two columns
+   plus the gutter) and is written by measure() as --nw-read-box on the stage. */
+.nw-read-sheet{
+  /* R141：纸不再从视口顶边拉到视口底边。这里原来是 top:0;bottom:0，而
+     absolute 的 0 对齐的是 stage 的 padding box，于是纸的上下沿正好压在视口
+     边上，只有左右两侧看得见桌面——一张四周没有桌面的纸不像书，像网页的一
+     块背景色。上下留出 --nw-read-air 之后，纸成了桌上的一个物件。 */
+  position:absolute;top:var(--nw-read-air, 18px);bottom:var(--nw-read-air, 18px);
+  left:50%;
+  width:calc(var(--nw-read-box, 680px) + var(--nw-read-sheet-pad) * 2);
+  transform:translateX(-50%);
+  background-color:var(--nw-read-paper);
+  /* R141：纸面终于有了材质。编辑页的 .nw-page 一直在用 --nw-texture（120px
+     噪点），阅读页因为被 .nw-surface:not(.nw-read) 排除在外，纸是纯色的——
+     一块干干净净的矩形。同一个变量接到纸上，两处纸张才是同一种纸。
+     R143：纸面会弯。摊开的纸不是一块平板：它从书脊那侧被抬起来，鼓成一道
+     极浅的弧，所以中间亮、贴装订线和贴外边的一指暗，上下两条边也各压一点。
+     这四层很轻（2%~6%），轻到说不清画了什么，只说得出「这张纸不是平的」。
+     弧度只能靠明暗说——轮廓一动就得 clip-path，而 clip-path 会把接触影连同
+     纸的边一起裁掉（R140 的教训）。 */
+  background-image:
+    var(--nw-texture, none),
+    linear-gradient(to right,
+      color-mix(in srgb, var(--nw-fg) 8%, transparent) 0,
+      color-mix(in srgb, #fff 3%, transparent) 2.4%,
+      transparent 7%, transparent 94%,
+      color-mix(in srgb, var(--nw-fg) 7%, transparent) 100%),
+    linear-gradient(to bottom,
+      color-mix(in srgb, var(--nw-fg) 5%, transparent) 0,
+      transparent 2.4%, transparent 97.4%,
+      color-mix(in srgb, var(--nw-fg) 4%, transparent) 100%),
+    radial-gradient(58% 46% at 38% 30%,
+      color-mix(in srgb, #fff 3.8%, transparent) 0,
+      transparent 70%),
+    /* R143：纸不是均匀受光的。灯在左上，纸的右下角离灯最远、又正被自己压出的
+       影子扫到，那里再沉一点点。有了这一层，四角不再是四个一模一样的直角。 */
+    radial-gradient(74% 62% at 86% 88%,
+      transparent 44%,
+      color-mix(in srgb, var(--nw-fg) 4%, transparent) 100%),
+    /* R143：纸上有波。一张纸压在桌上不会完全平——靠书脊那条被缝线拽着，靠书
+       口那条自己翘起一点点。落在明暗上就是一道很宽的亮带横在上三分之一，一
+       道更宽的暗带压在下三分之一。两带都只有 2%，说不出画了什么，只说得出
+       「这不是一块板」。 */
+    linear-gradient(to bottom,
+      transparent 6%,
+      color-mix(in srgb, #fff 2.4%, transparent) 28%,
+      transparent 44%,
+      color-mix(in srgb, var(--nw-fg) 2.2%, transparent) 76%,
+      transparent 95%);
+  /* R148：纸不该有描边。这圈 1px 的 border 加上 crisp 内光把纸勾成了一张
+     「卡片」——纸的边缘信息已经全在落影里（外缘接触影 + 纸垛错层），再描一圈
+     实线只会把纸从书上「剪」下来。去掉 border，上下两条 1px 内光也一并撤掉，
+     纸与纸垛由同一套明暗接在一起。 */
+  border-radius:5px 5px 9px 9px / 3px 3px 6px 6px;
+  /* 落影分三层：贴边的一道受光（纸的厚度）、纸垛与纸之间那道咬合的硬缝、以及
+     投在桌面上的大而软的一团。底下那几页的错层已经交给 .nw-read-block 去画了
+     —— 一圈 1px 的实色影撑不起几百张纸，只会让纸看着像叠了三张卡片。
+     inset 的左右两道是纸枕下去的暗：纸一弯，贴桌的那两指就照不到灯。 */
+  box-shadow:
+    inset 9px 0 18px -12px color-mix(in srgb, var(--nw-fg) 20%, transparent),
+    inset -9px 0 18px -12px color-mix(in srgb, var(--nw-fg) 20%, transparent),
+    0 1px 0 color-mix(in srgb, #000 16%, transparent),
+    7px 30px 66px -26px color-mix(in srgb, #000 42%, transparent);
+  pointer-events:none;z-index:0;
+}
+/* The crease. No hairline: a printed 1px line down the middle of a book is the
+   single thing that made the spread read as a table rather than as paper. What
+   a real gutter does is darken — two leaves curving away from each other — so
+   the crease is only the spine shadow below, with a very faint centre. */
+/* R143：中缝不再是「一条影」，是两道坡。
+   真书摊开时，两张纸在装订线那里一起往下塌，形成一个 V：紧贴装订线的两三
+   毫米最暗，然后各自往外迅速爬升回纸面。原来一层 96px 的对称渐变把整条缝
+   画成了一条匀称的暗带，看着像有人拿喷枪在纸上喷了一道。
+   R150：中间那条 1px 亮线去掉了。真书的缝是暗的——两张纸在最低处一起塌下
+   去，光进不来；那条白线是「画上去的一条线」，也正是用户说的「这条缝不真
+   实」。现在只剩一道塌陷：6px 的锐核 + 220px 的柔坡，两侧纸面再靠 sheet 自
+   己那两道内阴影压住，缝是「塌出来的」，不是「画出来的」。 */
+.nw-read-spine{
+  position:absolute;left:50%;top:var(--nw-read-air, 18px);bottom:var(--nw-read-air, 18px);
+  width:170px;z-index:2;transform:translateX(-50%);pointer-events:none;
+  /* R154：这道缝原来画在纸的 ::after 上——纸在 z-index 0、正文流在 1，
+     于是它一直被正文盖着，屏幕上根本没有缝，只剩封面裁边的一道 1px 硬线。
+     现在缝是舞台里一个真实的元素：压在正文之上（2）、纸之下（3），
+     一定看得见，也一定不会被纸的滚动内容吃掉。 */
+  background:
+    radial-gradient(52% 100% at 50% 50%,
+      color-mix(in srgb, #000 26%, transparent) 0,
+      color-mix(in srgb, #000 15%, transparent) 26%,
+      color-mix(in srgb, #000 5%, transparent) 62%,
+      transparent 100%);
+  -webkit-mask-image:linear-gradient(to bottom, transparent, #000 9%, #000 91%, transparent);
+  mask-image:linear-gradient(to bottom, transparent, #000 9%, #000 91%, transparent);
+}
+/* The edge of the sheet, hung on the spine. z-index 3, not 2: the running heads
+   and folios sit at 2 and later in the DOM, and a sheet that lets the page
+   number print on top of it reads as a decal rather than as paper. */
+.nw-read-flip{
+  position:absolute;top:0;bottom:0;left:50%;z-index:3;
+  width:calc(var(--nw-read-box, 680px) + var(--nw-read-sheet-pad) * 2);
+  transform:translateX(-50%);
+  /* R156: turn.js 的模型。整张纸是一个刚体平面，只绕书脊走完 180 度；纸的
+     弧度和折线全靠纸面上的渐变画出来，不再用分段关节去拼。正交投影让纸
+     转到哪儿都不变大变小，落点与书页严丝合缝。 */
+  perspective:none;
+  /* R156: 翻页层裁在书框里——turn.js 同样把纸放在 overflow:hidden 的书框
+     内，所以纸永远不会越出书沿。裁剪必须在这一层：.nw-read-leaf 要保留
+     preserve-3d，overflow 会把它压平，纸背就不见了。 */
+  overflow:hidden;
+  pointer-events:none;visibility:hidden;
+}
+.nw-read-flip[data-live="1"]{visibility:visible;}
+/* R156: 一张真正的纸。整片只绕书脊转一个角度，正反两面各印一页；折线与
+   纸背的明暗交给 .nw-read-shade。 */
+.nw-read-leaf{
+  position:absolute;width:calc(50% - .5px);z-index:2;
+  /* 掀起来的是一整张纸，不是一条正文带：上下一直长到纸边，页脚就在纸的
+     下边距里，跟着纸一起翻。 */
+  top:var(--nw-read-air, 18px);bottom:var(--nw-read-air, 18px);
+  background:transparent;
+  transform-style:preserve-3d;
+  backface-visibility:visible;
+  will-change:transform;
+  /* R156: 这里不能 overflow:hidden。overflow 会把 preserve-3d 压平，正反
+     两面叠在一起，纸背就翻不出来；裁剪由外层的 .nw-read-flip 负责。 */
+  transform:rotateY(0deg);
+}
+/* R156: 没有关节了。原来这里叠着十段 .nw-read-joint，每段一个转角伪造
+   弧度；turn.js 的做法是整片刚体平面 + 一条渐变，段落全部删除。 */
+/* 纸的两面：正面印着被掀走的那一页，背面印着翻到的那一页；各自 backface
+   hidden，所以任何时刻只看得到朝向读者的那一面。
+   面自己 overflow:hidden 同时裁掉副本：副本的宽度是整整一个对开，比这张
+   半页纸宽得多——不裁的话，抬手时那半页字会悬在纸外面。 */
+.nw-read-face{
+  position:absolute;inset:0;overflow:hidden;
+  backface-visibility:hidden;
+  background-color:var(--nw-read-flip);
+  background-image:
+    var(--nw-texture, none),
+    radial-gradient(90% 62% at 50% 46%,
+      color-mix(in srgb, #fff 5%, transparent) 0,
+      transparent 72%);
+  box-shadow:none;
+}
+.nw-read-face[data-face="back"]{transform:rotateY(180deg);}
+/* R159: 纸的自由边。两面同色同纹理，纸在空中原本只剩「字被压扁」这一条
+   线索，看过去像整页在滑而不是一张纸在翻。真纸的切口会压出一道极窄的暗
+   边：这里沿自由边画 1px 实线 + 24px 收进去的软影。自由边永远在折线的对
+   侧，所以镜像规则与 .nw-read-shade 同源（回翻的正面、前翻与单栏的背面
+   折线在右，暗边就翻到左边）。 */
+.nw-read-face::after{
+  content:'';position:absolute;top:0;bottom:0;right:0;width:24px;
+  pointer-events:none;
+  background:linear-gradient(to left,
+    rgba(0,0,0,0.085) 0,
+    rgba(0,0,0,0.085) 1px,
+    rgba(0,0,0,0.032) 2px,
+    rgba(0,0,0,0.012) 10px,
+    rgba(0,0,0,0) 24px);
+}
+.nw-read-flip[data-dir="back"] .nw-read-face[data-face="front"]::after,
+.nw-read-flip[data-dir="fwd"] .nw-read-face[data-face="back"]::after,
+.nw-read-flip[data-single="1"] .nw-read-face[data-face="back"]::after{
+  right:auto;left:0;
+  background:linear-gradient(to right,
+    rgba(0,0,0,0.085) 0,
+    rgba(0,0,0,0.085) 1px,
+    rgba(0,0,0,0.032) 2px,
+    rgba(0,0,0,0.012) 10px,
+    rgba(0,0,0,0) 24px);
+}
+/* 这一页自己的字：一份只读副本，栏宽/行高/字号与正文完全一致。
+   R147：纸长到整页高了，副本仍只占正文带——上下按带的偏移内缩，分栏高度
+   与舞台上的正文一字不差，否则列会被重新断开。 */
+.nw-read-face .nw-read-copy{
+  /* R158: 副本必须与 .nw-read-flow 用同一套字体度量。少任何一项，同一个字在
+     纸上和纸下就会粗细、字距不同——用户一眼就看出来「字体不一样」。 */
+  font-family:inherit;font-size:inherit;line-height:inherit;
+  letter-spacing:inherit;word-spacing:inherit;font-weight:inherit;
+  text-align:inherit;text-indent:inherit;
+  position:absolute;
+  top:calc(var(--nw-read-band-top, 64px) - var(--nw-read-air, 18px));
+  bottom:calc(var(--nw-read-band-bottom, 58px) - var(--nw-read-air, 18px));
+  width:var(--nw-read-box, 680px);
+  height:auto; /* R156：全局 .nw-read-copy 是 height:100%，这里必须收回；否则副本比半页纸还高，底边被裁的行会画两遍。 */
+}
+/* 纸的下边距里印着这一页自己的页码与书名/章名。它和副本用同一个横向原点
+   （--nw-foot-front / --nw-foot-back 由 armFlip 按这一趟翻页的方向写一次），
+   纸在空中的时候，页码跟着纸走，不会再「消失」。 */
+.nw-read-face-foot{
+  position:absolute;bottom:16px;
+  left:var(--nw-foot-front, 0);
+  width:var(--nw-read-box, 680px);
+  display:flex;align-items:baseline;gap:var(--nw-read-gap);
+  color:var(--nw-read-muted);pointer-events:none;
+}
+.nw-read-face[data-face="back"] .nw-read-face-foot{left:var(--nw-foot-back, 0);}
+/* R159：这里原本有一对 [data-dir="back"] 背面行内倒序（row-reverse），注释的
+   理由是「背面横向镜像，两槽顺序要跟着镜像」。实测不是：纸背的可见窗口是靠
+   拷贝的 left 位移选出来的（背面回翻时 --nw-foot-back 把行左移一个书脊），
+   窗口本来就落在行的右段、自然取到右槽——再倒序一次反而让右页印出左槽的
+   号码：回翻落到右半的第 2 页，纸上印的是 1。删掉倒序，四个朝向（前进正/背、
+   回翻正/背）印出的都是纸带过来的那一页。 */
+/* 单栏时只有右页那一个槽：把槽推到整页的右缘，和舞台上的页脚对齐。 */
+.nw-read-face-foot[data-single="1"]{justify-content:flex-end;}
+/* 天头的眉题也一样：纸现在是整张纸，眉毛落在纸的天头里；不复刻的话，纸一
+   抬起来，原先画在舞台上、正被纸盖住的那条章名就跟着没了。 */
+.nw-read-face-head{
+  position:absolute;top:13px;
+  left:var(--nw-foot-front, 0);
+  width:var(--nw-read-box, 680px);height:22px;
+  display:flex;gap:var(--nw-read-gap);
+  pointer-events:none;
+}
+.nw-read-face[data-face="back"] .nw-read-face-head{left:var(--nw-foot-back, 0);}
+/* R156: 纸的弧度。turn.js 不用分段几何，它把整张纸当一个平面，弧度靠一条
+   贴在折线上的渐变画出来：正面从折线往里先是一道很窄的纸边亮光，紧挨着一
+   道暗，再向自由边化开；背面只从折线往里压暗。渐变带宽度 = 纸宽 * sin(转角)，
+   和 turn.js 的 gradientSize 同一个算法——纸越立起来，这条带越宽；贴平或
+   完全落定（sin=0）时消失。颜色取 turn.js 的 stop 值：正面黑 0.2、白 0.2，
+   背面黑 0.3。 */
+.nw-read-shade{
+  position:absolute;top:0;bottom:0;left:0;
+  width:100%;transform-origin:left center;transform:scaleX(0);
+  pointer-events:none;opacity:0;
+  background-repeat:no-repeat;
+}
+.nw-read-face[data-face="front"] .nw-read-shade{
+  background-image:linear-gradient(to right,
+    rgba(255,255,255,0.2) 0,
+    rgba(0,0,0,0.2) 24%,
+    rgba(0,0,0,0) 100%);
+}
+.nw-read-face[data-face="back"] .nw-read-shade{
+  background-image:linear-gradient(to right,
+    rgba(0,0,0,0.3) 0,
+    rgba(0,0,0,0) 100%);
+}
+/* 反面在纸上转了 180 度，折线落在它的右边；回翻时正面的折线也在右边。
+   这两种情况把渐变条锚在右边，渐变方向也反过来，亮/暗的先后顺序与折线
+   对齐，不靠再写一套 stop。R159：镜像交给 transform 的符号（poseFlip 每帧
+   写 scaleX(±sin)），这里只定锚点和静止姿态。 */
+.nw-read-flip[data-dir="back"] .nw-read-face[data-face="front"] .nw-read-shade,
+.nw-read-flip[data-dir="fwd"] .nw-read-face[data-face="back"] .nw-read-shade,
+.nw-read-flip[data-single="1"] .nw-read-face[data-face="back"] .nw-read-shade{
+  left:auto;right:0;transform-origin:right center;transform:scaleX(0);
+}
+/* R157: 纸的厚度。零厚度的平面转到与视线共面（90 度）时投影面积为零，纸会
+   凭空消失——真纸在那一刻看到的是切口。这道 2px 的竖线正对书脊，只在纸侧
+   过来的那一段角度里浮现，颜色是纸白夹两道浅灰，就是纸被看成一条线的那一瞬。 */
+.nw-read-edge{
+  position:absolute;left:50%;top:var(--nw-read-air, 18px);bottom:var(--nw-read-air, 18px);
+  width:2px;margin-left:-1px;z-index:2;pointer-events:none;opacity:0;
+  background:linear-gradient(to right,
+    color-mix(in srgb, var(--nw-fg) 16%, transparent) 0,
+    var(--nw-read-flip) 34%,
+    var(--nw-read-flip) 66%,
+    color-mix(in srgb, var(--nw-fg) 20%, transparent) 100%);
+  box-shadow:0 0 5px color-mix(in srgb, var(--nw-fg) 14%, transparent);
+}
+/* Forwards: the leaf covers the right page and hinges on the spine. */
+.nw-read-flip[data-dir="fwd"] .nw-read-leaf{
+  left:50%;transform-origin:left center;
+}
+/* Backwards: the leaf is the left page and hinges on the spine, its right edge. */
+.nw-read-flip[data-dir="back"] .nw-read-leaf{
+  left:0;transform-origin:right center;
+}
+/* One column: one page, hinged on its left edge like a book being opened. */
+.nw-read-flip[data-single="1"] .nw-read-leaf{
+  left:0;width:100%;transform-origin:left center;
+}
+/* The page still on the table. While the leaf is in the air, the half it has
+   not covered yet keeps showing the page being left — in a real book nothing on
+   that side has moved yet. R142：它一直不透明，直到纸真的落上来把它盖住
+   （stopFlip 撤 data-on 的那一帧纸已经严丝合缝在上面）；原来让它在 52% 处
+   淡出，纸还没到、旧页先没了，翻页就少了「盖住」这个动作。 */
+.nw-read-cover{
+  /* 纸色不透明：它盖在已经翻到的新页上，只需要露出还没被掀走的半边旧页。 */
+  background:var(--nw-read-paper);
+/* R150：盖住的那半页必须和纸面一模一样。原来 cover 只有正文带那么高、
+     一个 box 那么宽，纸色是平涂的——翻页一开始，被压住的那半页就从「纸垛的
+     渐变 + 两侧内阴影 + 波带」变成一块平色，颜色当场变一次，纸落下再变回来。
+     现在 cover 与 .nw-read-sheet 同框（同样的 air 上下边、box + 两侧页边距、
+     同样的圆角），并且抄下同一套背景层与那两道内阴影，盖上去看不出接缝。 */
+  background-image:
+    var(--nw-texture, none),
+    linear-gradient(to right,
+      color-mix(in srgb, var(--nw-fg) 8%, transparent) 0,
+      color-mix(in srgb, #fff 3%, transparent) 2.4%,
+      transparent 7%, transparent 94%,
+      color-mix(in srgb, var(--nw-fg) 7%, transparent) 100%),
+    linear-gradient(to bottom,
+      color-mix(in srgb, var(--nw-fg) 5%, transparent) 0,
+      transparent 2.4%, transparent 97.4%,
+      color-mix(in srgb, var(--nw-fg) 4%, transparent) 100%),
+    radial-gradient(58% 46% at 38% 30%,
+      color-mix(in srgb, #fff 3.8%, transparent) 0,
+      transparent 70%),
+    radial-gradient(74% 62% at 86% 88%,
+      transparent 44%,
+      color-mix(in srgb, var(--nw-fg) 4%, transparent) 100%),
+    linear-gradient(to bottom,
+      transparent 6%,
+      color-mix(in srgb, #fff 2.4%, transparent) 28%,
+      transparent 44%,
+      color-mix(in srgb, var(--nw-fg) 2.2%, transparent) 76%,
+      transparent 95%);
+  position:absolute;left:50%;
+  top:var(--nw-read-air, 18px);bottom:var(--nw-read-air, 18px);
+  width:calc(var(--nw-read-box, 680px) + var(--nw-read-sheet-pad) * 2);
+  transform:translateX(-50%);
+  border-radius:5px 5px 9px 9px / 3px 3px 6px 6px;
+  box-shadow:
+    inset 9px 0 18px -12px color-mix(in srgb, var(--nw-fg) 20%, transparent),
+    inset -9px 0 18px -12px color-mix(in srgb, var(--nw-fg) 20%, transparent);
+  overflow:hidden;z-index:1;contain:paint;
+  visibility:hidden;pointer-events:none;
+}
+/* 被压住那半页的正文要和 flow 落在同一个位置：cover 比 flow 宽出两侧页边距，
+   所以副本让开一个 pad，再缩回正文带。 */
+.nw-read-cover .nw-read-copy{
+  position:absolute;
+  left:var(--nw-read-sheet-pad, 30px);
+  right:var(--nw-read-sheet-pad, 30px);
+  top:calc(var(--nw-read-band-top, 54px) - var(--nw-read-air, 18px));
+  bottom:calc(var(--nw-read-band-bottom, 52px) - var(--nw-read-air, 18px));
+  width:auto;height:auto;
+}
+.nw-read-cover[data-on="1"]{visibility:visible;}
+.nw-read-cover[data-half="left"]{clip-path:inset(0 50% 0 0);}
+.nw-read-cover[data-half="right"]{clip-path:inset(0 0 0 50%);}
+/* A sheet lifting off a book presses a shadow into the spread below it: darkest
+   at the fold, gone before the outer edge. It rises and settles with the leaf,
+   so "something is leaving this book" does not have to be explained by the leaf
+   alone. */
+.nw-read-cast{
+  position:absolute;left:50%;
+  top:var(--nw-read-band-top, 54px);bottom:var(--nw-read-band-bottom, 52px);
+  width:var(--nw-read-box, 680px);transform:translateX(-50%);
+  pointer-events:none;z-index:2;opacity:0;contain:paint;
+  background-image:radial-gradient(ellipse at center,
+    color-mix(in srgb, var(--nw-fg) 30%, transparent) 0,
+    color-mix(in srgb, var(--nw-fg) 13%, transparent) 42%,
+    transparent 72%);
+  filter:blur(7px);transform-origin:center;will-change:transform,opacity;
+}
+/* One paged copy of the manuscript, used only by the leaf and the cover. It has
+   to break its columns exactly like .nw-read-flow or the leaf would not line up
+   with the page it is lifting. */
+.nw-read-copy{
+  position:relative;width:100%;height:100%;
+  column-width:var(--nw-read-col, 680px);
+  column-gap:var(--nw-read-gap);
+  column-fill:auto;
+  overflow:hidden;
+  color:var(--nw-fg);
+  font-family:var(--nw-read-serif);
+  user-select:none;
+  scrollbar-width:none;-ms-overflow-style:none;
+  touch-action:none;
+}
+/* Running head. One slot per visible column, each slot exactly one text column
+   wide, with its own hairline — the rule under the book title ends where the
+   left column ends, not in the gutter. It is painted above the flow, so it
+   never scrolls away and never enters measure(). */
+.nw-read-head{
+  position:absolute;left:50%;
+  /* R148：眉题原来距纸顶 20px，底部离正文只有 4px，贴得像贴上去的标签。
+     抬到 13px，让眉线下方的空气到 11px 左右——书页的天头才读得出来。 */
+  top:calc(var(--nw-read-air, 18px) + 13px);
+  transform:translateX(-50%);
+  width:var(--nw-read-box, 680px);
+  display:flex;gap:var(--nw-read-gap);
+  z-index:2;pointer-events:none;
+}
+.nw-read-head-slot{
   position:relative;
-  width:var(--nw-read-box,680px);height:100%;
-  column-width:var(--nw-read-col,680px);
-  column-gap:clamp(28px,5vw,64px);
+  flex:1 1 0;min-width:0;height:22px;
+  display:flex;align-items:flex-end;justify-content:flex-start;
+  padding:0 14px 6px;
+  font-size:11px;line-height:1;letter-spacing:.16em;
+  color:var(--nw-read-muted);white-space:nowrap;
+  /* R139：眉题下面那条线曾经是一条贯穿整栏的 border，四栏摊开时就成了表格。
+     书里的眉线本来就该淡：只在外侧收笔，越往书脊越淡。
+     R148：线从纸缘让进来 6px，外端落一枚小菱形——眉题有了起笔的「点」，
+     线是从点里长出来的，不再是一条光秃秃的尺。 */
+  background-image:linear-gradient(to right,
+    color-mix(in srgb, var(--nw-read-rule-soft) 90%, transparent),
+    transparent 78%);
+  background-repeat:no-repeat;
+  background-position:6px 100%;
+  background-size:calc(62% - 6px) 1px;
+}
+.nw-read-head-slot::before{
+  content:'';position:absolute;bottom:3px;width:4px;height:4px;
+  border:1px solid var(--nw-read-rule);
+  transform:rotate(45deg);
+}
+.nw-read-head-slot[data-side="left"]::before{left:0;}
+.nw-read-head-slot[data-side="right"]::before{right:0;}
+.nw-read-head-slot > span{overflow:hidden;text-overflow:ellipsis;min-width:0;}
+.nw-read-head-slot[data-side="right"]{
+  justify-content:flex-end;
+  background-image:linear-gradient(to left,
+    color-mix(in srgb, var(--nw-read-rule-soft) 90%, transparent),
+    transparent 78%);
+  background-position:calc(100% - 6px) 100%;
+}
+/* R139：栏缝不发丝线。原来每一页内部的栏缝上各压一条全高 1px 竖线，对开四栏
+   时读起来是一张网格表，而不是一本摊开的书——书里栏与栏之间只有空白。中缝
+   的暗影已经由 .nw-read-sheet 的 ::after 负责，这里不再补线。 */
+.nw-read-crules{display:none;}
+/* Feet. Numbers in the serif, one size up from the name beside them, always on
+   the outer edge of the page that owns them. */
+.nw-read-foot{
+  position:absolute;left:50%;
+  bottom:calc(var(--nw-read-air, 18px) + 16px);
+  transform:translateX(-50%);
+  width:var(--nw-read-box, 680px);
+  display:flex;align-items:baseline;gap:var(--nw-read-gap);
+  z-index:2;pointer-events:none;color:var(--nw-read-muted);
+}
+.nw-read-foot-slot{flex:1 1 0;min-width:0;display:flex;align-items:baseline;gap:10px;}
+.nw-read-foot-slot[data-side="right"]{justify-content:flex-end;}
+.nw-read-foot-name{
+  font-size:10.5px;letter-spacing:.12em;color:var(--nw-read-muted);
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.nw-read-count{
+  font-family:var(--nw-read-serif);font-size:14px;line-height:1;
+  font-variant-numeric:tabular-nums;letter-spacing:.02em;color:var(--nw-read-faint);
+}
+.nw-read-hint{
+  font-size:10.5px;letter-spacing:.06em;color:var(--nw-read-muted);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;
+  transition:opacity .7s var(--nw-ease, ease);
+}
+.nw-read-hint[data-fade="1"]{opacity:0;}
+/* In a spread the hint sits under the crease for the first few seconds, then
+   leaves; the feet keep the numbers. One footer, not two stacks of chrome. */
+.nw-read-foot[data-spread="1"] .nw-read-hint{
+  position:absolute;left:50%;bottom:0;transform:translateX(-50%);max-width:52%;
+}
+/* The paged column. --nw-read-col is one text column, --nw-read-box is the
+   page (one column, or two plus the gutter); both are written by measure(). */
+.nw-read-flow{
+  position:relative;z-index:1;
+  width:var(--nw-read-box, 680px);height:100%;
+  column-width:var(--nw-read-col, 680px);
+  column-gap:var(--nw-read-gap);
   column-fill:auto;
   overflow-x:auto;overflow-y:hidden;
   overscroll-behavior-x:contain;
+  /* No native horizontal panning on the prose: a finger that drags across the
+     page must not slide the columns out of the sheet. Vertical panning stays
+     with the browser (there is nothing to scroll, but selection handles etc.). */
+  touch-action:pan-y;
   scrollbar-width:none;-ms-overflow-style:none;
-  /* 不用 CSS 的 smooth：翻页的位移由 slideToPage() 用 rAF 自己推，浏览器再补
-     一段 300ms 的匀速滑动只会和它打架。 */
+  /* A page turn is one assignment to scrollLeft; a browser-side smooth scroll
+     would animate that assignment and drag the columns across the sheet. */
   scroll-behavior:auto;
   color:var(--nw-fg);
-  /* R53c：焦点在这个滚动容器上（翻页靠它收方向键），但它不是「一个控件」——
-     给键盘用户看的焦点环在这里只会变成翻页时闪一下的红框。:where() 那条通用
-     焦点样式特异性为 0，这里用类选择器就盖住了。 */
+  font-family:var(--nw-read-serif);
+  /* The pane is a scroller, not a control: the generic focus ring would flash a
+     red frame on every page turn. */
   outline:none;
-  /* R53b：翻页 = 真的横向滑动。整栏内容向左/向右移过去，下一页从相反方向滑
-     进来（位移由 slideToPage() 用 rAF 推 scrollLeft 完成，不是 CSS 过渡）。
-     滑动过程中只叠一层很轻的透明度，让字从纸面底色里浮出来；不再整块淡出淡
-     入，所以看不到「一个框在动」。 */
-  transition:opacity .22s var(--nw-ease, ease);
 }
-/* 特异度要比 05-css 里那条通用焦点样式更高：它写的是 .nw-root 加 :where()
-   （0,2,0），所以这里带两层类再叠伪类。 */
 .nw-read-stage .nw-read-flow:focus,
 .nw-read-stage .nw-read-flow:focus-visible{outline:none;box-shadow:none;}
-.nw-read-gutter{transition:opacity .22s var(--nw-ease, ease);}
-/* 滑动时正文轻轻让一下色（字从纸面底色里浮出来，不是整块白底平移），页边签
-   先退场——它挂在「某一行」上，滑动中途那行已经不在原位了，跟着跑只会抖。
-   透明度只压到 .85：再低字会发灰，读起来像信号不好。 */
-.nw-read-stage[data-turn="1"] .nw-read-flow{opacity:.85;}
-.nw-read-stage[data-turn="1"] .nw-read-gutter{opacity:0;}
 .nw-read-flow::-webkit-scrollbar{width:0;height:0;}
-.nw-read-flow[data-drag="1"]{cursor:grabbing;}
-/* R55: 对开两页时，中间那道装订线。只画在两栏之间——也就是每页正中各一道，
-   不会在书页边缘多画出线来（column-rule 只出现在同一页内的栏与栏之间）。
-   单页模式下没有这条规则，所以窄屏和以前一模一样。 */
-.nw-read-flow[data-spread="1"]{column-rule:1px solid var(--nw-rule);}
+.nw-read-stage[data-drag="1"] .nw-read-flow{cursor:grabbing;}
+/* Page edge notes fade while a page is in motion (they are pinned to a line,
+   and that line is moving); they are re-painted once, after the turn ends. */
+.nw-read-gutter{transition:opacity .14s linear;}
+.nw-read-stage[data-turn="1"] .nw-read-gutter{opacity:0;}
+/* R159: 翻页进行中把居中那句提示淡掉。纸的 z-index 比页脚高，扫过来时正好从
+   「← → 翻页 · 选字可以标注」中间切过去，一行字被削掉半截——淡出比切一半好看。 */
+.nw-read-hint{transition:opacity .12s linear;}
+.nw-read-stage[data-turn="1"] .nw-read-hint{opacity:0;}
+/* A spread keeps the two text columns apart; the crease itself is drawn on the
+   sheet above, so no column-rule here. */
 .nw-read-chapter{margin:0;}
-.nw-read-chapter + .nw-read-chapter{break-before:column;}
+/* R128：换章不再强制跳到新一栏。原来每章都 break-before:column，一章若只剩
+   一两行没排完，那一栏就空出一大片，看上去像漏排。现在让它接着排，靠留白、
+   眉标与标题装饰交代换章；万一标题正落在栏底，break-after:avoid 会把它连同
+   开头几行一起挪到下一栏，不会出现「标题单独挂在栏末」。 */
+/* 注意：这个文件里的 CSS 都写在模板字面量里，注释中不能出现反引号。 */
+.nw-read-chapter + .nw-read-chapter{
+  break-before:auto;
+  /* R148：2.6em 的章间距在 1.9 行高的正文里只有一指宽，上一章的句号几乎
+     压着下一章的章标。开到 3.4em——一章结束的沉吟，才放得下一章的开头。 */
+  margin-top:3.4em;
+}
+/* Chapter opening: kicker, serif title, short rule and a diamond — all CSS,
+   no icons and no shadows. */
+.nw-read-kicker{
+  /* R148：章标离正文太近（上 .18em 下 1.1em），读成「紧贴着的一行小字」。
+     上下各放大留白，让「第 N 章」先站定，标题再落。 */
+  margin:.55em 0 1.35em;font-family:var(--nw-read-serif);
+  font-size:10.5px;line-height:1;letter-spacing:.3em;
+  color:var(--nw-read-muted);break-after:avoid;
+}
 .nw-read-title{
-  margin:0 0 1.6em;padding-bottom:.7em;
-  border-bottom:1px solid var(--nw-rule);
-  text-align:center;font-size:1.16em;font-weight:600;
-  line-height:1.5;letter-spacing:.04em;color:var(--nw-fg);
+  margin:0;
+  font-family:var(--nw-read-serif);
+  font-size:1.45em;font-weight:600;line-height:1.32;
+  letter-spacing:.03em;color:var(--nw-fg);text-align:left;
   break-after:avoid;
 }
-/* R69: 两端对齐。阅读页的段落按 Justification 排，但最后一行必须留在左边
-   （text-align-last:left）——否则每段结尾那几个字会被拉满一整行，中文里看起来
-   像是排版坏了。text-indent:2em 的首行缩进不受影响。 */
+.nw-read-orn{
+  position:relative;display:block;width:96px;height:10px;
+  /* R148：章标装饰放长到 96px、下方留白翻倍——装饰与正文之间的空隙
+     和装饰本身的形一样重要。 */
+  margin:1.3em 0 2.3em;break-after:avoid;
+}
+.nw-read-orn::before{
+  /* R148：一段实线、一枚菱形、一段渐弱的虚影——像雕版书页里
+     「线 ◇ 线」的章标花饰，而不是一条光秃的短尺。 */
+  content:'';position:absolute;left:0;top:4.5px;
+  width:96px;height:1px;
+  background:linear-gradient(to right,
+    var(--nw-read-rule) 0, var(--nw-read-rule) 36.5px,
+    transparent 36.5px, transparent 41.5px,
+    color-mix(in srgb, var(--nw-read-rule) 46%, transparent) 41.5px,
+    color-mix(in srgb, var(--nw-read-rule) 30%, transparent) 70px,
+    transparent 96px);
+}
+.nw-read-orn::after{
+  content:'';position:absolute;left:35px;top:1px;
+  width:6px;height:6px;border:1px solid var(--nw-read-rule);
+  transform:rotate(45deg);
+}
+/* Body text. Justified to the column edge, hanging punctuation off, last line
+   left — a stretched last line is the one thing that reads as "web page". */
+/* 章末的「压角」：杂志里收故事用的小方块，摆在最后一段的行末，
+   读者一眼就知道这一段是这一章的句号，不必等下一章的标题出现。 */
+.nw-read-end{
+  display:inline-block;width:.46em;height:.46em;margin-left:.62em;
+  transform:rotate(45deg);
+  background:color-mix(in srgb, var(--nw-accent) 62%, transparent);
+  vertical-align:.04em;
+}
 .nw-read-p{
-  margin:0 0 .9em;text-indent:2em;
+  margin:0 0 .3em;text-indent:2em;
   white-space:pre-wrap;overflow-wrap:break-word;word-break:normal;
-  text-align:justify;text-align-last:left;
+  text-align:justify;text-justify:inter-ideograph;text-align-last:left;
+  font-family:var(--nw-read-serif);
+  orphans:2;widows:2;
 }
 /* An empty line in the manuscript is a scene break, not a typo: it earns an
    extra line of air instead of being flattened into the paragraph wall. */
-.nw-read-p[data-gap="1"]{margin-top:1.1em;}
+.nw-read-p[data-gap="1"]{margin-top:1.05em;}
 .nw-read-p:last-child{margin-bottom:0;}
+/* The opening paragraph of a chapter loses its indent and starts with a
+   three-line initial. */
+.nw-read-chapter > .nw-read-p:first-of-type{text-indent:0;break-inside:avoid;}
+.nw-read-chapter > .nw-read-p:first-of-type::first-letter{
+  float:left;font-size:3.1em;line-height:1;font-weight:600;
+  margin:.04em .1em 0 0;color:var(--nw-fg);
+}
 /* ---- 标注（读视图）------------------------------------------------------
    Marks are drawn under the words, never over them: an underline sits below the
    glyphs, a strike-through is a line through the middle of the em box, and a
-   comment is a wash of colour plus a rule. The manuscript text itself is
-   untouched, so annotating can never change the words or the pagination. */
+   comment is a wash of colour plus a rule. Nothing here can change the words
+   or the pagination. */
 .nw-mark{border-radius:var(--nw-r-hair);}
-.nw-mark-underline{box-shadow:inset 0 -2px 0 var(--nw-mark-underline, var(--nw-brand));}
-/* R49: 1.5px 在大字号下细得像根头发，读者以为是渲染毛刺而不是自己划的线。
-   给一个随字号走的厚度：小字两像素，大字更粗。先写固定值兜底，再写 max()。 */
-.nw-mark-strike{
-  text-decoration:line-through;
-  text-decoration-color:var(--nw-mark-strike, var(--nw-danger));
-  text-decoration-thickness:2px;
-  text-decoration-thickness:max(2px, .09em);
+.nw-mark-underline{
+  /* 一条 1.5px 的细线贴着行底（inset 阴影），比 text-decoration 更贴纸面，
+     换行处也不会断成几截。 */
+  box-shadow:inset 0 -1.5px 0 color-mix(in srgb, var(--nw-mark-underline, var(--nw-brand)) 72%, transparent);
 }
+.nw-mark-strike{
+  text-decoration-line:line-through;
+  text-decoration-color:color-mix(in srgb, var(--nw-mark-strike, var(--nw-danger)) 78%, transparent);
+  text-decoration-thickness:1.5px;
+}
+/* 批注只加底色，不补底边——否则读起来和「下划线」一模一样。 */
 .nw-mark-comment{
-  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 28%, transparent);
+  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 17%, transparent);
   box-shadow:none;
 }
 .nw-mark[data-active="1"]{
-  background-color:color-mix(in srgb, var(--nw-brand) 30%, transparent);
-  box-shadow:inset 0 -1px 0 var(--nw-brand);
+  background-color:color-mix(in srgb, var(--nw-brand) 22%, transparent);
 }
-/* R84：批注只加底色，不补底边——否则读起来和「下划线」一模一样。 */
+.nw-mark-underline[data-active="1"]{box-shadow:inset 0 -1.5px 0 var(--nw-brand);}
 .nw-mark-comment[data-active="1"]{
-  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 46%, transparent);
+  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 34%, transparent);
   box-shadow:none;
 }
-/* R53d：删除线被点开时只加底色，不补底边——它身上已经有一条穿字而过的线，再加
-   一道底边就成了「删除线附带下划线」，和编辑页那个 bug 是同一个。 */
 .nw-mark-strike[data-active="1"]{box-shadow:none;}
-/* 选中的标注：用外描边而不是换色，正文颜色始终是作者的字色。 */
+/* 选中的标注：外描边，正文颜色始终是作者的字色。 */
 .nw-mark[data-selected="1"]{outline:1px solid color-mix(in srgb, var(--nw-brand) 55%, transparent);outline-offset:1px;}
-/* 页边批注签（R53）——批注不再在字里插角标。
-   用户连着两轮说「小标识遮挡字体」：只要标识和文字共处一行，行距再松也会压到
-   某个字，而且字数一多就找不到它指的是哪一句。所以标识搬出正文：落在这一页
-   右侧的页边空白里，和它指向的那一行齐平。正文一个像素都不占，也再没有遮挡
-   的可能；点这个签就等于点那条线。
-   R53 也删掉了 .nw-mark-dot 那一套（零宽锚点 + 字尾小方框）和与之配套的
-   splitByMarks 角标节点——没有东西再往正文里塞额外节点了。 */
+/* 页边批注签：一小片标签纸，细边、浅底、没有重阴影。序号仍然章内唯一，用来
+   分辨同一行上的两条批注。 */
 .nw-read-gutter{
   position:absolute;inset:0;z-index:2;
   pointer-events:none;overflow:hidden;
 }
-/* R53b：签上带**章内序号**。
-   同一行挂两条批注时，两枚签只能上下错开一格——错开之后就分不清哪枚对哪句了，
-   光靠「三个点」这种无差别图案更不可能分辨。所以每枚签写自己的序号（按 start
-   排序，一章之内唯一），再把鼠标移上去时点亮它对应的那句话：看见序号，也看见
-   它指的是哪一行。 */
 .nw-mark-side{
   position:absolute;box-sizing:border-box;
-  width:16px;height:16px;padding:0;border:0;border-radius:4px;
+  min-width:17px;height:17px;padding:0 3px;
   display:flex;align-items:center;justify-content:center;
+  border:1px solid color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 52%, transparent);
+  border-radius:2px;
+  background:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 11%, var(--nw-read-paper));
+  color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 76%, var(--nw-fg));
   pointer-events:auto;cursor:pointer;
-  font-family:var(--nw-ui-font);font-size:9px;line-height:1;
+  font-family:var(--nw-read-serif);font-size:9.5px;line-height:1;
   font-variant-numeric:tabular-nums;letter-spacing:0;
-  color:var(--nw-panel);
-  background:var(--nw-mark-comment, var(--nw-brand));
-  box-shadow:0 0 0 1px color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 30%, transparent);
-  transition:transform .12s var(--nw-ease, ease), box-shadow .12s var(--nw-ease, ease);
+  box-shadow:0 1px 0 color-mix(in srgb, var(--nw-fg) 6%, transparent);
+  transition:border-color .12s var(--nw-ease, ease), background-color .12s var(--nw-ease, ease);
 }
-.nw-mark-side:hover{transform:scale(1.12);}
-.nw-mark-side[data-active="1"]{box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-brand) 45%, transparent);}
+.nw-mark-side:hover{border-color:var(--nw-mark-comment, var(--nw-brand));}
+.nw-mark-side[data-active="1"]{
+  background:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 24%, var(--nw-read-paper));
+  border-color:var(--nw-mark-comment, var(--nw-brand));
+}
 .nw-mark-side:focus-visible{outline:2px solid var(--nw-brand);outline-offset:1px;}
-/* 鼠标停在签上、或点开一条批注时，那句话亮起来——这是「分不清是哪个」的答案。
-   R53c：原来 14% 太轻，用户说看不出来；现在 26% + 底边一道 2px 品牌线，
-   隔着一页也能一眼扫到是哪句。 */
+/* 鼠标停在签上、或点开一条批注时，那句话亮起来。 */
 .nw-mark[data-hover="1"]{
-  background-color:color-mix(in srgb, var(--nw-brand) 26%, transparent);
-  box-shadow:inset 0 -2px 0 var(--nw-brand);
+  background-color:color-mix(in srgb, var(--nw-brand) 20%, transparent);
 }
-/* R84：同上，批注悬停只加深底色。 */
+.nw-mark-underline[data-hover="1"]{box-shadow:inset 0 -2px 0 var(--nw-brand);}
 .nw-mark-comment[data-hover="1"]{
-  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 38%, transparent);
+  background-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 30%, transparent);
   box-shadow:none;
 }
-/* R53d：删除线悬停时也只加底色。底边一旦补上去，删除线底下就多出一道下划线——
-   这正是用户报的那个 bug，只不过换了个触发状态。 */
 .nw-mark-strike[data-hover="1"]{box-shadow:none;}
 .nw-read-empty{
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:var(--nw-sp-2);height:100%;
-  color:var(--nw-soft);font-family:var(--nw-ui-font);font-size:var(--nw-fs-second);
+  color:var(--nw-read-muted);font-family:var(--nw-read-serif);font-size:var(--nw-fs-second);
 }
-.nw-read-foot{
-  flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;
-  gap:var(--nw-sp-3);
-  padding:var(--nw-sp-2) clamp(20px,6vw,64px) clamp(14px,3vh,30px);
-  font-family:var(--nw-ui-font);font-size:var(--nw-fs-micro);color:var(--nw-soft);
-}
-.nw-read-hint{transition:opacity .7s var(--nw-ease, ease);}
-.nw-read-hint[data-fade="1"]{opacity:0;}
-.nw-read-count{font-variant-numeric:tabular-nums;letter-spacing:.06em;}
 /* ---- 标注工具条 / 标注详情 ----------------------------------------------
-   Both float inside .nw-read-stage, so they travel with the page column
-   instead of the window — a toolbar anchored to the viewport would drift away
-   from the sentence as soon as the writer turns a page. */
+   Both float inside .nw-read-stage, so they travel with the page rather than
+   the window. */
 .nw-mark-bar{
   position:fixed;z-index:34;
   display:inline-flex;align-items:center;gap:2px;
@@ -16359,10 +17331,7 @@ const SEL_EMIT_MS = 120;
 .nw-mark-pop-btn[data-primary="1"]{background:var(--nw-brand);border-color:var(--nw-brand);color:var(--nw-panel);}
 /* 两个按钮那一版只是个小条，不该占满正文宽度。 */
 .nw-mark-pop.nw-mark-pick{width:auto;padding:4px;}
-/* R52：写批注那一版再窄一点、再矮一点——它是一张便条，不是一块面板。
-   用户说「编辑框太大」，所以宽度收到 176px、留白也收，让它真的像贴在字边上的便签。
-   R53：再收一档（196px 上限）并让它贴着点击处张开；输入框一行高、随字长高，
-   最多三行半，绝不先占一块空面板。 */
+/* R52：写批注那一版再窄一点、再矮一点——它是一张便条，不是一块面板。 */
 .nw-mark-pop.nw-mark-edit{width:min(196px,calc(100vw - 16px));padding:5px;gap:3px;}
 .nw-mark-pop-note{
   box-sizing:border-box;width:100%;min-height:24px;max-height:64px;
@@ -16373,41 +17342,17 @@ const SEL_EMIT_MS = 120;
   resize:none;overflow-y:auto;
 }
 .nw-mark-pop-note:focus{outline:none;border-color:var(--nw-brand);}
-/* R53e：把一条下划线写成批注时，窗里那一行小字——说明「写下字它就不是下划线了」。
-   灰、小、不抢按钮，但必须有：这是唯一会让线本身变样的操作。R53g 之后窗里只剩
-   一颗「删除」，这行字反而成了唯一的说明，所以留在批注窗底部、输入框下面。 */
 .nw-mark-pop-hint{
   color:var(--nw-soft);font-size:calc(var(--nw-fs-tiny) - 1px);
   line-height:1.35;padding:0 2px;
 }
 .nw-mark-pop-btn[data-danger="1"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 45%, var(--nw-line-strong));}
-@media (max-width: 560px){
-  .nw-mark-bar-btn{padding:0 8px;}
-  .nw-mark-pop{width:min(208px,calc(100vw - 16px));}
-}
 @media (prefers-reduced-motion: reduce){
   .nw-read{animation:none;}
-  .nw-read-flow{scroll-behavior:auto;transition:none;}
+  .nw-read-flow{scroll-behavior:auto;}
   .nw-read-gutter{transition:none;}
-  .nw-read-stage[data-turn="1"] .nw-read-flow{opacity:1;}
   .nw-mark-pop{animation:none;}
   .nw-mark-side{transition:none;}
-}
-/* R117：手机单栏档。这里原本是 @media (max-width:560px)——按**窗口**断点，
-   但插件挂在宿主侧栏里，栏宽可能比窗口窄得多（桌面分栏时也一样），按窗口判
-   会把手机样式漏掉。.nw-read 在 .nw-root 内，而 .nw-root 是 container:nw，
-   所以改按容器宽判，和 60-editor / 98b-responsive 的断点同一条基准。 */
-@container nw (max-width: 560px){
-  .nw-read-bar{padding-top:var(--nw-sp-2);}
-  .nw-read-stage{padding:0 14px;}
-  .nw-read-foot{padding-left:14px;padding-right:14px;}
-  /* 瞬时翻页：go() 在 compact 下不再 set data-turn，这里再兜一层，防止别的
-     路径（比如旧版本残留、或未来某处补了 data-turn）又触发 .22s 透明度过渡。 */
-  .nw-read-flow{transition:none;}
-  .nw-read-stage[data-turn="1"] .nw-read-flow{opacity:1;}
-  /* 没有页边可放批注签；paintGutter 也已提前返回，这里只是不让空层挡住
-     正文的点击/滑动命中。 */
-  .nw-read-gutter{display:none;}
 }
 `);
 
@@ -16417,7 +17362,9 @@ const SEL_EMIT_MS = 120;
    * props:
    *   novel       — 当前这本书（只用来显示书名，可为 null）
    *   chapters    — 这本书的所有章节（已按文档顺序、含 content）
-   *   currentId   — 打开时想停在哪一章
+   *   currentId   — 编辑器当前那一章（决定哪一章读实时文本）
+   *   startId     — 打开时想停在哪一章（R129：目录里点「读这一章」/「读整本」）；
+   *                 省略时等同 currentId
    *   currentText — 当前章节编辑器里的**实时**文本（含尚未保存的字）
    *   settings    — 用来沿用字号/行高/主题
    *   marks       — 整本书的标注（`{id, chapterId, kind, start, end, note}`）
@@ -16426,18 +17373,61 @@ const SEL_EMIT_MS = 120;
    *   onNote      — `(id, note) => void`，改批注正文
    *   onClose     — 退出
    */
+  // R130: 朗读的两个偏好（语速 / 音色）只影响听感，不写进 settings —— 换台机器
+  // 听同一本书时，用那台机器自己的声音更合理。
+  function readSpeakPref(key) {
+    try {
+      return window.localStorage.getItem('nw.tts.' + key) || '';
+    } catch (err) {
+      return '';
+    }
+  }
+  function writeSpeakPref(key, value) {
+    try {
+      window.localStorage.setItem('nw.tts.' + key, String(value));
+    } catch (err) {
+      /* 隐私模式下写不进去，本次会话仍然是生效的 */
+    }
+  }
+
   NW.ReadView = function ReadView(props) {
     const p = props || {};
     const settings = p.settings || {};
 
     const fontSize = clampNum(numOf(settings.fontSize, 20), 11, 42);
     const lineHeight = clampNum(numOf(settings.lineHeight, 2), 1.1, 3.4);
+    // R125: 一页正文分几栏。1 = 单栏，2 = 双栏；测量时还会被「一栏至少 22
+    // 个字」这条底线再压回去，所以这个值只是偏好，不是命令。
+    const readColumns = clampNum(numOf(settings.readColumns, 2), 1, 2) >= 2 ? 2 : 1;
     const themeKey = THEME_KEYS[String(settings.theme || '')] ? String(settings.theme) : 'claude';
+    // R159：字形原来写死在 CSS 里（--nw-read-serif 是一串宋体），用户在设置里挑的
+    // 字体只影响编辑器，读书时永远是宋体——「字体不生效」的根就是这个。
+    // 这里把同一份偏好抬成 --nw-read-serif：正文、纸上副本、页码、眉题全都吃这个
+    // 变量，一处赋值全身生效。写法跟编辑器的 fontStackOf 一致：已经是字体栈
+    // （带逗号或引号）就原样用，只写了一个族名就补一层兜底。
+    const readerFont = (() => {
+      const raw = String(settings.fontFamily || '').trim();
+      if (!raw) return '';
+      if (/[,"']/.test(raw)) return raw;
+      return '"' + raw.replace(/"/g, '') + '","Songti SC","SimSun",serif';
+    })();
     const novelTitle = p.novel && p.novel.title ? String(p.novel.title) : '';
     const currentId = p.currentId == null ? null : String(p.currentId);
+    // R129：开场停在哪一章。目录里的「读这一章」传这一章的 id，「读整本」传第一章；
+    // 都不传时沿用编辑器当前章（dock 上的「读一遍」）。
+    const startId = p.startId == null ? currentId : String(p.startId);
     const currentText = typeof p.currentText === 'string' ? p.currentText : null;
-    const chapters = (Array.isArray(p.chapters) ? p.chapters : []).filter(Boolean);
-    const marks = (Array.isArray(p.marks) ? p.marks : []).filter(Boolean);
+    // 这两个数组每次渲染都会被重建，而「翻页」恰好就是一次渲染。正文的 useMemo
+    // 靠它们的**引用**判断要不要把整本书重新拆段——不缓存的话，按一下方向键
+    // 就要拆两万行，那才是翻页卡顿的真正来源（动画本身几乎不花时间）。
+    const chapters = React.useMemo(
+      () => (Array.isArray(p.chapters) ? p.chapters : []).filter(Boolean),
+      [p.chapters],
+    );
+    const marks = React.useMemo(
+      () => (Array.isArray(p.marks) ? p.marks : []).filter(Boolean),
+      [p.marks],
+    );
 
     const stageRef = React.useRef(null);
     const flowRef = React.useRef(null);
@@ -16447,11 +17437,10 @@ const SEL_EMIT_MS = 120;
     const activeRef = React.useRef('');
     const noteRef = React.useRef(null);
     const composerRef = React.useRef(null);
-    const turnTimersRef = React.useRef([]);
-    // 正在跑的滑动动画（一次一帧，翻页/卸载时取消）。
+    // 正在跑的翻页动画（一次一帧，翻页/卸载时取消）。
     const slideRef = React.useRef(0);
-    // 滑动开始时容器的 scroll-behavior 原值：中途被打断要还回去。
-    const slideWasRef = React.useRef('');
+    // 拖拽翻页：松手时要看起手时的 scrollLeft 和最后几帧的速度，决定翻过去还是弹回。
+    const dragRef = React.useRef(null);
     const marksRef = React.useRef({});
     const jumpedRef = React.useRef(false);
     const pageRef = React.useRef(0);
@@ -16463,20 +17452,39 @@ const SEL_EMIT_MS = 120;
     const wheelRef = React.useRef({ acc: 0, at: 0 });
 
     // w = 栏宽（= 行宽），gap = 栏间距，total = 总页数。三者都来自真实布局测量。
-    const [layout, setLayout] = React.useState({ w: 0, gap: 0, total: 1 });
+    const [layout, setLayout] = React.useState({
+      w: 0, gap: 0, total: 1, cols: 1, textCols: 1, colW: 0, step: 0, starts: [],
+    });
     const [page, setPage] = React.useState(0);
+    // R148：页码/眉题印的是「纸面上此刻该有的那页」，不是正文书页。翻页是正文
+    // 先跳、纸后落：数字若跟着正文一起跳，就会在纸还没翻过去时先变（页码抢跑）。
+    // R149：而且对开的两半**不是同时换的**——被掀起的那一半从第一帧起露出的
+    // 就是新页，被纸压着的那一半要等纸落上来才轮到。所以台面页码按「半」取：
+    // shownPage 记台面这一跨页，halfOverride 记翻页期间先换掉的那一半。
+    const [shownPage, setShownPage] = React.useState(0);
+    const shownPageRef = React.useRef(0);
+    const setShown = React.useCallback((idx) => {
+      if (shownPageRef.current === idx) return;
+      shownPageRef.current = idx;
+      setShownPage(idx);
+    }, []);
+    // 翻页途中先换码的那一半：{ side: 'left' | 'right', page } | null。
+    // 它只在纸飞着的时候存在，stopFlip 一撤，两半重新跟 shownPage。
+    const [halfOverride, setHalfOverride] = React.useState(null);
+    // 正在飞的这一页：to = 纸要落到的那一页；live = 纸真的在飞（armFlip 成功）。
+    const turnPagesRef = React.useRef({ to: 0, live: false });
     const [hintOn, setHintOn] = React.useState(true);
 
-    const maxPage = Math.max(0, layout.total - 1);
+    // R159：能停的最大页号还要受「正文真的能滚到哪」限制。total 是页数，最后一页
+    // 的落点是 (total - 1) * step，而正文最多只滚到 scrollWidth - box。对开时最后
+    // 那一跨页是 (total-2, total-1)，两者正好相等。旧代码只按 total - 1 夹，End 键
+    // 会把 page 记成滚不到的那一页——正文被浏览器夹回一页，数字却按后一页印，
+    // 于是书末印出「25 | 26」这种对不上的号。
+    const fitPage = layout.fit == null ? layout.total - 1 : layout.fit;
+    const maxPage = Math.max(0, Math.min(layout.total - 1, fitPage));
     // R55：一页有多宽（单页 = 一栏 + 栏距，对开 = 两栏 + 两个栏距里的一整段）。
     // 由 measure() 算好后放进 layout，凡是「翻一页」都读它，别再各自拼 w+gap。
     const step = layout.step || (layout.w + layout.gap);
-    // R117：手机上的「读一遍」是单栏窄页。这个尺寸下，翻页动画、滚动结束的
-    // 回正吸附、页边批注签重画都只是在和手指抢帧：一次翻页要跑 190–560ms 的
-    // rAF，一次松手要再跑一段吸附，滚动时每 90ms 还要 querySelectorAll 整页
-    // 标注再绝对定位。单栏窄页没有第二栏要对齐，也没有页边可以放签，所以
-    // 直接读成「瞬时翻页 + 不吸附 + 不画签」，把滚动留给浏览器合成。
-    const compact = layout.w > 0 && (layout.cols || 1) === 1 && layout.w < 600;
 
     const close = React.useCallback(() => {
       if (typeof p.onClose === 'function') p.onClose();
@@ -16511,135 +17519,882 @@ const SEL_EMIT_MS = 120;
       }
     }, []);
 
-    const clearTurns = () => {
-      const list = turnTimersRef.current;
-      for (let i = 0; i < list.length; i += 1) window.clearTimeout(list[i]);
-      turnTimersRef.current = [];
-      if (slideRef.current) {
-        window.cancelAnimationFrame(slideRef.current);
-        slideRef.current = 0;
-        // 半路叫停的滑动必须把自己临时改过的 scroll-behavior 还回去，否则这
-        // 本书后面所有的「瞬间跳页」都会变成 300ms 的匀速滑动。
-        const flow = flowRef.current;
-        if (flow) flow.style.scrollBehavior = slideWasRef.current;
-      }
-    };
+    // ---- 翻页：落位一次 + 掀一张带字的纸 -------------------------------------
+    //
+    // 正文（多栏流）**永不横移**：`flow.scrollLeft` 只在换页那一刻被赋值一次，
+    // 直接落到整页。看上去在动的是 `.nw-read-flip` 里那张纸，而且纸上印着**被
+    // 掀走的那一页**的字：舞台上另有一份同样的多栏副本（.nw-read-copy），只装
+    // 当前章附近几章，用同样的栏宽、栏距、行高排好；翻页时只把它的 scrollLeft
+    // 指到旧页。所以动画路径里没有 measure、没有 getBoundingClientRect、没有
+    // querySelectorAll，只有 transform / opacity 交给合成器。
+    const flipWrapRef = React.useRef(null);
+    const leafRef = React.useRef(null);
+    const castRef = React.useRef(null);
+    // R156: 一张纸，两面。正面副本印离开的那页，背面副本印翻到的那页；
+    // 每面各有一道贴在折线上的渐变，弧度不再由几何产生。
+    const frontCopyRef = React.useRef(null);
+    const backCopyRef = React.useRef(null);
+    const frontShadeRef = React.useRef(null);
+    const edgeRef = React.useRef(null);
+    const backShadeRef = React.useRef(null);
+    // R156: 两面在 180 度附近共面，浏览器会把正面的背面对着人画出来（纸背上
+    // 透出上一层字）。过了 90 度就按朝向明开关一面，和 turn.js 换 fpage 一样。
+    const frontFaceRef = React.useRef(null);
+    const backFaceRef = React.useRef(null);
+    // 摆纸那一刻量出来的几何（纸宽 / 每条宽 / 朝哪个方向），掀页时只用来算角度。
+    const poseGeomRef = React.useRef(null);
+    const rafRef = React.useRef(0);
+    const coverRef = React.useRef(null);
+    const coverCopyRef = React.useRef(null);
+    const flipAnimRef = React.useRef(null);
+    const coverAnimRef = React.useRef(null);
+    const castAnimRef = React.useRef(null);
+    // The leaf is laid out against the geometry of this moment. When the panel
+    // crosses the spread threshold the column count changes and the copy printed
+    // on the leaf reflows with it, so remember what it was laid out for: a new
+    // geometry is a reason to take the sheet down (see abortTurn).
+    const armColsRef = React.useRef(0);
+    const geometryRef = React.useRef('');
+    const flipTimerRef = React.useRef(0);
+    const flipGenRef = React.useRef(0);
+    const mirrorOriginRef = React.useRef(0);
+    const fadeRef = React.useRef(null);
+    // 掀页途中不能换副本里的那几章：换一次就要重排那几章，纸上正在飞的字会
+    // 跳。所以窗口的移动推迟到落定之后（turnEpoch 只是把它叫醒）。
+    const turningRef = React.useRef(false);
+    const [turnEpoch, setTurnEpoch] = React.useState(0);
 
-    // 瞬间落到某一页：把 CSS 的平滑滚动临时关掉，否则「瞬间」也会被浏览器补
-    // 成一段 300ms 的滑动。要滑动的翻页走 slideToPage()，这里只负责「立刻」。
-    const scrollToPage = React.useCallback((index) => {
-      const flow = flowRef.current;
-      if (!flow) return;
+    // 纸上两面各自的字，各自指到自己的那一页：正面印离开的那页，背面印翻到的
+    // 那页。副本只装了几章，所以要减掉它第一章在正文里的左边距——两个数都是量
+    // 好的（layout.starts 里的 left），这里只做减法。
+    const syncCopies = React.useCallback((frontAt, backAt) => {
       const s = step;
-      if (!s) return;
-      const left = Math.round(index * s);
-      // 让滚动监听器在这段时间里安静：中途每一帧的 scrollLeft 都落在两页之间，
-      // 不屏蔽会把页码拖来拖去。
-      quietRef.current = Date.now() + 200;
-      const was = flow.style.scrollBehavior;
-      flow.style.scrollBehavior = 'auto';
-      flow.scrollLeft = left;
-      flow.style.scrollBehavior = was;
+      if (!(s > 0)) return;
+      const origin = mirrorOriginRef.current;
+      const front = Math.max(0, Math.round(frontAt * s) - origin);
+      const back = Math.max(0, Math.round(backAt * s) - origin);
+      const fc = frontCopyRef.current;
+      if (fc) fc.scrollLeft = front;
+      const bc = backCopyRef.current;
+      if (bc) bc.scrollLeft = back;
+      const c = coverCopyRef.current;
+      if (c) c.scrollLeft = Math.max(0, Math.round(frontAt * s) - origin);
     }, [step]);
 
-    // R53b：把「翻页」做成一次真正的横向滑动。滚的是容器的 scrollLeft，所以
-    // 效果就是整页内容往一侧走、下一页从另一侧进来——和纸质书翻页时视线移动
-    // 的方向一致。用 rAF 自己推，是为了控制时长和缓动（CSS 的 smooth 是 300ms
-    // 匀速，收尾很硬），也让「滑到一半又按了下一翻」能立刻改向。
-    const slideToPage = React.useCallback((index) => {
-      const flow = flowRef.current;
+    const stopFlip = React.useCallback(() => {
+      flipGenRef.current += 1;
+      if (flipTimerRef.current) {
+        window.clearTimeout(flipTimerRef.current);
+        flipTimerRef.current = 0;
+      }
+      const anim = flipAnimRef.current;
+      flipAnimRef.current = null;
+      if (anim) {
+        try {
+          anim.cancel();
+        } catch (err) {
+          /* 老浏览器没有 WAAPI：纸面已经收回去了，无所谓 */
+        }
+      }
+      const coverAnim = coverAnimRef.current;
+      coverAnimRef.current = null;
+      if (coverAnim) {
+        try {
+          coverAnim.cancel();
+        } catch (err) {
+          /* ignore */
+        }
+      }
+      const castAnim = castAnimRef.current;
+      castAnimRef.current = null;
+      if (castAnim) {
+        try {
+          castAnim.cancel();
+        } catch (err) {
+          /* ignore */
+        }
+      }
+      turningRef.current = false;
+      // R149：纸收走了（落定、被打断或卸载清理），台面两半一起对回正文书页：
+      // 先撤掉翻页期间那半边的覆盖，再对齐 shownPage。没飞完就被收走的翻页，
+      // 数字不会停在半空。setShown 里有同值守卫，卸载清理也不会 setState。
+      turnPagesRef.current.live = false;
+      setHalfOverride(null);
+      setShown(pageRef.current);
+      const wrap = flipWrapRef.current;
+      if (wrap) {
+        wrap.removeAttribute('data-live');
+        // R158: poseFlip 为了换面会在两面写 inline visibility:visible。
+        // visibility 是继承的，但子元素把 visible 写回去就会盖掉父层的 hidden——
+        // 于是一次翻页之后，那张纸就永远留在屏幕上，副本停在页首，右半页变成
+        // 左半页的复制品。这里必须把 inline 值清掉，让父层的 hidden 生效。
+        if (frontFaceRef.current) frontFaceRef.current.style.visibility = '';
+        if (backFaceRef.current) backFaceRef.current.style.visibility = '';
+        wrap.removeAttribute('data-dir');
+        wrap.removeAttribute('data-single');
+      }
+      if (rafRef.current) {
+        window.cancelAnimationFrame(rafRef.current);
+        rafRef.current = 0;
+      }
+      const leaf = leafRef.current;
+      if (leaf) {
+        leaf.style.transform = 'rotateY(0deg)';
+        if (edgeRef.current) edgeRef.current.style.opacity = '0';
+      }
+      const fs = frontShadeRef.current;
+      if (fs) {
+        fs.style.opacity = '0';
+        fs.style.transform = 'scaleX(0)';
+      }
+      const bs = backShadeRef.current;
+      if (bs) {
+        bs.style.opacity = '0';
+        bs.style.transform = 'scaleX(0)';
+      }
+      const ff = frontFaceRef.current;
+      if (ff) ff.style.visibility = 'visible';
+      const bf = backFaceRef.current;
+      if (bf) bf.style.visibility = 'hidden';
+      const cover = coverRef.current;
+      if (cover) {
+        cover.removeAttribute('data-on');
+        cover.style.opacity = '';
+      }
+      const cast = castRef.current;
+      if (cast) cast.style.opacity = '0';
+    }, []);
+
+    // The geometry changed (single page became a spread, or the column width
+    // changed): the copy printed on the leaf was laid out for the old geometry,
+    // so leaving that sheet in the air stacks it on the new layout -- which is
+    // exactly the third column of text that shows up when a single page widens
+    // into a spread. Take the sheet down before anything is re-measured.
+    const abortTurn = React.useCallback(() => {
+      const wasTurning = turningRef.current;
+      stopFlip();
+      if (!wasTurning) return;
+      const st = stageRef.current;
+      if (st) st.removeAttribute('data-turn');
+      setTurnEpoch((n) => n + 1);
+    }, [stopFlip]);
+
+    const clearTurns = React.useCallback(() => {
+      stopFlip();
+      if (fadeRef.current) {
+        try {
+          fadeRef.current.cancel();
+        } catch (err) {
+          /* ignore */
+        }
+        fadeRef.current = null;
+      }
       const stage = stageRef.current;
-      if (!flow || !stage) {
-        if (stage) stage.removeAttribute('data-turn');
-        return;
+      if (stage) stage.removeAttribute('data-turn');
+    }, [stopFlip]);
+
+    // 页边签是命令式画的：翻页落位后补一次，滚动过程中一次都不画——原来每
+    // 90ms 扫一遍整页 `.nw-mark`（还连着 getClientRects），掉帧就是它。
+    const repaintGutter = React.useCallback(() => {
+      const fn = paintGutterRef.current;
+      if (typeof fn === 'function') fn();
+    }, []);
+
+    // 摆好那张纸（不带动画）：方向、单/双栏、正反两面的字各指到自己的那一页。
+    // 单栏时整页都在纸上，所以不需要底下的那一塊；对开时底下那一半由 turnTo 打开。
+    // R142：`frontAt` 是正面印的那页（离开的那页），`backAt` 是背面印的那页
+    // （翻到的那页）——纸要转到 180°，所以两面都得先印好。
+    const armFlip = React.useCallback((dir, frontAt, backAt) => {
+      const wrap = flipWrapRef.current;
+      if (!wrap || !leafRef.current) return false;
+      wrap.setAttribute('data-dir', dir > 0 ? 'fwd' : 'back');
+      const single = layout.cols < 2;
+      if (single) wrap.setAttribute('data-single', '1');
+      else wrap.removeAttribute('data-single');
+      wrap.setAttribute('data-live', '1');
+      const ff = frontFaceRef.current;
+      if (ff) ff.style.visibility = 'visible';
+      const bf = backFaceRef.current;
+      if (bf) bf.style.visibility = 'hidden';
+      armColsRef.current = layout.cols;
+      // 纸宽全部由量好的栏宽推出来，不去读 DOM：对开时是一半书页，单栏时是整页。
+      const box = layout.w * layout.cols + layout.gap * (layout.cols - 1);
+      const pad = 30;
+      const sheet = box + pad * 2;
+      const leafW = single ? sheet : (sheet - 1) / 2;
+      // 对开前翻时纸的左边就是书缝，反翻和单栏时纸的左边在整页左缘外面
+      // 那圈页边距上。
+      const spreadFwd = !single && dir > 0;
+      const side = dir > 0 ? 1 : -1;
+      // R159：明暗带的方向（贴折线那一道在左还是在右）。正面在回翻时、背面在
+      // 前翻时，画在纸上的折线落在右边；这两个情况要靠 scaleX 取负来镜像。
+      // 这里一次算好存进 geom，每帧只写 transform / opacity，不再改宽度——
+      // 改宽度会让浏览器重排纸里的整份正文（两列排版），一帧能卡 200ms。
+      poseGeomRef.current = {
+        dir: side,
+        leafW: leafW,
+        mirrorFront: side < 0,
+        mirrorBack: spreadFwd || single,
+      };
+      // 半个对开：书缝在正文第 w+gap/2 列（w 已是「一页两栏 + 页内一缝」）。
+      const spineAt = layout.w + layout.gap / 2;
+      // 正面：纸的左边对上「离开的那一页」。
+      const frontLeft = spreadFwd ? -spineAt : pad;
+      // 背面在纸上已经转了 180 度，横向坐标是镜像的。对开前翻落到左页，
+      // 副本让开一个页边距；回翻落到右页，副本要向左让出书缝那一半；单栏的
+      // 背面已经翻到书外，只需保证那一瞬的字不反。
+      const backLeft = spreadFwd ? pad : (single ? pad : -spineAt);
+      const fc = frontCopyRef.current;
+      if (fc) fc.style.left = (frontLeft + 0.35).toFixed(3) + 'px';
+      const bc = backCopyRef.current;
+      if (bc) bc.style.left = (backLeft + 0.35).toFixed(3) + 'px';
+      // 页脚和副本共用同一个横向原点；整张纸只写一次。
+      leafRef.current.style.setProperty('--nw-foot-front', (frontLeft + 0.35).toFixed(3) + 'px');
+      leafRef.current.style.setProperty('--nw-foot-back', (backLeft + 0.35).toFixed(3) + 'px');
+      syncCopies(frontAt, backAt);
+      return true;
+    }, [layout.cols, layout.w, layout.gap, syncCopies]);
+
+    // ---- turn.js 的一张纸 --------------------------------------------
+    // 纸是刚体平面，只绕书脊转；弧度不靠分段，靠叠加在纸面上的两道渐变
+    // （正面贴折线一道暗、紧贴折线一道亮，背面贴折线更暗）画出来。所有节点与
+    // 几何都在 armFlip 里准备好，这里不读布局、不查询 DOM。
+    const poseFlip = React.useCallback((angleDeg) => {
+      const leaf = leafRef.current;
+      if (!leaf) return;
+      const abs = Math.min(200, Math.abs(angleDeg));
+      const rise = Math.min(1, abs / 180);
+      const swing = Math.sin(Math.PI * rise);
+      const g = poseGeomRef.current;
+      const side = g && g.dir ? g.dir : 1;
+      const leafW = g && g.leafW ? g.leafW : 500;
+      leaf.style.transform = 'rotateY(' + angleDeg.toFixed(2) + 'deg)';
+      // turn.js 的 gradientSize：纸越侧过去，折线旁的明暗带越宽；贴平或落定
+      // 时 sin=0，带子消失。R159：宽度不用改——两道渐变条铺满整面，用
+      // scaleX 压出来。改宽度会重排纸里的正文（两列排版），那是翻页中途卡
+      // 200ms 的原因；scaleX 只重投影，不碰布局。
+      const gmirrorF = g && g.mirrorFront ? -1 : 1;
+      const gmirrorB = g && g.mirrorBack ? -1 : 1;
+      const frontShade = frontShadeRef.current;
+      if (frontShade) {
+        frontShade.style.transform = 'scaleX(' + (gmirrorF * swing).toFixed(4) + ')';
+        frontShade.style.opacity = swing.toFixed(3);
       }
+      const backShade = backShadeRef.current;
+      if (backShade) {
+        backShade.style.transform = 'scaleX(' + (gmirrorB * swing).toFixed(4) + ')';
+        backShade.style.opacity = swing.toFixed(3);
+      }
+      // R157: 90 度附近纸是侧着的，投影为零。这道切口只在这个角度窗口里浮现，
+      // 越接近正侧越实（rise=0.5），离开 ±22 度就完全隐去。
+      const edge = edgeRef.current;
+      if (edge) edge.style.opacity = Math.max(0, 1 - Math.abs(rise - 0.5) * 8).toFixed(3);
+      // 纸过 90 度翻到背面。浏览器在两面共面时偶尔会把背面的正面也画出来，
+      // 形成重影；这里像 turn.js 换 fpage 一样，按朝向把另一面关掉。
+      const over = abs > 90;
+      const ff = frontFaceRef.current;
+      if (ff) ff.style.visibility = over ? 'hidden' : 'visible';
+      const bf = backFaceRef.current;
+      if (bf) bf.style.visibility = over ? 'visible' : 'hidden';
+
+      // R149：页码不在这里换。对开的两半不是同时露出来的——被掀起的那一半从
+      // 第一帧起就该是新页（turnTo 用 halfOverride 一次登记），被压住的那一半
+      // 等纸落地（stopFlip）才换。R148 在这里按 90° 整体换码，结果外缘的页码
+      // 与它旁边真正印着的内容对不上：前半程新右页配旧页码，后半程旧左页配新页码。
+
+      // 落影是一道随自由边横跨书页的椭圆。纸越竖直，投影越窄；纸越高，
+      // 影子越柔、越明显。它和 turn.js 的 bshadow 是同一个意思：让底下那张
+      // 纸知道有一页正从它上面过去。
+      const cast = castRef.current;
+      if (cast) {
+        const base = angleDeg * Math.PI / 180;
+        const flat = Math.abs(Math.cos(base));
+        const shift = Math.cos(base) * side * leafW * 0.34;
+        cast.style.opacity = (0.62 * swing).toFixed(3);
+        cast.style.transform = 'translateX(-50%) translateX(' + shift.toFixed(2)
+          + 'px) scaleX(' + (0.42 + 0.58 * flat).toFixed(3) + ')';
+      }
+    }, []);
+
+    // R149：纸的转速。旧曲线起手先甩出 7%、再按 2.35 次幂一路减速——一半的
+    // 时间就走完 85% 的角度，剩下的四成时间全耗在最后 28° 上，读起来是「甩开
+    // 又悬住」；末尾 1.035 的回摆还让纸越过 180° 往书里扎 6°，落页那一下像被
+    // 弹回来。
+    // R159：余弦曲线（0.5-0.5cos）两端速度都是 0，起手 90ms 里纸只走 3.7°，
+    // 读起来是「先愣一下再甩出去」——而按方向键后第一帧总要等 React 提交和
+    // 正文重绘（实测 30~70ms），两段延迟叠在一起就是用户说的"卡"。
+    // 改成 1-(1-t)^1.8：起手不留白，前 100ms 就走掉六分之一的角度，末尾仍然
+    // 速度归零、不越界，落页是收住而不是撞住。
+    const turnCurve = (t) => 1 - Math.pow(1 - Math.min(1, t), 1.8);
+
+    const turnTo = React.useCallback((index, fromAngle) => {
+      const flow = flowRef.current;
       const s = step;
-      if (!s) {
-        stage.removeAttribute('data-turn');
-        return;
+      if (!flow || !(s > 0)) return;
+      const cur = pageRef.current;
+      const next = Math.max(0, Math.min(maxPage, index));
+      if (next === cur) return;
+      const dir = next > cur ? 1 : -1;
+      const still = typeof window.matchMedia === 'function'
+        && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const stage = stageRef.current;
+
+      // R142：真书翻页永远是**半圈**——一页纸从这一侧平放，经竖直，落到另一
+      // 侧平放，正好 180°。原来只转到 ±90° 就停、再靠底下一层淡出收尾，所以
+      // 看着像「纸抬起来就没了」。现在两个方向走同一条路：
+      //   向后翻：右页绕书脊 0 → -180，落在左页上，把它盖住
+      //   向前翻：左页绕书脊 0 → +180，落在右页上，把它盖住
+      // 过 90° 之后读者看到的是纸背，纸背上印的是翻到的那一页（backCopyRef）。
+
+      // 0) 把纸摆好。正面印**离开的那一页**，背面印**翻到的那一页**。
+      //    这一步只有三次 scrollLeft 赋值，不排一次版。
+      stopFlip();
+      // R159：纸背印的是**落下来之后那一侧的那一页**，两侧的窗口公式不一样，
+      // 所以 backAt 不能两向都取 next：向前翻，纸落到左半，左半露出的是
+      // next + 1（拷贝窗口的左半边）；向后翻，纸落到右半，右半露出的是
+      // next + 2，也就是拷贝窗口右半边要挪到 next + 1 这一页上。原来两向都用
+      // next，向后翻时纸背一直印着前一页（第 2 页的位置上是第 1 页的字），
+      // 落定的那一帧才跳回来——这就是向后翻「最后一下字会闪」的来源。
+      const backAt = dir > 0 ? next : Math.min(layout.total - 1, next + 1);
+      const armed = !still && armFlip(dir, cur, backAt);
+      turningRef.current = armed;
+      // R149：登记这一趟翻页。纸背的页码读 to（翻到的那页）；台面上被掀起的
+      // 那一半（向前翻是右半，向后翻是左半）从这一帧起就换成新页——它从第一
+      // 帧起就在露出新内容，只有被纸完全盖住的那几帧看不见。另一半留在旧页，
+      // 等纸落上来由 stopFlip 一起对齐。没有纸可翻时下面 !armed 分支直接换。
+      turnPagesRef.current = { to: next, live: armed };
+      setHalfOverride(armed ? { side: dir > 0 ? 'right' : 'left', page: next } : null);
+      const cover = coverRef.current;
+      if (armed && cover && layout.cols > 1) {
+        // 还没被纸盖住的那一半仍然是旧页（真书上那一侧还没动）：向后翻时旧的
+        // 左页要一直留到纸落上来，向前翻时旧的右页同理。
+        cover.setAttribute('data-half', dir > 0 ? 'left' : 'right');
+        cover.setAttribute('data-on', '1');
+        cover.style.opacity = '1';
       }
-      const from = flow.scrollLeft;
-      const to = Math.round(index * s);
-      const dist = Math.abs(to - from);
-      if (dist < 2) {
-        scrollToPage(index);
+
+      // 1) 落位：整页瞬跳。**这是整个翻页过程中唯一一次写正文的 scrollLeft。**
+      //    R142：两个方向都在开头落位。真书上，纸一被挑起，底下那一半立刻就是
+      //    新页；不该露的那一半由上面的 cover 顶着。原来回翻要等纸落下来才跳，
+      //    是因为那时纸只转到竖直、必须靠旧页兜住，现在纸会自己盖住那一半。
+      const drop = () => {
+        pageRef.current = next;
+        setPage(next);
+        quietRef.current = Date.now() + 720;
+        const at = Math.round(next * s);
+        if (Math.abs(flow.scrollLeft - at) > 1) flow.scrollLeft = at;
+      };
+
+      // 2) 新页很轻地淡进来（0.82 → 1，只在前 200ms）：压住瞬跳的突兀，
+      //    但不是把整页压暗，也不做任何位移。prefers-reduced-motion 下连这一下
+      //    也不要——整页直接换掉。
+      const fadeIn = () => {
+        if (still) return;
+        try {
+          if (fadeRef.current) fadeRef.current.cancel();
+          fadeRef.current = flow.animate(
+            [{ opacity: 0.82 }, { opacity: 1 }],
+            { duration: 200, easing: 'cubic-bezier(.3,0,.2,1)' },
+          );
+        } catch (err) {
+          /* 没有 WAAPI 就干脆不淡，翻页照样是对的 */
+        }
+      };
+
+      drop();
+      // R159：有纸在翻的时候不做这层整页淡入。掀页那一瞬间两半都被纸和压页
+      // 盖着，新页本来就不露面；淡入真正起作用的是「没有纸」的直接换页。
+      // 而这层 opacity 动画铺在大半屏正文上，会多开一个合成层，和纸抢第一帧。
+      if (!armed) fadeIn();
+
+      // `data-turn` 现在只剩一个语义：把页边签淡掉（它们钉在上一页的行上）。
+      // 重画本身要扫整页标注、读矩形，所以**不**放在这里——放到纸落定之后。
+      if (stage) stage.setAttribute('data-turn', '1');
+
+      if (!armed) {
+        // 没有纸可翻（reduced-motion，或者纸还没量好）：直接换页，页码同帧换。
         if (stage) stage.removeAttribute('data-turn');
+        setShown(next);
+        repaintGutter();
         return;
       }
-      // 滑动期间屏蔽 scroll 监听器：每一帧 scrollLeft 都在两页之间，不屏蔽会
-      // 把页码拖来拖去，还会触发「对齐到整页」的吸附，跟动画打架。
-      const was = flow.style.scrollBehavior;
-      flow.style.scrollBehavior = 'auto';
-      slideWasRef.current = was;
-      // R53c：用户说「翻页太快，没有动画」。原来 190-320ms 的起步快收尾慢，眨眼
-      // 就过去了；现在整页翻是 560ms，缓动换成「两头都慢、中间快」的 easeInOut：
-      // 起手轻轻带起来，中段走过去，最后自己停住——像纸页被手指推过去，而不是
-      // 被谁一甩。
-      // 但吸附（手指松开后那一点点回正）走的是同一个函数，不能也等半秒：时长按
-      // 「这次要走多远 / 一页有多宽」缩放，走满一页 560ms，走几像素 ~190ms。
-      const ratio = Math.min(1, dist / Math.max(1, s));
-      const dur = Math.round(190 + ratio * 370);
-      quietRef.current = Date.now() + dur + 140;
+
+      // 3) 掀页：一整页手翻大约半秒（拖拽续翻按剩余角度折算）。只写 transform
+      //    与 opacity，一帧一次，没有布局读取。
+      const from = Number(fromAngle) || 0;
+      // 向后翻转到 -180（右页落到左页），向前翻转到 +180（左页落到右页）。
+      const to = dir > 0 ? -180 : 180;
+      const span = Math.max(1, Math.abs(to - from));
+      // R136: 660 → 880ms。660 的纸翻起来像被谁推了一把，太快、太薄；真实的
+      // 纸页要等空气托一下再落。880 仍在「不拖沓」的一侧（一页翻完不到一秒），
+      // 但每一帧的角度变化小了三分之一，光才有时间走完它那段路。
+      // R142：改成一整圈 180° 之后按 180 折算，仍是约 880ms 翻完一页。
+      // R149：880 → 620ms。整页翻要 880ms 太黏了：手翻一页大约半秒多一点，
+      // 超过 0.8s 就开始像慢动作，纸的「轻」先没了。
+      // R159：620 → 560ms。曲线改成起手就动的形状（见 turnCurve）之后，前
+      // 三分之一的时间已经走完一半以上的角度，再去掉末尾那截拖尾就是 560。
+      const dur = Math.max(240, Math.round(560 * (span / 180)));
+
+      // R142：cover 整段保持不透明——它盖着的那一半要等到纸真的落上来才交给
+      // 纸背，所以不需要渐变淡出（原来 52% 就淡完，纸还没到，旧页先没了）。
+      // 落定时 stopFlip 会把 data-on 一并撤掉，那一帧纸已经严丝合缝盖在上面。
+
+      // 连按两次时同一张纸会被重新摆一遍：上一段的收尾必须失效，否则它会在半路
+      // 把这张还在转的纸收走（画面一闪）。用代号认领。
+      const gen = (flipGenRef.current += 1);
+      const land = () => {
+        if (flipGenRef.current !== gen) return;
+        // The sheet was printed for one geometry; if the columns changed while
+        // it was in the air, it is a leaf from a different book -- take it down
+        // and let measure() re-align instead of dropping a stale page on top.
+        if (armColsRef.current !== layout.cols) {
+          stopFlip();
+          setTurnEpoch((n) => n + 1);
+          const st2 = stageRef.current;
+          if (st2) st2.removeAttribute('data-turn');
+          return;
+        }
+        stopFlip();
+        setTurnEpoch((n) => n + 1);
+        const st = stageRef.current;
+        if (st) st.removeAttribute('data-turn');
+        // 纸落定，才是重画页边签的那一次（每翻一页一次，滚动里一次都不画）。
+        repaintGutter();
+      };
+      if (rafRef.current) {
+        window.cancelAnimationFrame(rafRef.current);
+        rafRef.current = 0;
+      }
       const t0 = (typeof performance !== 'undefined' && performance.now)
         ? performance.now()
         : Date.now();
-      const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
-      // 这个回调不能叫 step：外层的 step 是「一页有多宽」，同心圆里再声明一个
-      // 同名 const 会把上面那行 `const s = step` 推进 TDZ（读的是还没初始化的
-      // 那个），运行时报 ReferenceError。
       const frame = (now) => {
-        const t = Math.min(1, Math.max(0, (now - t0) / dur));
-        flow.scrollLeft = from + (to - from) * ease(t);
+        rafRef.current = 0;
+        if (flipGenRef.current !== gen) return;
+        const t = Math.min(1, (now - t0) / dur);
+        // R142：两个方向都是同一张纸走完半圈，所以走同一条手感曲线——黏一下、
+        // 放开、越过竖直再回摆。原来回翻单独用减速曲线（纸落下来），那是「只
+        // 转 90°」时代的补丁，现在不需要了。
+        const k = turnCurve(t);
+        poseFlip(from + (to - from) * k);
         if (t < 1) {
-          slideRef.current = window.requestAnimationFrame(frame);
+          rafRef.current = window.requestAnimationFrame(frame);
           return;
         }
-        flow.scrollLeft = to;
-        flow.style.scrollBehavior = was;
-        slideRef.current = 0;
-        quietRef.current = Date.now() + 160;
-        if (stage) stage.removeAttribute('data-turn');
+        land();
       };
-      slideRef.current = window.requestAnimationFrame(frame);
-    }, [step, scrollToPage]);
+      poseFlip(from);
+      rafRef.current = window.requestAnimationFrame(frame);
+      // 兜底：后台标签页里 rAF 会被冻住，时长 + 240ms 后一定收。
+      flipTimerRef.current = window.setTimeout(land, dur + 240);
+    }, [step, maxPage, armFlip, stopFlip, repaintGutter, layout.cols, poseFlip]);
 
+    // 瞬间落到某一页：开场定位、窗口重排后的回位、TTS 念到下一页走这里。不翻纸。
+    // R148：它原来只挪 scrollLeft 不写 pageRef/setPage——正文已经在那一页，
+    // 舞台页码却还停在上一页，页码从 TTS 第一跳起就一直是错的。现在和滚轮
+    // 监听一样：pageRef、page、shownPage 三处一起对齐。
+    const scrollToPage = React.useCallback((index) => {
+      const flow = flowRef.current;
+      const s = step;
+      if (!flow || !(s > 0)) return;
+      const at = Math.max(0, Math.min(maxPage, index));
+      pageRef.current = at;
+      setPage(at);
+      stopFlip();
+      setShown(at);
+      quietRef.current = Date.now() + 200;
+      flow.scrollLeft = Math.round(at * s);
+      const stage = stageRef.current;
+      if (stage) stage.removeAttribute('data-turn');
+      repaintGutter();
+    }, [step, maxPage, stopFlip, repaintGutter]);
+
+    // 所有入口（点击半页、滚轮、键盘、拖拽松手）都只走这一个函数。
     const go = React.useCallback((delta) => {
-      // pageRef is the source of truth: the scroll listener writes it on every
-      // swipe, so reading it here keeps clicks and keys in sync with the finger.
+      // pageRef 是唯一真相：它只在落位时被写，所以连按也永远从屏幕上的那页起算。
       const cur = pageRef.current;
       const next = Math.max(0, Math.min(maxPage, cur + delta));
       if (next === cur) return;
-      pageRef.current = next;
-      setPage(next);
-      const stage = stageRef.current;
-      if (!stage) return;
-      // R117：窄单栏直接落到下一页。不设 data-turn（那是透明度过渡的开关），
-      // 也不进 slideToPage 的 rAF 动画——手机上这两种开销换不来「纸质翻页」
-      // 的感觉，只会让翻页慢半拍。
-      if (compact) {
-        clearTurns();
-        scrollToPage(next);
-        return;
-      }
-      const still = typeof window.matchMedia === 'function'
-        && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      if (still) {
-        // No motion wanted: swap the page with no slide at all.
-        scrollToPage(next);
-        return;
-      }
-      // R53b：翻页是**真的横向滑动**——整栏往翻页方向走，下一页从相反方向滑
-      // 进来。位移由 rAF 推 scrollLeft 完成（不是 CSS transition，因为要滚的是
-      // 滚动容器的 scrollLeft 而不是 transform），翻页方向就是滑动方向：往后翻
-      // 内容向左走，往前翻内容向右走。
-      // 滑动期间只把整体压到 .72 的透明度再回来：字从纸面底色里浮出来，不会
-      // 像「隔着一个框」那样整块平移一块白底。
-      clearTurns();
-      stage.setAttribute('data-turn', '1');
-      slideToPage(next);
-    }, [compact, maxPage, scrollToPage, slideToPage]);
+      turnTo(next);
+    }, [maxPage, turnTo]);
 
-    React.useEffect(() => () => clearTurns(), []);
+    React.useEffect(() => () => clearTurns(), [clearTurns]);
+
+    // ---- R130：念给我听 ------------------------------------------------------
+    //
+    // 为什么用系统语音：这个插件是本地优先的，正文不为了「听一遍」先上传。
+    // `speechSynthesis` 零依赖、离线可用，音色没有云端那种「像真人」的水平，
+    // 但它是此刻就能用的那一档（更高真度的引擎见 README 的说明）。
+    //
+    // 一次只念一段，不是整章一个大 utterance：Chrome 对十几秒以上的长句子会
+    // 在中间自己停住；分段还顺便给了「念到哪段亮哪段」「念到下一页自动翻页」。
+    // 在线引擎的声音：Edge 读声那几个中文自然音，写死一份，免得每次拉列表。
+    const EDGE_VOICES = [
+      ['zh-CN-XiaoxiaoNeural', '晓晓 · 女声（最像真人）'],
+      ['zh-CN-XiaoyiNeural', '晓伊 · 女声'],
+      ['zh-CN-YunxiNeural', '云希 · 男声'],
+      ['zh-CN-YunjianNeural', '云健 · 男声（讲故事）'],
+      ['zh-CN-YunyangNeural', '云扬 · 男声（播报）'],
+      ['zh-CN-YunxiaNeural', '云夏 · 少年'],
+      ['zh-CN-liaoning-XiaobeiNeural', '晓北 · 东北腔'],
+      ['zh-CN-shaanxi-XiaoniNeural', '晓妮 · 陕西腔'],
+      ['zh-TW-HsiaoChenNeural', '晓臻 · 台湾'],
+      ['zh-HK-HiuGaaiNeural', '晓佳 · 粤语'],
+    ];
+    const engineOf = (value) =>
+      value === 'edge' || value === 'api' || value === 'baidu' ? value : 'system';
+    const [speakEngine, setSpeakEngine] = React.useState(() => engineOf(readSpeakPref('engine')));
+    const cfgRef = React.useRef({});
+    cfgRef.current = {
+      engine: speakEngine,
+      edgeVoice: String(p.settings.ttsEdgeVoice || 'zh-CN-XiaoxiaoNeural'),
+      api: {
+        url: String(p.settings.ttsApiUrl || ''),
+        key: String(p.settings.ttsApiKey || ''),
+        model: String(p.settings.ttsApiModel || 'tts-1'),
+        voice: String(p.settings.ttsApiVoice || 'alloy'),
+      },
+    };
+
+    // R131：三种引擎。系统语音在渲染进程里念（离线、不出本机）；在线（Edge 的
+    // 自然音）和自定义（任何 OpenAI /v1/audio/speech 兼容接口）都走宿主的那条
+    // 路由——浏览器自己发不出去：Edge 会拒掉不是扩展 Origin 的 websocket，
+    // 自定义接口多半要带密钥，跨域也过不去。
+    const [speaking, setSpeaking] = React.useState(false);
+    const [speakError, setSpeakError] = React.useState('');
+    const [speakMenu, setSpeakMenu] = React.useState(false);
+    const [speakVoices, setSpeakVoices] = React.useState([]);
+    const [speakRate, setSpeakRate] = React.useState(() => {
+      const raw = Number(readSpeakPref('rate'));
+      return Number.isFinite(raw) && raw >= 0.5 && raw <= 2 ? raw : 1;
+    });
+    const [speakVoice, setSpeakVoice] = React.useState(() => String(readSpeakPref('voice') || ''));
+    const speakRef = React.useRef({ gen: 0, list: [] });
+
+    // 关掉阅读页（Esc / 关闭按钮 / 换书）时一定把声音停掉：组件卸载后
+    // speechSynthesis 仍然会把队列念完，那就会在写作页里突然有人开口。
+    React.useEffect(() => () => {
+      const synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
+      if (synth) {
+        try { synth.cancel(); } catch (err) { /* 已经停了 */ }
+      }
+    }, []);
+
+    // 浮层收起的两种手势：点别处、按 Esc。Esc 要在读页的关闭逻辑之前吃掉，
+    // 否则「关掉朗读设置」会连带把整本书关掉。
+    React.useEffect(() => {
+      if (!speakMenu) return undefined;
+      const onDown = (ev) => {
+        const bar = ev.target && ev.target.closest ? ev.target.closest('.nw-read-speakbar') : null;
+        if (!bar) setSpeakMenu(false);
+      };
+      const onKey = (ev) => {
+        if (ev.key === 'Escape') {
+          ev.stopPropagation();
+          setSpeakMenu(false);
+        }
+      };
+      document.addEventListener('pointerdown', onDown, true);
+      document.addEventListener('keydown', onKey, true);
+      return () => {
+        document.removeEventListener('pointerdown', onDown, true);
+        document.removeEventListener('keydown', onKey, true);
+      };
+    }, [speakMenu]);
+
+    React.useEffect(() => {
+      const synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
+      if (!synth || typeof synth.getVoices !== 'function') return undefined;
+      const read = () => {
+        try {
+          const all = synth.getVoices() || [];
+          const zh = all.filter((v) => /^zh/i.test(String(v.lang || '')));
+          setSpeakVoices(zh.length ? zh : all);
+        } catch (err) {
+          /* 有些实现会在这里抛，朗读本身仍然能用 */
+        }
+      };
+      read();
+      try { synth.addEventListener('voiceschanged', read); } catch (err) { synth.onvoiceschanged = read; }
+      return () => {
+        try { synth.removeEventListener('voiceschanged', read); } catch (err) { synth.onvoiceschanged = null; }
+      };
+    }, []);
+
+    const markSpeaking = React.useCallback((el) => {
+      const flow = flowRef.current;
+      if (!flow) return;
+      const prev = flow.querySelector('.nw-read-p.is-speaking');
+      if (prev && prev !== el) prev.classList.remove('is-speaking');
+      if (el && el.classList) el.classList.add('is-speaking');
+    }, []);
+
+    /** 收掉在线/自定义引擎那一层：一个复用的 Audio 元素 + 一个 object URL。 */
+    const dropAudio = React.useCallback(() => {
+      const el = speakRef.current.audio;
+      if (el) {
+        try { el.pause(); } catch (err) { /* 已经停了 */ }
+        try { el.removeAttribute('src'); el.load(); } catch (err) { /* 同上 */ }
+      }
+      const url = speakRef.current.url;
+      if (url) {
+        try { URL.revokeObjectURL(url); } catch (err) { /* 同上 */ }
+      }
+      speakRef.current.url = '';
+    }, []);
+
+    const stopSpeak = React.useCallback(() => {
+      const synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
+      speakRef.current.gen += 1;
+      speakRef.current.list = [];
+      if (synth) {
+        try { synth.cancel(); } catch (err) { /* 已经停了 */ }
+      }
+      dropAudio();
+      const flow = flowRef.current;
+      if (flow) {
+        const cur = flow.querySelector('.nw-read-p.is-speaking');
+        if (cur) cur.classList.remove('is-speaking');
+      }
+      setSpeaking(false);
+    }, [dropAudio]);
+
+    /** base64 → Blob（宿主把音频放在 JSON 信封里，省一条裸字节路由）。 */
+    const audioBlob = React.useCallback((payload) => {
+      const raw = String((payload && payload.audio) || '');
+      if (!raw) throw new Error('朗读接口没有返回音频');
+      const bin = typeof atob === 'function' ? atob(raw) : Buffer.from(raw, 'base64').toString('binary');
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+      return new Blob([bytes], { type: String((payload && payload.mime) || 'audio/mpeg') });
+    }, []);
+
+    /**
+     * 在线 / 自定义引擎：一段一段问宿主要音频，播完再要下一段。
+     *
+     * 复用同一个 Audio 元素（不是每段 new 一个）：Chromium 只在用户点过之后
+     * 允许自动播放，同一个元素一路 play 下去还算「这次交互里」，换新元素就容易
+     * 被拦。下一段在第一段还在响的时候就开始取，中间不留空档。
+     */
+    const speakRemote = React.useCallback((startIndex) => {
+      const flow = flowRef.current;
+      if (!flow || !NW.io || !NW.io.tts) return;
+      const all = Array.prototype.slice.call(flow.querySelectorAll('p.nw-read-p'));
+      const list = all.filter((el) => String(el.textContent || '').trim().length > 1);
+      if (!list.length) return;
+
+      const gen = speakRef.current.gen + 1;
+      speakRef.current.gen = gen;
+      speakRef.current.list = list;
+      setSpeakError('');
+      setSpeaking(true);
+
+      const el = speakRef.current.audio || (typeof Audio === 'function' ? new Audio() : null);
+      if (!el) {
+        stopSpeak();
+        return;
+      }
+      el.preload = 'auto';
+      speakRef.current.audio = el;
+
+      const stepNow = step > 0 ? step : 1;
+      const pageOf = (node) => Math.max(0, Math.floor((node.offsetLeft || 0) / stepNow));
+      const textOf = (node) => String(node.textContent || '').replace(/\s+/g, ' ').trim();
+
+      // 每一段的请求都缓存起来：预取的那一段在真正播的时候直接复用，不再问一次。
+      const pending = [];
+      const want = (at) => {
+        if (at >= list.length) return null;
+        if (pending[at]) return pending[at];
+        const cfg = cfgRef.current;
+        const text = textOf(list[at]);
+        if (!text) return null;
+        const job = NW.io.tts
+          .speak({
+            engine: cfg.engine,
+            text,
+            rate: speakRate,
+            voice: cfg.engine === 'edge' ? cfg.edgeVoice : cfg.api.voice,
+            edgeVoice: cfg.edgeVoice,
+            api: cfg.api,
+          })
+          .then((payload) => audioBlob(payload));
+        pending[at] = job;
+        return job;
+      };
+
+      const fail = (err) => {
+        if (speakRef.current.gen !== gen) return;
+        setSpeakError(err && err.message ? err.message : String(err || '朗读失败'));
+        stopSpeak();
+      };
+
+      const play = (at) => {
+        if (speakRef.current.gen !== gen) return;
+        if (at >= list.length) {
+          stopSpeak();
+          return;
+        }
+        const node = list[at];
+        const page = pageOf(node);
+        if (page !== pageRef.current) scrollToPage(Math.max(0, Math.min(maxPage, page)));
+        markSpeaking(node);
+        // 预取下一段：这一段还在响的时候就把下一段的请求发出去。
+        if (at + 1 < list.length) want(at + 1);
+        const job = want(at);
+        if (!job) {
+          window.setTimeout(() => { if (speakRef.current.gen === gen) play(at + 1); }, 0);
+          return;
+        }
+        job.then((blob) => {
+          if (speakRef.current.gen !== gen) return;
+          dropAudio();
+          const url = URL.createObjectURL(blob);
+          speakRef.current.url = url;
+          el.onended = () => {
+            if (speakRef.current.gen === gen) play(at + 1);
+          };
+          el.onerror = () => {
+            if (speakRef.current.gen === gen) fail(new Error('音频播放失败'));
+          };
+          el.src = url;
+          const started = el.play();
+          if (started && typeof started.catch === 'function') {
+            started.catch((err) => fail(err));
+          }
+        }).catch(fail);
+      };
+
+      play(Math.max(0, Math.min(list.length - 1, startIndex)));
+    }, [audioBlob, dropAudio, markSpeaking, maxPage, scrollToPage, speakRate, stopSpeak]);
+
+    // 句子在纸上换页时把纸翻过去：念到一半跳页很刺眼，所以只在「下一段不在
+    // 当前这一页」时瞬移，和手动翻页走同一个落位函数（quietRef 会挡住回弹）。
+    const speakFrom = React.useCallback((startIndex) => {
+      // 在线/自定义引擎不需要 speechSynthesis；系统语音那条路继续往下走。
+      if (cfgRef.current.engine !== 'system') {
+        speakRemote(startIndex);
+        return;
+      }
+      const synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
+      const flow = flowRef.current;
+      // 没有引擎就静静地不开始：朗读是锦上添花，不该弹一个错误框打断阅读。
+      if (!synth || !flow) return;
+      const all = Array.prototype.slice.call(flow.querySelectorAll('p.nw-read-p'));
+      const list = all.filter((el) => String(el.textContent || '').trim().length > 1);
+      if (!list.length) return;
+      const gen = speakRef.current.gen + 1;
+      speakRef.current.gen = gen;
+      speakRef.current.list = list;
+      setSpeaking(true);
+
+      const stepNow = step > 0 ? step : 1;
+      const pageOf = (el) => Math.max(0, Math.floor((el.offsetLeft || 0) / stepNow));
+
+      const voice = (() => {
+        let voices = [];
+        try { voices = synth.getVoices() || []; } catch (err) { voices = []; }
+        if (speakVoice) {
+          const hit = voices.find((v) => v.voiceURI === speakVoice || v.name === speakVoice);
+          if (hit) return hit;
+        }
+        const zh = voices.filter((v) => /^zh/i.test(String(v.lang || '')));
+        const pool = zh.length ? zh : voices;
+        const prefer = ['Xiaoxiao', 'Xiaoyi', 'Yunxi', 'Yunyang', 'Yunjian', 'Huihui', 'Yaoyao', 'Kangkang', 'Tingting', 'Meijia', 'Sinji'];
+        for (let i = 0; i < prefer.length; i += 1) {
+          const hit = pool.find((v) => String(v.name || '').indexOf(prefer[i]) >= 0);
+          if (hit) return hit;
+        }
+        return pool[0] || null;
+      })();
+
+      const say = (at) => {
+        if (speakRef.current.gen !== gen) return;
+        if (at >= list.length) {
+          stopSpeak();
+          return;
+        }
+        const el = list[at];
+        const page = pageOf(el);
+        if (page !== pageRef.current) scrollToPage(Math.max(0, Math.min(maxPage, page)));
+        markSpeaking(el);
+        const text = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!text) {
+          say(at + 1);
+          return;
+        }
+        let u = null;
+        try {
+          u = new window.SpeechSynthesisUtterance(text);
+        } catch (err) {
+          stopSpeak();
+          return;
+        }
+        u.lang = (voice && voice.lang) || 'zh-CN';
+        u.rate = speakRate;
+        u.pitch = 1;
+        if (voice) u.voice = voice;
+        u.onend = () => {
+          if (speakRef.current.gen === gen) say(at + 1);
+        };
+        u.onerror = () => {
+          if (speakRef.current.gen === gen) stopSpeak();
+        };
+        try {
+          synth.speak(u);
+        } catch (err) {
+          stopSpeak();
+        }
+      };
+
+      say(Math.max(0, Math.min(list.length - 1, startIndex)));
+    }, [markSpeaking, maxPage, scrollToPage, speakRate, speakRemote, speakVoice, step, stopSpeak]);
+
+    const startSpeakHere = React.useCallback(() => {
+      if (speaking) {
+        stopSpeak();
+        return;
+      }
+      const flow = flowRef.current;
+      if (!flow) return;
+      const stepNow = step > 0 ? step : 1;
+      const all = Array.prototype.slice.call(flow.querySelectorAll('p.nw-read-p'));
+      const now = pageRef.current;
+      // 从「当前这一页的第一段」念起，而不是从全书第一段。
+      let start = all.findIndex((el) => Math.max(0, Math.floor((el.offsetLeft || 0) / stepNow)) === now);
+      if (start < 0) start = Math.max(0, all.findIndex((el) => Math.floor((el.offsetLeft || 0) / stepNow) > now));
+      speakFrom(start < 0 ? 0 : start);
+    }, [speakFrom, speaking, step, stopSpeak]);
+
+    /** 语速只对「下一段」生效，所以换档时把正在念的那一段重念一遍。 */
+    const restartAt = React.useCallback(() => {
+      const flow = flowRef.current;
+      const cur = flow ? flow.querySelector('.nw-read-p.is-speaking') : null;
+      const all = flow ? Array.prototype.slice.call(flow.querySelectorAll('p.nw-read-p')) : [];
+      const at = cur ? all.indexOf(cur) : -1;
+      stopSpeak();
+      if (at >= 0) {
+        window.setTimeout(() => { speakFrom(at); }, 30);
+      }
+    }, [speakFrom, stopSpeak]);
+
+    const changeRate = React.useCallback((next) => {
+      const value = Number(next);
+      if (!Number.isFinite(value)) return;
+      setSpeakRate(value);
+      writeSpeakPref('rate', value);
+      if (speaking) restartAt();
+    }, [restartAt, speaking]);
+
+    const changeEngine = React.useCallback((next) => {
+      const value = engineOf(next);
+      if (value === speakEngine) return;
+      setSpeakEngine(value);
+      writeSpeakPref('engine', value);
+      setSpeakError('');
+      if (speaking) stopSpeak();
+    }, [speakEngine, speaking, stopSpeak]);
+
 
     // ---- 选字 → 标注 --------------------------------------------------------
     //
@@ -17072,9 +18827,6 @@ const SEL_EMIT_MS = 120;
       // 节点上——不扫一遍的话，改完字之后会有一句话一直亮着，像被选中了一样。
       const stale = flow ? flow.querySelectorAll('.nw-mark[data-hover]') : [];
       for (let i = 0; i < stale.length; i += 1) stale[i].removeAttribute('data-hover');
-      // R117：手机单栏不画页边签——没有页边，签只能压在字上。层已经清空，
-      // 直接返回，省掉整页标注的查询与绝对定位。
-      if (compact) return;
       if (!stage || !flow) return;
       const w = layout.w;
       if (!w) return;
@@ -17208,7 +18960,7 @@ const SEL_EMIT_MS = 120;
         });
         layer.appendChild(btn);
       }
-    }, [compact, layout.w, layout.cols, layout.gap, marks, openMark]);
+    }, [layout.w, layout.cols, layout.gap, marks, openMark]);
 
     // 滚动停下来之后重算一次：手指拖到半页时，签要跟着字走，不能停在旧行上。
 
@@ -17224,7 +18976,7 @@ const SEL_EMIT_MS = 120;
     //
     // 三处步长都必须跟着页宽走，否则翻页会翻半页：
     //   - measure() 里的 total 和起始页偏移
-    //   - scrollToPage() / slideToPage() 里的 s
+    //   - scrollToPage() / turnTo() 里的 s
     //   - 滚动监听里换算页码的 s
     // 三者统一读 layout.step（= 一页有多宽，含中间的空档）。
     const measure = React.useCallback(() => {
@@ -17233,38 +18985,139 @@ const SEL_EMIT_MS = 120;
       if (!stage || !flow) return;
       const cs = window.getComputedStyle(stage);
       const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+      // The geometry last measured (columns : page step). If it turns out to be
+      // different, the copy on the sheet and the prose below no longer share a
+      // pagination -- take the sheet down first, then measure the new one.
+      const before = geometryRef.current;
       const avail = Math.max(240, stage.clientWidth - padX);
       const gap = parseFloat(window.getComputedStyle(flow).columnGap) || 0;
-      // 一行 34 个汉字上下最像书。
-      const oneCol = Math.floor(Math.min(34 * fontSize, avail));
-      // 对开要求：两栏 + 中间那道空档真的放得下，而且每栏还不至于窄到一行
-      // 十来个字（那比单页更难读）。900px 是临界点，再窄就单页。
-      const spread = avail >= 900 && (avail - gap) / 2 >= 300;
-      const cols = spread ? 2 : 1;
-      const w = spread
-        ? Math.floor(Math.min(oneCol, (avail - gap) / 2))
-        : oneCol;
-      flow.style.setProperty('--nw-read-col', w + 'px');
-      flow.style.setProperty('--nw-read-box', (w * cols + gap * (cols - 1)) + 'px');
-      if (spread) flow.setAttribute('data-spread', '1');
+      // R125: 一行多少字最舒服。中文书 26–30 字读着最稳；双栏时再宽就成碎片
+      // 句子，再窄就换行太勤（一行十来字，眼睛一直在跳）。
+      const maxCol = Math.round(30 * fontSize);
+      const minCol = Math.round(22 * fontSize);
+      // R128：双栏的字数下限单开一条。22 字是「一行读起来最稳」的门槛，但双栏
+      // 的价值在于「一眼看见两个栏位」，17 字（约 340px）依然成立，只有窄到
+      // 连 17 字都放不下时才退回单栏——否则一千出头的面板会突兀地变成一整行
+      // 三十多字，读起来反而累。
+      // R136：门槛从 17 字降到 15 字（约 300px）。原来的 17 在常见面板宽度上
+      // 恰好卡死：760 面板去掉 7vw 页边只剩 ≈654px，两栏各 303px 差一点够不到
+      // 340px，于是用户明明选了双栏，看到的却是一页一栏。15 字仍是「一行十
+      // 来个字」可读的门槛，换来的是双栏设置真的生效。
+      const minCol2 = Math.round(15 * fontSize);
+      // R138：四栏对开单开一条**更低**的线——十二字（约 240px）。用户的验收
+      // 标准是「点阅读就整屏、一个屏幕两页、四栏」，1440/1512 这类屏幕整屏
+      // 可用宽度约 1272，四栏各 282px（十四字）——按单页双栏那条十五字线永远
+      // 差十几像素，于是整屏开着却只见一页两栏。四栏是「摊开的书」，每栏短一点
+      // 反而像书页边注；真排不下十二字（窄屏、分屏）才老实退回单页双栏。
+      const minColWide = Math.round(12 * fontSize);
+      // R136：对开门槛 900 → 840。对开是「两页并排」，它的价值与双栏无关，
+      // 840px 上一页只需 396px（约 20 字）就能成立，960 面板从此也能翻开对开。
+      // 每页几栏、一屏几页：按「舒服」优先排，而不是先把宽度填满。
+      //   ① 对开四栏（超宽屏才可能，而且每栏仍要有 22 字）
+      //   ② 单页两栏（常规窗口里双栏排版的主场）
+      //   ③ 对开每页一栏（双栏放不下时的传统书页）
+      //   ④ 单页一栏（窄面板）
+      const fitCol = (pages, texts) => {
+        const total = pages * texts;
+        return Math.floor((avail - gap * (total - 1)) / total);
+      };
+      const plan = readColumns >= 2
+        ? [[2, 2], [1, 2], [2, 1], [1, 1]]
+        : [[2, 1], [1, 1]];
+      let cols = 1; // 一屏几页
+      let textCols = 1; // 一页几栏
+      let colW = 0; // 一栏的宽度
+      for (let k = 0; k < plan.length; k += 1) {
+        const pages = plan[k][0];
+        const texts = plan[k][1];
+        if (pages === 2 && avail < 840) continue;
+        const candidate = fitCol(pages, texts);
+        // 宽屏对开（一张纸四栏）要求每栏仍能排 18 字（R137 从 22 降到 18）：
+        // 整屏 1920 去掉页边只剩 1752，四栏各 402px，22 字要 440px 差 38px，
+        // 「一屏两页、一页两栏」在常见的大屏上根本开不出来。18 字（360px）
+        // 仍是舒服的一行，换来整屏被真正用满。单页对开沿用 22 字，单页双栏
+        // 用 15 字，窄面板才降到 22 字以下。
+        const floor = texts >= 2
+          ? (pages === 2 ? minColWide : minCol2)
+          : minCol;
+        if (candidate < floor) continue;
+        cols = pages;
+        textCols = texts;
+        colW = Math.min(candidate, texts >= 2 ? maxCol : Math.round(34 * fontSize));
+        break;
+      }
+      if (!colW) {
+        // 面板窄到连 22 字都放不下：一页一栏，能吃多宽吃多宽。
+        cols = 1;
+        textCols = 1;
+        colW = Math.max(160, Math.floor(Math.min(34 * fontSize, avail)));
+      }
+      // 一页 = textCols 栏正文 + 栏与栏之间那道空档；翻一页跨一整页，所以步长
+      // 是「页宽 + 页与页之间的空档」。
+      const w = colW * textCols + gap * (textCols - 1);
+      const step = w + gap;
+      const box = w * cols + gap * (cols - 1);
+      stage.style.setProperty('--nw-read-col', colW + 'px');
+      stage.style.setProperty('--nw-read-box', box + 'px');
+      stage.style.setProperty('--nw-read-gap', gap + 'px');
+      flow.style.setProperty('--nw-read-col', colW + 'px');
+      flow.style.setProperty('--nw-read-box', box + 'px');
+      if (cols > 1) flow.setAttribute('data-spread', '1');
       else flow.removeAttribute('data-spread');
-      // 一栏的步长（栏宽 + 栏距）：栏在 CSS 多栏里是连续的，页只是「一次显示几栏」。
-      const colStep = w + gap;
-      // 一页的步长：对开时跨两栏。
-      const step = colStep * cols;
-      const total = Math.max(1, Math.round((flow.scrollWidth + gap) / step));
-      setLayout({ w, gap, total, cols, step });
+      // R159：`total` 是「页」数，不是「栏」数。一页 = textCols 栏，所以先把
+      // scrollWidth 折算成栏数，再除以每页的栏数。旧公式 (scrollWidth + gap) / step
+      // 只在「每页两栏 + 对开」这一种尺寸下碰巧对——单栏、或一页一栏的对开都会算错，
+      // 书末的页码跟着错。
+      const span = flow.scrollWidth;
+      const unitW = colW + gap;
+      const columns = unitW > 0 ? Math.max(1, Math.round((span + gap) / unitW)) : 1;
+      const total = Math.max(1, Math.ceil(columns / Math.max(1, textCols)));
+      // 正文最多滚到 span - box，所以能整页停下的最后一页是 floor((span - box) / step)。
+      // 半页的尾巴（栏数是奇数）滚不满一整步，这里必须取整，否则 End 会停在
+      // 「正文被夹回一页、页码却按后一页印」的状态。
+      const fit = step > 0
+        ? Math.max(0, Math.min(total - 1, Math.floor((span - box) / step + 0.02)))
+        : Math.max(0, total - 1);
+      // 每一章从第几页开始：眉题要跟着当前页换章名，而翻页时绝不能去 DOM 里
+      // 找——那是一个动画帧里最不该出现的事。这里量一次，翻页只查这个数组。
+      const starts = [];
+      for (let i = 0; i < chapters.length; i += 1) {
+        const row = chapters[i];
+        const key = row && row.id != null ? String(row.id) : '';
+        const el = key ? marksRef.current[key] : null;
+        if (!el) continue;
+        const at = step > 0 ? Math.round(el.offsetLeft / step) : 0;
+        starts.push({
+          id: key,
+          page: Math.max(0, Math.min(at, total - 1)),
+          // 一章的左边界（px）：翻页时纸上那份副本要用它把 scrollLeft
+          // 换算成「副本里的偏移」——读一次量好，翻页就不用再碰 DOM。
+          left: el.offsetLeft || 0,
+          // R128：章可以在栏中间开头（换章不再另起一栏），只记 left 的话
+          // 「这一章从哪一行开始」就丢了——同一栏里的两章 left 完全一样，
+          // 眉题会把整栏都算给后来那一章。多记一个 offsetTop（在栏内的纵向
+          // 位置），查表时用它区分「栏首」和「栏中间」。
+          top: el.offsetTop || 0,
+          title: isPlaceholderTitle(row.title) ? '' : String(row.title || ''),
+        });
+      }
+      starts.sort((a, b) => a.page - b.page);
+      const geo = cols + ':' + textCols + ':' + colW + ':' + step + ':' + gap;
+      if (before && before !== geo) abortTurn();
+      geometryRef.current = geo;
+      setLayout({ w, gap, total, fit, cols, textCols, colW, step, starts: starts });
 
       if (!jumpedRef.current) {
         jumpedRef.current = true;
-        const mark = marksRef.current[currentId];
+        const mark = marksRef.current[startId];
         let start = 0;
         if (mark && typeof mark.offsetLeft === 'number' && step > 0) {
           start = Math.round(mark.offsetLeft / step);
         }
-        start = Math.max(0, Math.min(start, total - 1));
+        start = Math.max(0, Math.min(start, fit));
         pageRef.current = start;
         setPage(start);
+        setShown(start);
         // 开场这一跳必须瞬间到位：`scroll-behavior:smooth` 会让书从第一页
         // 滑到一半，看起来像是自己翻了几页。
         const wasBehavior = flow.style.scrollBehavior;
@@ -17273,12 +19126,30 @@ const SEL_EMIT_MS = 120;
         flow.style.scrollBehavior = wasBehavior;
       } else {
         setPage((cur) => {
-          const next = Math.max(0, Math.min(cur, total - 1));
+          const next = Math.max(0, Math.min(cur, fit));
           pageRef.current = next;
           return next;
         });
+        // R148：重排后正文书页被 clamp 了，舞台页码也一起 clamp，别让数字
+        // 停在一页已经不存在的页上。
+        setShown(Math.max(0, Math.min(shownPageRef.current, fit)));
+        // R120: put the prose back on a page boundary. The step just changed
+        // (a single page became a spread, or the panel was resized), while
+        // scrollLeft still holds the old pixel offset -- off by part of a page,
+        // which shows up as a slice of the NEXT column along the right edge,
+        // i.e. three columns of text where the book claims to have two.
+        const landed = Math.round(Math.max(0, Math.min(pageRef.current, fit)) * step);
+        if (Math.abs(flow.scrollLeft - landed) > 1) {
+          quietRef.current = Date.now() + 220;
+          const wasBehavior = flow.style.scrollBehavior;
+          flow.style.scrollBehavior = 'auto';
+          flow.scrollLeft = landed;
+          flow.style.scrollBehavior = wasBehavior;
+        }
       }
-    }, [fontSize, currentId]);
+      // lineHeight 不进 `--nw-read-col` 的算法，但它决定一栏能装多少行：
+      // 行高变了 scrollWidth 就变，不重算 total 会把页码停在旧的总页数上。
+    }, [fontSize, lineHeight, readColumns, currentId, startId, chapters, abortTurn]);
 
     React.useLayoutEffect(() => {
       measure();
@@ -17289,16 +19160,25 @@ const SEL_EMIT_MS = 120;
         if (flow.scrollWidth <= flow.clientWidth + 4) measure();
       });
       const stage = stageRef.current;
+      // 尺寸一变，栏宽、页边签的位置就全变了：量一次，再重画一次页边签
+      // （下一页 rAF 里做，免得跟这次重排挤在同一帧）。
+      const relayout = () => {
+        measure();
+        window.requestAnimationFrame(() => {
+          const fn = paintGutterRef.current;
+          if (typeof fn === 'function') fn();
+        });
+      };
       let ro = null;
       if (stage && typeof ResizeObserver === 'function') {
-        ro = new ResizeObserver(() => measure());
+        ro = new ResizeObserver(() => relayout());
         try {
           ro.observe(stage);
         } catch (err) {
           /* ignore */
         }
       }
-      const onResize = () => measure();
+      const onResize = () => relayout();
       window.addEventListener('resize', onResize);
       return () => {
         if (raf) window.cancelAnimationFrame(raf);
@@ -17313,7 +19193,8 @@ const SEL_EMIT_MS = 120;
       };
     }, [measure]);
 
-    // 手指/滚轮直接横向滚（触控板横滑、手机横拖）也要让页码跟上。
+    // 手指 / 触控板横向滚（触控板横滑、手机横拖）也要让页码跟上，停下来再对齐
+    // 到整页。这里只做两件事：换页码、记一个「停下」的定时器——页边签一律不碰。
     React.useEffect(() => {
       const flow = flowRef.current;
       if (!flow) return undefined;
@@ -17324,35 +19205,38 @@ const SEL_EMIT_MS = 120;
           scrollRafRef.current = 0;
           const s = step;
           if (!s) return;
-          // 自己滚的那一段不参与：页码已经由 go()/scrollToPage() 定好了。
+          // 自己滚的那一段不参与：页码已经由 go() 定好了。
           if (Date.now() < quietRef.current) return;
           const index = Math.round(flow.scrollLeft / s);
           if (index !== pageRef.current) {
             pageRef.current = index;
             setPage(index);
+            // R148：手动拖动是瞬时的正文移动，纸不在飞——页码跟着正文一起换。
+            setShown(index);
           }
-          // R117：手机上手指拖到半页就让它停在半页，页码已经跟上了。松手后
-          // 再跑一段 190ms 的 rAF 把页面「吸」回整页，看文字的人只会觉得
-          // 页面在手下自己动了一下——这就是卡顿感的一部分。下一次翻页或
-          // 点目录会瞬时对齐，不需要在这里补。
-          if (compact) return;
-          // 手指停下来之后把页面对齐到整页：多栏布局没有 scroll-snap 可依（页
-          // 不是元素），停在半页上读起来像被人挪了一下椅子。吸附也走同一条滑
-          // 动，短距离 190ms，读起来是「轻轻一推」而不是突然跳过去。
+          // 手指/触控板停下 80ms 后回位到整页边界：**一次赋值，没有动画**。
+          // 原来的「停 170ms 再花 110ms 吸过去」就是手感发滞的根源——那两段
+          // 加起来快 300ms，期间用户已经开始下一次操作了。
           window.clearTimeout(snapTimer);
           snapTimer = window.setTimeout(() => {
             if (Date.now() < quietRef.current) return;
-            const drift = flow.scrollLeft - Math.round(pageRef.current * s);
-            if (Math.abs(drift) > 2) slideToPage(pageRef.current);
-          }, 170);
+            const target = pageRef.current * s;
+            if (Math.abs(flow.scrollLeft - target) <= 1) return;
+            quietRef.current = Date.now() + 90;
+            flow.scrollLeft = target;
+          }, 80);
         });
       };
       flow.addEventListener('scroll', onScroll, { passive: true });
       return () => {
         window.clearTimeout(snapTimer);
+        if (scrollRafRef.current) {
+          window.cancelAnimationFrame(scrollRafRef.current);
+          scrollRafRef.current = 0;
+        }
         flow.removeEventListener('scroll', onScroll);
       };
-    }, [compact, step, scrollToPage, slideToPage]);
+    }, [step]);
 
     // 滚轮 / 触控板：竖着滚也要翻页。横向滚动容器对竖向滚轮没有反应，
     // 而看书的人不会先想一想该往哪个方向滚。
@@ -17363,14 +19247,16 @@ const SEL_EMIT_MS = 120;
         if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
         const dx = ev.deltaX || 0;
         const dy = ev.deltaY || 0;
-        // 触控板的横向滑动交给浏览器自己滚，页码由 scroll 监听器跟上。
-        if (Math.abs(dx) > Math.abs(dy)) return;
+        // 横滚、竖滚都翻页，按当次的主轴取方向。横滚**也**要拦下来：正文容器
+        // 绝不能被浏览器自己横着滚出去（一滚就从装订线上穿过去了）。
+        const main = Math.abs(dx) > Math.abs(dy) ? dx : dy;
+        if (!main) return;
         ev.preventDefault();
         const acc = wheelRef.current;
         const now = Date.now();
         if (now - acc.at > 160) acc.acc = 0;
         acc.at = now;
-        acc.acc += dy;
+        acc.acc += main;
         const threshold = 40;
         if (Math.abs(acc.acc) < threshold) return;
         const delta = acc.acc > 0 ? 1 : -1;
@@ -17420,7 +19306,9 @@ const SEL_EMIT_MS = 120;
       return () => window.clearTimeout(timer);
     }, []);
 
-    // 点左侧回一页、点右侧翻一页。拖动/选字/点标注都不算点。
+    // 指针三件事：点左半页回一页、点右半页翻一页、在纸面上按住横向拖跟手翻页。
+    // 拖拽只从「不是正文」的地方起手（纸边、栏间空档、页眉页脚），正文上起手
+    // 一定是想选字标注——那条路留给 readSelection。
     const onPointerDown = (ev) => {
       const node = ev.target;
       // 点在标注、工具条或批注面板上时，这一下是给它们的，不是翻页的。
@@ -17428,8 +19316,102 @@ const SEL_EMIT_MS = 120;
       // 就翻了页，等 click 打开批注时书已经跳到下一页了。
       const onSomething = !!(node && typeof node.closest === 'function'
         && node.closest('.nw-mark[data-mark], .nw-mark-bar, .nw-mark-pop, .nw-mark-side, .nw-read-gutter'));
-      pointerRef.current = { x: ev.clientX, y: ev.clientY, onSomething: onSomething };
+      // 指针监听挂在整个舞台上（纸边、栏间空档也能起手拖），所以一切按钮
+      // 和输入框都得先摘出去，否则点工具条/便签会连带翻一页。
+      const onChrome = !!(node && typeof node.closest === 'function'
+        && node.closest('button, a, input, textarea, select'));
+      pointerRef.current = { x: ev.clientX, y: ev.clientY, onSomething: onSomething || onChrome };
+      dragRef.current = null;
+      if (onSomething || onChrome) return;
+      if (ev.pointerType === 'touch' || ev.button !== 0) return;
+      if (node && typeof node.closest === 'function'
+        && node.closest('p[data-start], h2, .nw-mark, button, a, input, textarea, select')) return;
+      const flow = flowRef.current;
+      if (!flow) return;
+      const now = Date.now();
+      dragRef.current = {
+        id: ev.pointerId,
+        x: ev.clientX,
+        lastX: ev.clientX,
+        lastAt: now,
+        v: 0,
+        angle: 0,
+        dir: 0,
+        moved: false,
+      };
+      const stage = stageRef.current;
+      try {
+        (stage || flow).setPointerCapture(ev.pointerId);
+      } catch (err) {
+        /* ignore */
+      }
     };
+
+    const onPointerMove = (ev) => {
+      const d = dragRef.current;
+      if (!d || d.id !== ev.pointerId) return;
+      const dx = ev.clientX - d.x;
+      if (!d.moved && Math.abs(dx) < 8) return;
+      d.moved = true;
+      const now = Date.now();
+      const dt = now - d.lastAt;
+      if (dt > 0) d.v = (ev.clientX - d.lastX) / dt;
+      d.lastX = ev.clientX;
+      d.lastAt = now;
+      // 正文一步都不动：跟着手走的只有那张「纸」的角度。这个函数里没有布局
+      // 读取、没有 measure、没有 querySelectorAll，只有一次 style 写入。
+      const dir = dx < 0 ? 1 : -1;
+      if (d.dir !== dir) {
+        d.dir = dir;
+        d.angle = 0;
+        // R142：纸有两个面，所以摆纸时要把「翻到哪一页」一起交进去。
+        // R159：同 turnTo，纸背取的那一页两向不同（见那里的注释）。
+        const cur = pageRef.current;
+        const nextAt = Math.max(0, Math.min(maxPage, cur + dir));
+        armFlip(dir, cur, dir > 0 ? nextAt : Math.min(layout.total - 1, nextAt + 1));
+      }
+      const span = step > 0 ? step : 600;
+      // 拖拽是最多掀 26° 的预演：正面那一层先跟着手指走，纸还没真正翻过去，
+      // 底下那一半仍是旧页（与 cover 的作用一致）。松手后 turnTo 从这把角度
+      // 接着转完剩下的半圈（R142：一整圈 180°，所以是「剩下的 154°」）。
+      const angle = Math.max(-26, Math.min(26, (dx / span) * 90));
+      d.angle = angle;
+      poseFlip(angle);
+      const stage = stageRef.current;
+      if (stage && stage.getAttribute('data-drag') !== '1') stage.setAttribute('data-drag', '1');
+    };
+
+    // 松开：过了页宽 15%，或者甩得够快（>0.45px/ms），就顺势翻过去——纸从
+    // 手停下的那个角度接着转完剩下的大半圈；否则纸直接收掉（正文原地不动，
+    // 没有任何回弹动画）。没有「等一会儿再慢慢吸附」那一段。
+    const endDrag = (ev) => {
+      const d = dragRef.current;
+      if (!d || d.id !== ev.pointerId) return false;
+      dragRef.current = null;
+      const flow = flowRef.current;
+      const stage = stageRef.current;
+      if (stage) {
+        try {
+          stage.releasePointerCapture(ev.pointerId);
+        } catch (err) {
+          /* ignore */
+        }
+        stage.removeAttribute('data-drag');
+      }
+      const s = step;
+      if (!d.moved || !(s > 0)) return false;
+      const dx = ev.clientX - d.x;
+      const delta = dx !== 0 ? dx : d.v;
+      if (Math.abs(dx) > s * 0.15 || Math.abs(d.v) > 0.45) {
+        const before = pageRef.current;
+        turnTo(before + (delta < 0 ? 1 : -1), d.angle);
+        if (pageRef.current === before) stopFlip();
+      } else {
+        stopFlip();
+      }
+      return true;
+    };
+
     const onPointerUp = (ev) => {
       const down = pointerRef.current;
       pointerRef.current = null;
@@ -17437,9 +19419,29 @@ const SEL_EMIT_MS = 120;
       // 的那一次（600ms 内），否则点在正文外没收到 pointerup 时会一直吞翻页。
       if (dismissedRef.current && Date.now() - dismissedRef.current < 600) {
         dismissedRef.current = 0;
+        dragRef.current = null;
         return;
       }
       dismissedRef.current = 0;
+      if (ev.type === 'pointercancel') {
+        // 指针被系统收走了（来电、系统手势接管）：纸收回来、光标复原，别把
+        // 一张掀到一半的纸留在屏幕上。
+        const drag = dragRef.current;
+        if (drag && drag.moved) stopFlip();
+        dragRef.current = null;
+        const st = stageRef.current;
+        if (st) {
+          st.removeAttribute('data-drag');
+          try {
+            st.releasePointerCapture(ev.pointerId);
+          } catch (err) {
+            /* ignore */
+          }
+        }
+        return;
+      }
+      // 拖动过的话，翻页/回弹都在 endDrag 里处理完了。
+      if (endDrag(ev)) return;
       if (!down) return;
       if (Math.abs(ev.clientX - down.x) > 8 || Math.abs(ev.clientY - down.y) > 8) {
         // 拖了一下 = 想标注这段字，不是想翻页。从已有标注上起手也一样：
@@ -17474,10 +19476,10 @@ const SEL_EMIT_MS = 120;
     // 整本书拆段是这里唯一的重活：一本二十万字的稿子要走两万行。翻页只改
     // `page`、提示五秒后只改 `hintOn`，两者都会重渲染本组件——所以正文必须
     // 缓存住，否则每翻一页都要把全书重新拆一遍。
-    const body = React.useMemo(() => {
-      if (!chapters.length) {
-        return h('div', { className: 'nw-read-empty' }, h('span', null, NW.t('这本书还没有正文')));
-      }
+    //
+    // 同一个拆段函数也给纸上那份副本用（只装当前章附近几章）：`register`
+    // 为 false 时不往 marksRef 里挂节点——那张表是 measure() 量尺寸用的真正的流。
+    const renderChapters = React.useCallback((rows, base, register) => {
       const byChapter = {};
       for (let i = 0; i < marks.length; i += 1) {
         const m = marks[i];
@@ -17486,7 +19488,8 @@ const SEL_EMIT_MS = 120;
         if (!byChapter[key]) byChapter[key] = [];
         byChapter[key].push(m);
       }
-      return chapters.map((row, index) => {
+      return rows.map((row, offset) => {
+        const index = base + offset;
         const key = String(row.id);
         const own = byChapter[key] || [];
         return h(
@@ -17496,36 +19499,115 @@ const SEL_EMIT_MS = 120;
             key: key,
             'data-chapter-id': key,
             'data-first': index === 0 ? '1' : '0',
-            ref: (el) => {
+          ref: register
+            ? (el) => {
               if (el) marksRef.current[key] = el;
               else delete marksRef.current[key];
-            },
+            }
+            : undefined,
           },
           isPlaceholderTitle(row.title)
             ? null
-            : h('h2', { className: 'nw-read-title' }, String(row.title)),
-          paragraphsOf(
-            currentId != null && key === currentId && currentText != null
-              ? currentText
-              : row.content,
-          ).map((para, i) =>
-            h(
-              'p',
-              {
-                className: 'nw-read-p',
-                key: String(i),
-                // 原文里的空行在这里变成「这段之前空了一行」，读起来才是作者
-                // 写作时划分的场景，而不是被压平的段落墙。
-                'data-gap': para.gap ? '1' : '0',
-                // 这段第一个字在章节全文里的下标：选区要靠它反推成标注区间。
-                'data-start': String(para.start),
-              },
-              own.length ? splitByMarks(para, own) : para.text,
-            ),
-          ),
+            : [
+              // 标题本身已经写了「第 X 章」就不再重复一遍，换三个点当眉标。
+              h(
+                'div',
+                { className: 'nw-read-kicker', key: 'kicker' },
+                /第\s*[0-9零一二三四五六七八九十百千]+\s*[章节回卷篇]/.test(String(row.title))
+                  ? '· · ·'
+                  : '第 ' + (index + 1) + ' 章',
+              ),
+              h('h2', { className: 'nw-read-title', key: 'title' }, String(row.title)),
+              h('div', { className: 'nw-read-orn', key: 'orn', 'aria-hidden': 'true' }),
+            ],
+          (() => {
+            const paras = paragraphsOf(
+              currentId != null && key === currentId && currentText != null
+                ? currentText
+                : row.content,
+            );
+            return paras.map((para, i) =>
+              h(
+                'p',
+                {
+                  className: 'nw-read-p',
+                  key: String(i),
+                  // 原文里的空行在这里变成「这段之前空了一行」，读起来才是作者
+                  // 写作时划分的场景，而不是被压平的段落墙。
+                  'data-gap': para.gap ? '1' : '0',
+                  // 这段第一个字在章节全文里的下标：选区要靠它反推成标注区间。
+                  'data-start': String(para.start),
+                },
+                own.length ? splitByMarks(para, own) : para.text,
+                // 章末小方块跟着最后一段走，所以它永远落在这一章最后一个字后面。
+                i === paras.length - 1
+                  ? h('span', { className: 'nw-read-end', key: 'end', 'aria-hidden': 'true' })
+                  : null,
+              ),
+            );
+          })(),
         );
       });
-    }, [chapters, currentId, currentText, marks]);
+    }, [currentId, currentText, marks]);
+
+    const body = React.useMemo(() => {
+      if (!chapters.length) {
+        return h('div', { className: 'nw-read-empty' }, h('span', null, NW.t('这本书还没有正文')));
+      }
+      return renderChapters(chapters, 0, true);
+    }, [chapters, renderChapters]);
+
+    // ---- 纸上那份副本 --------------------------------------------------------
+    // 只装当前页所在章前后几章：整本书排两遍太贵，而一章总从新的一栏开始
+    // （.nw-read-chapter + .nw-read-chapter{break-before:column}），所以副本里的分栏和正文
+    // 里那几章一模一样，只差一个「章首在正文里的左边距」。
+    const mirrorWindow = React.useMemo(() => {
+      const starts = layout.starts || [];
+      if (!starts.length || !chapters.length) return 0;
+      let at = null;
+      for (let i = 0; i < starts.length; i += 1) {
+        if (starts[i].page <= page) at = starts[i];
+        else break;
+      }
+      if (!at) return 0;
+      let idx = 0;
+      for (let i = 0; i < chapters.length; i += 1) {
+        if (String(chapters[i].id) === String(at.id)) { idx = i; break; }
+      }
+      return Math.max(0, idx - 2);
+    }, [chapters, layout.starts, page]);
+
+    // 窗口只在读者走出去时才换：换一次就要重排那几章，不能每翻一页都重排。
+    const [mirrorFrom, setMirrorFrom] = React.useState(0);
+    React.useEffect(() => {
+      if (turningRef.current) return;
+      if (mirrorFrom !== mirrorWindow) setMirrorFrom(mirrorWindow);
+    }, [mirrorFrom, mirrorWindow, turnEpoch]);
+
+    const mirrorRows = React.useMemo(
+      () => (chapters.length ? chapters.slice(mirrorFrom, mirrorFrom + 5) : []),
+      [chapters, mirrorFrom],
+    );
+
+    // 副本第一章在正文里的左边界：翻页时 scrollLeft 要减掉它。
+    const mirrorOrigin = React.useMemo(() => {
+      const first = mirrorRows[0];
+      const starts = layout.starts || [];
+      if (!first) return 0;
+      for (let i = 0; i < starts.length; i += 1) {
+        if (String(starts[i].id) === String(first.id)) return starts[i].left || 0;
+      }
+      return 0;
+    }, [mirrorRows, layout.starts]);
+
+    React.useLayoutEffect(() => {
+      mirrorOriginRef.current = mirrorOrigin;
+    }, [mirrorOrigin]);
+
+    const mirrorBody = React.useMemo(
+      () => (mirrorRows.length ? renderChapters(mirrorRows, mirrorFrom, false) : null),
+      [mirrorRows, mirrorFrom, renderChapters],
+    );
 
     // 正文重建后立刻重算页边批注签；`body` 变了说明分段/换页规则也可能变了。
     React.useLayoutEffect(() => {
@@ -17533,32 +19615,165 @@ const SEL_EMIT_MS = 120;
       paintGutter();
     }, [paintGutter, body]);
 
-    React.useEffect(() => {
-      // R117：手机单栏没有页边签可跟，不需要在滚动时反复排一次签。
-      if (compact) return undefined;
-      const flow = flowRef.current;
-      if (!flow) return undefined;
-      let timer = 0;
-      const relayout = () => {
-        window.clearTimeout(timer);
-        timer = window.setTimeout(() => {
-          const fn = paintGutterRef.current;
-          if (typeof fn === 'function') fn();
-        }, 90);
-      };
-      flow.addEventListener('scroll', relayout, { passive: true });
-      window.addEventListener('resize', relayout);
-      return () => {
-        window.clearTimeout(timer);
-        flow.removeEventListener('scroll', relayout);
-        window.removeEventListener('resize', relayout);
-      };
-    }, [compact]);
+    // 页边签只在三件事之后重画：翻页落位（turnTo/scrollToPage 里的 repaintGutter）、
+    // 尺寸变化（上面的 relayout）、批注数据或正文变化（上面这个 effect）。
+    // 滚动与拖拽过程中一律不碰——那正是原来卡顿的第二个来源。
 
     const flowStyle = {
       fontSize: fontSize + 'px',
       lineHeight: String(lineHeight),
     };
+
+    // 纸下边距里的页脚。两面各印一份：正面是掀走的那页，背面是落下的那页。
+    // 两槽都画出来，纸只露出一页宽，自然只看见自己那一侧的槽。
+    const faceFoot = (key, folio) => h(
+      'div',
+      {
+        className: 'nw-read-face-foot',
+        key: key,
+        'data-single': spread ? '0' : '1',
+        'aria-hidden': 'true',
+      },
+      spread
+        ? [
+          h(
+            'div',
+            { className: 'nw-read-foot-slot', key: 'l', 'data-side': 'left' },
+            h('span', { className: 'nw-read-count' }, String(folio.left)),
+            h('span', { className: 'nw-read-foot-name' }, bookName),
+          ),
+          h(
+            'div',
+            { className: 'nw-read-foot-slot', key: 'r', 'data-side': 'right' },
+            h('span', { className: 'nw-read-foot-name' }, folio.rightChapter),
+            h('span', { className: 'nw-read-count' }, folio.right == null ? '' : String(folio.right)),
+          ),
+        ]
+        : h(
+          'div',
+          { className: 'nw-read-foot-slot', key: 'r', 'data-side': 'right' },
+          h('span', { className: 'nw-read-foot-name' }, bookName),
+          h('span', { className: 'nw-read-count' }, folio.right == null ? '' : String(folio.right)),
+        ),
+    );
+
+    // 天头的眉题。纸现在是整张纸，天头也在纸上；不复刻的话，纸一抬起来，
+    // 原先画在舞台上、正被纸盖住的那条章名就跟着没了。
+    const faceHead = (key, folio) => h(
+      'div',
+      {
+        className: 'nw-read-face-head',
+        key: key,
+        'aria-hidden': 'true',
+      },
+      spread || textCols > 1
+        ? [
+          h(
+            'div',
+            { className: 'nw-read-head-slot', key: 'l', 'data-side': 'left' },
+            h('span', null, '《' + bookName + '》'),
+          ),
+          h(
+            'div',
+            { className: 'nw-read-head-slot', key: 'r', 'data-side': 'right' },
+            h('span', null, folio.rightChapter),
+          ),
+        ]
+        : h(
+          'div',
+          { className: 'nw-read-head-slot', key: 'one', 'data-side': 'left' },
+          h('span', null, folio.chapter),
+        ),
+    );
+
+    // R156: 一张纸只有两面。正面印离开的那页，背面印翻到的那页；每面都是
+    // 一份整页副本 + 一道贴在折线上的渐变，浏览器负责 3D 旋转与背面裁剪。
+    const renderLeafFace = (face, folio, key, copyRef, shadeRef, faceRef) => h(
+      'div',
+      { className: 'nw-read-face', 'data-face': face, key: key, ref: (el) => { faceRef.current = el; } },
+      h('div', {
+        className: 'nw-read-copy',
+        ref: (el) => { copyRef.current = el; },
+        style: flowStyle,
+      }, mirrorBody),
+      h('span', {
+        className: 'nw-read-shade',
+        ref: (el) => { shadeRef.current = el; },
+        'aria-hidden': 'true',
+      }),
+      faceFoot(face + '-foot', folio),
+      faceHead(face + '-head', folio),
+    );
+
+    // —— 眉题与页脚 ---------------------------------------------------------
+    // 对开时一次翻过去就是两页：`layout.starts` 里记的是「第几个跨页」，
+    // 这里只查数组，翻页过程不碰 DOM。章名取当前页之前最后一个有名字的章。
+    const spread = layout.cols === 2;
+    // R125: 一页分成几栏。栏线、眉题、页脚都跟着它走，别再假设「一页 = 一栏」。
+    const textCols = layout.textCols || 1;
+    const bookName = novelTitle || NW.t('读一遍');
+    // 章按**栏的偏移量**查，而不是按「第几个跨页」取整：一章要是从半页中间
+    // 开始（双栏时很常见），取整会把整页都算成新章，右页就会顶着下一章的名字。
+    // R128：换章可以发生在栏中间，所以「哪一章」要按 (栏, 行) 两个坐标查：
+    // 栏首算给「在本栏顶开始的章」，栏中间那一章不算在这一栏的头上。
+    const chapterAtX = (x) => {
+      const starts = layout.starts || [];
+      let name = '';
+      for (let i = 0; i < starts.length; i += 1) {
+        const at = starts[i];
+        const sLeft = at.left || 0;
+        const sTop = at.top || 0;
+        // 左边界在这栏之前，或者就在这栏但确实从栏顶起头。
+        if (sLeft < x - 1 || (Math.abs(sLeft - x) <= 1 && sTop <= 2)) name = at.title || name;
+        else if (sLeft > x + 1) break;
+      }
+      return name;
+    };
+    const pageStep = layout.step || 0;
+    // R148: 台面上的页码与眉题跟「看起来的那页」（shownPage）走，不再跟数据页
+    // page 抢跑。纸自己的正面印旧页 folio、背面印要落下的新页 folio，与切片选
+    // 出的正文窗口一致。
+    // R149: 台面改成按「半」取：翻页途中被掀起的那一半先换（halfOverride），
+    // 另一半等纸落地。整幅一份 folio 会让外缘的页码与它旁边的内容对不上。
+    // R159: 编号口径改成「一次翻页推进一页」。正文的 scrollLeft = page * step，
+    // 而 step 正好是一页宽（w + gap），所以停在 page = i 时，台面上左右两页就是
+    // i 与 i+1，印出来必须是 i+1 / i+2。旧代码 `idx * (spread ? 2 : 1)` 把每一趟
+    // 翻页都当成翻了两页，于是第一下之后所有页码都比正文多 1，越往后差得越多
+    // （正文第 20 页印成 24）——这就是「页码不对」的根。
+    const folioAt = (idx) => {
+      const startX = idx * pageStep;
+      // 对开时右页就是紧挨着的下一张书页；单页两栏时右栏与左页同一页，取页首。
+      const rightX = spread ? startX + pageStep : startX;
+      const rightIdx = spread ? idx + 1 : idx;
+      return {
+        left: idx + 1,
+        // 越界的右页没有号：书正好在两跨页中间结束时，右半是空白的，
+        // 宁可不印，也不要印一个不存在的页码。注意右页只要「存在」就能印，
+        // 不必是可停留的左页（书末那一跨页的右页正是这种情况）。
+        right: rightIdx <= layout.total - 1 ? rightIdx + 1 : null,
+        chapter: chapterAtX(startX) || bookName,
+        rightChapter: chapterAtX(rightX) || bookName,
+      };
+    };
+    const stageFolio = folioAt(shownPage);
+    // 翻页途中先换码的那一半；不在翻页时 halfOverride 是 null，两半都跟台面。
+    const halfFolio = halfOverride ? folioAt(halfOverride.page) : null;
+    const leftFolio = halfFolio && halfOverride.side === 'left' ? halfFolio : stageFolio;
+    const rightFolio = halfFolio && halfOverride.side === 'right' ? halfFolio : stageFolio;
+    // R159：纸的一面只印一个号。这一页模型里，纸的两面本来印的就是同一页：
+    // 向前翻时正面压旧右页（i+1）、背面是新左页（next+1 = i+1）；向后翻时
+    // 正面压旧左页（i）、背面是新右页（next+2 = i+1）。所以两面各印一个号，
+    // 3D 镜像露出哪一半都不会错位（[data-dir="back"] 的 row-reverse 正好把
+    // 背面那半拉回外侧）。
+    const frontFolio = stageFolio;
+    const backFolio = turnPagesRef.current.live ? folioAt(turnPagesRef.current.to) : stageFolio;
+    // 单栏时整页就是那张纸，没有「另一半」：纸一抬起来它就是新页了。
+    const shownFolio = halfFolio || stageFolio;
+    const runningChapter = spread ? leftFolio.chapter : shownFolio.chapter;
+    const runningRightChapter = spread ? rightFolio.rightChapter : shownFolio.rightChapter;
+    // 页码按「书上印的那一页」算：对开是 n+1 / n+2，单栏就是 n+1。
+    const pageLeft = spread ? leftFolio.left : shownFolio.left;
+    const pageRight = spread ? rightFolio.right : shownFolio.right;
 
     // 选中一段字之后浮出来的小工具条：就四个动作，不下拉、不弹窗。
     // 便签开着的时候收起来：那一版的选区已经交给便签了，再叠一个条子只是噪音。
@@ -17778,6 +19993,7 @@ const SEL_EMIT_MS = 120;
         className: 'nw-read nw-surface',
         'data-theme': themeKey,
         'data-read': '1',
+        style: readerFont ? { '--nw-read-serif': readerFont } : undefined,
         role: 'dialog',
         'aria-modal': 'true',
         'aria-label': NW.t('读一遍'),
@@ -17786,6 +20002,143 @@ const SEL_EMIT_MS = 120;
         'div',
         { className: 'nw-read-bar' },
         h('span', { className: 'nw-read-bar-name' }, novelTitle || NW.t('读一遍')),
+        // R130：念给我听。一只手就能按到：左边喇叭是开关，右边小三角是设置。
+        h(
+          'div',
+          { className: 'nw-read-speakbar' },
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'nw-read-bar-btn',
+              'data-on': speaking ? '1' : '0',
+              'aria-pressed': speaking ? 'true' : 'false',
+              'aria-label': speaking ? NW.t('停止朗读') : NW.t('念给我听'),
+              title: speaking ? NW.t('停止朗读') + '（再点一下）' : NW.t('念给我听'),
+              onClick: startSpeakHere,
+            },
+            NW.icon(speaking ? 'volumeoff' : 'volume', { size: 16 }),
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'nw-read-bar-btn',
+              'data-narrow': '1',
+              'aria-label': NW.t('朗读设置'),
+              title: NW.t('朗读设置'),
+              onClick: () => setSpeakMenu((v) => !v),
+            },
+            NW.icon('caret', { size: 13 }),
+          ),
+          speakMenu
+            ? h(
+                'div',
+                { className: 'nw-read-speakmenu', role: 'dialog', 'aria-label': NW.t('朗读设置') },
+                h(
+                  'div',
+                  { className: 'nw-read-speakmenu-row' },
+                  h('span', { className: 'nw-read-speakmenu-label' }, NW.t('引擎')),
+                  [
+                    ['system', NW.t('系统')],
+                    ['edge', NW.t('微软')],
+                    ['baidu', NW.t('百度')],
+                    ['api', NW.t('自定义')],
+                  ].map(([value, label]) =>
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        key: value,
+                        className: 'nw-read-speakmenu-chip',
+                        'data-on': speakEngine === value ? '1' : '0',
+                        onClick: () => changeEngine(value),
+                      },
+                      label,
+                    ),
+                  ),
+                ),
+                h(
+                  'div',
+                  { className: 'nw-read-speakmenu-row' },
+                  h('span', { className: 'nw-read-speakmenu-label' }, NW.t('语速')),
+                  [0.8, 1, 1.2, 1.5].map((r) =>
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        key: String(r),
+                        className: 'nw-read-speakmenu-chip',
+                        'data-on': Math.abs(speakRate - r) < 0.01 ? '1' : '0',
+                        onClick: () => changeRate(r),
+                      },
+                      r.toFixed(r === 1 ? 0 : 1) + '×',
+                    ),
+                  ),
+                ),
+                speakEngine === 'api' || speakEngine === 'baidu'
+                  ? h(
+                      'div',
+                      { className: 'nw-read-speakmenu-row' },
+                      h('span', { className: 'nw-read-speakmenu-label' }, NW.t('声音')),
+                      h(
+                        'span',
+                        { className: 'nw-read-speakmenu-note' },
+                        speakEngine === 'baidu'
+                          ? NW.t('百度只有这一个女声')
+                          : String(p.settings.ttsApiVoice || 'alloy') + ' · ' + NW.t('在设置里改'),
+                      ),
+                    )
+                  : h(
+                      'div',
+                      { className: 'nw-read-speakmenu-row' },
+                      h('span', { className: 'nw-read-speakmenu-label' }, NW.t('声音')),
+                      h(
+                        'select',
+                        {
+                          value: speakEngine === 'edge' ? String(p.settings.ttsEdgeVoice || EDGE_VOICES[0][0]) : speakVoice,
+                          'aria-label': NW.t('声音'),
+                          onChange: (ev) => {
+                            const next = String(ev.target.value || '');
+                            if (speakEngine === 'edge') {
+                              if (typeof p.onReadSetting === 'function') p.onReadSetting({ ttsEdgeVoice: next });
+                              if (speaking) restartAt();
+                              return;
+                            }
+                            setSpeakVoice(next);
+                            writeSpeakPref('voice', next);
+                            if (speaking) restartAt();
+                          },
+                        },
+                        speakEngine === 'edge'
+                          ? EDGE_VOICES.map(([value, label]) => h('option', { value: value, key: value }, label))
+                          : [
+                              h('option', { value: '' }, NW.t('系统默认')),
+                              speakVoices.map((v) =>
+                                h('option', { value: v.voiceURI || v.name, key: v.voiceURI || v.name }, v.name + ' · ' + v.lang),
+                              ),
+                            ],
+                      ),
+                    ),
+                speakError
+                  ? h('div', { className: 'nw-read-speakmenu-note nw-read-speakmenu-error' }, speakError)
+                  : null,
+                h(
+                  'div',
+                  { className: 'nw-read-speakmenu-note' },
+                  speakEngine === 'edge'
+                    ? NW.t('微软的在线自然音，免费、不用密钥，但这一段正文会联网发给微软。有些网络会被它拒掉（403），那就换百度或自定义 API。')
+                    : speakEngine === 'baidu'
+                      ? NW.t('百度的免费朗读，不用密钥，国内连得通；音色只有一个女声，比系统语音清楚但不带感情。这一段正文会联网发给百度。')
+                      : speakEngine === 'api'
+                      ? NW.t('任何 OpenAI /v1/audio/speech 兼容的接口都可以：地址、密钥、模型在 设置 → 阅读 里填。本地跑的 GPT-SoVITS、CosyVoice、Kokoro 也走这条。')
+                      : speakVoices.length
+                        ? NW.t('本机自带的声音，离线可用，正文不出本机。')
+                        : NW.t('这台机器没有报出中文声音，朗读可能用英文音色念中文。'),
+                ),
+              )
+            : null,
+        ),
         h(
           'button',
           {
@@ -17800,7 +20153,46 @@ const SEL_EMIT_MS = 120;
       ),
       h(
         'div',
-        { className: 'nw-read-stage', ref: stageRef },
+        { className: 'nw-read-stage', ref: stageRef, onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp },
+        // R143：纸下面那一摞。它比纸宽 4px、往下多露 9px，露出来的那条缝才是
+        // 「厚度」；纸面、翻页、正文都不碰它，没有它纸就是浮在桌上的一张。
+        h('div', { className: 'nw-read-block', 'aria-hidden': 'true' }),
+        // 纸：桌面上的那一张，压在多栏流下面。折痕只在真正对开时才画。
+        h('div', {
+          className: 'nw-read-sheet',
+          'data-spread': spread ? '1' : '0',
+          'aria-hidden': 'true',
+        }),
+        // R154：中缝是真实的一层。画在纸上时它永远被正文盖住——纸在 0、正文在 1。
+        spread
+          ? h('div', { className: 'nw-read-spine', 'aria-hidden': 'true' })
+          : null,
+        // R139：栏与栏之间不再画线（书里栏间就是空白）。中缝的暗影由纸面
+        // .nw-read-sheet 的 ::after 负责，所以这个装饰层整个撤掉了。
+        // 眉题：左页书名、右页当前章；单栏只放章名。画在流上面，正文滚动
+        // 它不动，也不进 measure() 的分页计算。
+        h(
+          'div',
+          { className: 'nw-read-head', 'aria-hidden': 'true' },
+          spread || textCols > 1
+            ? [
+              h(
+                'div',
+                { className: 'nw-read-head-slot', key: 'left', 'data-side': 'left' },
+                h('span', null, '《' + bookName + '》'),
+              ),
+              h(
+                'div',
+                { className: 'nw-read-head-slot', key: 'right', 'data-side': 'right' },
+                h('span', null, runningRightChapter),
+              ),
+            ]
+            : h(
+              'div',
+              { className: 'nw-read-head-slot', key: 'one', 'data-side': 'left' },
+              h('span', null, runningChapter),
+            ),
+        ),
         h(
           'div',
           {
@@ -17808,8 +20200,6 @@ const SEL_EMIT_MS = 120;
             ref: flowRef,
             style: flowStyle,
             tabIndex: -1,
-            onPointerDown,
-            onPointerUp,
             onClick: (ev) => {
               const node = ev.target;
               if (node && typeof node.closest === 'function') {
@@ -17828,21 +20218,84 @@ const SEL_EMIT_MS = 120;
           },
           body,
         ),
+        // 纸上的字：被掀走的那一页的副本。它按同样的栏宽排一遍，翻页时只改
+        // scrollLeft，所以动画里没有任何布局（CSS 见 .nw-read-cover / .nw-read-flip）。
+        mirrorBody
+          ? h(
+            'div',
+            { className: 'nw-read-cover', ref: coverRef, 'data-half': 'left', 'aria-hidden': 'true' },
+            h('div', { className: 'nw-read-copy', ref: coverCopyRef, style: flowStyle }, mirrorBody),
+          )
+          : null,
+        h('div', { className: 'nw-read-cast', ref: castRef, 'aria-hidden': 'true' }),
+        h(
+          'div',
+          { className: 'nw-read-flip', ref: flipWrapRef, 'aria-hidden': 'true' },
+          h(
+            'i',
+            { className: 'nw-read-leaf', ref: leafRef },
+            // R156: 一张纸，两面。正面印离开的那页，背面印翻到的那页；
+            // 弧度不再由几何产生，而是每面一道贴在折线上的渐变。
+            mirrorBody
+              ? [
+                renderLeafFace('front', frontFolio, 'front', frontCopyRef, frontShadeRef, frontFaceRef),
+                renderLeafFace('back', backFolio, 'back', backCopyRef, backShadeRef, backFaceRef),
+              ]
+              : null,
+          ),
+          // R157: 纸的切口。它不在 .nw-read-leaf 里面——跟着纸转的元素在
+          // 90 度时投影同样是零，只有留在外面、不参与旋转的这一道才能被看见。
+          h('div', { className: 'nw-read-edge', ref: edgeRef, 'aria-hidden': 'true' }),
+        ),
         h('div', { className: 'nw-read-gutter', ref: gutterRef }),
+        // 页脚只有一套：外侧页码 + 一行小字书名/章名，提示条只占折痕下面的
+        // 一小块、几秒后淡出——不再在书下面堆第二条 chrome。
+        h(
+          'div',
+          { className: 'nw-read-foot', 'data-spread': spread ? '1' : '0' },
+          spread
+            ? [
+              h(
+                'div',
+                { className: 'nw-read-foot-slot', key: 'left', 'data-side': 'left' },
+                h('span', { className: 'nw-read-count' }, String(pageLeft)),
+                h('span', { className: 'nw-read-foot-name' }, bookName),
+              ),
+              h(
+                'div',
+                { className: 'nw-read-foot-slot', key: 'right', 'data-side': 'right' },
+                // 右页的章名要跟右页自己的眉题一致（一章可能从右页才开头）
+                h('span', { className: 'nw-read-foot-name' }, runningRightChapter),
+                h('span', { className: 'nw-read-count' }, pageRight == null ? '' : String(pageRight)),
+              ),
+              h(
+                'span',
+                { className: 'nw-read-hint', key: 'hint', 'data-fade': hintOn ? '0' : '1' },
+                '← → 翻页 · 选字可以标注 · Esc 回到写作',
+              ),
+            ]
+            : [
+              h(
+                'div',
+                { className: 'nw-read-foot-slot', key: 'left', 'data-side': 'left' },
+                h(
+                  'span',
+                  { className: 'nw-read-hint', 'data-fade': hintOn ? '0' : '1' },
+                  '← → 翻页 · 选字可以标注 · Esc 回到写作',
+                ),
+              ),
+              h(
+                'div',
+                { className: 'nw-read-foot-slot', key: 'right', 'data-side': 'right' },
+                h('span', { className: 'nw-read-foot-name' }, bookName),
+                h('span', { className: 'nw-read-count' }, pageRight == null ? '' : String(pageRight)),
+              ),
+            ],
+        ),
         toolbar,
         picker,
         composerBox,
         editor,
-      ),
-      h(
-        'div',
-        { className: 'nw-read-foot' },
-        h(
-          'span',
-          { className: 'nw-read-hint', 'data-fade': hintOn ? '0' : '1' },
-          '← → 翻页 · 选字可以标注 · Esc 回到写作',
-        ),
-        h('span', { className: 'nw-read-count' }, String(page + 1) + ' / ' + String(Math.max(1, layout.total))),
       ),
     );
   };
@@ -17859,7 +20312,7 @@ const SEL_EMIT_MS = 120;
   const LS_TYPE_SCALE = 'nw.typeScale.v3';
   const LS_SIDEBAR_AUTO = 'nw.sidebarAutoCollapsed';
   const LS_SHELF_OPEN = 'nw.shelfOpen';
-// 修改建议 column (R12 ②): the writer who opens the critique panel usually
+// AI建议 column (R12 ②): the writer who opens the critique panel usually
 // wants it back next session, so both the toggle and the drag width persist.
 const LS_ADVICE_OPEN = 'nw.adviceOpen';
 const LS_ADVICE_WIDTH = 'nw.adviceWidth';
@@ -17917,48 +20370,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   }
 
   /**
-   * R100: the micro goal ("只写 100 字") is a promise to the writer, not a
-   * setting — it belongs to one sitting on one chapter. It lives in
-   * localStorage because it must survive a reload (the whole point is that the
-   * bar is still there when the writer comes back), and it is deliberately
-   * small: `{novelId, chapterId, target, baseline, startedAt}` where `baseline`
-   * is today's ledger value when the goal started, so the bar measures words
-   * written *since* the click rather than today's total.
-   */
-  const MICRO_GOAL_KEY = 'nw.microGoal';
-
-  function readMicroGoal() {
-    if (typeof window === 'undefined') return null;
-    try {
-      const raw = window.localStorage.getItem(MICRO_GOAL_KEY);
-      const row = raw ? JSON.parse(raw) : null;
-      if (!row || typeof row !== 'object') return null;
-      const target = Number(row.target);
-      const baseline = Number(row.baseline);
-      if (!Number.isFinite(target) || !Number.isFinite(baseline)) return null;
-      return {
-        novelId: row.novelId == null ? null : row.novelId,
-        chapterId: row.chapterId == null ? null : row.chapterId,
-        target: Math.max(1, Math.round(target)),
-        baseline: Math.max(0, baseline),
-        startedAt: Number(row.startedAt) || 0,
-      };
-    } catch (err) {
-      return null;
-    }
-  }
-
-  function writeMicroGoal(row) {
-    if (typeof window === 'undefined') return;
-    try {
-      if (row) window.localStorage.setItem(MICRO_GOAL_KEY, JSON.stringify(row));
-      else window.localStorage.removeItem(MICRO_GOAL_KEY);
-    } catch (err) {
-      /* a full quota must never block writing */
-    }
-  }
-
-  /**
    * R80: fill in the layout preferences a wiped WebView profile lost.
    *
    * Only missing keys are touched — whatever this profile already recorded stays
@@ -17993,7 +20404,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   // layout (which has no top bar at all — Esc is the only way out).
   NW.CSS_PARTS.push(`
 .nw-main{position:relative;}
-/* R12 ②: 修改建议 is a column beside the manuscript, not a modal. A dialog
+/* R12 ②: AI建议 is a column beside the manuscript, not a modal. A dialog
    hides the text it is talking about; a column keeps the passage and the advice
    on screen at once, so 「这一段」 can actually be looked at while reading why. */
 .nw-bench{
@@ -18004,18 +20415,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   container-type:inline-size;container-name:bench;
 }
 .nw-bench-paper{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;min-height:0;position:relative;}
-/* R100: 微目标 — a 3px line at the top of the paper. Quiet by design: it answers
-   "how much is left" without asking the writer to look at it. */
-.nw-microbar{
-  position:absolute;top:0;left:0;right:0;height:3px;z-index:4;
-  background:color-mix(in srgb,var(--nw-line) 38%,transparent);
-  pointer-events:none;overflow:hidden;
-}
-.nw-microbar-fill{
-  display:block;height:100%;
-  background:linear-gradient(90deg,color-mix(in srgb,var(--nw-brand) 55%,transparent),var(--nw-brand));
-  transition:width .35s ease;
-}
 /* R28 ①: the reserved lane is gone. R24/R27 carved 348px out of the manuscript by
    padding the surface, which narrowed the page and pushed the prose right the
    moment the card opened — the exact two things the writer asked us to stop
@@ -18358,7 +20757,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 /* ======================= R73：选中改写 / 接受 / 已接收 =======================
 
    选中一段字 → 纸面上浮出一个小方钮 → 在正文右侧开一扇并排的窗口。窗口是
-   .nw-bench 的第三个 flex 子项（和 修改建议 栏同一个位置逻辑），所以它**把正文
+   .nw-bench 的第三个 flex 子项（和 AI建议 栏同一个位置逻辑），所以它**把正文
    挤窄**而不是盖在正文上：要看懂一条修改，原文和改后必须同时在视野里。
 
    卡片三态靠边框颜色区分：待定 / 已接受（绿）/ 已拒绝（红）。颜色读的是主题
@@ -18708,14 +21107,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    是保险：哪天某个名字长过它那一级，宁可把台阶踩平，也不许把字裁掉。
    高度只给变量，窄屏那条 .nw-dock-btn{height:36px} 仍然能一把压平。
    R67b：宽度不是随手排的等差数列，而是「这一行自己起码要多宽 + 一样多的余量」。
-   四字行 8.21em、'AI 校对' 7.5em、三字行 7.21em、两字行 6.21em（14px 字号下量出来的），
-   各加 0.5em 余量就成了下面五个数。上一版顶层给到 10.4em 而那一行只有四字，
-   左边空出一大块——用户说的「AI 校对按钮左边的空白太多了」就是这个。 */
+   四字行 8.21em、三字行 7.21em、两字行 6.21em（14px 字号下量出来的），各加 0.5em
+   余量就成了下面几个数。上一版顶层给到 10.4em 而那一行只有四字，左边空出一大块。
+   R118：AI 校对并入 AI建议，菜单从五行变四行，「AI建议」是三字行，阶梯整体收紧。 */
 .nw-dock-menu .nw-dock-btn:nth-child(1){--nw-dock-w:8.7em;--nw-dock-h:46px;}
-.nw-dock-menu .nw-dock-btn:nth-child(2){--nw-dock-w:8.7em;--nw-dock-h:44px;}
-.nw-dock-menu .nw-dock-btn:nth-child(3){--nw-dock-w:8em;--nw-dock-h:42px;}
-.nw-dock-menu .nw-dock-btn:nth-child(4){--nw-dock-w:7.7em;--nw-dock-h:40px;}
-.nw-dock-menu .nw-dock-btn:nth-child(5){--nw-dock-w:6.7em;--nw-dock-h:38px;}
+.nw-dock-menu .nw-dock-btn:nth-child(2){--nw-dock-w:8em;--nw-dock-h:44px;}
+.nw-dock-menu .nw-dock-btn:nth-child(3){--nw-dock-w:7.7em;--nw-dock-h:42px;}
+.nw-dock-menu .nw-dock-btn:nth-child(4){--nw-dock-w:6.7em;--nw-dock-h:40px;}
 .nw-dock-btn::before{
   content:'';position:absolute;inset:4px 0;z-index:-1;
   border-radius:calc(var(--nw-r-control) + 2px);
@@ -18781,37 +21179,56 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    一种红（--nw-brand 原色，不掺墨也不做径向渐变）、一条 50% 的圆边、一条
    中性浮影。上一版的墨色、内圈发丝环、品牌色染影全部去掉，只留「一个圆」。
    盒子仍 52×52、border-radius:0、形状由 ::before 画——R56 起的不变式，碰
-   外观不碰命中区。静止 .9，悬停与展开到 1。 */
+   外观不碰命中区。静止 .9，悬停与展开到 1。
+   R132：红圆退场。它是纸面上最亮的像素，眼睛先落在工具上、不在字上；改成
+   和菜单行同一张皮（--nw-dock-card，即「纸色 + 4% 墨」，夜盘由 98-shell-theme
+   抬到 7%）、一条发丝边、一条中性浮影，图标回到墨色。只有悬停/展开时皮上才
+   浮一层 8% 品牌雾、笔尖才转品牌红——红色从此只留给章线、光标与当前章。
+   尺寸 52→44。所有颜色都走主题变量，五套阅读主题各取各的纸色，不写死任何值。 */
 .nw-dock-fab{
   position:relative;isolation:isolate;
   display:flex;align-items:center;justify-content:center;
-  width:52px;height:52px;padding:0;flex:0 0 auto;
+  width:44px;height:44px;padding:0;flex:0 0 auto;
   border-radius:0;border:0;background:transparent;
-  color:var(--nw-on-brand,#fff);
+  color:color-mix(in srgb, var(--nw-fg) 82%, var(--nw-bg));
   cursor:pointer;
+  transition:color .2s var(--nw-ease, ease);
 }
 .nw-dock-fab::before{
   content:'';position:absolute;inset:0;z-index:-1;
   border-radius:50%;
   pointer-events:none;
-  background:var(--nw-brand);
+  background:var(--nw-dock-card);
+  border:1px solid color-mix(in srgb, var(--nw-line-soft) 60%, transparent);
   box-shadow:
-    0 8px 20px -8px color-mix(in srgb, var(--nw-brand) 60%, transparent),
-    0 2px 6px -1px color-mix(in srgb, var(--nw-fg) 16%, transparent);
+    0 4px 10px -4px color-mix(in srgb, var(--nw-fg) 18%, transparent),
+    0 1px 2px color-mix(in srgb, var(--nw-fg) 8%, transparent);
   opacity:.9;
   transition:opacity .2s var(--nw-ease, ease),
+    background .2s var(--nw-ease, ease),
+    border-color .2s var(--nw-ease, ease),
     box-shadow .2s var(--nw-ease, ease),
     filter .2s var(--nw-ease, ease);
 }
+.nw-dock-fab:hover,
+.nw-dock-fab:focus-visible,
+.nw-dock-fab[aria-expanded="true"]{color:var(--nw-brand);}
 .nw-dock-fab:hover::before,
 .nw-dock-fab:focus-visible::before,
-.nw-dock-fab[aria-expanded="true"]::before{opacity:1;}
-.nw-dock-fab:active::before{filter:brightness(.95);}
+.nw-dock-fab[aria-expanded="true"]::before{
+  opacity:1;
+  background:color-mix(in srgb, var(--nw-brand) 8%, var(--nw-dock-card));
+  border-color:color-mix(in srgb, var(--nw-brand) 26%, transparent);
+  box-shadow:
+    0 4px 12px -4px color-mix(in srgb, var(--nw-brand) 22%, transparent),
+    0 1px 2px color-mix(in srgb, var(--nw-fg) 8%, transparent);
+}
+.nw-dock-fab:active::before{filter:brightness(.97);}
 .nw-dock-fab:focus-visible{outline:none;}
 .nw-dock-fab:focus-visible::before{
   box-shadow:
-    0 8px 20px -8px color-mix(in srgb, var(--nw-brand) 60%, transparent),
-    0 2px 6px -1px color-mix(in srgb, var(--nw-fg) 16%, transparent),
+    0 4px 12px -4px color-mix(in srgb, var(--nw-brand) 22%, transparent),
+    0 1px 2px color-mix(in srgb, var(--nw-fg) 8%, transparent),
     0 0 0 3px color-mix(in srgb, var(--nw-brand) 40%, transparent);
 }
 .nw-dock-fab > *{pointer-events:none;}
@@ -18821,88 +21238,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   transition:transform .22s var(--nw-ease-pop, ease);
 }
 .nw-dock-fab[aria-expanded="true"] .nw-dock-fabicon{transform:rotate(90deg);}
-
-/* ---- R117: phone bottom bar ----------------------------------------------
-   The floating dock reserves a lane on the right of every line (88px total on
-   a phone) so its FAB never sits on a character. That is the wrong trade on a
-   390px screen: the lane is always there, the dock is only needed sometimes,
-   and the manuscript lost a third of its width for it.
-
-   So at phone width the same five actions become a real bottom bar inside
-   .nw-main's flex column. It owns its height, the editor gets the rest, and
-   nothing floats over the text. The FAB and its ladder of rows do not render
-   at all in this mode (see Dock's compact branch); these selectors only paint
-   the bar and its 「更多」 sheet. */
-.nw-dock.nw-dock-bar{
-  position:relative;left:auto;right:auto;top:auto;bottom:auto;
-  flex:0 0 auto;width:100%;
-  flex-direction:row;align-items:stretch;justify-content:space-between;
-  gap:2px;
-  padding:5px 6px calc(5px + env(safe-area-inset-bottom, 0px));
-  background:var(--nw-panel);
-  border:0;
-  border-top:1px solid var(--nw-line-soft);
-  box-shadow:0 -1px 0 color-mix(in srgb, var(--nw-fg) 3%, transparent);
-  z-index:var(--nw-z-float);
-  /* The sheet's backdrop is fixed and z-index:0; isolate the bar so it cannot
-     compete with anything outside it, and lift the items above that backdrop
-     (negative z-index would paint them under the bar's own background). */
-  isolation:isolate;
-}
-/* Immersive keeps the bar out of the picture: the App only passes compact for
-   non-immersive, so this is a safety net for a mid-session immersive toggle. */
-.nw-dock.nw-dock-bar[data-immersive="1"]{
-  background:transparent;border-top-color:transparent;box-shadow:none;
-}
-.nw-dock-baritem{
-  position:relative;z-index:1;
-  flex:1 1 0;min-width:0;height:48px;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
-  gap:2px;padding:0 1px;border:0;border-radius:var(--nw-r-control);
-  background:transparent;color:var(--nw-fg-soft);
-  font-family:var(--nw-ui-font);font-size:11px;line-height:1;letter-spacing:.01em;
-  cursor:pointer;-webkit-tap-highlight-color:transparent;
-}
-.nw-dock-baritem[data-active="1"]{
-  color:var(--nw-brand);
-  background:color-mix(in srgb, var(--nw-brand) 9%, transparent);
-}
-.nw-dock-baritem[data-blocked="1"]{opacity:.45;}
-.nw-dock-baritem:active{filter:brightness(.97);}
-.nw-dock-baricon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;}
-.nw-dock-barname{white-space:nowrap;font-weight:500;}
-/* The sheet floats above the bar, not over the status bar, and only exists as
-   long as its own state. The backdrop is a button so a tap anywhere closes it
-   — the same behaviour as the desktop dock's outside-click, but one layer. */
-.nw-dock-sheetback{
-  position:fixed;inset:0;z-index:0;
-  margin:0;padding:0;border:0;border-radius:0;
-  background:rgba(10, 8, 6, .18);
-  cursor:default;
-}
-.nw-dock-sheet{
-  position:absolute;left:8px;right:8px;bottom:calc(100% + 8px);z-index:2;
-  display:grid;grid-template-columns:repeat(3, minmax(0, 1fr));gap:6px;
-  padding:10px;border-radius:14px;
-  border:1px solid var(--nw-line);
-  background:var(--nw-panel);
-  box-shadow:0 -12px 32px -14px color-mix(in srgb, var(--nw-fg) 22%, transparent),
-    var(--nw-shadow-3);
-  animation:nw-dock-rise .18s var(--nw-ease-pop, cubic-bezier(.22,1.16,.36,1)) both;
-}
-.nw-dock-sheetitem{
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
-  gap:6px;height:58px;padding:0 2px;
-  border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
-  background:color-mix(in srgb, var(--nw-fg) 4%, var(--nw-panel));
-  color:var(--nw-fg);
-  font-family:var(--nw-ui-font);font-size:11px;line-height:1;
-  cursor:pointer;-webkit-tap-highlight-color:transparent;
-}
-.nw-dock-sheetitem[data-blocked="1"]{opacity:.5;}
-.nw-dock-sheetitem:active{filter:brightness(.97);}
-.nw-dock-sheeticon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;color:var(--nw-fg-soft);}
-.nw-dock-sheetname{white-space:nowrap;font-weight:500;}
 
 @media (prefers-reduced-motion: reduce){
   .nw-dock-menu,
@@ -18915,7 +21250,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    了，悬浮在编辑器上」，又说「看着好瘦长」—— 那是 196px 宽 × 整屏高 的结果。
    现在是一张 420×最多 320 的悬浮卡片，钉在写作列**左上角**：写作时一直看得见正文，
    关掉只留一枚小圆钮。整块不参与 .nw-main 的布局，所以永远不会把正文挤窄。 */
-/* R24: 挪到左边。用户说「左侧没东西」—— 右边挤着修改建议栏和浮动坞，左边那片
+/* R24: 挪到左边。用户说「左侧没东西」—— 右边挤着AI建议栏和浮动坞，左边那片
    只有三个 28px 的角落按钮。放在 left:14px 还顺手解决了和查找栏的争位：查找栏
    占的是 top:10px right:14px，两者现在各占一角，谁都不用压谁。
    R28/R30: 早期版本让 .nw-bench-paper 用 padding-left 让出一条 348px 的车道，
@@ -19162,6 +21497,32 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     return { theme: mapped };
   }
 
+  /**
+   * R120: the pool behind 「浅色主题随机切换」.
+   *
+   * `night` is deliberately absent. The setting exists to vary the *daytime*
+   * page; a random dark palette would be the opposite of what the writer asked
+   * for, and it would also fight 「跟随系统深浅色」 (which owns when the night
+   * room appears). Declared once at module level so the list is not rebuilt on
+   * every keystroke.
+   */
+  const LIGHT_THEMES = ['claude', 'eye', 'newspaper', 'magazine'];
+
+  /**
+   * Picks one light theme. `avoid` is the theme currently on screen: it is
+   * skipped when more than one candidate remains, so re-rolling (turning the
+   * setting on, or a fresh launch landing on the same palette as last time)
+   * always produces a visible change. With a one-element pool the exclusion is
+   * dropped instead of returning nothing.
+   */
+  function pickLightTheme(avoid) {
+    const keep = String(avoid || '');
+    const pool = LIGHT_THEMES.length > 1 ? LIGHT_THEMES.filter((id) => id !== keep) : LIGHT_THEMES.slice();
+    const list = pool.length ? pool : LIGHT_THEMES;
+    const index = Math.floor(Math.random() * list.length);
+    return list[index] || 'claude';
+  }
+
   NW.App = function App() {
     const [ready, setReady] = useState(false);
     const [bootError, setBootError] = useState('');
@@ -19210,18 +21571,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * `lastPushAt` when this browser last handed its library over — shown in the
      * pairing dialog so "is it actually syncing?" has an answer visible on screen.
      */
-    const [lanSync, setLanSync] = useState({ books: 0, lastPushAt: 0, pulledAt: 0, pulled: 0, peers: 0, lastSyncAt: 0, lan: null, stats: null });
     /** Studio's own sidebar (the chapter tree) can be hidden independently of the host rail. */
-    const [shelfOpen, setShelfOpen] = useState(() => {
-      const raw = lsGet(LS_SHELF_OPEN);
-      if (raw != null) return raw !== '0';
-      // R117: on a phone the shelf is a drawer over the manuscript, so opening
-      // to a drawer that hides the page is not a useful first screen. Desktop
-      // keeps the old open-by-default behaviour.
-      return !(typeof window !== 'undefined' && window.innerWidth <= 560);
-    });
+    const [shelfOpen, setShelfOpen] = useState(() => lsGet(LS_SHELF_OPEN) !== '0');
     /**
-     * 修改建议 column (R12 ②). Off by default: it costs a model call and most
+     * AI建议 column (R12 ②). Off by default: it costs a model call and most
      * sessions are spent writing, not reviewing.
      */
     const [adviceOpen, setAdviceOpen] = useState(() => lsGet(LS_ADVICE_OPEN) === '1');
@@ -19282,7 +21635,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      */
     const [selAdvice, setSelAdvice] = useState(null);
     /**
-     * R73: 已接收的修改建议 for the whole library (rows are per chapter; the open
+     * R73: 已接收的AI建议 for the whole library (rows are per chapter; the open
      * chapter's slice is derived below). Loaded once on boot and refreshed
      * whenever a decision is made — the same list feeds the dock's column and the
      * selection window, so accepting in one place shows up in the other.
@@ -19298,8 +21651,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [dailyStats, setDailyStats] = useState({});
     const dailyStatsRef = useRef(dailyStats);
     dailyStatsRef.current = dailyStats;
-    // R100: 「只写 100 字」 — one sitting, one chapter, persisted across reloads.
-    const [microGoal, setMicroGoal] = useState(readMicroGoal);
     const dailyWordsRef = useRef({});
     // R95: which counting rule the baselines above were taken under. Toggling
     // 字数含标点 rescales every count, so the baselines have to be dropped.
@@ -19342,12 +21693,34 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       };
     }, []);
     /**
+     * R133: 跟随系统、且系统是浅色时从非深色主题里抽一套。抽一次定下来——
+     * 每渲染一次都重抽的话，改字号都会整页换面色。只在「进入自动浅色」的那一步
+     * 重抽：打开跟随系统，或系统从深翻到浅。
+     */
+    const [lightPick, setLightPick] = useState(() => pickLightTheme(''));
+    /**
      * R44: 读一遍 — the whole book laid out as pages, over the writing surface.
      * It is an overlay rather than a route on purpose: the editor stays mounted
      * underneath, so the caret, the scroll position and any unsaved buffer are
      * exactly where the writer left them when they close it.
      */
     const [readOpen, setReadOpen] = useState(false);
+    /**
+     * R129: 阅读页从哪一章开始。null = 跟着编辑器当前章（dock 上「读一遍」的老行为）；
+     * 一个章节 id = 目录里点的那一章；读整本时传这本书的第一章。
+     * 单独一个 state 而不是切编辑器的当前章，是因为「读一章」不该改变写作上下文——
+     * 退出阅读时光标还在原来那一句上。
+     */
+    const [readAt, setReadAt] = useState(null);
+    /**
+     * R133: 查阅 — a knowledge lookup that floats over whatever is open. It is
+     * a glance, not a route: the shelf, the manuscript and the caret all stay
+     * exactly where they were, and Esc returns the writer to the same sentence.
+     */
+    const [lookupOpen, setLookupOpen] = useState(false);
+    // 点了另一本书的「读整本」时，它的章节还没加载完（selectNovel 是异步的），
+    // 先记下这本书，等它的章节到了再把阅读页打开。
+    const readPendingRef = useRef(null);
     /**
      * 灵感便签 (R10): notes for the open book, plus whether the card is up.
      * R13 turned it into a floating card anchored to the corner of the paper
@@ -19389,46 +21762,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // whose editor has already unmounted (the 首页 → 继续写 race).
     const pendingSaveRef = useRef(null);
     const rootRef = useRef(null);
-    /**
-     * R117: whether the studio is in phone layout. The CSS breakpoint alone is
-     * not enough here: the dock changes *shape* on a phone (five floating rows +
-     * FAB become a five-slot bottom bar with its own sheet), which is a DOM
-     * decision, not a style one. Measured from `.nw-root` — the host rail may
-     * leave the panel much narrower than the phone viewport, and the container
-     * queries in 98b-responsive.js are keyed to this same box.
-     */
-    const [narrow, setNarrow] = useState(() => (typeof window !== 'undefined' ? window.innerWidth <= 560 : false));
-    useEffect(() => {
-      const read = () => {
-        const node = rootRef.current;
-        const w = node && node.clientWidth ? node.clientWidth : window.innerWidth;
-        setNarrow(w <= 560);
-      };
-      read();
-      const node = rootRef.current;
-      let ro = null;
-      if (node && typeof ResizeObserver === 'function') {
-        ro = new ResizeObserver(read);
-        try {
-          ro.observe(node);
-        } catch (err) {
-          /* very old engine: fall back to the resize listener below */
-        }
-      }
-      window.addEventListener('resize', read);
-      return () => {
-        if (ro) {
-          try {
-            ro.disconnect();
-          } catch (err) {
-            /* ignore */
-          }
-        }
-        window.removeEventListener('resize', read);
-      };
-      // The root node is replaced by the lock screen / boot error screens, so
-      // re-measure when one of those hands the panel back.
-    }, [ready, bootError, locked]);
     const aliveRef = useRef(true);
     /** R82: last chapter-open request; a slower earlier open must not win. */
     const chapterOpenSeqRef = useRef(0);
@@ -19473,17 +21806,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     }, [chapter && chapter.id, settings.countPunctuation]);
     const immersiveRef = useRef(false);
     immersiveRef.current = immersive;
-    // R43 ④: `pullSync` must not close over `novels`. Every keystroke that lands
-    // in the library calls setNovels, which used to invalidate the callback and
-    // rebuild the 6s interval — the timer restarted before it ever fired, so a
-    // phone edit could sit in the mirror for as long as the user kept typing.
-    // Read the list through a ref instead and keep the dependency list empty.
-    const novelsRef = useRef([]);
-    novelsRef.current = novels;
-    // Same reason: adopting a remote chapter is only safe when the buffer has
-    // nothing unsaved in it.
-    const saveStateRef = useRef('saved');
-    saveStateRef.current = saveState;
 
     // ------------------------------------------------------------- toasts ----
     /**
@@ -20061,120 +22383,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * failure is reported at most once per session so a broken folder never
      * spams the user while they are typing.
      */
-    /**
-     * R34 ④: the browser's library, in the shape the sync engine merges.
-     *
-     * Why the browser pushes at all: IndexedDB is the only place the real text
-     * lives, and the host cannot read it. `sync.push` hands the host a full copy
-     * on every library change, which is what lets a phone that comes online later
-     * pull a complete, current library without the desktop having been idle.
-     *
-     * The unit is a *book* — `{id,title,author,updatedAt,deleted,chapters}` — and
-     * `deleted` is only ever true for a book still sitting in the trash: that is
-     * the tombstone, and without it a book deleted on the phone would reappear on
-     * the next pull because the desktop simply had a copy of it.
-     */
-    const syncLibrary = useCallback(async () => {
-      try {
-        // Refuse to push while a password exists but the studio is locked: the
-        // rows would be `enc:v1:` ciphertext, and the phone cannot read them. The
-        // push effect already skips this state; the guard keeps a future caller
-        // from reintroducing the bug the decryption below exists to fix.
-        //
-        // `hasPassword()` is async (15-crypto.js): reading it without `await`
-        // used to make this guard true for everyone, because a Promise is always
-        // truthy and `isUnlocked()` is false on an install that never set a
-        // password. The result was no `sync.push` at all — the phone only ever
-        // received what the phone itself had pushed.
-        const hasPw = NW.crypto && typeof NW.crypto.hasPassword === 'function'
-          ? await NW.crypto.hasPassword()
-          : false;
-        if (hasPw && !NW.crypto.isUnlocked()) return null;
-        const snapshot = await NW.db.dump();
-        const grouped = new Map();
-        for (const row of snapshot.chapters || []) {
-          if (!row || row.novelId == null) continue;
-          if (!grouped.has(row.novelId)) grouped.set(row.novelId, []);
-          grouped.get(row.novelId).push(row);
-        }
-        const books = (snapshot.novels || []).map((novel) => {
-          const rows = (grouped.get(novel.id) || [])
-            .slice()
-            .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || String(a.id).localeCompare(String(b.id)));
-          return {
-            id: String(novel.id),
-            title: String(novel.title || ''),
-            author: String(novel.author || ''),
-            updatedAt: Number(novel.updatedAt) || Number(novel.createdAt) || 0,
-            deleted: novel.deleted === true,
-            chapters: rows.map((row) => ({
-              id: String(row.id),
-              title: String(row.title || ''),
-              content: String(row.content || ''),
-              order: Number(row.order) || 0,
-            })),
-          };
-        });
-        // A book deleted here has to leave a tombstone, or a phone that was
-        // offline during the deletion still holds a copy and hands it straight
-        // back on its next push. The trash store already records every deleted
-        // book (kind 'novel' plus the whole payload), so the tombstone is
-        // derived from it rather than kept in a second bookkeeping store that
-        // could drift out of step with the trash screen.
-        const live = new Set(books.map((book) => book.id));
-        for (const item of snapshot.trash || []) {
-          if (!item || item.kind !== 'novel') continue;
-          const gone = item.payload && item.payload.novel;
-          if (!gone || gone.id == null) continue;
-          const id = String(gone.id);
-          if (live.has(id)) continue;
-          books.push({
-            id,
-            title: String(gone.title || ''),
-            author: String(gone.author || ''),
-            // The deletion timestamp, not the book's: that is the moment the
-            // merge has to compare against a peer's copy of the same book.
-            updatedAt: Number(item.deletedAt) || 0,
-            deleted: true,
-            chapters: [],
-          });
-        }
-        // R36: with 正文加密 on, IndexedDB stores `enc:v1:` bodies. Pushing them
-        // raw is what made the phone show ciphertext: it holds no key and the
-        // host only relays. This is the one place that can decrypt, so it does —
-        // but only when the studio is unlocked, which `encryptionOn()` implies.
-        // A body that fails to decrypt is left sealed rather than blanked:
-        // showing a garbled chapter beats silently deleting it everywhere.
-        if (await NW.crypto.encryptionOn()) {
-          for (const book of books) {
-            for (const chapter of book.chapters) {
-              if (!chapter.content || !NW.crypto.isEncrypted(chapter.content)) continue;
-              try {
-                chapter.content = await NW.crypto.decryptText(chapter.content);
-              } catch (err) {
-                /* keep the ciphertext */
-              }
-            }
-          }
-        }
-        const data = await NW.io.sync.push(books);
-        if (!aliveRef.current) return data;
-        setLanSync((prev) =>
-          Object.assign({}, prev, {
-            books: Number(data && data.books) || books.length,
-            lastPushAt: Date.now(),
-            stats: (data && data.stats) || prev.stats,
-          })
-        );
-        return data;
-      } catch (err) {
-        // Sync is a background convenience: a failure must never surface as a
-        // toast on every keystroke. The pairing dialog reports it on demand.
-        return null;
-      }
-    }, [pushToast]);
-
-    const mirrorLibrary = useCallback(async (options) => {
+        const mirrorLibrary = useCallback(async (options) => {
       const silent = !!(options && options.silent === true);
       // `override` lets the caller pass the settings it just persisted: the
       // state update that follows is asynchronous, so the closure still holds
@@ -20349,40 +22558,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       return () => window.clearTimeout(timer);
     }, [ready, locked, autosaveSignature, mirrorLibrary, novels, chapters, notes, submissions, settings.libraryEncrypt]);
 
-    /**
-     * R34 ④: hand the library to the host's sync mirror.
-     *
-     * Separate from `autosaveSignature` on purpose — the mirror is only active
-     * when a folder has been chosen, while LAN sync should work for anyone who
-     * paired a phone. It is debounced a little longer than the folder save
-     * because the payload is the whole library and a phone pull is the only
-     * consumer, so a 2s lag is invisible.
-     */
-    const syncSignature = useMemo(() => {
-      const novelPart = novels.map((row) => [row && row.id, row && row.updatedAt].join(':')).join(',');
-      const chapterPart = chapters
-        .map((row) => [row && row.id, row && row.updatedAt, row && row.wordCount].join(':'))
-        .join(',');
-      return novelPart + '|' + chapterPart;
-    }, [novels, chapters]);
-
-    useEffect(() => {
-      if (!ready || locked || !syncSignature) return undefined;
-      const timer = window.setTimeout(() => {
-        syncLibrary();
-      }, 2000);
-      return () => window.clearTimeout(timer);
-    }, [ready, locked, syncSignature, syncLibrary]);
-
-    /**
-     * Poll for the phone's side.
-     *
-     * Lives next to `pullSync` at the bottom of the CRUD block, because the
-     * dependency array is evaluated during render — naming `pullSync` up here
-     * would read a `const` before it is initialised and take the whole panel down
-     * with a ReferenceError.
-     */
-    // Host capabilities (drives which export formats the UI offers). Best effort:
+        // Host capabilities (drives which export formats the UI offers). Best effort:
     // when the host half is missing the defaults above keep every format listed and
     // the export itself surfaces the real error.
     useEffect(() => {
@@ -20393,33 +22569,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         .then((data) => {
           if (!alive || !data || !data.capabilities) return;
           setCaps((prev) => Object.assign({}, prev, data.capabilities));
-        })
-        .catch(() => {});
-      return () => {
-        alive = false;
-      };
-    }, [ready, locked]);
-
-    // Which LAN addresses the phone can call. Read once per mount and after a
-    // pairing code is generated; the listener itself is started host-side, so a
-    // failure here just means the settings page shows "未启动".
-    useEffect(() => {
-      if (!ready || locked) return undefined;
-      let alive = true;
-      Promise.resolve()
-        .then(() => NW.io.pair.info())
-        .then((data) => {
-          if (!alive || !data) return;
-          // R38: keep the peers themselves, not just their count. The settings
-          // page now shows "最近一次同步" for the phone, and only the host knows
-          // when a phone last merged — this is the field that was always 0.
-          setLanSync((prev) =>
-            Object.assign({}, prev, {
-              peers: Array.isArray(data.peers) ? data.peers.length : prev.peers,
-              lastSyncAt: Array.isArray(data.peers) && data.peers.length ? data.peers.reduce((at, row) => Math.max(at, Number(row && row.lastSyncAt) || 0), 0) || prev.lastSyncAt : prev.lastSyncAt,
-              lan: { running: data.running === true, port: Number(data.port) || 0, addresses: Array.isArray(data.addresses) ? data.addresses : [] },
-            })
-          );
         })
         .catch(() => {});
       return () => {
@@ -20760,7 +22909,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     }, []);
 
     /**
-     * R73: 接受一条修改建议.
+     * R73: 接受一条AI建议.
      *
      * Writes ONE row and nothing else — the manuscript is the writer's, and
      * "accept" means "this edit is right, I will make it", not "apply it for me".
@@ -20797,7 +22946,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           await refreshRevisions();
           return row || null;
         } catch (err) {
-          pushToast(errText(err, '保存修改建议失败'), 'error');
+          pushToast(errText(err, '保存AI建议失败'), 'error');
           return null;
         }
       },
@@ -20812,7 +22961,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           if (!aliveRef.current) return;
           await refreshRevisions();
         } catch (err) {
-          pushToast(errText(err, '删除修改建议失败'), 'error');
+          pushToast(errText(err, '删除AI建议失败'), 'error');
         }
       },
       [pushToast, refreshRevisions],
@@ -20908,156 +23057,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       },
       [refreshMarks, refreshRevisions],
     );
-
-    /**
-     * R43 ④: after a pull, bring the *open* chapter up to date as well.
-     *
-     * `NW.db.applyBooks` only rewrites IndexedDB. The chapter being edited lives
-     * in React state, and the editor adopts new text only when its `chapter`
-     * prop changes (`60-editor.js` keys that effect on `chapter.content`), so an
-     * edit the phone made to the chapter you are staring at was written to the
-     * database and nowhere else — it only appeared after switching chapters or
-     * reloading. That read as "手机上的改动同步不到电脑".
-     *
-     * Two guards, both deliberate:
-     * - unsaved keystrokes win; adopting over them would throw them away;
-     * - the text is compared before `setChapter`, because re-rendering the
-     *   editor on every tick would move the caret while the author types.
-     */
-    const adoptRemoteChapter = useCallback(async (books) => {
-      const current = chapterRef.current;
-      if (!current || current.id == null) return false;
-      if (!Array.isArray(books) || !books.length) return false;
-      const mine = books.find(
-        (book) => book && book.id != null && String(book.id) === String(current.novelId),
-      );
-      // A deleted book is the shelf's business, not the editor's.
-      if (!mine || mine.deleted === true) return false;
-      if (saveStateRef.current === 'dirty' || saveStateRef.current === 'saving') return false;
-      let record = null;
-      try {
-        record = await NW.db.getChapter(current.id);
-      } catch (err) {
-        return false;
-      }
-      if (!record || record.id == null) return false;
-      const next = typeof record.content === 'string' ? record.content : '';
-      const api = editorRef.current;
-      let shown = '';
-      try {
-        shown = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
-      } catch (err) {
-        shown = '';
-      }
-      if (!shown) shown = String(current.content || '');
-      if (next === shown) return false;
-      if (!aliveRef.current) return false;
-      setChapter(record);
-      return true;
-    }, []);
-
-    /**
-     * R34 ④: pull the host mirror and apply whatever actually moved.
-     *
-     * Declared after refreshNovels/refreshChapters on purpose — a useCallback that
-     * captures them earlier would close over the temporal dead zone and the whole
-     * panel would fail to mount (the build gate catches it, but only after a full
-     * bundle pass).
-     *
-     * The diff matters more than the pull: the mirror holds the *merged* result,
-     * so applying it wholesale every few seconds would rewrite every chapter row
-     * on every tick and make the editor think the text changed underneath the
-     * caret. Only books whose remote `updatedAt` is strictly newer than the local
-     * row — or that the remote calls deleted while we still have them — reach
-     * `applyBooks`.
-     *
-     * No toast on success: this runs on a timer while the user is writing, and a
-     * book that arrived from the phone announces itself through the shelf.
-     */
-    const pullSync = useCallback(async () => {
-      try {
-        const data = await NW.io.sync.pull();
-        // R38: the pull doubles as the heartbeat for "did a phone sync recently".
-        // `lastSyncAt` is written host-side by markPeerSync(); before this the
-        // settings page could only report the browser's own counters, which a
-        // phone sync never touches — hence 「还没有同步过」 on a phone that had
-        // just synced. Fold it in before the early return so a quiet tick still
-        // refreshes the timestamp.
-        if (aliveRef.current) {
-          const hostSync = Number(data && data.lastSyncAt) || 0;
-          const peerCount = Number(data && data.peers) || 0;
-          setLanSync((prev) => {
-            if (hostSync <= Number(prev.lastSyncAt || 0) && peerCount === Number(prev.peers || 0)) return prev;
-            return Object.assign({}, prev, {
-              lastSyncAt: Math.max(Number(prev.lastSyncAt || 0), hostSync),
-              peers: peerCount || prev.peers,
-            });
-          });
-        }
-        const remote = data && data.library && Array.isArray(data.library.books) ? data.library.books : [];
-        if (!remote.length) return 0;
-        const local = new Map();
-        for (const row of novelsRef.current) if (row && row.id != null) local.set(String(row.id), row);
-        const wanted = [];
-        for (const book of remote) {
-          if (!book || book.id == null) continue;
-          const mine = local.get(String(book.id));
-          const theirs = Number(book.updatedAt) || 0;
-          if (!mine) {
-            // Unknown book: only take it if it is alive. A tombstone for a book we
-            // never had is noise from an earlier install.
-            if (book.deleted !== true) wanted.push(book);
-            continue;
-          }
-          if (book.deleted === true) {
-            wanted.push(book);
-            continue;
-          }
-          const ours = Number(mine.updatedAt) || 0;
-          if (theirs > ours) wanted.push(book);
-        }
-        if (!wanted.length) return 0;
-        const touched = await NW.db.applyBooks(wanted);
-        if (!touched) return 0;
-        await refreshNovels();
-        await refreshChapters();
-        // R47: a pull can also remove chapters, and their annotations go with
-        // them. Without this the underlines of a chapter the phone deleted would
-        // keep being drawn until the panel was reloaded.
-        await refreshMarks();
-        // R43 ④: applyBooks only rewrites IndexedDB. The open chapter lives in
-        // React state, and the editor adopts new text only when its `chapter`
-        // prop changes — so a phone edit to the chapter you are *looking at*
-        // landed in the database and nowhere else until you switched chapters.
-        // Re-read the buffer below, but never over unsaved keystrokes.
-        await adoptRemoteChapter(wanted);
-        if (!aliveRef.current) return touched;
-        setLanSync((prev) => Object.assign({}, prev, { pulledAt: Date.now(), pulled: touched }));
-        return touched;
-      } catch (err) {
-        return 0;
-      }
-    }, [refreshNovels, refreshChapters, adoptRemoteChapter, refreshMarks]);
-
-    /**
-     * Poll for the phone's side.
-     *
-     * There is no server push into the browser: the LAN listener writes to the
-     * host mirror, and the only way the page learns about it is by asking. Six
-     * seconds is a compromise — faster makes a 30-book library do needless work
-     * every tick, slower makes an edit on the phone feel like it did not arrive.
-     * `pullSync` short-circuits before touching IndexedDB when nothing changed.
-     */
-    useEffect(() => {
-      if (!ready || locked) return undefined;
-      const timer = window.setInterval(() => {
-        // R81: a hidden tab decrypts and merges the whole mirror every 6s for
-        // nothing. Skip the tick; the next visible one catches up.
-        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-        pullSync();
-      }, 6000);
-      return () => window.clearInterval(timer);
-    }, [ready, locked, pullSync]);
 
     const createNovel = useCallback(async () => {
       try {
@@ -21295,30 +23294,71 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       // R99: the flush is awaited — encryptAll reads the rows next, and starting
       // it while the flush was still in flight could seal (and then restore) the
       // pre-flush body.
-      await flushEditor();
-      await snapshotVersion();
-      try {
-        if (NW.crypto && NW.crypto.hasPassword && (await NW.crypto.hasPassword())) {
-          let sealed = 0;
-          try {
-            if (settings.encryption && NW.crypto.isUnlocked && NW.crypto.isUnlocked()) {
-              sealed = await NW.db.encryptAll();
-            }
-          } catch (err) {
-            /* encryption is best-effort; locking must still happen */
-          }
-          NW.crypto.lock();
+      //
+      // R118: two things used to keep the lock from ever landing, and both were
+      // silent (the caller is a timer, so nobody saw the pending promise):
+      //   1. a flush/snapshot that never settles, and
+      //   2. encryptAll on a large library, which can take a lot longer than the
+      //      writer expects between 「该锁了」 and the lock screen.
+      // The seal pass now has a deadline and the whole routine has a watchdog
+      // that drops the key and shows the lock screen no matter what the save
+      // layer is doing. Sealing is best-effort by design; being unlocked is not.
+      const dropKey = () => {
+        try {
+          if (NW.crypto && NW.crypto.lock) NW.crypto.lock();
           setLocked(true);
           setImmersive(false);
           setChapters((list) => list.map((row) => (row ? Object.assign({}, row, { content: '' }) : row)));
           setChapter(null);
           setDialog(null);
-          if (sealed > 0) pushToast('已加密 ' + sealed + ' 段正文并上锁', 'ok');
-        } else {
-          setDialog({ kind: 'lockSetup' });
+        } catch (err) {
+          /* the watchdog is the last resort; never throw out of a timer */
         }
-      } catch (err) {
-        pushToast(errText(err, '锁定失败'), 'error');
+      };
+      const bail = setTimeout(dropKey, 6000);
+      const sealWithDeadline = (ms) =>
+        new Promise((resolve) => {
+          let settled = false;
+          const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            resolve(value);
+          };
+          const timer = setTimeout(() => finish(-1), ms);
+          Promise.resolve()
+            .then(() => NW.db.encryptAll())
+            .then((n) => {
+              clearTimeout(timer);
+              finish(Number(n) || 0);
+            })
+            .catch(() => {
+              clearTimeout(timer);
+              finish(-1);
+            });
+        });
+      try {
+        await flushEditor();
+        await snapshotVersion();
+        try {
+          if (NW.crypto && NW.crypto.hasPassword && (await NW.crypto.hasPassword())) {
+            let sealed = 0;
+            try {
+              if (settings.encryption && NW.crypto.isUnlocked && NW.crypto.isUnlocked()) {
+                sealed = await sealWithDeadline(4000);
+              }
+            } catch (err) {
+              /* encryption is best-effort; locking must still happen */
+            }
+            dropKey();
+            if (sealed > 0) pushToast('已加密 ' + sealed + ' 段正文并上锁', 'ok');
+          } else {
+            setDialog({ kind: 'lockSetup' });
+          }
+        } catch (err) {
+          pushToast(errText(err, '锁定失败'), 'error');
+        }
+      } finally {
+        clearTimeout(bail);
       }
     }, [flushEditor, snapshotVersion, pushToast, settings.encryption]);
 
@@ -21396,28 +23436,91 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [loadAll, pickInitial, pushToast],
     );
 
+    /**
+     * R118: 自动锁定为什么会「不锁」——两个都能静默失败的地方：
+     *
+     *  1. 原来的 effect 在 `settings`/`doLock` 身份一变就重建 15s 计时器。
+     *     任何一次重渲染或设置补丁都会把这段倒计时推后，于是「15 分钟没动静
+     *     就锁」在长会话里永远差一点点。
+     *  2. 窗口最小化或机器睡眠时，Chromium 会冻结/强节流计时器。等计时器再
+     *     跑起来，用户通常已经动过鼠标——而旧实现里「动鼠标」第一件事是
+     *     `NW.crypto.touch()` 刷新 idle，于是早就过期的会话在检查之前被
+     *     「原谅」了。
+     *
+     * 现在的调度与渲染身份无关：计时器只建一次，通过 ref 读最新的设置和
+     * 锁定函数；5s 一跳，另外在 visibilitychange / focus / pageshow 补检；
+     * 关键是 `touchActivity` 先判断会话是否已过期——过期就锁，而不是续命。
+     * 于是「回到一个放了一下午的窗口」落在锁屏上，而不是落在一段被悄悄
+     * 延长的会话里。
+     */
+    const lockSettingsRef = useRef(settings);
+    lockSettingsRef.current = settings;
+    const doLockRef = useRef(doLock);
+    doLockRef.current = doLock;
+    const lockAgeRef = useRef(0);
+    const wantAutoLock = useCallback(() => {
+      const live = lockSettingsRef.current || {};
+      const minutes = Number(live.autoLockMinutes) || 0;
+      if (!live.lockEnabled || minutes <= 0) return false;
+      if (!NW.crypto || !NW.crypto.autoLocked) return false;
+      try {
+        return !!NW.crypto.autoLocked(minutes);
+      } catch (err) {
+        return false;
+      }
+    }, []);
+    /** One lock request at a time — doLock awaits a flush and a seal pass. */
+    const requestLock = useCallback(() => {
+      const now = Date.now();
+      if (now - lockAgeRef.current < 1000) return;
+      lockAgeRef.current = now;
+      Promise.resolve(doLockRef.current && doLockRef.current()).catch(() => {});
+    }, []);
+
     const touchActivity = useCallback(() => {
+      // Check BEFORE forgiving the session: an expired idle clock must lock on
+      // the first sign of life, otherwise the very act of coming back rescues
+      // the session the timer was about to close.
+      if (wantAutoLock()) {
+        requestLock();
+        return;
+      }
       const now = Date.now();
       if (now - lastTouchRef.current < 4000) return;
       lastTouchRef.current = now;
       if (NW.crypto && NW.crypto.touch) NW.crypto.touch();
-    }, []);
+    }, [wantAutoLock, requestLock]);
 
     useEffect(() => {
       if (!ready || locked) return undefined;
-      const timer = setInterval(() => {
+      const check = () => {
         try {
-          const minutes = Number(settings.autoLockMinutes) || 0;
-          if (!settings.lockEnabled || minutes <= 0) return;
-          if (NW.crypto && NW.crypto.autoLocked && NW.crypto.autoLocked(minutes)) {
-            doLock();
-          }
+          if (wantAutoLock()) requestLock();
         } catch (err) {
           /* ignore */
         }
-      }, 15000);
-      return () => clearInterval(timer);
-    }, [ready, locked, settings.lockEnabled, settings.autoLockMinutes, doLock]);
+      };
+      const timer = setInterval(check, 5000);
+      const onWake = () => {
+        try {
+          if (typeof document !== 'undefined' && document.hidden) return;
+          check();
+        } catch (err) {
+          /* ignore */
+        }
+      };
+      document.addEventListener('visibilitychange', onWake);
+      window.addEventListener('focus', onWake);
+      window.addEventListener('pageshow', onWake);
+      // Timers are throttled while hidden, so a session that expires in the
+      // background still lands on the lock screen the moment it comes back.
+      return () => {
+        clearInterval(timer);
+        document.removeEventListener('visibilitychange', onWake);
+        window.removeEventListener('focus', onWake);
+        window.removeEventListener('pageshow', onWake);
+      };
+    }, [ready, locked, wantAutoLock, requestLock]);
 
     // Global shortcut: Ctrl/Cmd+Shift+L locks the studio.
     useEffect(() => {
@@ -21432,6 +23535,28 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       window.addEventListener('keydown', onKey, true);
       return () => window.removeEventListener('keydown', onKey, true);
     }, [locked, doLock]);
+
+    // R133: Alt+S opens 查阅 from anywhere — the shelf, the writing page, even
+    // behind the reading overlay. A plain chord (no Ctrl/Cmd) on purpose: this
+    // is a pause for a fact, not a command, and it must not collide with the
+    // browser's own find/search.
+    useEffect(() => {
+      const onKey = (ev) => {
+        if (!ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+        if (String(ev.key || '').toLowerCase() !== 's') return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (locked) return;
+        setLookupOpen((open) => !open);
+      };
+      window.addEventListener('keydown', onKey, true);
+      return () => window.removeEventListener('keydown', onKey, true);
+    }, [locked]);
+
+    // A locked studio has no lookup; drop it rather than leave it waiting.
+    useEffect(() => {
+      if (locked) setLookupOpen(false);
+    }, [locked]);
 
     // Global shortcut: Ctrl/Cmd+\ shows or hides the chapter shelf. It is the
     // keyboard twin of the restore handle, so a collapsed shelf can never trap
@@ -21512,7 +23637,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       // Immersive has no visible chrome by design, so the way out is announced
       // once through the existing toast channel instead of a permanent bar.
       // R43 ②: name the new chord too — Esc was the only way out before.
-      pushToast('已进入沉浸模式 · Esc 或 Ctrl+Shift+F 退出', 'info');
+      pushToast('已进入沉浸模式 · Esc 退出，Ctrl+Shift+F 或 Ctrl+Alt+F 切换', 'info');
     }, [applySettings, enterFullscreen, pushToast, settings.typewriter]);
 
     const exitImmersive = useCallback(() => {
@@ -21524,6 +23649,24 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       if (immersiveRef.current) exitImmersive();
       else enterImmersive();
     }, [enterImmersive, exitImmersive]);
+
+    /**
+     * R138: 点「阅读」就直接进整屏。三件事必须在同一次点击里做完：
+     *   ① 打开阅读页（它自己是 absolute inset:0 的浮层，盖住编辑器与书架）；
+     *   ② 把 `.nw-root` 提到视口（`.nw-reading`，见 62-read.js 顶部注释——
+     *      container-type 会把 fixed 祖先之外的后代困在插件那一列）；
+     *   ③ 向浏览器要真全屏。
+     * 第 ③ 步只能留在手势回调里：Chromium 在用户手势之外一律拒绝
+     * requestFullscreen，放进 effect 会被静默吞掉，于是「全屏」只剩插件那一列。
+     * 拿不到全屏也没关系——前两步已经让纸铺满宿主视口，只是边上还留着操作系统
+     * 的标题栏。
+     */
+    const openRead = useCallback((startId) => {
+      setDockOpen(false);
+      setReadAt(startId == null ? null : startId);
+      setReadOpen(true);
+      enterFullscreen();
+    }, [enterFullscreen]);
 
     // Escape leaves immersive mode (and the browser's own fullscreen Esc works
     // too — listen to fullscreenchange so the two stay in sync).
@@ -21569,8 +23712,46 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // (deleted, restored snapshot), drop the overlay instead of leaving it up
     // over an empty workspace.
     useEffect(() => {
-      if (!activeNovelId && readOpen) setReadOpen(false);
+      if (!activeNovelId && readOpen) {
+        setReadOpen(false);
+        setReadAt(null);
+      }
     }, [activeNovelId, readOpen]);
+
+    // R153：一次 Esc 就该回到进来之前的窗口。阅读页是全屏进来的（openRead 里
+    // ③），可浏览器把 Esc 留给「退出全屏」时，页面收不到这个键——人已经不在全屏
+    // 里了，卷子还摊着，看起来就是「Esc 没退回原来的窗口」。所以全屏一没，卷子
+    // 也合上：退出的落点和关闭按钮完全一致（编辑器原样在下面，光标与滚动都没动）。
+    useEffect(() => {
+      if (!readOpen) return undefined;
+      const onFsChange = () => {
+        let fs = null;
+        try {
+          fs = document.fullscreenElement || document.webkitFullscreenElement;
+        } catch (err) {
+          fs = null;
+        }
+        if (fs) return;
+        setReadOpen(false);
+        setReadAt(null);
+        window.requestAnimationFrame(() => {
+          const api = editorRef.current;
+          if (api && typeof api.focus === 'function') {
+            try {
+              api.focus();
+            } catch (err) {
+              /* the editor may be gone; nothing to restore */
+            }
+          }
+        });
+      };
+      document.addEventListener('fullscreenchange', onFsChange);
+      document.addEventListener('webkitfullscreenchange', onFsChange);
+      return () => {
+        document.removeEventListener('fullscreenchange', onFsChange);
+        document.removeEventListener('webkitfullscreenchange', onFsChange);
+      };
+    }, [readOpen]);
 
     // R43 ②: a keyboard way into and out of immersive mode.
     //
@@ -21582,10 +23763,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // otherwise a closed chapter would strand the user in a chrome-less room.
     useEffect(() => {
       const onKey = (ev) => {
-        const chord = (ev.ctrlKey || ev.metaKey) && ev.shiftKey && !ev.altKey
-          && String(ev.key || '').toLowerCase() === 'f';
+        // R136: `ev.key` 在 Shift 按住时是 'F'、在俄文/希腊文布局下是别的字母，
+        // 所以键盘位（ev.code）也算一种认法——两者有一个对上就算这个键。
+        const key = String(ev.key || '').toLowerCase();
+        const isF = key === 'f' || ev.code === 'KeyF';
+        const mod = ev.ctrlKey || ev.metaKey;
+        const chord = mod && ev.shiftKey && !ev.altKey && isF;
+        // R136: 有的宿主（含它自己的快捷键表）会先吞掉带 Shift 的组合键，窗口
+        // 这一层就再也收不到 Ctrl+Shift+F。Ctrl/⌘+Alt+F 不冲突于任何一方，作为
+        // 第二条通路保留；F11 依旧是「宿主愿意让出来才能用」的那条。
+        const altChord = mod && !ev.shiftKey && ev.altKey && isF;
         const plain = ev.key === 'F11' && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && !ev.altKey;
-        if (!chord && !plain) return;
+        if (!chord && !altChord && !plain) return;
         ev.preventDefault();
         ev.stopPropagation();
         if (locked) return;
@@ -21880,6 +24069,20 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [chapters, activeNovelId],
     );
 
+    // R129：另一本书的「读整本」——章节到位后再开阅读页，否则会读到上一本书。
+    React.useEffect(() => {
+      const pending = readPendingRef.current;
+      if (!pending) return;
+      if (String(pending.novelId) !== String(activeNovelId)) return;
+      if (!readChapters.length) return;
+      readPendingRef.current = null;
+      const first = readChapters[0];
+      // R138：从目录里点另一本书的「读整本」时，章节到位已经是异步之后了，
+      // 这时候再要全屏拿不到手势——但阅读页本身照样铺满视口（.nw-reading），
+      // 缺的只是浏览器那一层真全屏，可接受。
+      openRead(first ? first.id : null);
+    }, [activeNovelId, readChapters, openRead]);
+
     // R47: annotations of the open book. Books are the unit here because the
     // reading view shows a whole book and the editor only the open chapter —
     // one array serves both, and it stays stable across App renders so the
@@ -21934,10 +24137,50 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           ? Number(chapter.wordCount) || 0
           : 0;
     // R77 (B2): 主题最终落到哪一套。手动时就是 settings.theme，自动时按系统亮暗取。
+    // R133: 系统深色 → themeDark（默认 night）；系统浅色 → 在非深色主题里随机抽的
+    // 那一套（lightPick），不再读「系统为浅色时用」那个下拉——浅色随机已经不需要
+    // 单独开关，也不再需要一个固定指名。
     const autoTheme = settings.themeAuto === true;
+    const manualTheme = String(settings.theme || 'claude');
     const effectiveTheme = autoTheme
-      ? String(settings[systemDark ? 'themeDark' : 'themeLight'] || (systemDark ? 'night' : 'claude'))
-      : String(settings.theme || 'claude');
+      ? String(systemDark ? settings.themeDark || 'night' : lightPick)
+      : manualTheme;
+    // R135: 自动轮换时，换的是一屋子的光，不是换皮。手动点主题仍然 180ms 快切，
+    // 只有「跟随系统」自己换的那一下才慢慢来：先把时长放开，下一帧再换主题。
+    // 减弱动效时 05-css.js 的 !important 会把这段压回快切，这是想要的行为。
+    const [slowTheme, setSlowTheme] = useState(false);
+    const slowTimerRef = useRef(0);
+    useEffect(
+      () => () => {
+        if (slowTimerRef.current) clearTimeout(slowTimerRef.current);
+      },
+      [],
+    );
+    const autoLightRef = useRef(autoTheme && !systemDark);
+    // R135: 每次自动换主题都先挂上「慢换光」，1.4 秒后摘掉。手动点主题不会走
+    // 这两个入口，所以仍然是 180ms。换色与挂标记在同一次批处理里，样式表看到
+    // 新颜色时过渡时长已经是 1.2 秒，不是「换完了才补一个过渡」。
+    const pickThemeSlowly = useCallback(() => {
+      setSlowTheme(true);
+      if (slowTimerRef.current) clearTimeout(slowTimerRef.current);
+      slowTimerRef.current = setTimeout(() => {
+        slowTimerRef.current = 0;
+        setSlowTheme(false);
+      }, 1400);
+      setLightPick((prev) => pickLightTheme(prev));
+    }, []);
+    useEffect(() => {
+      const isAutoLight = autoTheme && !systemDark;
+      if (isAutoLight && !autoLightRef.current) pickThemeSlowly();
+      autoLightRef.current = isAutoLight;
+    }, [autoTheme, systemDark, pickThemeSlowly]);
+    // R133: 自动浅色不再「进来时换一次」就停住——只要还停在浅色里，每半小时
+    // 换一套，像一整天里桌面慢慢换气。深色固定用选的那套，不参与轮换。
+    useEffect(() => {
+      if (!(autoTheme && !systemDark)) return undefined;
+      const timer = setInterval(pickThemeSlowly, 30 * 60 * 1000);
+      return () => clearInterval(timer);
+    }, [autoTheme, systemDark, pickThemeSlowly]);
     // Hand the editor/read view a settings object whose `theme` is the resolved
     // one. Identity is stable while nothing changes, so panels do not re-render
     // on every tick.
@@ -21947,20 +24190,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     );
     // R77: 今日进度。一条记录都没有时显示「今日 0 字」，不编数字。
     const todayWords = Number(dailyStats[dayKeyOf(Date.now())]) || 0;
-    // R100: 目标环与微目标都从同一本账推导，绝不另算一套字数。
+    // R100: 目标环从当天的账推导，绝不另算一套字数。
     const dailyGoal = Math.max(0, Math.round(Number(settings.dailyGoal) || 0));
-    const microWritten = microGoal ? Math.max(0, todayWords - microGoal.baseline) : 0;
-    const microActive = !!(
-      microGoal &&
-      chapter &&
-      String(chapter.id) === String(microGoal.chapterId) &&
-      microWritten < microGoal.target
-    );
 
     // ------------------------------------------------------ R100 goals ------
-    // Declared after `dailyGoal`/`microWritten`: these closures read them in
-    // their dependency arrays, and reading a `const` before its declaration
-    // would throw on the first render.
+    // Declared after `dailyGoal`: the closure reads it in its dependency array,
+    // and reading a `const` before its declaration would throw on the first
+    // render.
     const editDailyGoal = useCallback(async () => {
       const answer = await NW.ui.prompt({
         title: '每日字数目标',
@@ -21972,36 +24208,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       await applySettings({ dailyGoal: next });
       pushToast(next > 0 ? `每日目标：${next} 字` : '已关闭每日目标', 'ok');
     }, [applySettings, dailyGoal, pushToast]);
-
-    const startMicroGoal = useCallback(
-      (novelId, chapterId, target) => {
-        if (chapterId == null) return;
-        const baseline = Number(dailyStatsRef.current[dayKeyOf(Date.now())]) || 0;
-        const row = {
-          novelId: novelId == null ? null : novelId,
-          chapterId: chapterId,
-          target: Math.max(1, Math.round(Number(target) || 100)),
-          baseline: baseline,
-          startedAt: Date.now(),
-        };
-        writeMicroGoal(row);
-        setMicroGoal(row);
-        const open = chapterRef.current;
-        if (open && String(open.id) === String(chapterId)) setView('write');
-        else selectChapter(chapterId);
-      },
-      [selectChapter],
-    );
-
-    // The bar is a promise, not a nag: it disappears the moment the target is
-    // met, with one quiet toast and no dialog to dismiss.
-    useEffect(() => {
-      if (!microGoal) return;
-      if (microWritten < microGoal.target) return;
-      writeMicroGoal(null);
-      setMicroGoal(null);
-      pushToast(`微目标达成：${microGoal.target} 字。今天可以收工了。`, 'ok');
-    }, [microGoal, microWritten, pushToast]);
 
     const streakDays = (() => {
       const DAY = 86400000;
@@ -22131,22 +24337,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // was the one that vanished. It is dimmed down to a hint instead.
     const dock = h(Dock, {
           immersive: immersive,
-          // R117: on a phone the dock is a real bottom bar in the flex column,
-          // not a floating menu over the last line of the page. Immersive keeps
-          // the floating FAB: a permanent strip would defeat "pure canvas".
-          compact: narrow && !immersive,
-          shelfOpen: shelfOpen,
-          notesOpen: notesOpen,
-          onShelf: () => setShelfOpen(true),
-          onNotes: () => setNotesOpen((v) => !v),
-          onHome: () => setView('home'),
-          onLock: doLock,
-          // R117: 段落导航 lived in the corner capsule, which the phone bar
-          // replaces; expose it through 「更多」 so the feature does not vanish.
-          onParaNav: () => {
-            const api = editorRef.current;
-            if (api && typeof api.openParaNav === 'function') api.openParaNav();
-          },
           chapter: chapter,
           dockRef: dockRef,
           // R92: mouse in opens, mouse out closes (touch keeps the click toggle).
@@ -22160,10 +24350,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // the rest of the shell uses.
           onBlocked: (name) => {
             pushToast('先打开一章，再' + name, 'warn');
-          },
-          onProofread: () => {
-            setDockOpen(false);
-            openDialog('proofread');
           },
           onTypeset: () => {
             setDockOpen(false);
@@ -22194,41 +24380,36 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             );
           },
           // R44: 读一遍 — the same manuscript, at arm's length.
-          onRead: () => {
-            setDockOpen(false);
-            setReadOpen(true);
-          },
+          // R138: 点它进整屏（含浏览器全屏），不再只是面板里的浮层。
+          onRead: () => openRead(null),
         });
 
     return h(
       'div',
       {
-        className: 'nw-root' + (immersive ? ' nw-immersive' : ''),
+        // R137: 开卷时把整个面板提到视口上（`.nw-root` 带 container-type，
+        // fixed 会以它为包含块，所以必须提它自己，见 62-read.js 顶部注释）。
+        className:
+          'nw-root' +
+          (immersive ? ' nw-immersive' : '') +
+          (readOpen && activeNovelId ? ' nw-reading' : ''),
         ref: rootRef,
         'data-immersive': immersive ? '1' : undefined,
         // The shell follows the reading theme (see 98-shell-theme.js) so the
         // sidebar and toolbar never frame a page in a contradicting palette.
         'data-theme': themeSettings.theme || 'claude',
+        // R135: only the automatic half-hourly swap asks for the slow dissolve.
+        'data-theme-slow': slowTheme ? '1' : undefined,
         onPointerMove: onRootPointerMove,
+        // R118: a click is activity too — and `touchActivity` is the one place
+        // that decides 「续命」 vs 「已经过期，上锁」.
+        onPointerDown: onRootPointerMove,
         onKeyDown: touchActivity,
         onWheel: touchActivity,
       },
       h(
         'div',
         { className: 'nw-body' },
-        // R117: on a phone the shelf is a drawer over the page, so tapping
-        // anywhere outside it must close it. The scrim is a real element (the
-        // drawer's spread shadow paints but cannot receive a tap), and it sits
-        // just below the drawer so its own buttons stay live.
-        narrow && showShelf
-          ? h('button', {
-              type: 'button',
-              className: 'nw-side-scrim',
-              tabIndex: -1,
-              'aria-label': NW.t('收起目录'),
-              onClick: () => setShelfOpen(false),
-            })
-          : null,
         showShelf
           ? h(
               'div',
@@ -22248,6 +24429,24 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 onRename: renameNode,
                 onDelete: deleteNode,
                 onMove: moveNode,
+                // R129：目录里直接读——「读这一章」把阅读页开到那一章的那一页，
+                // 「读整本」从第一章读起。两者都不动编辑器当前章。
+                onReadChapter: (id) => {
+                  if (id == null) return;
+                  openRead(id);
+                },
+                onReadBook: (novelId) => {
+                  const target = novelId == null ? activeNovelId : novelId;
+                  if (target == null) return;
+                  if (String(target) !== String(activeNovelId)) {
+                    // 换到那本书再读：等它的章节加载完，effect 会把阅读页打开。
+                    readPendingRef.current = { novelId: target };
+                    selectNovel(target);
+                    return;
+                  }
+                  const first = readChapters[0];
+                  openRead(first ? first.id : null);
+                },
                 // R77: 章节信息（状态 / 简介 / 目标字数）。
                 onChapterInfo: (id, title) => openDialog('chapterInfo', { chapterId: id, title: title }),
                 // R77: 设定集（人物 / 地点 / 道具 / 设定），按书打开。
@@ -22309,11 +24508,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 // from updatedAt; countPunctuation is part of the recount key.
                 dailyStats: dailyStats,
                 countPunctuation: settings.countPunctuation !== false,
-                // R100: 今天 becomes a goal ring, and 「只写 100 字」 starts a
-                // sitting-sized target on the chapter the writer is resuming.
+                // R100: 今天 becomes a goal ring; the target is edited by
+                // clicking it (the home screen keeps no other goal affordance).
                 dailyGoal: dailyGoal,
                 onSetDailyGoal: editDailyGoal,
-                onMicroGoal: startMicroGoal,
                 hasChapter: !!chapter,
                 journalCount: journalCount,
                 submissions: submissions,
@@ -22396,26 +24594,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       // manuscript for no reason.
                       'data-notes-lane': notesOpen && !immersive ? '1' : '0',
                     },
-                    // R100: the micro goal is a thin line at the top of the paper,
-                    // not a dialog. It is quiet on purpose — a progress bar you
-                    // cannot stop looking at is the opposite of encouragement.
-                    microActive
-                      ? h(
-                          'div',
-                          {
-                            className: 'nw-microbar',
-                            role: 'progressbar',
-                            'aria-valuemin': 0,
-                            'aria-valuemax': microGoal.target,
-                            'aria-valuenow': Math.min(microWritten, microGoal.target),
-                            title: `微目标 ${Math.min(microWritten, microGoal.target)} / ${microGoal.target} 字`,
-                          },
-                          h('span', {
-                            className: 'nw-microbar-fill',
-                            style: { width: Math.min(100, (microWritten / microGoal.target) * 100) + '%' },
-                          }),
-                        )
-                      : null,
                     h(NW.Editor, {
                       key: String(chapter.id),
                       chapter: chapter,
@@ -22442,6 +24620,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                         setView('home');
                         setShelfOpen(true);
                       },
+                      // R133: 查阅 lives with the other page-level acts in the
+                      // corner capsule. One icon, no label — it is a glance,
+                      // not a mode, and it should not compete with the paper.
+                      onLookup: () => setLookupOpen(true),
                       // R33: the 目录 toggle is gone (首页 now restores the
                       // shelf). Lock stays so the writing surface keeps its own
                       // controls even when DSH chrome is hidden.
@@ -22472,7 +24654,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       },
                       onSelectionChange: onSelectionChange,
                       // R73: 选中文字后浮出的小方钮点下去就是这里。开这扇窗口意味着
-                      // 要并排看原文和改写，所以整章的修改建议栏先让位。
+                      // 要并排看原文和改写，所以整章的AI建议栏先让位。
                       onAdviceSelection: (sel) => {
                         if (!sel || !String(sel.text || '').trim()) return;
                         setSelAdvice(sel);
@@ -22555,8 +24737,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // 为空时全部 disabled），只剩下一枚关不掉的圆按钮压在快捷入口上。
           // 首页有自己的卡片和操作行，不需要这块坞。
           //
-          // R83: 修改建议栏展开时整块坞不渲染。栏占着右侧车道，圆钮正好压在
-          // 建议卡片的下沿；收起状态下它也没有一个动作可点（修改建议正是打开
+          // R83: AI建议栏展开时整块坞不渲染。栏占着右侧车道，圆钮正好压在
+          // 建议卡片的下沿；收起状态下它也没有一个动作可点（AI建议正是打开
           // 这一栏的入口），先让位，关掉栏再回来。R114: 沉浸模式里栏也能打开，
           // 坞同样让位，不让圆钮压在建议卡片下沿。
           // R98: 选中改写窗口是同一个车道的另一种形态，同样让位——否则圆钮浮在
@@ -22579,10 +24761,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             novel: activeNovel,
             chapters: readChapters,
             currentId: chapter ? chapter.id : null,
+            // R129：目录里点的章节优先于「编辑器当前章」。
+            startId: readAt,
             // The editor buffer can be ahead of the last autosave, so the open
             // chapter is read from the live text, not from the stored row.
             currentText: getEditorText(),
             settings: themeSettings,
+            // R131：朗读引擎里的「声音」下拉要能改设置（在线音色存进 settings），
+            // 阅读页本身不持有设置，只把改动交回来。
+            onReadSetting: (patch) => setSettings((prev) => ({ ...prev, ...patch })),
             // R47: reading is also when a writer notices — so this is where an
             // annotation can be drawn. The marks are the shell's, not the view's:
             // the same array feeds the editor underneath, so a line underlined
@@ -22596,6 +24783,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // they left, with the scroll position the pages covered up.
             onClose: () => {
               setReadOpen(false);
+              setReadAt(null);
+              // R138: 阅读页是自己要的全屏，关卷时还回去；不然宿主会一直停在
+              // 浏览器全屏里，看不到书架。
+              exitFullscreen();
               window.requestAnimationFrame(() => {
                 const api = editorRef.current;
                 if (api && typeof api.focus === 'function') {
@@ -22628,7 +24819,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 { className: 'nw-status-today', 'data-sign': todayWords < 0 ? 'down' : 'up' },
                 '今日 ' + (todayWords > 0 ? '+' : '') + NW.fmtWords(todayWords)
                   + (dailyGoal > 0 ? ' / ' + NW.fmtWords(dailyGoal) : '') + ' 字'
-                  + (microActive ? ' · 微目标 ' + microWritten + '/' + microGoal.target : '')
                   + (streakDays > 1 ? ' · 连续 ' + streakDays + ' 天' : ''),
               ),
             ),
@@ -22636,6 +24826,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             wordText: '',
             counterText: counterText,
           }),
+      // R133: 查阅 — above the manuscript, below dialogs. It has no mask, so the
+      // writing page stays legible behind it: a lookup is a pause, not a place.
+      h(NW.SearchPanel, {
+        open: lookupOpen && !locked,
+        onClose: () => setLookupOpen(false),
+      }),
       DialogHost
         ? h(DialogHost, {
             dialog: dialog,
@@ -22710,14 +24906,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // (backup, version history, submission, export defaults), so it needs
             // a way to open another dialog on top of itself.
             onOpenDialog: (kind, extra) => openDialog(kind, extra),
-            // R34 ③: the pairing QR lives in its own dialog so the settings page
-            // stays a list of fields rather than a wall of one-off actions.
-            onOpenPair: () => openDialog('pair'),
-            // What the phone will see. Refreshed whenever the library changes, so
-            // a sync that happens while this window is open carries the latest
-            // edits instead of a boot-time copy.
-            syncLibrary: syncLibrary,
-            syncState: lanSync,
             // Defaults the Export dialog seeds itself with (closing signature).
             exportDefaults: {
               appendText: String(settings.exportSignature || ''),
@@ -22841,131 +25029,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   function Dock(props) {
     const p = props || {};
     const open = !!p.open;
-    /**
-     * R117: the phone bar's 「更多」 sheet. It is local to the bar because the
-     * bar itself has no collapsed state — the five primary entries are always
-     * on screen, and only the secondary tools need a popover.
-     */
-    const [moreOpen, setMoreOpen] = useState(false);
-    useEffect(() => {
-      if (!p.compact) setMoreOpen(false);
-    }, [p.compact]);
-    useEffect(() => {
-      if (!moreOpen) return undefined;
-      const onPointerDown = (event) => {
-        const node = p.dockRef && p.dockRef.current;
-        if (node && event.target && node.contains(event.target)) return;
-        setMoreOpen(false);
-      };
-      const onKeyDown = (event) => {
-        if (event.key === 'Escape' && !event.defaultPrevented) setMoreOpen(false);
-      };
-      document.addEventListener('pointerdown', onPointerDown, true);
-      document.addEventListener('keydown', onKeyDown, true);
-      return () => {
-        document.removeEventListener('pointerdown', onPointerDown, true);
-        document.removeEventListener('keydown', onKeyDown, true);
-      };
-    }, [moreOpen, p.dockRef]);
-
-    if (p.compact) {
-      const blockedToast = (name) => {
-        if (typeof p.onBlocked === 'function') p.onBlocked(name);
-      };
-      /**
-       * One slot in the bottom bar. The 44px box is the hit target; the icon
-       * and the 11px label are painted inside it, so the bar stays one row
-       * tall and every label remains readable at 390px.
-       */
-      const barItem = (iconName, name, onClick, opts) => {
-        const o = opts || {};
-        const blocked = !!o.needsChapter && !p.chapter;
-        return h(
-          'button',
-          {
-            type: 'button',
-            className: 'nw-dock-baritem',
-            'data-active': o.active ? '1' : '0',
-            'data-blocked': blocked ? '1' : '0',
-            'aria-disabled': blocked ? 'true' : undefined,
-            'aria-label': name,
-            title: blocked ? name + '（先打开一章）' : name,
-            onClick: () => {
-              if (blocked) {
-                blockedToast(name);
-                return;
-              }
-              if (typeof onClick === 'function') onClick();
-            },
-          },
-          h('span', { className: 'nw-dock-baricon', 'aria-hidden': 'true' }, NW.icon(iconName, { size: 20 })),
-          h('span', { className: 'nw-dock-barname' }, name),
-        );
-      };
-      const sheetItem = (iconName, name, onClick, needsChapter) => {
-        const blocked = !!needsChapter && !p.chapter;
-        return h(
-          'button',
-          {
-            type: 'button',
-            className: 'nw-dock-sheetitem',
-            role: 'menuitem',
-            'data-blocked': blocked ? '1' : '0',
-            'aria-disabled': blocked ? 'true' : undefined,
-            'aria-label': name,
-            title: blocked ? name + '（先打开一章）' : name,
-            onClick: () => {
-              if (blocked) {
-                blockedToast(name);
-                return;
-              }
-              setMoreOpen(false);
-              if (typeof onClick === 'function') onClick();
-            },
-          },
-          h('span', { className: 'nw-dock-sheeticon', 'aria-hidden': 'true' }, NW.icon(iconName, { size: 20 })),
-          h('span', { className: 'nw-dock-sheetname' }, name),
-        );
-      };
-      return h(
-        'div',
-        {
-          className: 'nw-dock nw-dock-bar',
-          ref: p.dockRef,
-          'data-immersive': p.immersive ? '1' : '0',
-          'data-open': moreOpen ? '1' : '0',
-          role: 'toolbar',
-          'aria-label': NW.t('写作工具'),
-        },
-        moreOpen
-          ? h('button', {
-              type: 'button',
-              className: 'nw-dock-sheetback',
-              tabIndex: -1,
-              'aria-label': NW.t('关闭更多工具'),
-              onClick: () => setMoreOpen(false),
-            })
-          : null,
-        moreOpen
-          ? h(
-              'div',
-              { className: 'nw-dock-sheet', role: 'menu', 'aria-label': NW.t('更多工具') },
-              // 二次动作：和桌面坞同一组，只是收进「更多」。
-              sheetItem('typeset', NW.t('一键排版'), p.onTypeset, true),
-              sheetItem('list', NW.t('段落'), p.onParaNav, true),
-              sheetItem('proofread', NW.t('AI 校对'), p.onProofread, true),
-              sheetItem('send', NW.t('投稿'), p.onSubmit, true),
-              sheetItem('home', NW.t('首页'), p.onHome, false),
-              sheetItem('lock', NW.t('锁定'), p.onLock, false),
-            )
-          : null,
-        barItem('list', NW.t('目录'), p.onShelf, { active: p.shelfOpen }),
-        barItem('pencil', NW.t('灵感'), p.onNotes, { active: p.notesOpen, needsChapter: true }),
-        barItem('sparkle', NW.t('建议'), p.onAdvice, { needsChapter: true }),
-        barItem('book', NW.t('读一遍'), p.onRead, { needsChapter: true }),
-        barItem('more', NW.t('更多'), () => setMoreOpen((v) => !v), { active: moreOpen }),
-      );
-    }
 
     /**
      * One action row. `disabled` is still gone (R58): a disabled button fires
@@ -23012,13 +25075,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         { className: 'nw-dock-menu', 'data-open': open ? '1' : '0', role: 'menu', 'aria-hidden': open ? 'false' : 'true' },
         // R67b：顺序是按**名字的长短**排的，不是按重要性 —— 阶梯要从长到短，
         // 名字也要从长到短，两个方向一致才不会出现「最上面那级最长、字却最短，
-        // 中间空出一大块」。所以「AI 校对」挪下来，紧挨在「读一遍」上面。
-        // 修改建议 toggles the advice column beside the paper, so its row stays
+        // 中间空出一大块」。
+        // R118：AI 校对并入 AI建议 之后，菜单只剩四行；阶梯宽度也随之重排
+        // （见 .nw-dock-menu .nw-dock-btn 的 nth-child）。
+        // AI建议 toggles the advice column beside the paper, so its row stays
         // lit while that column is open.
         item('typeset', NW.t('一键排版'), p.onTypeset, true),
-        // R114: 沉浸模式也保留「修改建议」入口；栏和选区窗口都能并排显示。
-        item('sparkle', NW.t('修改建议'), p.onAdvice, true),
-        item('proofread', NW.t('AI 校对'), p.onProofread, true),
+        // R114: 沉浸模式也保留「AI建议」入口；栏和选区窗口都能并排显示。
+        item('sparkle', NW.t('AI建议'), p.onAdvice, true),
         item('book', NW.t('读一遍'), p.onRead, true),
         item('send', NW.t('投稿'), p.onSubmit, true),
       ),
@@ -23052,7 +25116,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    * gutter, so the two can be open at the same time. Collapsed it is a single
    * small tab, which is what the writer sees most of the time.
    */
-  /* 修改建议 / 选中改写 (R73–R76) 已搬到 92-advice.js —— 它只通过
+  /* AI建议 / 选中改写 (R73–R76) 已搬到 92-advice.js —— 它只通过
      props 与工作室说话，放在这里只是让 90-app 重新长出三千行。 */
 
 /** Clamp a number into [lo, hi]; non-finite input falls back to `lo`. */
@@ -23392,7 +25456,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       if (typeof p.onDone === 'function') p.onDone(null);
     });
     const tried = Array.isArray(req.tried) ? req.tried : [];
-    // R34: the caller passes a Chinese label ('AI 校对' / 'AI 投稿' / '修改建议');
+    // R34: the caller passes a Chinese label ('AI 投稿' / 'AI建议' / '一键排版');
     // translate it here so the picker reads as one sentence in either language.
     const label = NW.t(String(req.label || '本次请求'));
     const failedLine =
@@ -23615,7 +25679,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   // file with no outer `NW`, so it still falls back to `window.NW`.
   const NS = typeof NW !== 'undefined' && NW ? NW : (window.NW = window.NW || {});
 
-  /** The ten kinds the cards know, plus the labels a writer may paste. */
+  /** The eleven kinds the cards know, plus the labels a writer may paste. */
   const KIND_ALIASES = new Map();
   [
     ['rhythm', '节奏', 'pacing'],
@@ -23628,6 +25692,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     ['logic', '逻辑', '设定'],
     ['emotion', '情绪', '情感'],
     ['redundancy', '冗余', '重复', '啰嗦'],
+    // R118: the 字词与标点 angle folded in from the old 「AI 校对」 dialog.
+    ['words', '字词', '字词与标点', '标点', '错别字', 'typo', 'punct'],
   ].forEach(([kind, ...labels]) => {
     KIND_ALIASES.set(kind, kind);
     labels.forEach((label) => KIND_ALIASES.set(String(label).toLowerCase(), kind));
@@ -23687,14 +25753,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
   /** The format block shown above the paste box — also copied as the prompt. */
   const TEMPLATE = [
-    '请按下面的格式给修改建议，每条之间空一行：',
+    '请按下面的格式给出AI建议，每条之间空一行：',
     '',
     '原文：从正文里逐字复制的一句（20~60 字）',
     '问题：一句话说清问题（不超过 40 字）',
     '理由：为什么是问题（不超过 60 字）',
     '建议：具体怎么改（不超过 80 字）',
     '改后：改后的文字（可选）',
-    '类型：节奏 / 用词 / 视角 / 画面 / 对话 / 结构 / 人物 / 逻辑 / 情绪 / 冗余（可选）',
+    '类型：节奏 / 用词 / 视角 / 画面 / 对话 / 结构 / 人物 / 逻辑 / 情绪 / 冗余 / 字词与标点（可选）',
     '严重度：高 / 中 / 低（可选）',
     '',
     '要求：原文必须与小说正文一字不差；没有值得改的就不要编。',
@@ -24318,6 +26384,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const KIND = {
       rhythm: '节奏', diction: '用词', pov: '视角', detail: '画面', dialogue: '对话',
       structure: '结构', character: '人物', logic: '逻辑', emotion: '情绪', redundancy: '冗余',
+      words: '字词',
     };
     return h(
       'div',
@@ -24328,7 +26395,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         'data-active': p.active ? '1' : '0',
         tabIndex: 0,
         role: 'group',
-        'aria-label': NW.t('修改建议'),
+        'aria-label': NW.t('AI建议'),
         onClick: () => {
           if (typeof p.onReveal === 'function') p.onReveal(item);
         },
@@ -24797,7 +26864,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         // writer typed after pressing Enter.
         const note = nextNote == null ? noteRef.current : nextNote;
         // R29: this panel has its own model — the writer may want the editorial
-        // read on a stronger model than the proofreader.
+        // read on a stronger model than the mechanical 字词与标点 pass.
         const provider = (p.settings && p.settings.adviceProvider) || undefined;
         const model = (p.settings && p.settings.adviceModel) || undefined;
         try {
@@ -24894,7 +26961,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           if (err && err.code === 'aborted') return;
           const keep = imported.concat(streamed);
           setItems(keep.length ? keep : null);
-          setError(errText(err, '获取修改建议失败'));
+          setError(errText(err, '获取AI建议失败'));
         } finally {
           if (runRef.current === token) setBusy(false);
           if (runAbortRef.current === controller) runAbortRef.current = null;
@@ -25156,6 +27223,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       { value: 'logic', label: '逻辑' },
       { value: 'emotion', label: '情绪' },
       { value: 'redundancy', label: '冗余' },
+      { value: 'words', label: '字词与标点' },
     ];
 
     // ---- 接受 / 拒绝 / 撤销 (R73) -------------------------------------------
@@ -25427,7 +27495,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const head = h(
       'div',
       { className: 'nw-suggest-head' },
-      h('span', { className: 'nw-suggest-title' }, NW.t('修改建议')),
+      h('span', { className: 'nw-suggest-title' }, NW.t('AI建议')),
       items && items.length > 0 ? h('span', { className: 'nw-suggest-count' }, items.length + ' 条') : null,
       h('span', { style: { flex: '1 1 auto' } }),
       NW.ui.iconBtn(
@@ -25473,7 +27541,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         );
       }),
       // R74: says out loud that the chips are optional *and* multi-select — the
-      // writer asked for both, and ten unlit pills read as "nothing works".
+      // writer asked for both, and eleven unlit pills read as "nothing works".
       // R75: and it says what to do next, now that pressing a pill does not run.
       h(
         'span',
@@ -25849,7 +27917,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       'aside',
       {
         className: 'nw-suggest',
-        'aria-label': NW.t('修改建议'),
+        'aria-label': NW.t('AI建议'),
         /* R25: no inline width in auto mode — the CSS clamp measures the bench.
            An inline width only exists once the writer has dragged the grip. */
         style: Number(p.width) > 0 ? { width: clampNum(Number(p.width), 300, 640) + 'px' } : null,
@@ -26119,7 +28187,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           if (runRef.current !== token) return;
           if (err && err.code === 'aborted') return;
           setItems(null);
-          setError(errText(err, '获取修改建议失败'));
+          setError(errText(err, '获取AI建议失败'));
         } finally {
           if (runRef.current === token) setBusy(false);
         }
@@ -26384,7 +28452,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const head = h(
       'div',
       { className: 'nw-selwin-head' },
-      h('span', { className: 'nw-selwin-title' }, NW.t('修改建议')),
+      h('span', { className: 'nw-selwin-title' }, NW.t('AI建议')),
       h('span', { className: 'nw-selwin-count' }, NW.t('选中 {0} 字', selectedCount)),
       h('span', { style: { flex: '1 1 auto' } }),
       NW.ui.iconBtn(NW.icon('x', { size: 16 }), NW.t('关闭'), () => {
@@ -26485,7 +28553,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     return h(
       'aside',
-      { className: 'nw-selwin', 'aria-label': NW.t('选中文字的修改建议') },
+      { className: 'nw-selwin', 'aria-label': NW.t('选中文字的AI建议') },
       head,
       selectedText
         ? h('div', { className: 'nw-selwin-src' }, selectedText)
@@ -26708,14 +28776,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    * Theme chip: a colour swatch plus its label. The actual colours live in the
    * stylesheet (data-theme-swatch attributes), so this stays theme-agnostic.
    */
-  function themeChoice(entry, active, onPick) {
+  function themeChoice(entry, active, onPick, disabled) {
     return h(
       'button',
       {
         key: entry.value,
         type: 'button',
         className: 'nw-choice' + (active ? ' nw-choice-on' : ''),
+        // R133：跟随系统开着时，手动色块不参与决定主题——留着能看见调色板，
+        // 但按下去不会生效，所以直接禁用，避免「点了没反应」。
+        disabled: !!disabled,
+        style: disabled ? { opacity: 0.45, cursor: 'default' } : undefined,
         onClick: () => {
+          if (disabled) return;
           if (typeof onPick === 'function') onPick(entry.value);
         },
         'aria-pressed': active ? 'true' : 'false',
@@ -26787,7 +28860,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     { id: 'export', label: '导出与文件', icon: 'download' },
     { id: 'privacy', label: '隐私与锁定', icon: 'lock' },
     { id: 'submit', label: '投稿', icon: 'mail' },
-    { id: 'lan', label: '手机同步', icon: 'refresh' },
     { id: 'keys', label: '快捷键', icon: 'keyboard' },
   ];
 
@@ -27671,270 +29743,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     );
   };
 
-  // =========================================================== Proofread ====
-  NW.dialogs.Proofread = function Proofread(props) {
-    const p = props || {};
-    const [state, setState] = useState({ loading: false, models: null, error: '', provider: '', model: '' });
-    const [suggestions, setSuggestions] = useState(null);
-    // The offsets in a suggestion only mean anything against the text they were
-    // computed from; a dialog stays open for minutes while the editor keeps
-    // accepting keystrokes, so keep the snapshot and refuse a stale apply.
-    const sourceRef = useRef('');
-    const [decided, setDecided] = useState({});
-    const [running, setRunning] = useState(false);
-    const [applying, setApplying] = useState(false);
-
-    const loadModels = useCallback(async () => {
-      setState((prev) => Object.assign({}, prev, { loading: true, error: '' }));
-      try {
-        const data = await NW.ai.models();
-        const current = (data && data.current) || {};
-        const list = (data && data.models) || [];
-        const settings = p.settings || {};
-        let provider = settings.proofreadProvider || current.provider || (list[0] && list[0].provider) || '';
-        let model = settings.proofreadModel || current.model || '';
-        const has = (pv, mv) => list.some((row) => row && row.provider === pv && row.id === mv);
-        if (!has(provider, model)) {
-          const first = list.filter((row) => row && row.provider === provider)[0] || list[0];
-          if (first) {
-            provider = first.provider;
-            model = first.id;
-          }
-        }
-        setState({ loading: false, models: data, error: '', provider: provider, model: model });
-      } catch (err) {
-        setState({ loading: false, models: null, error: errText(err, '无法获取可用模型'), provider: '', model: '' });
-      }
-    }, [p.settings]);
-
-    useEffect(() => {
-      loadModels();
-    }, [loadModels]);
-
-    const modelOptions = useMemo(() => {
-      const list = (state.models && state.models.models) || [];
-      const current = (state.models && state.models.current) || {};
-      const options = list.map((row) => ({
-        value: row.provider + '\u0000' + row.id,
-        label: (row.name || row.id) + ' · ' + row.provider,
-      }));
-      // The provider/model the harness itself uses is always a valid target,
-      // even when discovery returned nothing for it (some providers expose no
-      // model list at all). Surface it so the dialog is never unusable.
-      if (current.provider && current.model) {
-        const value = current.provider + '\u0000' + current.model;
-        if (!options.some((opt) => opt.value === value)) {
-          options.unshift({ value: value, label: current.model + ' · ' + current.provider + '（当前默认）' });
-        }
-      }
-      return options;
-    }, [state.models]);
-
-    const currentValue = state.provider && state.model ? state.provider + '\u0000' + state.model : '';
-
-    const run = async () => {
-      const text = textOf(p);
-      if (!text.trim()) {
-        setState((prev) => Object.assign({}, prev, { error: '当前章节还没有内容' }));
-        return;
-      }
-      setRunning(true);
-      setState((prev) => Object.assign({}, prev, { error: '' }));
-      setSuggestions(null);
-      setDecided({});
-      try {
-        // R34: failover — if the chosen model is unreachable the client walks
-        // the other configured models, and only then offers the picker. The
-        // panel itself stays the writer's explicit choice, so `preferred` wins
-        // whenever it works and nothing changes for the happy path.
-        const data = await NW.ai.proofreadSafe({
-          provider: state.provider,
-          model: state.model,
-          text: text,
-          mode: 'typo',
-          // R29: the brief edited in Settings → 写作, if the writer wrote one.
-          rules: String((p.settings && p.settings.proofreadRules) || ''),
-          onRetry: (candidate) => {
-            setState((prev) => Object.assign({}, prev, { error: NW.t('换用 {0} 重试…', candidate.label) }));
-          },
-        });
-        const usedModel = (data && data.usedModel) || null;
-        if (usedModel && (usedModel.provider !== state.provider || usedModel.model !== state.model)) {
-          setState((prev) => Object.assign({}, prev, { provider: usedModel.provider, model: usedModel.model, error: '' }));
-          if (typeof p.onToast === 'function') p.onToast(NW.t('原模型没有响应，已改用 {0}', usedModel.label), 'warn');
-        }
-        const rows = ((data && data.suggestions) || []).map((row, index) => ({
-          id: row.id == null ? 's' + index : row.id,
-          start: Number(row.start) || 0,
-          end: Number(row.end) || 0,
-          original: String(row.original == null ? '' : row.original),
-          replacement: String(row.replacement == null ? '' : row.replacement),
-          reason: String(row.reason == null ? '' : row.reason),
-          type: String(row.type == null ? '' : row.type),
-        }));
-        sourceRef.current = text;
-        setSuggestions(rows);
-        const initial = {};
-        rows.forEach((row) => {
-          initial[row.id] = false;
-        });
-        setDecided(initial);
-        if (rows.length === 0 && typeof p.onToast === 'function') p.onToast('没有发现需要修改的地方', 'ok');
-      } catch (err) {
-        setState((prev) => Object.assign({}, prev, { error: errText(err, '校对失败') }));
-      } finally {
-        setRunning(false);
-      }
-    };
-
-    const acceptAll = () => {
-      const next = {};
-      (suggestions || []).forEach((row) => {
-        next[row.id] = true;
-      });
-      setDecided(next);
-    };
-    const rejectAll = () => {
-      const next = {};
-      (suggestions || []).forEach((row) => {
-        next[row.id] = false;
-      });
-      setDecided(next);
-    };
-
-    const acceptedCount = (suggestions || []).filter((row) => decided[row.id]).length;
-
-    const apply = async () => {
-      if (acceptedCount === 0) {
-        if (typeof p.onToast === 'function') p.onToast('没有勾选任何修改', 'error');
-        return;
-      }
-      const live = textOf(p);
-      if (sourceRef.current && live !== sourceRef.current) {
-        const message = '正文在校对之后改过，建议的位置已经对不上。请重新校对一次再应用。';
-        setState((prev) => Object.assign({}, prev, { error: message }));
-        if (typeof p.onToast === 'function') p.onToast(message, 'error');
-        return;
-      }
-      setApplying(true);
-      try {
-        const text = live;
-        const ids = new Set();
-        (suggestions || []).forEach((row) => {
-          if (decided[row.id]) ids.add(row.id);
-        });
-        const next = NW.format.applyEdits(text, suggestions || [], ids);
-        const api = p.editorApi && p.editorApi.current;
-        if (api && typeof api.setContent === 'function') api.setContent(next);
-        if (typeof p.onRefreshData === 'function') await p.onRefreshData();
-        if (typeof p.onToast === 'function') p.onToast('已应用 ' + acceptedCount + ' 处修改', 'ok');
-        if (typeof p.onClose === 'function') p.onClose();
-      } catch (err) {
-        if (typeof p.onToast === 'function') p.onToast(errText(err, '应用失败'), 'error');
-      } finally {
-        setApplying(false);
-      }
-    };
-
-    const body = [];
-
-    body.push(
-      h(
-        'div',
-        { className: 'nw-inline', style: { gap: '8px', marginBottom: '10px', flexWrap: 'wrap' } },
-        NW.ui.select({
-          options: modelOptions.length ? modelOptions : [{ value: '', label: state.loading ? '加载中…' : '无可用模型' }],
-          value: currentValue,
-          ariaLabel: '校对模型',
-          onChange: (value) => {
-            const parts = String(value).split('\u0000');
-            setState((prev) => Object.assign({}, prev, { provider: parts[0] || '', model: parts[1] || '' }));
-          },
-          style: { flex: '1 1 220px', width: 'auto' },
-        }),
-        NW.ui.btn({ kind: 'primary', onClick: run, disabled: running || !currentValue, children: running ? '校对中…' : NW.t('AI 校对') }),
-      ),
-    );
-
-    if (running) body.push(h('div', { className: 'nw-inline' }, NW.ui.spinner('正在检查错别字、词语误用与标点…')));
-    if (state.error) body.push(h('div', { className: 'nw-lock-error', role: 'alert' }, state.error));
-
-    if (suggestions && suggestions.length > 0) {
-      body.push(
-        h(
-          'div',
-          { className: 'nw-inline', style: { justifyContent: 'space-between', margin: '4px 0 8px' } },
-          h('span', { className: 'nw-dim' }, '共 ' + suggestions.length + ' 条建议 · 已选 ' + acceptedCount + ' 条'),
-          h(
-            'span',
-            { style: { display: 'inline-flex', gap: '6px' } },
-            NW.ui.btn({ kind: 'ghost', onClick: acceptAll, children: NW.t('全部接受') }),
-            NW.ui.btn({ kind: 'ghost', onClick: rejectAll, children: NW.t('全部拒绝') }),
-          ),
-        ),
-      );
-      body.push(
-        h(
-          'div',
-          { className: 'nw-suggest-list', role: 'list' },
-          suggestions.map((row) =>
-            h(
-              'div',
-              { key: row.id, className: 'nw-suggest', role: 'listitem', 'data-on': decided[row.id] ? '1' : '0' },
-              h('input', {
-                type: 'checkbox',
-                checked: !!decided[row.id],
-                'aria-label': '接受这条修改',
-                onChange: (ev) => setDecided((prev) => Object.assign({}, prev, { [row.id]: ev.target.checked })),
-              }),
-              h(
-                'div',
-                { className: 'nw-suggest-body' },
-                h(
-                  'div',
-                  { className: 'nw-suggest-diff' },
-                  h('del', null, row.original || '∅'),
-                  h('span', { className: 'nw-suggest-arrow', 'aria-hidden': 'true' }, ' → '),
-                  h('ins', null, row.replacement || '∅'),
-                ),
-                row.reason ? h('div', { className: 'nw-suggest-reason' }, row.reason) : null,
-                row.type ? h('div', { className: 'nw-suggest-type' }, row.type) : null,
-              ),
-              h(
-                'div',
-                { className: 'nw-suggest-actions' },
-                NW.ui.btn({
-                  kind: 'ghost',
-                  onClick: () => setDecided((prev) => Object.assign({}, prev, { [row.id]: true })),
-                  children: NW.t('接受'),
-                }),
-                NW.ui.btn({
-                  kind: 'ghost',
-                  onClick: () => setDecided((prev) => Object.assign({}, prev, { [row.id]: false })),
-                  children: NW.t('拒绝'),
-                }),
-              ),
-            ),
-          ),
-        ),
-      );
-    } else if (suggestions && suggestions.length === 0 && !running) {
-      body.push(NW.ui.empty('没有发现问题，可以放心继续写作。'));
-    }
-
-    return modal(
-      NW.t('AI 校对'),
-      h('div', null, body),
-      h(
-        'div',
-        { style: { display: 'flex', gap: '8px' } },
-        closeBtn(p),
-        NW.ui.btn({ kind: 'primary', onClick: apply, disabled: applying || acceptedCount === 0, children: NW.t('应用') + (acceptedCount ? ' (' + acceptedCount + ')' : '') }),
-      ),
-      '640px',
-      p.onClose,
-    );
-  };
 
   // ============================================================= Typeset ====
   NW.dialogs.Typeset = function Typeset(props) {
@@ -28368,7 +30176,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   NW.dialogs.Settings = function Settings(props) {
     const p = props || {};
     const settings = p.settings || {};
-    const lanSync = p.syncState || {};
     const [draft, setDraft] = useState(() => Object.assign({}, settings));
     const set = (key, value) => {
       const next = Object.assign({}, draft, { [key]: value });
@@ -28595,9 +30402,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       }
       return [{ value: '', label: '跟随默认模型' }].concat(options);
     }, [models]);
-
-    /** R29: kept for the proofread dialog's own fallback, not for Settings. */
-    const proofreadValue = draft.proofreadProvider && draft.proofreadModel ? draft.proofreadProvider + '\u0000' + draft.proofreadModel : '';
 
     /**
      * R29: one picker per AI job. A job's model is a provider+model pair, so the
@@ -29061,14 +30865,20 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               children: h(
                 'div',
                 { style: { display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: '8px' } },
-                THEME_OPTIONS.map((entry) => themeChoice(entry, (draft.theme || 'claude') === entry.value, (value) => set('theme', value))),
+                THEME_OPTIONS.map((entry) => themeChoice(
+                  entry,
+                  (draft.theme || 'claude') === entry.value,
+                  (value) => set('theme', value),
+                  draft.themeAuto === true,
+                )),
               ),
             }),
-            // R77 (B2): 跟随系统深浅色。开着时主题由系统决定，两个下拉决定
-            // 「系统亮用哪套、系统暗用哪套」——九套主题里主观上最像白天/黑夜的那两套。
+            // R77 (B2) / R133：跟随系统深浅色。开着时主题由系统决定——系统深色
+            // 用下面选的那套，系统浅色则在非深色主题里随机抽一套，并每半小时
+            // 换一套。浅色随机不再是单独开关：跟随系统本身就是「交给环境」的意思。
             NW.ui.field({
               label: NW.t('跟随系统深浅色'),
-              hint: NW.t('开着时：系统是浅色用下面第一套，系统切到深色自动换第二套。'),
+              hint: NW.t('系统切到浅色时，从浅色、护眼、报纸、杂志里随机一套，之后每半小时自动换一套；深色时用下面选的那套。'),
               children: NW.ui.toggle({
                 checked: draft.themeAuto === true,
                 label: NW.t('跟随系统'),
@@ -29076,26 +30886,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               }),
             }),
             draft.themeAuto
-              ? h(
-                  'div',
-                  { className: 'nw-grid2' },
-                  NW.ui.field({
-                    label: NW.t('系统为浅色时用'),
-                    children: NW.ui.select({
-                      value: draft.themeLight || 'claude',
-                      onChange: (value) => set('themeLight', value),
-                      options: THEME_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label })),
-                    }),
+              ? NW.ui.field({
+                  label: NW.t('系统为深色时用'),
+                  hint: NW.t('浅色一侧不再指定：每次进入浅色都会换一套，免得每天打开都是同一个白天。'),
+                  children: NW.ui.select({
+                    value: draft.themeDark || 'night',
+                    onChange: (value) => set('themeDark', value),
+                    options: THEME_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label })),
                   }),
-                  NW.ui.field({
-                    label: NW.t('系统为深色时用'),
-                    children: NW.ui.select({
-                      value: draft.themeDark || 'night',
-                      onChange: (value) => set('themeDark', value),
-                      options: THEME_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label })),
-                    }),
-                  }),
-                )
+                })
               : null,
             // R113: the lock screen follows the reading theme by default; the
             // night room can be pinned for writers who liked that version.
@@ -29141,6 +30940,71 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               label: NW.t('页宽') + ' · ' + (draft.pageWidth || 760) + 'px',
               children: rangeInput({ value: draft.pageWidth || 760, min: 560, max: 1000, step: 20, onChange: (v) => set('pageWidth', v) }),
             }),
+            // R125: 每页栏数。不放在「阅读」里给个数字，是因为这是一个口味选择：
+            // 一栏像纸书，两栏像期刊。放得太隐蔽也没用，它就在字号行距旁边。
+            NW.ui.field({
+              label: NW.t('每页栏数'),
+              hint: NW.t('双栏把一页正文排成两栏（期刊那种），一行二十来字更好读；面板太窄会自动回到一栏。'),
+              children: NW.ui.seg({
+                ariaLabel: NW.t('每页栏数'),
+                value: Number(draft.readColumns) >= 2 ? '2' : '1',
+                onChange: (v) => set('readColumns', Number(v)),
+                options: [
+                  { value: '1', label: NW.t('一栏') },
+                  { value: '2', label: NW.t('双栏') },
+                ],
+              }),
+            }),
+            // R131: 朗读的自定义接口。引擎本身在阅读页那个喇叭旁边切（那里
+            // 才是「听着听着想换一个」的地方），这里放的是地址、密钥和音色——
+            // 它们不该在弹层里挤着填。
+            NW.ui.field({
+              label: NW.t('朗读接口地址'),
+              hint: NW.t('任何 OpenAI /v1/audio/speech 兼容的接口：填到 /v1 也行，填完整的 …/audio/speech 也行。留空则不用「自定义」引擎。'),
+              children: h('input', {
+                type: 'text',
+                className: 'nw-input',
+                placeholder: 'http://127.0.0.1:8880/v1',
+                value: String(draft.ttsApiUrl || ''),
+                onChange: (ev) => set('ttsApiUrl', ev.target.value),
+              }),
+            }),
+            h(
+              'div',
+              { className: 'nw-grid2' },
+              NW.ui.field({
+                label: NW.t('朗读接口密钥'),
+                hint: NW.t('本地服务通常留空。'),
+                children: h('input', {
+                  type: 'password',
+                  className: 'nw-input',
+                  placeholder: 'sk-…',
+                  value: String(draft.ttsApiKey || ''),
+                  onChange: (ev) => set('ttsApiKey', ev.target.value),
+                }),
+              }),
+              NW.ui.field({
+                label: NW.t('朗读模型'),
+                children: h('input', {
+                  type: 'text',
+                  className: 'nw-input',
+                  placeholder: 'tts-1',
+                  value: String(draft.ttsApiModel || ''),
+                  onChange: (ev) => set('ttsApiModel', ev.target.value),
+                }),
+              }),
+            ),
+            NW.ui.field({
+              label: NW.t('朗读音色'),
+              hint: NW.t('接口那边的音色名：alloy / nova / 或本地模型自己的名字。'),
+              children: h('input', {
+                type: 'text',
+                className: 'nw-input',
+                placeholder: 'alloy',
+                value: String(draft.ttsApiVoice || ''),
+                onChange: (ev) => set('ttsApiVoice', ev.target.value),
+              }),
+            }),
             // R11 ④: the caret is painted by the editor itself (.nw-cursor), so its
             // thickness, colour and blink are plain settings instead of a stylesheet
             // detail the user would have to hack.
@@ -29185,7 +31049,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             ),
             rowToggle('光标闪烁', draft.caretBlink !== false, (v) => set('caretBlink', v)),
             rowToggle('打字机模式', draft.typewriter, (v) => set('typewriter', v)),
-            rowToggle('沉浸模式（隐藏所有面板，Esc 或 Ctrl+Shift+F 退出）', draft.immersive, (v) => set('immersive', v)),
+            rowToggle('沉浸模式（隐藏所有面板；Esc 退出，Ctrl+Shift+F 或 Ctrl+Alt+F 切换）', draft.immersive, (v) => set('immersive', v)),
             rowToggle(
               '只照亮光标所在的那一段',
               draft.focusDim !== false,
@@ -29241,34 +31105,17 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               h('span', null, '封面图片'),
               NW.ui.btn({ onClick: () => openSibling(p, 'export', {}), children: '在导出面板中选择…' }),
             ),
-            // R29: three AI jobs, three models. Each defaults to the harness
-            // model; the writer picks a cheap one for proofreading and a strong
-            // one for the editorial advice if they want. 「跟随默认模型」 is the
-            // shipped state, not a placeholder — an unset pair really does fall
-            // through to the harness selection on the Host side.
-            modelPicker('AI 校对模型', 'proofreadProvider', 'proofreadModel', '只做错别字与标点这类机械校对，可以选便宜快的模型。'),
-            NW.ui.field({
-              label: 'AI 校对要求',
-              hint: '这段要求会拼在校对提示词后面，与内置规则冲突时以你的为准。清空即恢复默认。',
-              children: NW.ui.textarea({
-                rows: 4,
-                // R30: the default used to live only in the hint, so the box
-                // looked empty and the writer had to invent the wording before
-                // they could change a word of it. The default is now the actual
-                // value, editable in place; an untouched default is stored as
-                // '' so a future change to the text still reaches everyone.
-                value: String(draft.proofreadRules || NW.aiProofreadDefaultRules()),
-                placeholder: NW.aiProofreadDefaultRules(),
-                onChange: (v) =>
-                  set(
-                    'proofreadRules',
-                    String(v || '').trim() === NW.aiProofreadDefaultRules().trim() ? '' : v,
-                  ),
-                ariaLabel: 'AI 校对要求',
-              }),
-            }),
+            // R29: two AI jobs, two models. Each defaults to the harness model;
+            // the writer picks a strong one for the editorial advice if they
+            // want. 「跟随默认模型」 is the shipped state, not a placeholder — an
+            // unset pair really does fall through to the harness selection on
+            // the Host side.
+            // R118: the 「AI 校对模型 / 要求」 pair is gone — that angle now runs
+            // inside AI建议 (the `words` focus), so there is nothing to tune
+            // separately. The old settings keys stay in DEFAULT_SETTINGS for
+            // migrating libraries, they are simply no longer rendered here.
             modelPicker('AI 投稿模型', 'submitProvider', 'submitModel', '生成投稿邮件正文与按期刊要求排版时使用。'),
-            modelPicker('AI 修改建议模型', 'adviceProvider', 'adviceModel', '通读全章给出修改建议，建议用能力更强的模型。'),
+            modelPicker('AI建议模型', 'adviceProvider', 'adviceModel', '通读全章给出AI建议，建议用能力更强的模型。'),
           ),
         ),
         // -------------------------------------------------- 3 导出与文件 ----
@@ -29766,68 +31613,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           ),
           { ref: submitSectionRef },
         ),
-        // ------------------------------------------------------ 6 手机同步 ----
-        // R38 fix: `section(title, children, extra)` renders exactly one child. The
-        // variadic call written here dropped everything after the intro paragraph —
-        // the panel, the sync status and the LAN addresses never reached the DOM,
-        // and the pairing element ended up spread onto the <section> as props.
-        section(
-          '手机同步',
-          h(
-            'div',
-            null,
-            [
-            h('p', { className: 'nw-hint-block' }, '手机装好 App 后配对一次即可。之后只要在同一个 Wi-Fi 下，修改会自动双向同步；不同书各自保留，同一本书以最后修改时间为准。'),
-            // R38: the pairing panel is rendered in place instead of behind a button
-            // that swapped this window for another one. The values a phone needs are
-            // what people come here for; hiding them one click deeper was the bug.
-            h(PairPanel, { onToast: typeof p.onToast === 'function' ? p.onToast : null }),
-            // R36: users who turned on 正文加密 need to know that syncing does not
-            // carry the encryption to the phone — the desktop decrypts on the way
-            // out, because the phone has no key and never will.
-            draft.encryption === true
-              ? h('p', { className: 'nw-hint-block' }, '正文加密已开启：同步时桌面会先解密再交给手机，所以手机上看到的是明文；同步缓存仍用本机密钥加密存放。')
-              : null,
-            h(
-              'div',
-              { className: 'nw-row' },
-              h('span', null, '同步状态'),
-              h(
-                'span',
-                { className: 'nw-dim' },
-                // R38: a phone sync never touches the browser's own counters — it goes
-                // host-to-phone — so `lastSyncAt` (written by the host when a phone
-                // merges) is the honest answer. The browser counters stay as a
-                // fallback for the old in-page sync paths.
-                lanSync && lanSync.lastSyncAt
-                  ? NW.t('最近一次同步 {0}', NW.fmtDate(lanSync.lastSyncAt))
-                  : lanSync && lanSync.pulledAt
-                    ? NW.t('最近一次收到手机改动 {0}', NW.fmtDate(lanSync.pulledAt))
-                    : lanSync && lanSync.lastPushAt
-                      ? NW.t('最近一次交给同步 {0}', NW.fmtDate(lanSync.lastPushAt))
-                      : NW.t('还没有同步过'),
-              ),
-            ),
-            // Why the address is spelled out even though there is a QR: the phone
-            // sometimes cannot use a camera (emulator, cracked screen), and the
-            // number is also the fastest way to tell whether the desktop is on the
-            // same subnet as the phone at all.
-            lanSync && lanSync.lan && lanSync.lan.running && lanSync.lan.addresses && lanSync.lan.addresses.length
-              ? h(
-                  'div',
-                  { className: 'nw-row' },
-                  h('span', null, '局域网地址'),
-                  h('span', { className: 'nw-dim' }, lanSync.lan.addresses.map((row) => row.url).join('  ·  ')),
-                )
-              : h(
-                  'div',
-                  { className: 'nw-row' },
-                  h('span', null, '局域网地址'),
-                  h('span', { className: 'nw-dim' }, '未启动（生成配对码时会自动启动）'),
-                ),
-            ],
-          ),
-        ),
         // ---------------------------------------------------- 7 快捷键 ----
         section(
           '快捷键',
@@ -29845,7 +31630,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               ['Esc', '退出沉浸模式'],
               // R22: the two new in-editor shortcuts.
               ['Alt + N', NW.t('新章节')],
-              ['Alt + A', NW.t('修改建议')],
+              ['Alt + A', NW.t('AI建议')],
               ['Tab', '插入两个全角空格'],
               // R44: the reading view pages with the arrows, so say so where the
               // rest of the keys are listed rather than only in the footer hint.
@@ -30177,7 +31962,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         .recommend(
           { wordCount: count, genre: suggestGenreOf(count), title: String((activeNovel && activeNovel.title) || '') },
           6,
-          { excerpt, provider: settings.submitProvider || settings.proofreadProvider, model: settings.submitModel || settings.proofreadModel },
+          { excerpt, provider: settings.submitProvider, model: settings.submitModel },
         )
         .then((data) => {
           if (!alive) return;
@@ -31486,250 +33271,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     if (code === 'blank') return '空行';
     return '格式';
   }
-
-  // ============================================================== Pair =====
-  /**
-   * 手机配对—the two values a phone needs, and the devices already paired.
-   *
-   * R38: this is a panel, not a dialog. It used to be reachable only through a
-   * 「显示配对地址和配对码…」 button that closed the settings window and opened a
-   * second one, so reading a code and then typing it on the phone meant juggling
-   * two windows — and on a small laptop the second window covered the first.
-   * The settings section renders this in place now; `NW.dialogs.Pair` is a thin
-   * wrapper kept for the header entry point, so both roads share one
-   * implementation instead of drifting apart.
-   */
-  function PairPanel(props) {
-    const p = props || {};
-    const [info, setInfo] = useState(null);
-    const [busy, setBusy] = useState('');
-    const [error, setError] = useState('');
-    const [peers, setPeers] = useState(null);
-    const [left, setLeft] = useState(0);
-
-    const refreshPeers = () => {
-      NW.io.pair
-        .peers()
-        .then((data) => setPeers(Array.isArray(data && data.peers) ? data.peers : []))
-        .catch(() => setPeers([]));
-    };
-
-    useEffect(() => {
-      refreshPeers();
-      return undefined;
-    }, []);
-
-    // R38: this panel *is* the address and the code, so it must not open empty
-    // and wait for someone to find 「生成配对码」 — that was the complaint. Ask for
-    // one on mount, and reuse a still-valid offer when there is one: opening
-    // settings again mid-pairing must not invalidate the code being typed on the
-    // phone.
-    const bootRef = useRef(false);
-    useEffect(() => {
-      if (bootRef.current) return undefined;
-      bootRef.current = true;
-      let alive = true;
-      const bootBusy = NW.t('正在生成配对信息…');
-      setBusy(bootBusy);
-      NW.io.pair
-        .status()
-        .then((data) => {
-          if (!alive) return null;
-          if (data && data.active && data.token) {
-            setInfo(data);
-            return null;
-          }
-          return NW.io.pair.start().then((fresh) => {
-            if (alive) setInfo(fresh);
-          });
-        })
-        .catch((err) => {
-          if (alive) setError(errText(err, '生成配对码失败'));
-        })
-        .then(() => {
-          if (alive) setBusy((current) => (current === bootBusy ? '' : current));
-        });
-      return () => {
-        alive = false;
-      };
-    }, []);
-
-    // Countdown, not a progress bar: the only useful fact about a pairing code is
-    // how long it is still good for.
-    useEffect(() => {
-      if (!info || !info.expiresAt) return undefined;
-      const tick = () => setLeft(Math.max(0, Math.round((Number(info.expiresAt) - Date.now()) / 1000)));
-      tick();
-      const timer = setInterval(tick, 1000);
-      return () => clearInterval(timer);
-    }, [info]);
-
-    // Poll for "did the phone accept yet" while the code is on screen — the
-    // desktop cannot know otherwise, and without this the panel would still say
-    // 「等待扫码」 after a successful pair.
-    // The countdown above re-renders once a second, so this effect must not
-    // depend on `left`: doing so tore down and rebuilt the interval before its
-    // first tick ever ran and the desktop never noticed a successful pair.
-    const pairedRef = useRef(false);
-    useEffect(() => {
-      if (!info || !info.expiresAt) return undefined;
-      pairedRef.current = false;
-      const timer = setInterval(() => {
-        if (pairedRef.current) return;
-        if (Number(info.expiresAt) <= Date.now()) return;
-        NW.io.pair
-          .status()
-          .then((data) => {
-            if (!data || data.active !== false || pairedRef.current) return;
-            pairedRef.current = true;
-            // The offer is consumed by the accept, so the code on screen is dead
-            // text now. Drop it rather than leave a countdown running next to a
-            // code that would only answer 「过期」 if typed.
-            setInfo(null);
-            refreshPeers();
-            p.onToast && p.onToast('手机已配对', 'ok');
-          })
-          .catch(() => {});
-      }, 2500);
-      return () => clearInterval(timer);
-    }, [info]);
-
-    function showCode() {
-      setError('');
-      setBusy('正在生成配对码…');
-      NW.io.pair
-        .start()
-        .then((data) => {
-          setInfo(data);
-          refreshPeers();
-        })
-        .catch((err) => setError(errText(err, '生成配对码失败')))
-        .then(() => setBusy(''));
-    }
-
-    function unpair(peer) {
-      NW.ui
-        .confirm(`解除与「${peer.name}」的配对？这台设备之后需要重新扫码才能同步。`, {
-          title: '解除配对',
-          danger: true,
-          okText: '解除',
-        })
-        .then((yes) => {
-          if (!yes) return null;
-          return NW.io.pair.remove(peer.id).then(() => {
-            refreshPeers();
-            p.onToast && p.onToast('已解除配对', 'ok');
-          });
-        })
-        .catch((err) => setError(errText(err, '解除配对失败')));
-    }
-
-    // Copy as two lines: the phone form has one field per line. Pasting the whole
-    // thing into the address field also works — the app splits a `nw1:` payload.
-    function copyManual() {
-      const text = `${info.address || ''}:${info.port || '?'}\n${info.token || ''}`;
-      const toast = (message, kind) => p.onToast && p.onToast(message, kind);
-      try {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(text).then(
-            () => toast(NW.t('已复制地址和配对码'), 'ok'),
-            () => toast(NW.t('复制失败，请手动选中这两行'), 'warn'),
-          );
-          return;
-        }
-      } catch (error) {
-        // Clipboard API missing or blocked (no secure context) — fall through.
-      }
-      const area = document.createElement('textarea');
-      area.value = text;
-      area.style.position = 'fixed';
-      area.style.opacity = '0';
-      document.body.appendChild(area);
-      area.select();
-      let copied = false;
-      try {
-        copied = document.execCommand('copy');
-      } catch (error) {
-        copied = false;
-      }
-      document.body.removeChild(area);
-      toast(copied ? NW.t('已复制地址和配对码') : NW.t('复制失败，请手动选中这两行'), copied ? 'ok' : 'warn');
-    }
-
-    return h('div', { className: 'nw-pair nw-pair-inline' }, [
-      h(
-        'p',
-        { className: 'nw-hint-block' },
-        NW.t('在手机上打开「精神空间」→「配对」，把下面的「电脑地址」和「配对码」填进去；也可以「改成扫码」对准二维码。配对一次即可，之后在同一个 Wi-Fi 下会自动同步。'),
-      ),
-      error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
-      info
-        ? h('div', { className: 'nw-pair-stack' }, [
-            // Typing comes first: the address and code are what the phone form
-            // actually asks for, and a code that is printed can always be copied.
-            info.token
-              ? h('div', { className: 'nw-pair-manual' }, [
-                  h('div', { className: 'nw-pair-manual-head' }, NW.t('在手机「配对」里填这两行')),
-                  h('div', { className: 'nw-pair-manual-row' }, [
-                    h('span', { className: 'nw-pair-manual-key' }, NW.t('电脑地址')),
-                    h('code', { className: 'nw-pair-manual-value' }, `${info.address || '未知'}:${info.port || '?'}`),
-                  ]),
-                  h('div', { className: 'nw-pair-manual-row' }, [
-                    h('span', { className: 'nw-pair-manual-key' }, NW.t('配对码')),
-                    h('code', { className: 'nw-pair-manual-value' }, String(info.token)),
-                  ]),
-                ])
-              : null,
-            h('div', { className: 'nw-pair-box' }, [
-              h('div', { className: 'nw-pair-code', 'aria-hidden': 'true', dangerouslySetInnerHTML: { __html: String(info.svg || '') } }),
-              h('div', { className: 'nw-pair-meta' }, [
-                h('div', { className: 'nw-pair-addr' }, NW.t('电脑地址：{0}:{1}', info.address || '未知', info.port || '?')),
-                Array.isArray(info.addresses) && info.addresses.length > 1
-                  ? h('div', { className: 'nw-hint-block' }, NW.t('其他可能地址：{0}', info.addresses.slice(1).join('、')))
-                  : null,
-                h('div', { className: 'nw-pair-timer' }, left > 0 ? NW.t('配对码 {0} 秒后失效', left) : NW.t('配对码已失效，请重新生成')),
-                h('div', { className: 'nw-hint-block' }, NW.t('也可以让手机「改成扫码」对准这个二维码')),
-              ]),
-            ]),
-          ])
-        : h('div', { className: 'nw-pair-empty' }, busy ? NW.ui.spinner('正在生成配对信息…') : '点下面的「生成配对码」。'),
-      h(
-        'div',
-        { className: 'nw-pair-actions' },
-        NW.ui.btn({ kind: 'primary', onClick: showCode, disabled: !!busy, children: info ? NW.t('重新生成') : NW.t('生成配对码') }),
-        info && info.token ? NW.ui.btn({ kind: 'ghost', onClick: copyManual, children: NW.t('复制这两行') }) : null,
-      ),
-      h('h3', { className: 'nw-pair-subhead' }, NW.t('已配对设备')),
-      peers === null
-        ? NW.ui.spinner(NW.t('正在读取…'))
-        : !peers.length
-          ? h('p', { className: 'nw-hint-block' }, NW.t('还没有配对任何设备。'))
-          : h(
-              'ul',
-              { className: 'nw-pair-peers' },
-              peers.map((peer) =>
-                h(
-                  'li',
-                  { key: peer.id, className: 'nw-pair-peer' },
-                  h('span', { className: 'nw-pair-peername' }, peer.name || NW.t('未命名设备')),
-                  h('span', { className: 'nw-hint-block' }, peer.lastSyncAt ? NW.t('上次同步 {0}', NW.fmtDate(peer.lastSyncAt)) : NW.t('还没有同步过')),
-                  NW.ui.btn({ kind: 'ghost', onClick: () => unpair(peer), children: NW.t('解除配对') }),
-                ),
-              ),
-            ),
-    ]);
-  }
-
-  NW.dialogs.Pair = function Pair(props) {
-    const p = props || {};
-    return modal(
-      '手机配对',
-      h(PairPanel, { onToast: typeof p.onToast === 'function' ? p.onToast : null }),
-      [closeBtn(p)],
-      '560px',
-      p.onClose,
-    );
-  };
 
   // ============================================================ Versions ====
   NW.dialogs.Versions = function Versions(props) {
@@ -33157,6 +34698,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   --nw-ease-pop:cubic-bezier(.22,1.16,.36,1);
   --nw-dur:.18s;
   --nw-dur-long:.28s;
+  /* R135: only the palette cross-fade uses this, so the half-hourly automatic
+     swap can dissolve without slowing every hover on the page with it. */
+  --nw-dur-theme:var(--nw-dur);
+}
+
+/* R135: 自动轮换是「换一屋子的光」，不是换皮。应用在换主题前后约 1.4 秒里挂上
+   data-theme-slow="1"，纸、底色、墨色一起慢慢走；手动点主题不走这条路，仍然
+   180ms。减弱动效时 05-css.js 的 !important 会把它压回快切，这是想要的行为。 */
+.nw-root[data-theme-slow="1"]{
+  --nw-dur-theme:1.2s;
 }
 
 @keyframes nw-fade-up{
@@ -33792,9 +35343,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-root[data-theme="night"] .nw-toast{background:#2c2c2e;}
 /* R21/R63/R64/R65: the rows are transparent boxes and each one paints its own
    paper chip through ::before, so at night the chip has to be *lighter* than the
-   page to look raised — hence the 7% override instead of the daylight 4%. The
-   FAB needs nothing here any more: R65 made it one flat brand-red circle, and
-   the night palette's brand is already tuned for a dark page. */
+   page to look raised — hence the 7% override instead of the daylight 4%.
+   R132: the FAB now wears the same chip as the rows (it used to be one flat
+   brand-red circle), so this override covers it too — the disc gets the same
+   night lift, and only its hover/expand tint goes red. */
 .nw-root[data-theme="night"] .nw-dock{
   --nw-dock-card:color-mix(in srgb, var(--nw-fg) 7%, var(--nw-bg));
 }
@@ -33947,10 +35499,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
  * that actually matters is the width of .nw-root, so 05-css declares it a
  * named container ("nw") and everything below sizes itself in cqw.
  *
- * Tiers (deliberately three, not seven):
+ * Tiers (two, not seven — the desktop panel is the only target now):
  *   <= 980  full shell still fine, chrome gets tighter
  *   <= 780  two-column grids collapse, shelf starts overlaying
- *   <= 560  single column everywhere, shelf and advice become overlays
  *
  * The @media blocks in 97-theme.js are kept as a fallback for engines without
  * container queries; these rules come later in source order and win ties.
@@ -34022,95 +35573,905 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   .nw-suggest-body{padding:0 var(--nw-sp-2) var(--nw-sp-2);}
 }
 
-/* ------------------------------------------------------------ <= 560px -- */
-@container nw (max-width: 560px){
-  /* Below this the two-pane shell (shelf + paper) cannot both be readable, so
-     the shelf lifts out of the flow and floats over the paper, and the splitter
-     goes away because there is nothing left to drag. The width still comes from
-     the inline style (the user may have set 300px); it is simply no longer
-     taking room from the manuscript. */
-  .nw-side{
-    position:absolute;left:0;top:0;bottom:0;
-    /* R117: above the bottom bar. The scrim is a sibling element, not the
-       drawer's spread shadow: a shadow paints but cannot receive the tap that
-       closes the drawer. */
-    z-index:calc(var(--nw-z-panel) + 2);
-    max-width:min(88%,320px);
-    box-shadow:var(--nw-shadow-3);
-  }
-  .nw-side-scrim{
-    position:absolute;inset:0;z-index:calc(var(--nw-z-panel) + 1);
-    margin:0;padding:0;border:0;border-radius:0;
-    background:rgba(0,0,0,.28);cursor:default;
-    -webkit-tap-highlight-color:transparent;
-  }
-  .nw-splitter{display:none !important;}
+`);
+})();
 
-  /* The advice panel does the same: overlay, anchored right. */
-  .nw-suggest{
-    position:absolute;right:0;top:0;bottom:0;z-index:var(--nw-z-panel);
-    width:min(92%,360px) !important;max-width:92% !important;
-    box-shadow:var(--nw-shadow-3);
-  }
+/* ==== 98c-signature.js ==== */
+;(() => {
+  'use strict';
 
-  /* R117: on a phone the manuscript owns the width. The old tier kept the
-     88px lane (20 + 68) because the floating dock lived over the bottom-right
-     of the paper; that left ~204px of text on a 390px screen — ten characters
-     a line. The dock is a real bottom bar now (90-app.js), so the lane is
-     gone and the page reads at the full measure. The edge handle also goes:
-     the bar's 目录 item is the drawer door. */
-  .nw-surface{--nw-pad-x:16px;--nw-pad-y:24px;--nw-gutter-x:0px;}
-  /* 沉浸态在手机上仍要留一点呼吸：没有底栏要避让，但 16px 会贴到屏幕边。 */
-  .nw-surface[data-immersive="1"]{--nw-pad-x:32px;--nw-pad-y:40px;--nw-gutter-x:0px;}
-  .nw-shelfrestore{display:none;}
-  /* Pinned over the top padding on desktop; on a phone the paragraph nav,
-     首页 and 锁定 cover the first line as soon as the writer scrolls. 首页 and
-     锁定 stay reachable in the shelf header, and the 更多 sheet has both. */
-  .nw-surface-acts{display:none;}
+  // ===========================================================================
+  // 98c-signature.js — R119 「灯下的稿纸」signature pass.
+  //
+  // The last styling part (99-end.js is code), so at equal specificity it wins
+  // over every earlier sheet without a single !important. Everything here is
+  // decoration on a layout that already works: no markup is added, no class is
+  // invented, no behaviour changes.
+  //
+  // Five rules, so this file can be audited later:
+  //   1. One light source. The desk is a soft radial from just above the paper;
+  //      everything raised throws a shadow in the same direction.
+  //   2. Paper is a material. A manuscript sheet gets a hairline, a 1px lit top
+  //      edge, a very low-frequency grain (the --nw-texture hook every palette
+  //      left at none) and a quiet drop.
+  //   3. The brand colour is an accent, never a surface: the rule under a
+  //      section head, the active row's edge, the goal arc, the focus ring.
+  //   4. Type does the motivating: serif for what is *read* (titles, the
+  //      manuscript, book names), sans and tabular numerals for what is
+  //      *operated* (buttons, counters, meta).
+  //   5. Motion is felt, not watched: 120ms feedback, 180ms travel, never on a
+  //      layout property, and 96-motion.js already switches all of it off under
+  //      prefers-reduced-motion.
+  //
+  // Colour stays inside the token vocabulary of 05-css.js and the palette remap
+  // in 98-shell-theme.js. The only literals are white/black alphas (a highlight
+  // has no token peer) and the grain bitmap.
+  // ===========================================================================
 
-  /* The notes card turns into a bottom sheet. It used to open as a 248px card
-     over the first lines with only a hover-revealed close button — unusable on
-     touch. The tab is hidden because 灵感 is a bar item now; the sheet ends
-     exactly where the bar begins, so the two never overlap. */
-  .nw-notes{
-    left:0;right:0;top:auto;bottom:0;width:auto;max-height:min(62vh,440px);
-    align-items:stretch;gap:0;pointer-events:none;
-  }
-  .nw-notes[data-open="1"]{pointer-events:auto;}
-  .nw-notes-tab{display:none;}
-  .nw-notes-card{
-    width:100%;max-height:min(56vh,400px);
-    border-radius:var(--nw-r-card) var(--nw-r-card) 0 0;
-    border-bottom:0;
-    box-shadow:0 -18px 48px rgba(0,0,0,.28);
-  }
-  /* Touch has no hover, so the corner close would stay invisible forever.
-     Keep the state word + close button on screen and start the note below
-     them; otherwise the first line runs under the button. */
-  .nw-notes-tools{opacity:1;}
-  .nw-notes-input{padding-top:38px;}
+  // ---------------------------------------------------------------- tokens --
+  NW.CSS_PARTS.push(`
+.nw-root{
+  /* --- ink ladder: three steps of "how much does this matter" ------------ */
+  --nw-ink:var(--nw-fg);
+  --nw-ink-quiet:color-mix(in srgb, var(--nw-fg) 76%, var(--nw-bg));
+  --nw-ink-faint:color-mix(in srgb, var(--nw-fg) 48%, var(--nw-bg));
 
-  /* Below the shelf overlay: when the shelf is lifted out of the flow it must
-     be able to cover the dock, otherwise its bottom buttons are unreachable on
-     a phone-sized panel. The compact bar is in flow, so it keeps its own box. */
-  .nw-dock:not(.nw-dock-bar){right:10px;bottom:46px;z-index:var(--nw-z-panel);}
+  /* --- brand ladder: one saturated colour at three strengths ------------- */
+  --nw-accent:var(--nw-brand);
+  --nw-accent-wash:color-mix(in srgb, var(--nw-brand) 9%, transparent);
+  --nw-accent-wash-2:color-mix(in srgb, var(--nw-brand) 16%, transparent);
+  --nw-accent-line:color-mix(in srgb, var(--nw-brand) 32%, transparent);
 
-  /* Save state is the one thing that must stay visible; the word counters and
-     the auto-save sentence are desktop wallpaper on a 390px bar. */
-  .nw-status{padding:0 var(--nw-sp-2);font-size:12px;flex-wrap:wrap;row-gap:2px;height:auto;min-height:var(--nw-h-status);}
-  .nw-status .nw-status-mid,.nw-status .nw-status-sync{display:none;}
+  /* --- hairlines: a paper edge is darker paper, not a grey line ---------- */
+  --nw-hair:color-mix(in srgb, var(--nw-fg) 9%, transparent);
+  --nw-hair-strong:color-mix(in srgb, var(--nw-fg) 17%, transparent);
+
+  /* --- light: the lamp above the desk, and the lit edge of a sheet ------- */
+  --nw-lamp:radial-gradient(130% 80% at 50% -14%,
+    color-mix(in srgb, var(--nw-brand) 6%, transparent), transparent 62%);
+  --nw-lit-edge:inset 0 1px 0 color-mix(in srgb, #fff 44%, transparent);
+
+  /* --- depth: one direction, three heights ------------------------------- */
+  --nw-rise-1:0 1px 1px color-mix(in srgb, var(--nw-fg) 5%, transparent),
+    0 2px 6px color-mix(in srgb, var(--nw-fg) 5%, transparent);
+  --nw-rise-2:0 2px 4px color-mix(in srgb, var(--nw-fg) 6%, transparent),
+    0 10px 26px color-mix(in srgb, var(--nw-fg) 9%, transparent);
+  --nw-rise-3:0 3px 8px color-mix(in srgb, var(--nw-fg) 8%, transparent),
+    0 26px 60px color-mix(in srgb, var(--nw-fg) 15%, transparent);
+
+  /* --- the goal ring has wanted this token since 55-welcome.js:934 -------- */
+  --nw-success:var(--nw-ok);
+
+  /* --- radii, derived so the newspaper theme stays square ----------------
+     (newspaper rewrites --nw-r-card/-control/-modal to 2–3px in 98-shell-theme,
+     and every radius below follows automatically.) */
+  --nw-r-sm:calc(var(--nw-r-control) - 2px);
+  --nw-r-md:var(--nw-r-card);
+  --nw-r-lg:var(--nw-r-modal);
+
+  /* --- timing ----------------------------------------------------------- */
+  --nw-t-fast:120ms;
+  --nw-t-base:180ms;
+  --nw-t-slow:260ms;
+  --nw-e-out:cubic-bezier(.22,.7,.24,1);
+  --nw-e-spring:cubic-bezier(.3,1.3,.4,1);
 }
 
-/* Touch and coarse pointers: no hover, so anything that only appears on hover has
-   to be visible on its own. R60: the dock is a FAB again and its menu rows already
-   carry icon + name unconditionally, so all that is needed here is a readable
-   resting opacity for the FAB itself — otherwise the circle would sit at 62% with
-   nothing to reveal the rest. */
-@media (hover: none){
-  .nw-row-actions{opacity:1;}
-  .nw-notes-tab{opacity:.85;}
-  .nw-homebtn{opacity:.85;}
-  .nw-dock-fab::before{opacity:1;}
+/* The desk. Two very wide, very low-contrast washes — the lamp from above, a
+   faint vignette where the desk meets the floor — so an empty panel still has
+   a centre. Both are alpha-only, so all five palettes share the rule. */
+.nw-root{
+  background-image:
+    var(--nw-lamp),
+    radial-gradient(140% 92% at 50% 118%,
+      color-mix(in srgb, var(--nw-fg) 5%, transparent), transparent 58%);
+}
+
+/* Night needs its light to come from the lamp, not from white. */
+.nw-root[data-theme="night"]{
+  --nw-lamp:radial-gradient(130% 82% at 50% -14%,
+    color-mix(in srgb, var(--nw-brand) 11%, transparent), transparent 60%);
+  --nw-lit-edge:inset 0 1px 0 color-mix(in srgb, #fff 7%, transparent);
+  --nw-rise-1:0 1px 2px rgba(0,0,0,.42);
+  --nw-rise-2:0 2px 6px rgba(0,0,0,.44), 0 12px 30px rgba(0,0,0,.42);
+  --nw-rise-3:0 4px 10px rgba(0,0,0,.48), 0 30px 70px rgba(0,0,0,.56);
+  --nw-hair:color-mix(in srgb, #fff 9%, transparent);
+  --nw-hair-strong:color-mix(in srgb, #fff 16%, transparent);
+}
+
+/* ============================================================ scrollbars == */
+/* R139: 阅读页的翻页 scroller 不是「可以滚动的面板」，它只是把整本书摊成
+   一列列、靠 scrollLeft 换页——滚动条对它没有意义，露出一条就等于把「这是
+   网页」写在了书页下面。这条全局规则以前把它一起盖住了（.nw-root 星号选择器
+   与 .nw-read-flow 特异性相同，而本文件拼接在 62-read.js 之后，于是后写的
+   那条 width:0;height:0 反而输了），所以在这里显式排除，而不是在 62-read.js
+   里靠提高特异性去打架。 */
+.nw-root *:not(.nw-read-flow):not(.nw-read-copy){
+  scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--nw-fg) 22%, transparent) transparent;
+}
+.nw-root *:not(.nw-read-flow):not(.nw-read-copy)::-webkit-scrollbar{width:10px;height:10px;}
+.nw-root *:not(.nw-read-flow):not(.nw-read-copy)::-webkit-scrollbar-track{background:transparent;}
+.nw-root *:not(.nw-read-flow):not(.nw-read-copy)::-webkit-scrollbar-thumb{
+  background:color-mix(in srgb, var(--nw-fg) 15%, transparent);
+  border:3px solid transparent;border-radius:var(--nw-r-pill);background-clip:content-box;
+}
+.nw-root *:not(.nw-read-flow):not(.nw-read-copy)::-webkit-scrollbar-thumb:hover{
+  background:color-mix(in srgb, var(--nw-fg) 30%, transparent);background-clip:content-box;
+}
+.nw-root *:not(.nw-read-flow):not(.nw-read-copy)::-webkit-scrollbar-corner{background:transparent;}
+
+/* ================================================================= type === */
+/* Numbers that sit in a row and change while you watch them are tabular, so a
+   word count does not jitter as it counts up. */
+.nw-root :where(.nw-status,.nw-status-mid,.nw-status-today,.nw-goal-text,
+  .nw-welcome-novelmeta,.nw-welcome-submeta,.nw-shelf-row-meta,.nw-shelf-book-meta,
+  .nw-shelf-novel-meta,.nw-adv-ver,.nw-suggest-count,.nw-read-count,.nw-find-count){
+  font-variant-numeric:tabular-nums;
+  font-feature-settings:"tnum" 1;
+}
+
+/* A section head in this product is a *kicker*: small, spaced, quiet, with a
+   short brand rule in front of it. Applied to the heads that already exist. */
+.nw-welcome-cardtitle{
+  color:var(--nw-ink-faint);
+  font-family:var(--nw-ui-font);
+  font-size:var(--nw-fs-tiny);
+  font-weight:600;letter-spacing:.14em;text-transform:none;
+}
+.nw-welcome-cardtitle::before{
+  content:'';display:inline-block;vertical-align:middle;
+  width:18px;height:2px;margin-right:10px;border-radius:1px;
+  background:var(--nw-accent);
+}
+.nw-welcome-title{
+  font-family:var(--nw-reading-font);
+  font-size:clamp(26px,3cqw,33px);
+  line-height:1.16;letter-spacing:-.012em;font-weight:600;
+}
+.nw-welcome-lead{color:var(--nw-ink-quiet);}
+/* The hero rule reads as a gesture: ink on the left, gone by the right. */
+.nw-welcome-head::after{
+  background:linear-gradient(90deg,
+    var(--nw-hair-strong), var(--nw-hair) 46%, transparent 92%);
+}
+
+/* ================================================================ home ==== */
+.nw-welcome-card{
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--nw-fg) 1.5%, transparent), transparent 40%),
+    var(--nw-surface-overlay);
+  border-color:var(--nw-hair);
+  box-shadow:var(--nw-rise-1);
+  transition:box-shadow var(--nw-t-base) var(--nw-e-out),
+    border-color var(--nw-t-base) var(--nw-e-out);
+}
+.nw-welcome-inner > .nw-welcome-cols > .nw-welcome-col > .nw-welcome-card:hover{
+  border-color:var(--nw-hair-strong);box-shadow:var(--nw-rise-2);
+}
+
+/* A novel row is the thing the writer actually clicks, so it gets the most
+   material: a spine-ish mark on the left, a wash on hover, an accent edge when
+   it is the one being written. */
+.nw-welcome-novel{
+  border-radius:var(--nw-r-md);
+  border:1px solid transparent;
+  transition:background var(--nw-t-fast) var(--nw-e-out),
+    border-color var(--nw-t-fast) var(--nw-e-out),
+    box-shadow var(--nw-t-fast) var(--nw-e-out),
+    transform var(--nw-t-fast) var(--nw-e-out);
+}
+.nw-welcome-novel:hover{
+  background:var(--nw-surface-2);border-color:var(--nw-hair);
+  box-shadow:var(--nw-rise-1);
+}
+.nw-welcome-novelname{
+  font-family:var(--nw-reading-font);
+  font-size:calc(var(--nw-fs-base) + 1px);font-weight:600;letter-spacing:-.004em;
+}
+.nw-welcome-novelcurrent{color:var(--nw-ink-quiet);}
+/* Where you left off. Five red chapter names stacked down the column read as
+   noise, so the verb keeps the accent and the chapter goes back to ink. */
+.nw-welcome-novelcurrenttag{
+  color:var(--nw-accent);font-weight:600;letter-spacing:.02em;
+}
+.nw-welcome-novelcurrentname{color:var(--nw-ink);font-weight:500;}
+.nw-welcome-novelgo{
+  color:var(--nw-ink-faint);
+  transition:transform var(--nw-t-fast) var(--nw-e-out), color var(--nw-t-fast) var(--nw-e-out);
+}
+.nw-welcome-novel:hover .nw-welcome-novelgo{
+  color:var(--nw-accent);transform:translateX(3px);
+}
+/* The little book mark in front of every novel row: a spine, not a bullet. */
+.nw-welcome-novelmark{
+  border-radius:var(--nw-r-sm);
+  background:
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--nw-fg) 16%, transparent) 0 2px,
+      transparent 2px),
+    var(--nw-accent-wash);
+  box-shadow:inset 0 0 0 1px var(--nw-hair);
+}
+.nw-welcome-novel:hover .nw-welcome-novelmark,
+.nw-welcome-novel[data-active="1"] .nw-welcome-novelmark{
+  background:
+    linear-gradient(90deg, var(--nw-accent) 0 2px, transparent 2px),
+    var(--nw-accent-wash-2);
+}
+
+/* Today's goal: the arc finally turns green when it is done, and the whole cell
+   answers on hover, because this is the one number meant to pull you back. */
+/* The stats card is a grey tray; its four cells are paper slips sitting in
+   it, which gives the numbers a surface to sit on instead of floating. */
+.nw-welcome-stat{
+  background:var(--nw-bg);
+  box-shadow:inset 0 0 0 1px var(--nw-hair);
+}
+.nw-welcome-stat dt{
+  font-size:var(--nw-fs-micro);letter-spacing:.09em;text-transform:uppercase;
+  color:var(--nw-ink-faint);
+}
+.nw-welcome-stat dd{font-size:17px;}
+.nw-goal-track{stroke:color-mix(in srgb, var(--nw-fg) 12%, transparent);}
+.nw-goal-fill{
+  stroke:var(--nw-accent);
+  stroke-linecap:round;
+  transition:stroke-dashoffset 520ms var(--nw-e-out), stroke 240ms var(--nw-e-out);
+  filter:drop-shadow(0 0 3px color-mix(in srgb, var(--nw-accent) 45%, transparent));
+}
+.nw-welcome-statgoal[data-done="1"] .nw-goal-fill{
+  stroke:var(--nw-success);
+  filter:drop-shadow(0 0 5px color-mix(in srgb, var(--nw-success) 55%, transparent));
+}
+.nw-welcome-statgoal{border-radius:var(--nw-r-md);transition:background var(--nw-t-fast) var(--nw-e-out);}
+.nw-welcome-statgoal:hover{background:var(--nw-accent-wash);}
+.nw-goal-text{font-weight:600;color:var(--nw-ink);}
+.nw-welcome-stat dd{font-weight:600;color:var(--nw-ink);}
+.nw-welcome-stat dt{color:var(--nw-ink-faint);font-size:var(--nw-fs-tiny);}
+
+/* Inbox rows: the unread dot earns the accent; read rows stay quiet. */
+.nw-welcome-subbtn{border-radius:var(--nw-r-md);border-color:transparent;}
+.nw-welcome-subbtn:hover{background:var(--nw-surface-2);border-color:var(--nw-hair);}
+.nw-welcome-subbtn.nw-welcome-sub-unread .nw-welcome-subtitle{font-weight:600;}
+.nw-welcome-sub-unread::before{
+  content:'';position:absolute;
+  width:6px;height:6px;margin-left:-12px;margin-top:7px;
+  border-radius:var(--nw-r-pill);background:var(--nw-accent);
+}
+.nw-welcome-subtitle{font-family:var(--nw-reading-font);}
+
+/* A quick action that is disabled (投稿 with no novels yet) reads as a hint
+   rather than a dead control. */
+.nw-welcome-actions .nw-btn[data-kind="primary"]{
+  box-shadow:0 1px 2px color-mix(in srgb, var(--nw-brand) 30%, transparent),
+    0 8px 20px -8px color-mix(in srgb, var(--nw-brand) 55%, transparent);
+}
+`);
+
+  // ---------------------------------------------------------------- shelf ---
+  NW.CSS_PARTS.push(`
+/* =============================================================== shelf ==== */
+.nw-shelf{
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--nw-fg) 1.6%, transparent), transparent 240px),
+    var(--nw-panel);
+  border-right:1px solid var(--nw-hair);
+}
+.nw-shelf-toplabel{
+  color:var(--nw-ink-faint);
+  font-size:var(--nw-fs-tiny);font-weight:600;letter-spacing:.14em;
+}
+/* The search field is the only input in the rail: give it the sunken paper
+   treatment so it reads as a place to type rather than a box. */
+.nw-shelf-searchwrap .nw-input{
+  background:var(--nw-sunken);
+  border-color:transparent;
+  box-shadow:inset 0 0 0 1px var(--nw-hair);
+}
+.nw-shelf-searchwrap .nw-input:hover{box-shadow:inset 0 0 0 1px var(--nw-hair-strong);}
+.nw-shelf-searchwrap .nw-input:focus{
+  background:var(--nw-bg);
+  box-shadow:inset 0 0 0 1px var(--nw-accent-line), var(--nw-ring-soft);
+}
+
+/* Chapter rows. Hairline separators instead of borders, a wash on hover, and an
+   accent edge + tint for the chapter being written. */
+.nw-shelf-row{
+  border-radius:var(--nw-r-sm);
+  transition:background var(--nw-t-fast) var(--nw-e-out),
+    box-shadow var(--nw-t-fast) var(--nw-e-out);
+}
+.nw-shelf-row:hover{background:color-mix(in srgb, var(--nw-fg) 4.5%, transparent);}
+.nw-shelf-row.is-active,
+.nw-shelf-row[aria-selected="true"]{
+  background:var(--nw-accent-wash);
+  box-shadow:inset 3px 0 0 var(--nw-accent);
+}
+.nw-shelf-row.is-active .nw-shelf-row-title,
+.nw-shelf-row[aria-selected="true"] .nw-shelf-row-title{
+  color:var(--nw-ink);font-weight:600;
+}
+.nw-shelf-row-title{font-size:var(--nw-fs-second);}
+.nw-shelf-row-meta{color:var(--nw-ink-faint);font-size:var(--nw-fs-tiny);}
+.nw-shelf-row-meta[data-done="1"]{color:var(--nw-ok);}
+/* Tree connectors: quieter than the row text, so the tree reads as a map. */
+.nw-shelf-row[aria-level]::before{opacity:.55;}
+
+/* Status dots: revising = warm, done = green, both tiny and lit. */
+.nw-shelf-dot{border-radius:var(--nw-r-pill);}
+.nw-shelf-dot[data-status="revising"]{
+  background:var(--nw-warn);
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--nw-warn) 16%, transparent);
+}
+.nw-shelf-dot[data-status="done"]{
+  background:var(--nw-ok);
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--nw-ok) 16%, transparent);
+}
+
+/* Book cover in the rail: two gradients pretending to be a spine and a page
+   block, and a real shadow when the row is hovered. */
+.nw-shelf-cover{
+  border-radius:2px 3px 3px 2px;
+  box-shadow:0 1px 2px color-mix(in srgb, var(--nw-fg) 18%, transparent);
+  transition:transform var(--nw-t-fast) var(--nw-e-out),
+    box-shadow var(--nw-t-fast) var(--nw-e-out);
+}
+.nw-shelf-book-row:hover .nw-shelf-cover,
+.nw-shelf-novel:hover .nw-shelf-cover{
+  transform:translateY(-1px) rotate(-1deg);
+  box-shadow:0 3px 8px color-mix(in srgb, var(--nw-fg) 22%, transparent);
+}
+.nw-shelf-book-row{border-radius:var(--nw-r-md);transition:background var(--nw-t-fast) var(--nw-e-out);}
+.nw-shelf-book-row:hover{background:color-mix(in srgb, var(--nw-fg) 5%, transparent);}
+.nw-shelf-book-row.is-active,
+.nw-shelf-book-row[aria-pressed="true"]{
+  background:var(--nw-accent-wash);
+  box-shadow:inset 3px 0 0 var(--nw-accent);
+}
+.nw-shelf-book-title{font-family:var(--nw-reading-font);font-weight:600;}
+
+.nw-shelf-novel{
+  border:1px solid transparent;border-radius:var(--nw-r-md);
+  transition:background var(--nw-t-fast) var(--nw-e-out),
+    border-color var(--nw-t-fast) var(--nw-e-out),
+    box-shadow var(--nw-t-fast) var(--nw-e-out);
+}
+.nw-shelf-novel:hover{background:var(--nw-surface-2);border-color:var(--nw-hair);box-shadow:var(--nw-rise-1);}
+.nw-shelf-novel.is-active{
+  background:var(--nw-accent-wash);border-color:var(--nw-accent-line);
+  box-shadow:inset 3px 0 0 var(--nw-accent);
+}
+.nw-shelf-novel-title{font-family:var(--nw-reading-font);font-weight:600;}
+
+/* Rail footer tools + the library toggle: same material as the dock cards. */
+.nw-shelf-foot{border-top:1px solid var(--nw-hair);}
+.nw-shelf-library{border-radius:var(--nw-r-md);}
+.nw-shelf-library:hover{background:var(--nw-surface-2);}
+.nw-shelf-library.is-open .nw-shelf-library-label{color:var(--nw-ink);font-weight:600;}
+.nw-shelf-library-count{color:var(--nw-ink-faint);font-variant-numeric:tabular-nums;}
+.nw-shelf-indicator{background:var(--nw-accent);opacity:.5;}
+
+/* The drag handle between rail and manuscript. */
+.nw-splitter{transition:background var(--nw-t-fast) var(--nw-e-out);}
+.nw-splitter:hover,.nw-splitter[data-drag="1"]{background:var(--nw-accent-line);}
+`);
+
+  // --------------------------------------------------------------- paper ----
+  NW.CSS_PARTS.push(`
+/* ============================================================== paper ===== */
+/* The manuscript sheet. Every palette left --nw-texture at none; this is the
+   hook the editor has always had for grain, so the paper finally has a
+   material. One tile, 120px, 3% white-and-black noise: invisible at arm's
+   length, but the page stops looking like a flat rectangle under the cursor. */
+.nw-surface{--nw-grain:none;}
+.nw-surface[data-theme="claude"],
+.nw-surface[data-theme="eye"],
+.nw-surface[data-theme="newspaper"],
+.nw-surface[data-theme="magazine"]{
+  --nw-texture:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23g)' opacity='.028'/%3E%3C/svg%3E");
+}
+.nw-surface[data-theme="night"]{
+  --nw-texture:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23g)' opacity='.055'/%3E%3C/svg%3E");
+}
+
+/* Desk and sheet. The palette paints both white, so a page on it has no edge
+   at all; a 3% ink wash on the pane is enough to make the paper a sheet again,
+   and it costs nothing in the dark themes because the wash follows --nw-fg.
+   The grain follows the paper, not the desk — noise under a sheet is just dirt. */
+.nw-surface:not(.nw-read){
+  background-image:none;
+  background-color:color-mix(in srgb, var(--nw-bg) 95%, var(--nw-fg));
+}
+.nw-page{background-image:var(--nw-texture,none);}
+/* On a dark palette the desk must sit *below* the sheet, not above it: mixing
+   toward the ink would make the desk lighter than the page it holds. */
+.nw-root[data-theme="night"] .nw-surface:not(.nw-read){
+  background-color:color-mix(in srgb, var(--nw-bg) 78%, #000);
+}
+
+/* The sheet itself: a lit top edge, a hairline all round, and a drop that says
+   "on a desk" without turning the manuscript into a card. Only once the page is
+   narrower than the pane does it read as a sheet; below that it is the pane. */
+@container nw (min-width: 780px){
+  .nw-page{
+    background-color:var(--nw-bg);
+    box-shadow:
+      var(--nw-lit-edge),
+      0 1px 0 color-mix(in srgb, var(--nw-fg) 5%, transparent),
+      0 18px 44px -26px color-mix(in srgb, var(--nw-fg) 40%, transparent);
+  }
+  .nw-surface[data-focus="1"] .nw-page,
+  .nw-surface:focus-within .nw-page{
+    box-shadow:
+      var(--nw-lit-edge),
+      0 1px 0 color-mix(in srgb, var(--nw-fg) 6%, transparent),
+      0 24px 56px -28px color-mix(in srgb, var(--nw-fg) 46%, transparent);
+  }
+  /* Dark palette: light is the ink, so an ink-mixed drop becomes a glow around
+     the sheet. Shadows go to black instead and the lit edge carries the rest. */
+  .nw-root[data-theme="night"] .nw-page{
+    box-shadow:
+      var(--nw-lit-edge),
+      0 1px 0 rgba(0,0,0,.55),
+      0 20px 46px -26px rgba(0,0,0,.9);
+  }
+  .nw-root[data-theme="night"] .nw-surface[data-focus="1"] .nw-page,
+  .nw-root[data-theme="night"] .nw-surface:focus-within .nw-page{
+    box-shadow:
+      var(--nw-lit-edge),
+      0 1px 0 rgba(0,0,0,.6),
+      0 26px 58px -28px rgba(0,0,0,.95);
+  }
+}
+
+/* Chapter title: display serif, tighter, with the little rule under it tinted
+   by the accent so the head of every chapter is a typographic event. */
+.nw-chaptertitle{
+  font-family:var(--nw-reading-font);
+  letter-spacing:-.01em;
+  color:var(--nw-ink);
+}
+.nw-chaptertitle::after{
+  width:30px;height:1px;
+  background:var(--nw-accent);
+  opacity:.55;
+}
+.nw-chaptertitle:focus{outline:none;}
+
+/* The caret is the only thing that moves while writing: accent it, and give it
+   a hairline glow so the eye can find it on a page of grey text. */
+.nw-cursor{
+  background:var(--nw-accent);
+  box-shadow:0 0 6px color-mix(in srgb, var(--nw-accent) 55%, transparent);
+}
+/* One selection colour everywhere: paper, textarea and chrome agree. */
+.nw-ta::selection,
+.nw-surface ::selection{
+  background:color-mix(in srgb, var(--nw-brand) 20%, transparent);
+}
+.nw-veil{opacity:.9;}
+
+/* Floating pieces on the paper: the selection button, the paragraph map, the
+   find bar. All three are paper cards with a real edge. */
+.nw-selbtn{
+  border-radius:var(--nw-r-pill);
+  border:1px solid var(--nw-hair);
+  background:var(--nw-surface-overlay);
+  box-shadow:var(--nw-rise-2), var(--nw-lit-edge);
+  color:var(--nw-ink);
+  transition:transform var(--nw-t-fast) var(--nw-e-spring),
+    box-shadow var(--nw-t-fast) var(--nw-e-out);
+}
+.nw-selbtn:hover{
+  transform:translateY(-1px);
+  box-shadow:var(--nw-rise-3), var(--nw-lit-edge);
+  color:var(--nw-accent);
+}
+.nw-findbar{
+  border:1px solid var(--nw-hair);
+  background:var(--nw-surface-overlay);
+  box-shadow:var(--nw-rise-2);
+}
+
+/* The acts capsule in the corner of the sheet (immersive hides it to 28%). */
+.nw-surface-acts{
+  border-radius:var(--nw-r-pill);
+  border:1px solid var(--nw-hair);
+  background:color-mix(in srgb, var(--nw-surface-overlay) 88%, transparent);
+  box-shadow:var(--nw-rise-2);
+  backdrop-filter:blur(6px);
+}
+.nw-actbtn,.nw-homebtn{color:var(--nw-ink-quiet);}
+.nw-actbtn:hover,.nw-homebtn:hover{color:var(--nw-accent);}
+.nw-acts-div{background:var(--nw-hair);}
+`);
+
+  // ----------------------------------------------------------------- dock ---
+  // Geometry is locked by verify-dock-hit (the surface lives in ::before and the
+  // menu declares no box of its own), so this section spends only colour,
+  // shadow and child transforms.
+  NW.CSS_PARTS.push(`
+/* =============================================================== dock ===== */
+.nw-dock{--nw-dock-card:color-mix(in srgb, var(--nw-surface-overlay) 92%, transparent);}
+.nw-dock-btn::before{
+  border-color:color-mix(in srgb, var(--nw-hair) 100%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, #fff 26%, transparent), transparent 72%),
+    var(--nw-dock-card);
+  box-shadow:var(--nw-rise-1), var(--nw-lit-edge);
+}
+.nw-dock-btn:hover::before{
+  border-color:var(--nw-hair-strong);
+  box-shadow:var(--nw-rise-2), var(--nw-lit-edge);
+}
+.nw-dock-btn:hover{color:var(--nw-ink);}
+.nw-dock-icon{
+  border-radius:var(--nw-r-sm);
+  /* No transform here: verify-dock-hit forbids any geometry-moving hover state
+     on the dock, and a pressed edge that re-enters is worse than a still icon. */
+  transition:background var(--nw-t-fast) var(--nw-e-out),
+    color var(--nw-t-fast) var(--nw-e-out),
+    box-shadow var(--nw-t-fast) var(--nw-e-out);
+}
+.nw-dock-btn:hover .nw-dock-icon{
+  background:var(--nw-accent-wash);
+  color:var(--nw-accent);
+  box-shadow:inset 0 0 0 1px var(--nw-accent-line);
+}
+.nw-dock-btn[data-blocked="1"]{opacity:.5;}
+.nw-dock-fab::before{
+  background:
+    radial-gradient(120% 120% at 32% 18%, color-mix(in srgb, #fff 34%, transparent), transparent 62%),
+    var(--nw-brand);
+  box-shadow:0 2px 5px color-mix(in srgb, var(--nw-brand) 30%, transparent),
+    0 12px 28px -10px color-mix(in srgb, var(--nw-brand) 62%, transparent),
+    var(--nw-lit-edge);
+}
+.nw-dock-fab:hover::before{
+  box-shadow:0 3px 8px color-mix(in srgb, var(--nw-brand) 34%, transparent),
+    0 16px 34px -10px color-mix(in srgb, var(--nw-brand) 70%, transparent),
+    var(--nw-lit-edge);
+}
+.nw-dock-fabicon{transition:transform var(--nw-t-base) var(--nw-e-spring);}
+.nw-dock[data-theme="night"] .nw-dock-fab::before{
+  background:radial-gradient(120% 120% at 32% 18%, color-mix(in srgb, #fff 18%, transparent), transparent 62%), var(--nw-brand);
+}
+`);
+
+  // -------------------------------------------------------------- dialogs ---
+  NW.CSS_PARTS.push(`
+/* ============================================================= dialogs ==== */
+.nw-modal-mask{
+  background:
+    radial-gradient(120% 90% at 50% 0%, transparent 30%, rgba(0,0,0,.10) 100%),
+    rgba(0,0,0,.40);
+  backdrop-filter:blur(5px) saturate(.94);
+}
+.nw-modal{
+  border:1px solid var(--nw-hair);
+  box-shadow:var(--nw-rise-3), var(--nw-lit-edge);
+}
+/* The headband becomes one short editorial tick sitting inside the corner,
+   instead of a 2px colour bar stretching across the whole dialog. */
+.nw-modal::before{
+  left:22px;right:auto;width:34px;
+  background:var(--nw-accent);
+  opacity:.85;
+}
+.nw-modal-head h2{
+  font-family:var(--nw-reading-font);
+  letter-spacing:-.008em;
+}
+.nw-modal-head{border-bottom:1px solid var(--nw-hair);}
+.nw-modal-foot{border-top:1px solid var(--nw-hair);}
+.nw-modal-body > p,
+.nw-modal-body .nw-rowhint{color:var(--nw-ink-quiet);}
+
+/* Controls: one material for every field in the product. */
+.nw-input,.nw-select,.nw-textarea{
+  border-color:var(--nw-hair);
+  background:var(--nw-surface-overlay);
+  transition:border-color var(--nw-t-fast) var(--nw-e-out),
+    box-shadow var(--nw-t-fast) var(--nw-e-out),
+    background var(--nw-t-fast) var(--nw-e-out);
+}
+.nw-input:hover,.nw-select:hover,.nw-textarea:hover{border-color:var(--nw-hair-strong);}
+.nw-input:focus,.nw-select:focus,.nw-textarea:focus{
+  border-color:var(--nw-accent-line);
+  box-shadow:var(--nw-ring-soft);
+  outline:none;
+}
+.nw-input::placeholder,.nw-textarea::placeholder{color:var(--nw-ink-faint);}
+
+/* Primary button: ink block with a lit top edge and an accent shadow that only
+   shows up on hover. */
+.nw-btn[data-kind="primary"]{box-shadow:var(--nw-lit-edge), 0 1px 2px color-mix(in srgb, var(--nw-brand) 26%, transparent);}
+.nw-btn[data-kind="primary"]:hover:not(:disabled){
+  box-shadow:var(--nw-lit-edge), 0 10px 24px -12px color-mix(in srgb, var(--nw-brand) 70%, transparent);
+}
+.nw-btn[data-kind="ghost"]{color:var(--nw-ink-quiet);}
+.nw-btn[data-kind="ghost"]:hover:not(:disabled){color:var(--nw-ink);border-color:var(--nw-hair-strong);}
+.nw-btn[data-kind="icon"]{color:var(--nw-ink-quiet);}
+.nw-btn[data-kind="icon"]:hover:not(:disabled){color:var(--nw-accent);}
+.nw-btn[data-kind="danger"]{color:var(--nw-danger);}
+
+/* Switch: a track that tints with the accent and a thumb with a real shadow. */
+.nw-switch > i{
+  background:color-mix(in srgb, var(--nw-fg) 14%, transparent);
+  box-shadow:inset 0 0 0 1px var(--nw-hair);
+  transition:background var(--nw-t-base) var(--nw-e-out),
+    box-shadow var(--nw-t-base) var(--nw-e-out);
+}
+.nw-switch > input:checked + i{
+  background:color-mix(in srgb, var(--nw-brand) 90%, var(--nw-bg));
+  box-shadow:inset 0 1px 2px color-mix(in srgb, #000 22%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--nw-fg) 10%, transparent);
+}
+.nw-switch > i::after{
+  background:#fff;
+  box-shadow:0 1px 2px color-mix(in srgb, var(--nw-fg) 26%, transparent),
+    0 0 0 .5px color-mix(in srgb, var(--nw-fg) 10%, transparent);
+}
+
+/* Segmented control and chips share one selected look: accent tint + hairline. */
+.nw-seg{border:1px solid var(--nw-hair);border-radius:var(--nw-r-pill);background:var(--nw-sunken);}
+.nw-seg .nw-btn[data-active="1"]{
+  background:var(--nw-bg);color:var(--nw-ink);
+  box-shadow:var(--nw-rise-1);border-color:transparent;
+}
+.nw-chip[data-active="1"],
+.nw-choice[data-active="1"],
+.nw-advice-chip[data-on="1"]{
+  background:var(--nw-accent-wash);
+  border-color:var(--nw-accent-line);
+  color:var(--nw-accent);
+}
+.nw-chip,.nw-choice,.nw-advice-chip{transition:background var(--nw-t-fast) var(--nw-e-out),
+  border-color var(--nw-t-fast) var(--nw-e-out), color var(--nw-t-fast) var(--nw-e-out);}
+.nw-advice-chip:hover:not([data-on="1"]):not(:disabled){background:var(--nw-surface-2);}
+
+/* Settings: a serif section head with the magazine-style brand tick, a nav that
+   marks the open pane with an accent edge rather than a filled block. */
+.nw-settings-navbtn{
+  border-radius:var(--nw-r-sm);
+  color:var(--nw-ink-quiet);
+  transition:background var(--nw-t-fast) var(--nw-e-out), color var(--nw-t-fast) var(--nw-e-out);
+}
+.nw-settings-navbtn:hover{background:var(--nw-surface-2);color:var(--nw-ink);}
+.nw-settings-navbtn[data-active="1"]{
+  background:var(--nw-accent-wash);color:var(--nw-ink);font-weight:600;
+  box-shadow:inset 3px 0 0 var(--nw-accent);
+}
+.nw-settings-pane h3,
+.nw-settings-section > h3{font-family:var(--nw-reading-font);letter-spacing:-.006em;color:var(--nw-ink);}
+/* Two marks met here: 97-theme draws a 3px vertical tick before the heading and
+   the magazine palette draws a 2px rule under it. Both is a shrug, so the tick
+   retires in *every* palette and the rule gets a hairline tail that carries it
+   across the section, like a magazine standfirst. */
+.nw-settings-section > h3{position:relative;}
+.nw-settings-section > h3::before{display:none;}
+.nw-settings-section > h3::after,
+.nw-root[data-theme="magazine"] .nw-settings-section > h3::after{
+  content:'';
+  position:absolute;left:0;right:0;bottom:-7px;
+  width:auto;height:1px;border-radius:0;
+  background:linear-gradient(90deg,
+    var(--nw-accent) 0 30px,
+    var(--nw-hair) 30px 100%);
+}
+.nw-settings-pane h4{color:var(--nw-ink-quiet);letter-spacing:.02em;}
+.nw-row{border-bottom-color:var(--nw-hair);}
+.nw-rowitem{border-radius:var(--nw-r-sm);}
+.nw-rowitem:hover{background:var(--nw-surface-2);}
+.nw-rowitem[data-active="1"]{background:var(--nw-accent-wash);box-shadow:inset 2px 0 0 var(--nw-accent);}
+.nw-kbd-row kbd{
+  border:1px solid var(--nw-hair);border-radius:var(--nw-r-sm);
+  background:var(--nw-sunken);box-shadow:0 1px 0 var(--nw-hair-strong);
+  color:var(--nw-ink-quiet);font-variant-numeric:tabular-nums;
+}
+.nw-fold > summary{border-radius:var(--nw-r-sm);}
+.nw-fold > summary:hover{color:var(--nw-ink);}
+
+/* Toasts: a paper slip with a coloured dot and a real shadow. */
+.nw-toast{
+  border:1px solid var(--nw-hair);
+  box-shadow:var(--nw-rise-2);
+  backdrop-filter:blur(8px);
+}
+.nw-toast[data-kind="ok"]::before{background:var(--nw-ok);box-shadow:0 0 0 3px color-mix(in srgb, var(--nw-ok) 18%, transparent);}
+.nw-toast[data-kind="error"]::before{background:var(--nw-danger);box-shadow:0 0 0 3px color-mix(in srgb, var(--nw-danger) 18%, transparent);}
+.nw-toast[data-kind="info"]::before{background:var(--nw-brand);box-shadow:0 0 0 3px color-mix(in srgb, var(--nw-brand) 18%, transparent);}
+.nw-toast-act{color:var(--nw-accent);}
+`);
+
+  // --------------------------------------------------------------- advice ---
+  NW.CSS_PARTS.push(`
+/* ============================================================== advice ==== */
+/* aside.nw-suggest is the column; div.nw-suggest is a suggestion card from an
+   older sheet. The card rule comes first in the cascade, so the panel inherits
+   its padding and border — scope the panel explicitly. */
+aside.nw-suggest{
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--nw-fg) 1.6%, transparent), transparent 200px),
+    var(--nw-panel);
+  border-left:1px solid var(--nw-hair);
+  box-shadow:none;
+}
+aside.nw-suggest:hover{box-shadow:none;}
+.nw-suggest-title{
+  font-family:var(--nw-reading-font);
+  font-size:calc(var(--nw-fs-base) + 1px);font-weight:600;letter-spacing:-.004em;
+}
+.nw-suggest-title::before{
+  content:'';display:inline-block;vertical-align:middle;
+  width:18px;height:2px;margin-right:10px;border-radius:1px;background:var(--nw-accent);
+}
+.nw-suggest-count{
+  color:var(--nw-ink-faint);
+  border:1px solid var(--nw-hair);border-radius:var(--nw-r-pill);
+}
+.nw-advice-chip{
+  border-radius:var(--nw-r-pill);
+  border:1px solid var(--nw-hair);
+  color:var(--nw-ink-quiet);
+}
+
+/* A suggestion card is the reading unit of this column: paper, a kind tag, the
+   quoted passage in serif, the advice in the body colour. */
+.nw-adv{
+  border:1px solid var(--nw-hair);
+  border-radius:var(--nw-r-md);
+  background:var(--nw-surface-overlay);
+  box-shadow:var(--nw-rise-1);
+  transition:box-shadow var(--nw-t-base) var(--nw-e-out),
+    border-color var(--nw-t-base) var(--nw-e-out),
+    transform var(--nw-t-base) var(--nw-e-out);
+}
+.nw-adv:hover{
+  border-color:var(--nw-hair-strong);
+  box-shadow:var(--nw-rise-2);
+  transform:translateY(-1px);
+}
+.nw-adv[data-state="accepted"]{border-color:color-mix(in srgb, var(--nw-ok) 34%, var(--nw-hair));}
+.nw-adv[data-state="rejected"]{opacity:.62;box-shadow:none;}
+/* The before/after pair reads as a marked-up proof: two tinted slips of equal
+   height, each labelled, with the changed characters carrying the only strong
+   colour. The clipped scroll box the old sheet used is gone — a 20-character
+   quote must never need scrolling. */
+.nw-adv-compare{border-radius:var(--nw-r-sm);align-items:stretch;gap:10px;}
+.nw-adv-side{
+  padding:8px 10px;border-radius:var(--nw-r-sm);
+  border:1px solid var(--nw-hair);
+  box-shadow:inset 2px 0 0 color-mix(in srgb, var(--nw-fg) 10%, transparent);
+}
+.nw-adv-side[data-kind="old"]{
+  background:color-mix(in srgb, var(--nw-surface-2) 90%, var(--nw-danger) 10%);
+  box-shadow:inset 2px 0 0 color-mix(in srgb, var(--nw-danger) 40%, transparent);
+}
+.nw-adv-side[data-kind="new"]{
+  background:color-mix(in srgb, var(--nw-surface-2) 88%, var(--nw-ok) 12%);
+  box-shadow:inset 2px 0 0 color-mix(in srgb, var(--nw-ok) 45%, transparent);
+}
+/* Equal specificity to the base [data-kind] .nw-adv-txt rules, but later in the
+   cascade — that is the only way to drop the old dashed box and the paragraph-
+   wide underline without reaching for !important. */
+.nw-adv-compare .nw-adv-side .nw-adv-txt{
+  max-height:none;overflow:visible;
+  padding:0;border:0;background:none;border-radius:0;
+  text-decoration:none;
+  font-size:13px;line-height:1.74;
+}
+.nw-adv-txt{font-family:var(--nw-reading-font);}
+.nw-adv-tag{
+  color:var(--nw-ink-faint);font-size:var(--nw-fs-tiny);
+  letter-spacing:.08em;
+}
+.nw-adv-issue,.nw-adv-why{color:var(--nw-ink-quiet);}
+.nw-adv-foot{border-top:1px solid var(--nw-hair);}
+.nw-adv-kind{
+  border-radius:var(--nw-r-pill);
+  background:var(--nw-accent-wash);
+  color:var(--nw-ink-quiet);
+  letter-spacing:.02em;
+}
+.nw-adv-btn[data-kind="accept"]{color:var(--nw-ok);border-color:color-mix(in srgb, var(--nw-ok) 30%, var(--nw-hair));}
+.nw-adv-btn[data-kind="accept"]:hover{background:color-mix(in srgb, var(--nw-ok) 12%, transparent);}
+.nw-adv-btn[data-kind="reject"]{color:var(--nw-ink-faint);}
+.nw-adv-btn[data-kind="reject"]:hover{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 26%, var(--nw-hair));}
+.nw-adv-mini{border-radius:var(--nw-r-sm);}
+.nw-adv-mini[data-kind="apply"]{color:var(--nw-accent);}
+.nw-accepted{
+  border:1px solid var(--nw-hair);border-radius:var(--nw-r-md);
+  background:var(--nw-sunken);
+}
+.nw-accepted-head{border-radius:var(--nw-r-md);}
+.nw-acc-row{border-radius:var(--nw-r-sm);}
+.nw-acc-row:hover{background:var(--nw-surface-2);}
+.nw-acc-quote{font-family:var(--nw-reading-font);color:var(--nw-ink-quiet);}
+.nw-acc-ord{color:var(--nw-ink-faint);font-variant-numeric:tabular-nums;}
+.nw-suggest-foot{border-top:1px solid var(--nw-hair);}
+.nw-suggest-grip:hover,.nw-suggest-grip[data-drag="1"]{background:var(--nw-accent-line);}
+`);
+
+  // ---------------------------------------------------------- status, misc --
+  NW.CSS_PARTS.push(`
+/* ============================================================== status ==== */
+.nw-status{
+  border-top:1px solid var(--nw-hair);
+  background:color-mix(in srgb, var(--nw-bg) 86%, transparent);
+  backdrop-filter:blur(8px);
+  color:var(--nw-ink-faint);
+  font-size:var(--nw-fs-tiny);
+}
+.nw-status-today{color:var(--nw-ink-quiet);}
+/* The attribute 90-app.js has always set and nothing styled: today's delta
+   reads up (green) or down (quiet). */
+.nw-status-today[data-sign="up"]{color:var(--nw-ok);}
+.nw-status-today[data-sign="down"]{color:var(--nw-ink-faint);}
+.nw-status-mid{color:var(--nw-ink-faint);}
+.nw-dot{border-radius:var(--nw-r-pill);}
+.nw-dot[data-state="ok"]{background:var(--nw-ok);box-shadow:0 0 0 3px color-mix(in srgb, var(--nw-ok) 16%, transparent);}
+.nw-dot[data-state="err"]{background:var(--nw-danger);box-shadow:0 0 0 3px color-mix(in srgb, var(--nw-danger) 16%, transparent);}
+.nw-dot[data-state="busy"]{background:var(--nw-brand);box-shadow:0 0 0 3px color-mix(in srgb, var(--nw-brand) 16%, transparent);}
+
+/* Badges: one tone vocabulary across both call sites. */
+.nw-badge{border-radius:var(--nw-r-pill);border:1px solid var(--nw-hair);letter-spacing:.02em;}
+.nw-badge[data-tone="brand"]{background:var(--nw-accent-wash);border-color:var(--nw-accent-line);color:var(--nw-accent);}
+.nw-badge[data-tone="ok"]{background:color-mix(in srgb, var(--nw-ok) 12%, transparent);border-color:color-mix(in srgb, var(--nw-ok) 28%, var(--nw-hair));color:var(--nw-ok);}
+.nw-badge[data-tone="danger"]{background:color-mix(in srgb, var(--nw-danger) 10%, transparent);border-color:color-mix(in srgb, var(--nw-danger) 26%, var(--nw-hair));color:var(--nw-danger);}
+.nw-badge[data-tone="warn"]{background:color-mix(in srgb, var(--nw-warn) 12%, transparent);border-color:color-mix(in srgb, var(--nw-warn) 28%, var(--nw-hair));color:var(--nw-warn);}
+.nw-badge[data-tone="info"]{background:var(--nw-sunken);border-color:var(--nw-hair);color:var(--nw-ink-quiet);}
+.nw-badge[data-tone="idle"]{background:var(--nw-sunken);border-color:var(--nw-hair);color:var(--nw-ink-faint);}
+
+/* Empty states: the medallion gets a soft halo instead of a flat 50% glyph. */
+.nw-empty svg{opacity:.42;}
+.nw-empty .nw-center{color:var(--nw-ink-faint);}
+.nw-skel{border-radius:var(--nw-r-sm);}
+
+/* Menus and popovers share one material with dialogs, at a lighter weight. */
+.nw-shelf-menu,.nw-suggest-diff{
+  border:1px solid var(--nw-hair);
+  box-shadow:var(--nw-rise-2);
+  background:var(--nw-surface-overlay);
+}
+.nw-shelf-menu-item{border-radius:var(--nw-r-sm);}
+.nw-shelf-menu-item:hover{background:var(--nw-surface-2);}
+.nw-shelf-menu-item.is-danger{color:var(--nw-danger);}
+
+/* ============================================================== themes ==== */
+/* Magazine is the palette the writer actually runs: red ink on white paper.
+   It gets a slightly drier grain and one more notch of contrast in the meta. */
+.nw-root[data-theme="magazine"]{
+  --nw-ink-faint:color-mix(in srgb, var(--nw-fg) 52%, var(--nw-bg));
+  --nw-accent-wash:color-mix(in srgb, var(--nw-brand) 7%, transparent);
+}
+.nw-root[data-theme="magazine"] .nw-welcome-card,
+.nw-root[data-theme="magazine"] .nw-adv{
+  border-color:color-mix(in srgb, var(--nw-fg) 11%, transparent);
+}
+/* Eye-care green needs the accent to stay dark, or nothing is legible on it. */
+.nw-root[data-theme="eye"]{--nw-accent-wash:color-mix(in srgb, var(--nw-brand) 12%, transparent);}
+/* Newspaper is square and inky: the accent rule gets wider, the shadows harder. */
+.nw-root[data-theme="newspaper"] .nw-welcome-cardtitle::before{width:16px;height:2px;}
+/* Night: the accent is light, so washes must be additive, not multiplicative. */
+.nw-root[data-theme="night"]{
+  --nw-accent-wash:color-mix(in srgb, var(--nw-brand) 14%, transparent);
+  --nw-accent-wash-2:color-mix(in srgb, var(--nw-brand) 22%, transparent);
+}
+`);
+
+  // ------------------------------------------------------------ lock: tint --
+  // The lock screen is the only hand-painted view in the plugin (it draws its
+  // own study). Its palette stays, but the padlock glow now inherits the theme's
+  // brand so night/magazine no longer show a claude-coloured library.
+  NW.CSS_PARTS.push(`
+/* ================================================================ lock ==== */
+.nw-lock .nw-lock-rule{background:linear-gradient(90deg, transparent, var(--nw-accent), transparent);}
+.nw-lock .nw-lock-eyebrow{letter-spacing:.24em;}
+.nw-lock-title{letter-spacing:-.01em;}
+.nw-lock-input:focus{box-shadow:0 1px 0 var(--nw-accent);}
+.nw-lock-go:not([disabled]){
+  box-shadow:0 8px 20px -10px color-mix(in srgb, var(--nw-accent) 70%, transparent);
 }
 `);
 })();
