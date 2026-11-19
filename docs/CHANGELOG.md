@@ -23,6 +23,16 @@
     再落回摞位：`translate + scale(≈1.7) + rotate(-2.8deg) + opacity .2 + blur(1px)`
     → 原位，520ms `cubic-bezier(.22,.72,.24,1)`，只动 transform/opacity/filter，
     结束 `anim.cancel()` 把样式还给 CSS。
+  - **路由缺席时也该看到真雨**：宿主的前缀路由（`GET /novel-writer/api/scene.forest`）
+    只在进程启动时注册，旧进程里它回的是 `{ok:false, error:{code:"method-not-allowed"}}`，
+    而 `<video>` 把这段 JSON 当成解码失败。所以影像同时内联进 bundle（`client/src/46-scene-media.js`，
+    由 `scripts/build-scene-media.mjs` 从 `assets/*.mp4` 生成），`47-scene.js` 先试路由、
+    失败就换成内联字节，两条都失败才回落 canvas。
+    这里踩过一个真坑：一个坏掉的 `<video>` 会**报两次**（元素自己的 `error` 事件 + `play()` 的
+    promise rejection），旧逻辑第二次就把「放弃」执行了 —— 内联字节还在解码，画面已经切到卡通树。
+    现在 `demote()` 每层只换一次（`tried` ref），放弃交给 4200ms 的那只看门狗（`giveUp()`）。
+    验证方式：把 `assets/*.mp4` 临时挪走（等价于真 GUI 里的路由缺席），
+    两层 `video` 的 `src` 变成 `data:video/mp4;base64,…`、`readyState 4`、在播。
   - **还纸**：`flyBack(el)` 把被点/被顶出的那张克隆成 `.nw-fly`（fixed 在其原矩形），
     边飞边长大到纸宽（`scale = 0.74 × 纸宽 / 卡宽`）、边淡出（1 → .1），520ms，
     落点是纸口；一次只飞一张，多页跳转（Ctrl+Home、点很下面那张）只滚动不飞——

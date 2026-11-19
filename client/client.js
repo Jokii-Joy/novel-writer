@@ -7706,6 +7706,7 @@ window.__ModuleLoader__.load({
       () => ({ far: media.forest || '', glass: media.glass || '' }),
       [media.forest, media.glass],
     );
+
     const [urls, setUrls] = React.useState(() => ({
       far: routes.far || inline.far,
       glass: routes.glass || inline.glass,
@@ -7714,22 +7715,36 @@ window.__ModuleLoader__.load({
     // A missing route answers 200 + JSON (the host's error envelope), which a
     // <video> reports as a decode error rather than a 404 — so the swap is
     // driven by the element's own failure, plus a watchdog for the case where
-    // nothing fires at all.
+    // nothing fires at all. One demotion per layer: route → inline bytes →
+    // (only then) the canvas fallback. A `tried` ref, not the current src, is
+    // what decides — reading state here would give up on the swap we just made.
+    const tried = React.useRef({ far: false, glass: false });
+    const giveUp = React.useCallback((kind) => {
+      if (kind === 'far') setFailed(true);
+      else setGlassOn(false);
+    }, []);
+    // R166: a failed <video> reports twice — the element's `error` event and
+    // the rejection of play(). Making the second call "give up" is what sent
+    // the window back to the canvas while the inlined bytes were still
+    // decoding, so a demotion only ever swaps once; giving up belongs to the
+    // second watchdog below.
     const demote = React.useCallback(
       (kind) => {
-        setUrls((cur) => {
-          const route = routes[kind];
-          const fallback = inline[kind];
-          if (route && cur[kind] === route && fallback) return Object.assign({}, cur, { [kind]: fallback });
-          if (kind === 'far') setFailed(true);
-          else setGlassOn(false);
-          return cur;
-        });
+        if (tried.current[kind]) return;
+        const route = routes[kind];
+        const fallback = inline[kind];
+        if (!route || !fallback) {
+          giveUp(kind);
+          return;
+        }
+        tried.current[kind] = true;
+        setUrls((cur) => Object.assign({}, cur, { [kind]: fallback }));
       },
-      [routes, inline],
+      [routes, inline, giveUp],
     );
 
     React.useEffect(() => {
+
       if (!urls.far) {
         setFailed(true);
         return undefined;
@@ -7737,6 +7752,7 @@ window.__ModuleLoader__.load({
       const far = farRef.current;
       const glass = glassRef.current;
       if (!far) {
+
         setFailed(true);
         return undefined;
       }
@@ -7753,12 +7769,20 @@ window.__ModuleLoader__.load({
       };
       play(far, () => demote('far'));
       play(glass, () => demote('glass'));
-      const watch = window.setTimeout(() => {
-        const stuck = (el) => el && el.readyState < 2;
+      // Two looks: the first swaps to the inlined copy, the second gives up and
+      // lets the canvas take over. A single early look killed the swap while
+      // the data URI was still decoding.
+      const stuck = (el) => el && el.readyState < 2;
+      const first = window.setTimeout(() => {
         if (stuck(far)) demote('far');
         if (stuck(glass)) demote('glass');
-      }, 1600);
-      cleanups.push(() => window.clearTimeout(watch));
+      }, 1500);
+      const second = window.setTimeout(() => {
+        if (stuck(far)) giveUp('far');
+        if (stuck(glass)) giveUp('glass');
+      }, 4200);
+      cleanups.push(() => window.clearTimeout(first));
+      cleanups.push(() => window.clearTimeout(second));
       const onHide = () => {
         const els = [far, glass].filter(Boolean);
         if (document.hidden) {
@@ -7775,7 +7799,7 @@ window.__ModuleLoader__.load({
       document.addEventListener('visibilitychange', onHide);
       cleanups.push(() => document.removeEventListener('visibilitychange', onHide));
       return () => cleanups.forEach((fn) => fn());
-    }, [urls.far, urls.glass, running, demote]);
+    }, [urls.far, urls.glass, running, demote, giveUp]);
 
     if (failed) {
       return h(
