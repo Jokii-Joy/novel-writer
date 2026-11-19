@@ -499,6 +499,13 @@ window.__ModuleLoader__.load({
     typewriter: false,
     immersive: false,
     /**
+     * R164: 窗外. true = the writing surface sits in front of one pane of glass
+     * with the rain and the wind outside it (see 47-scene.js). false = the plain
+     * paper surface the plugin had before, which is also the low-power mode:
+     * with the scene off no canvas is mounted at all.
+     */
+    scene: true,
+    /**
      * Caret appearance (R11). The editor paints its own caret (.nw-cursor) on top
      * of a transparent native one, so width/colour/blink are plain settings rather
      * than theme internals. `caretColor: ''` means "follow the theme", which is
@@ -7146,6 +7153,1110 @@ window.__ModuleLoader__.load({
 `);
 })();
 
+/* ==== 47-scene.js ==== */
+;(() => {
+  'use strict';
+
+  // ============================================================================
+  // 精神空间 · 窗外 (NW.Scene)
+  //
+  // R164 / R165. The writer asked for a window, not a wallpaper:
+  //   「玻璃要一整块，透明，能看到窗外的雨，树，风」 · 「背景不合格，要透明，
+  //   光线不要太暗，树呢，风呢，要真实」
+  //
+  // Three decisions came out of that, and each one is why the previous pass
+  // looked like a tinted panel instead of a window:
+  //
+  // 1. DEPTH BY CONTRAST, NOT BY FOG. The old frame put a wide grey mist over
+  //    everything, which flattened far and near into one pale field. Now the
+  //    distance is handled by desaturation and blur alone (far treeline sits at
+  //    ~22% opacity and is blurred hard), and the near foliage is drawn almost
+  //    black-green and sharp. Rain is then visible twice: bright against the
+  //    sky, and as a lighter veil over the dark leaves. That double reading is
+  //    what the eye uses to decide "it is raining outside", not "the wallpaper
+  //    has lines on it".
+  //
+  // 2. THE TREES ARE BUILT, NOT BLURRED. A tree here is a tapered trunk, three
+  //    or four branches, and a canopy of 40-90 small leaf ellipses whose sizes
+  //    shrink toward the tips. Canopies are seeded once; a frame only moves each
+  //    cluster as a whole plus a per-leaf flutter, so a gust reads as the same
+  //    wind arriving on the tree from left to right rather than each leaf having
+  //    its own private opinion.
+  //
+  // 3. ONE WIND. `gustAt(t)` — three sines at incommensurate rates — feeds the
+  //    rain angle, the trunk bend, the canopy sway, the leaf flutter, the
+  //    drifting glass streaks and the flying leaves. Two trees nodding at
+  //    unrelated times is the single strongest "this is fake" cue available, so
+  //    nothing in the frame is allowed to move on its own clock.
+  //
+  // Why canvas and not video: the plugin ships as one JS bundle and has no asset
+  // pipeline (client/ holds client.js and src/), so a clip would have to be
+  // inlined as base64 — heavier than this renderer for every single load. The
+  // renderer is deliberately dumb: shapes are seeded once, a frame walks the
+  // arrays and draws, nothing is measured from the DOM, and the loop stops when
+  // the tab is hidden or the window is switched off in 设置.
+  // ============================================================================
+
+  // Overcast late afternoon. Bright enough to read as daylight through glass,
+  // never so bright that the paper stops being the lightest thing on screen.
+  const SKY_TOP = '#9db2bd';
+  const SKY_HI = '#c8d6d8';
+  const SKY_LOW = '#d3dbd5';
+  const LEAF_DARK = [26, 46, 38];
+  const LEAF_MID = [42, 68, 52];
+  const LEAF_LIT = [78, 106, 74];
+
+  /** deterministic 0..1 from an integer seed (no Math.random in draw code) */
+  function rnd(i) {
+    const x = Math.sin(i * 12.9898) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  /** one shared wind value, ~0..1, slow and slightly irregular */
+  function gustAt(t) {
+    return 0.44
+      + 0.24 * Math.sin(t * 0.37)
+      + 0.17 * Math.sin(t * 1.07 + 1.7)
+      + 0.11 * Math.sin(t * 2.41 + 0.4);
+  }
+
+  /** A tree: trunk, branches, and a seeded canopy of leaves. */
+  function makeTree(s, i, spec) {
+    const leaves = [];
+    const n = spec.leaves;
+    for (let k = 0; k < n; k++) {
+      // Two thirds of the leaves fill an ellipse around the crown, the rest
+      // hang toward the tips where a canopy is thinnest and lets light through.
+      const a = rnd(s + i * 131 + k * 7) * Math.PI * 2;
+      const rr = Math.pow(rnd(s + i * 131 + k * 7 + 1), 0.62);
+      const ox = Math.cos(a) * rr * spec.cw;
+      const oy = Math.sin(a) * rr * spec.ch * (ox < 0 ? 0.86 : 1);
+      leaves.push({
+        ox: ox,
+        oy: oy,
+        r: spec.leaf * (0.55 + rnd(s + i * 131 + k * 7 + 2) * 0.85),
+        tone: rnd(s + i * 131 + k * 7 + 3),
+        ph: rnd(s + i * 131 + k * 7 + 4) * 6.283,
+        rot: (rnd(s + i * 131 + k * 7 + 5) - 0.5) * 1.4,
+      });
+    }
+    return {
+      x: spec.x,
+      y: spec.y,
+      h: spec.h,
+      trunk: spec.trunk,
+      cw: spec.cw,
+      ch: spec.ch,
+      ph: rnd(s + i * 17) * 6.283,
+      amp: spec.amp,
+      blur: spec.blur || 0,
+      alpha: spec.alpha == null ? 1 : spec.alpha,
+      lit: spec.lit == null ? 1 : spec.lit,
+      leaves: leaves,
+    };
+  }
+
+  function build(w, h, seed) {
+    const s = Math.round(seed * 977) | 0;
+    const tree = (i, spec) => makeTree(s, i, spec);
+
+    // The paper covers the middle of the glass, so the trees are placed where a
+    // window still shows them: the two side strips and the corner above. A
+    // treeline runs across the whole width underneath.
+    const side = tree(1, {
+      x: 0.135, y: 1.02, h: 0.92, trunk: 0.016,
+      cw: 0.20, ch: 0.20, leaf: 0.030, leaves: 74, amp: 1.0,
+    });
+    const side2 = tree(2, {
+      x: 0.925, y: 1.05, h: 0.78, trunk: 0.013,
+      cw: 0.15, ch: 0.16, leaf: 0.024, leaves: 58, amp: 1.0,
+    });
+    // A near branch crossing the top-left corner: foreground, sharp, and the
+    // closest thing to the glass, so it moves the most.
+    const branch = tree(3, {
+      x: 0.055, y: 0.36, h: 0.5, trunk: 0.010,
+      cw: 0.13, ch: 0.11, leaf: 0.026, leaves: 46, amp: 1.9, blur: 0,
+    });
+
+    // Treeline across the frame: cheap silhouettes, hard blur, low alpha.
+    const line = [];
+    for (let i = 0; i < 26; i++) {
+      line.push({
+        x: (i / 25) * 1.08 - 0.04,
+        y: 0.60 + rnd(s + i + 40) * 0.10,
+        r: 0.05 + rnd(s + i + 90) * 0.09,
+        tone: rnd(s + i + 130),
+        ph: rnd(s + i + 170) * 6.283,
+      });
+    }
+
+    const rain = [];
+    for (let i = 0; i < 460; i++) {
+      rain.push({
+        x: rnd(s + i * 7 + 11),
+        y: rnd(s + i * 7 + 12),
+        z: rnd(s + i * 7 + 13),
+        len: 0.008 + rnd(s + i * 7 + 14) * 0.026,
+      });
+    }
+
+    // Water ON the glass: streaks that stick, crawl down under their own weight,
+    // and leave the wet line behind them.
+    const streaks = [];
+    for (let i = 0; i < 22; i++) {
+      streaks.push({
+        x: rnd(s + i * 11 + 501),
+        y: rnd(s + i * 11 + 502),
+        v: 0.004 + rnd(s + i * 11 + 503) * 0.016,
+        r: 0.8 + rnd(s + i * 11 + 504) * 1.9,
+        wob: rnd(s + i * 11 + 505) * 6.283,
+        trail: 12 + rnd(s + i * 11 + 506) * 70,
+        pause: 0,
+      });
+    }
+
+    // Drops that have not started to run yet: the beads that make a pane read as
+    // glass rather than as air.
+    const beads = [];
+    for (let i = 0; i < 64; i++) {
+      beads.push({
+        x: rnd(s + i * 13 + 701),
+        y: rnd(s + i * 13 + 702),
+        r: 0.7 + rnd(s + i * 13 + 703) * 2.1,
+        ph: rnd(s + i * 13 + 704) * 6.283,
+      });
+    }
+
+    // A handful of leaves already off the branch, crossing the view.
+    const blown = [];
+    for (let i = 0; i < 7; i++) {
+      blown.push({
+        x: rnd(s + i * 19 + 901),
+        y: 0.1 + rnd(s + i * 19 + 902) * 0.6,
+        v: 0.02 + rnd(s + i * 19 + 903) * 0.05,
+        ph: rnd(s + i * 19 + 904) * 6.283,
+        r: 3 + rnd(s + i * 19 + 905) * 5,
+      });
+    }
+
+    return { w, h, trees: [side, side2, branch], line, rain, streaks, beads, blown };
+  }
+
+  function leafColor(tone, lit) {
+    const t = tone;
+    const base = t < 0.45 ? LEAF_DARK : (t < 0.8 ? LEAF_MID : LEAF_LIT);
+    const r = Math.round(base[0] * (0.82 + lit * 0.3));
+    const g = Math.round(base[1] * (0.82 + lit * 0.3));
+    const b = Math.round(base[2] * (0.82 + lit * 0.3));
+    return 'rgb(' + r + ',' + g + ',' + b + ')';
+  }
+
+  /** One tree, drawn from its own seed. `sway` is the shared wind, 0..1. */
+  function drawTree(ctx, tree, w, h, t, wind) {
+    const bx = tree.x * w;
+    const by = tree.y * h;
+    const th = tree.h * h;
+    const bend = Math.sin(t * 0.52 + tree.ph) * tree.amp * wind * w * 0.012
+      + Math.sin(t * 1.31 + tree.ph * 1.4) * tree.amp * wind * w * 0.004;
+    const topX = bx + bend;
+    const topY = by - th;
+    const trunkW = Math.max(2.2, tree.trunk * w);
+
+    ctx.save();
+    if (tree.blur) ctx.filter = 'blur(' + tree.blur.toFixed(1) + 'px)';
+    ctx.globalAlpha = tree.alpha;
+
+    // trunk: two edges that curve with the bend, so the whole tree leans
+    ctx.fillStyle = 'rgb(38,40,34)';
+    ctx.beginPath();
+    ctx.moveTo(bx - trunkW, by);
+    ctx.quadraticCurveTo(bx - trunkW * 0.5 + bend * 0.5, (by + topY) * 0.5, topX - trunkW * 0.35, topY + th * 0.34);
+    ctx.lineTo(topX + trunkW * 0.35, topY + th * 0.34);
+    ctx.quadraticCurveTo(bx + trunkW * 0.5 + bend * 0.5, (by + topY) * 0.5, bx + trunkW, by);
+    ctx.closePath();
+    ctx.fill();
+
+    // three or four limbs, each carrying part of the canopy
+    const limbs = 4;
+    for (let i = 0; i < limbs; i++) {
+      const f = (i + 1) / (limbs + 1);
+      const ly = topY + th * 0.34 + (by - topY - th * 0.34) * f * 0.62;
+      const dir = i % 2 === 0 ? -1 : 1;
+      const reach = tree.cw * w * (0.7 + rnd(i + 31) * 0.5);
+      ctx.strokeStyle = 'rgb(40,43,36)';
+      ctx.lineWidth = Math.max(1.4, trunkW * (0.55 - f * 0.3));
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(bx + bend * (0.4 + f * 0.4), ly);
+      ctx.quadraticCurveTo(
+        bx + dir * reach * 0.55,
+        ly - th * 0.05,
+        bx + dir * reach + bend * 0.9,
+        ly - th * (0.10 + rnd(i + 71) * 0.12),
+      );
+      ctx.stroke();
+    }
+
+    // canopy
+    const cx = topX;
+    const cy = topY + th * 0.16;
+    for (let i = 0; i < tree.leaves.length; i++) {
+      const leaf = tree.leaves[i];
+      const flutter = Math.sin(t * 2.4 + leaf.ph) * wind * (2.2 * tree.amp)
+        + Math.sin(t * 5.1 + leaf.ph * 1.7) * wind * 0.9;
+      const lx = cx + leaf.ox * w + flutter;
+      const ly = cy + leaf.oy * h + Math.cos(t * 1.9 + leaf.ph) * wind * 1.6 * tree.amp;
+      const lr = leaf.r * w * (0.55 + tree.lit * 0.55);
+      // Lit leaves live on the sky side of the crown, dark ones underneath.
+      const upward = (cy - ly) / Math.max(1, tree.ch * h);
+      const lit = Math.max(0, Math.min(1, 0.25 + upward * 0.85)) * tree.lit;
+      ctx.fillStyle = leafColor(leaf.tone, lit);
+      ctx.beginPath();
+      ctx.ellipse(lx, ly, lr, lr * (0.5 + leaf.tone * 0.28), leaf.rot, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function paint(ctx, st, t) {
+    const w = st.w;
+    const h = st.h;
+    const g = gustAt(t);
+    const lean = 0.14 + g * 0.34;
+
+    // ---- sky ----------------------------------------------------------------
+    const sky = ctx.createLinearGradient(0, 0, w * 0.15, h);
+    sky.addColorStop(0, SKY_TOP);
+    sky.addColorStop(0.42, SKY_HI);
+    sky.addColorStop(0.78, SKY_LOW);
+    sky.addColorStop(1, '#c9d2c9');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, h);
+
+    // the bright break in the cloud the light comes through
+    const sun = ctx.createRadialGradient(w * 0.63, h * 0.14, 0, w * 0.63, h * 0.14, Math.max(w, h) * 0.55);
+    sun.addColorStop(0, 'rgba(255,252,240,0.55)');
+    sun.addColorStop(0.45, 'rgba(246,246,236,0.18)');
+    sun.addColorStop(1, 'rgba(246,246,236,0)');
+    ctx.fillStyle = sun;
+    ctx.fillRect(0, 0, w, h);
+
+    // ---- far treeline (depth by desaturation + blur, never by fog) ----------
+    ctx.save();
+    ctx.filter = 'blur(' + Math.max(2.5, h * 0.008).toFixed(1) + 'px)';
+    ctx.fillStyle = 'rgba(112,128,124,0.30)';
+    ctx.beginPath();
+    ctx.moveTo(-w * 0.05, h);
+    for (let i = 0; i < st.line.length; i++) {
+      const c = st.line[i];
+      const cx = c.x * w;
+      const cy = c.y * h;
+      const r = c.r * w;
+      ctx.lineTo(cx - r, h);
+      ctx.quadraticCurveTo(cx - r * 0.5, cy, cx, cy);
+      ctx.quadraticCurveTo(cx + r * 0.5, cy, cx + r, h);
+    }
+    ctx.lineTo(w * 1.05, h);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // ---- mid ground / hedge --------------------------------------------------
+    const ground = ctx.createLinearGradient(0, h * 0.82, 0, h);
+    ground.addColorStop(0, 'rgba(58,72,58,0)');
+    ground.addColorStop(0.35, 'rgba(44,58,46,0.55)');
+    ground.addColorStop(1, 'rgba(26,36,30,0.85)');
+    ctx.fillStyle = ground;
+    ctx.fillRect(0, h * 0.82, w, h * 0.18);
+
+    // ---- trees --------------------------------------------------------------
+    for (let i = 0; i < st.trees.length; i++) {
+      drawTree(ctx, st.trees[i], w, h, t, g);
+    }
+
+    // ---- rain in the air ----------------------------------------------------
+    // Two passes: the bright one that reads against the sky, and a softer, wider
+    // one that reads against the dark leaves.
+    for (let pass = 0; pass < 2; pass++) {
+      const bright = pass === 0;
+      ctx.lineCap = 'round';
+      for (let i = 0; i < st.rain.length; i++) {
+        const d = st.rain[i];
+        if (bright !== d.z > 0.55) continue;
+        d.y += (0.5 + d.z * 1.5) * 0.017;
+        d.x += lean * 0.017 * (0.35 + d.z);
+        if (d.y > 1.08) { d.y = -0.08; d.x = rnd(i * 3 + Math.floor(t * 2)) * 1.12 - 0.06; }
+        if (d.x > 1.08) d.x -= 1.16;
+        const len = d.len * h * (0.7 + d.z * 1.8);
+        const px = d.x * w;
+        const py = d.y * h;
+        ctx.strokeStyle = bright
+          ? 'rgba(238,246,250,' + (0.10 + d.z * 0.22).toFixed(3) + ')'
+          : 'rgba(210,224,226,' + (0.05 + d.z * 0.10).toFixed(3) + ')';
+        ctx.lineWidth = bright ? 0.8 + d.z * 1.2 : 1.6 + d.z * 2.2;
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(px - lean * len * 1.6, py - len);
+        ctx.stroke();
+      }
+    }
+
+    // ---- leaves in the wind -------------------------------------------------
+    for (let i = 0; i < st.blown.length; i++) {
+      const b = st.blown[i];
+      b.x += (0.004 + g * 0.010) * 0.9;
+      b.y += Math.sin(t * 1.3 + b.ph) * 0.0016 - 0.0006;
+      if (b.x > 1.08) { b.x = -0.08; b.y = 0.08 + rnd(i + Math.floor(t)) * 0.6; }
+      ctx.save();
+      ctx.translate(b.x * w, b.y * h);
+      ctx.rotate(Math.sin(t * 2.1 + b.ph) * 0.9 + b.v * 8);
+      ctx.fillStyle = 'rgba(38,56,40,0.75)';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, b.r, b.r * 0.42, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // ---- water on the glass -------------------------------------------------
+    for (let i = 0; i < st.streaks.length; i++) {
+      const s = st.streaks[i];
+      // pause-and-go: a real run on glass stalls, then slides
+      s.pause += 0.016;
+      if (s.pause > 1.4 + rnd(i) * 2.6) s.pause = 0;
+      if (s.pause < 0.5) {
+        s.y += s.v * 0.016 * (0.4 + g);
+        s.x += Math.sin(t * 0.9 + s.wob) * 0.00035;
+      }
+      if (s.y > 1.05) { s.y = -0.05; s.x = rnd(i * 7 + Math.floor(t)) * 0.98 + 0.01; }
+      const px = s.x * w;
+      const py = s.y * h;
+      const tail = ctx.createLinearGradient(px, py - s.trail, px, py);
+      tail.addColorStop(0, 'rgba(236,246,248,0)');
+      tail.addColorStop(1, 'rgba(236,246,248,0.16)');
+      ctx.strokeStyle = tail;
+      ctx.lineWidth = Math.max(0.8, s.r * 0.7);
+      ctx.beginPath();
+      ctx.moveTo(px, py - s.trail);
+      ctx.lineTo(px, py);
+      ctx.stroke();
+      // the head of the run: a bead with a highlight
+      ctx.fillStyle = 'rgba(244,250,252,0.34)';
+      ctx.beginPath();
+      ctx.ellipse(px, py, s.r * 1.25, s.r * 1.55, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.62)';
+      ctx.beginPath();
+      ctx.arc(px - s.r * 0.3, py - s.r * 0.45, Math.max(0.5, s.r * 0.42), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (let i = 0; i < st.beads.length; i++) {
+      const b = st.beads[i];
+      const px = b.x * w;
+      const py = b.y * h;
+      const rr = b.r * (0.9 + Math.sin(t * 0.7 + b.ph) * 0.1);
+      const dg = ctx.createRadialGradient(px, py, 0, px, py, rr * 2.4);
+      dg.addColorStop(0, 'rgba(255,255,255,0.34)');
+      dg.addColorStop(0.5, 'rgba(230,240,242,0.12)');
+      dg.addColorStop(1, 'rgba(230,240,242,0)');
+      ctx.fillStyle = dg;
+      ctx.beginPath();
+      ctx.arc(px, py, rr * 2.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.beginPath();
+      ctx.arc(px - rr * 0.35, py - rr * 0.4, Math.max(0.5, rr * 0.34), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // ---- the pane itself ----------------------------------------------------
+    // Two soft diagonal bands (glass catching the sky) and a very light edge
+    // darkening. The middle is never dimmed: that was the "night behind a filter"
+    // look the writer rejected.
+    const gl1 = ctx.createLinearGradient(w * 0.05, 0, w * 0.58, h);
+    gl1.addColorStop(0, 'rgba(255,255,255,0.12)');
+    gl1.addColorStop(0.4, 'rgba(255,255,255,0.03)');
+    gl1.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = gl1;
+    ctx.fillRect(0, 0, w, h);
+
+    const gl2 = ctx.createLinearGradient(w, h * 0.1, w * 0.4, h * 0.9);
+    gl2.addColorStop(0, 'rgba(240,248,252,0.10)');
+    gl2.addColorStop(0.55, 'rgba(240,248,252,0)');
+    ctx.fillStyle = gl2;
+    ctx.fillRect(0, 0, w, h);
+
+    const vig = ctx.createRadialGradient(
+      w * 0.5, h * 0.5, Math.min(w, h) * 0.42,
+      w * 0.5, h * 0.5, Math.max(w, h) * 0.82,
+    );
+    vig.addColorStop(0, 'rgba(12,18,18,0)');
+    vig.addColorStop(1, 'rgba(12,18,18,0.14)');
+    ctx.fillStyle = vig;
+    ctx.fillRect(0, 0, w, h);
+
+    // ---- the desk ------------------------------------------------------------
+    // The sheet lies on a desk, and the desk is the one thing in the room the
+    // writer touches, so the paper needs it under its front edge or the sheet
+    // reads as floating on the weather. Drawn last: it is inside the room, so it
+    // occludes the window, the rain and the glass water below the sill line.
+    // Slate, not wood — 不要木头材质和颜色 — a dark grey surface with a cool
+    // sheen from the pane and a warm shadow where the paper sits.
+    const deskTop = h - Math.max(56, Math.min(104, h * 0.115));
+    const desk = ctx.createLinearGradient(0, deskTop, 0, h);
+    desk.addColorStop(0, '#4a4a45');
+    desk.addColorStop(0.18, '#3e3e39');
+    desk.addColorStop(0.62, '#31312d');
+    desk.addColorStop(1, '#262624');
+    ctx.fillStyle = desk;
+    ctx.fillRect(0, deskTop, w, h - deskTop);
+
+    // the sill line: a hairline of light where the desk catches the pane
+    const sill = ctx.createLinearGradient(0, deskTop - 2, 0, deskTop + 6);
+    sill.addColorStop(0, 'rgba(226,236,236,0)');
+    sill.addColorStop(0.4, 'rgba(226,236,236,0.20)');
+    sill.addColorStop(1, 'rgba(226,236,236,0)');
+    ctx.fillStyle = sill;
+    ctx.fillRect(0, deskTop - 2, w, 8);
+
+    // cool daylight lying on the desk, brighter on the side the light comes from
+    const sheen = ctx.createLinearGradient(0, deskTop, w, h);
+    sheen.addColorStop(0, 'rgba(206,222,226,0.10)');
+    sheen.addColorStop(0.45, 'rgba(206,222,226,0.03)');
+    sheen.addColorStop(1, 'rgba(206,222,226,0.07)');
+    ctx.fillStyle = sheen;
+    ctx.fillRect(0, deskTop, w, h - deskTop);
+
+    // and the shadow the sheet throws onto it (the sheet itself is DOM, above)
+    const under = ctx.createRadialGradient(w * 0.5, deskTop + 4, w * 0.1, w * 0.5, deskTop + 4, w * 0.46);
+    under.addColorStop(0, 'rgba(0,0,0,0.34)');
+    under.addColorStop(0.6, 'rgba(0,0,0,0.16)');
+    under.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = under;
+    ctx.fillRect(0, deskTop, w, h - deskTop);
+  }
+
+  function create(canvas, seed) {
+    return build(canvas.width, canvas.height, seed || 7);
+  }
+
+  /**
+   * NW.Scene — the window behind the paper. Props:
+   *   running: boolean   (false → nothing animates)
+   *   seed?:   number   (canvas fallback only)
+   *   video?:  boolean  (false → always use the canvas fallback)
+   *
+   * R165 (second pass): the writer said the built trees were 不像真实. A canvas
+   * can fake weather, it cannot photograph it — so the window is now a real
+   * clip: ten seconds of rain running down glass with green trees behind it,
+   * ping-ponged so the loop has no cut, served by the host as
+   * `assets/rain-window.mp4` (GET novel-writer/api/scene.video, byte ranges).
+   * The canvas renderer survives as the fallback: a host without the asset, a
+   * browser that refuses to decode H.264, or `settings.scene` on an older
+   * profile all still get a window instead of a white hole.
+   *
+   * Brightness: the source is a rainy afternoon, not a night. A light lift
+   * (`filter`) plus one soft sky highlight keeps the paper the brightest thing
+   * on screen — 光线不要太暗 — while the glass stays readable as glass.
+   */
+  NW.Scene = function Scene(props) {
+    const running = props && props.running !== false;
+    const wantVideo = !(props && props.video === false);
+    const farRef = React.useRef(null);
+    const glassRef = React.useRef(null);
+    const [failed, setFailed] = React.useState(!wantVideo);
+    const [glassOn, setGlassOn] = React.useState(true);
+
+    const urls = React.useMemo(() => {
+      if (!wantVideo) return { far: '', glass: '' };
+      try {
+        const make = typeof NW.apiUrl === 'function' ? NW.apiUrl : () => '';
+        return { far: make('scene.forest'), glass: make('scene.video') };
+      } catch (error) {
+        return { far: '', glass: '' };
+      }
+    }, [wantVideo]);
+
+    React.useEffect(() => {
+      if (!urls.far) {
+        setFailed(true);
+        return undefined;
+      }
+      const far = farRef.current;
+      const glass = glassRef.current;
+      if (!far) {
+        setFailed(true);
+        return undefined;
+      }
+      const cleanups = [];
+      const play = (el, onFail) => {
+        if (!el) return;
+        // `muted` must already be a property before play() on every Chromium
+        // build; the React prop alone can arrive one frame too late.
+        el.muted = true;
+        el.volume = 0;
+        if (onFail) el.addEventListener('error', onFail);
+        const attempt = el.play();
+        if (attempt && typeof attempt.catch === 'function') attempt.catch(onFail || (() => {}));
+      };
+      play(far, () => setFailed(true));
+      play(glass, () => setGlassOn(false));
+      const onHide = () => {
+        const els = [far, glass].filter(Boolean);
+        if (document.hidden) {
+          els.forEach((el) => {
+            try { el.pause(); } catch (error) { /* ignore */ }
+          });
+        } else if (running) {
+          els.forEach((el) => {
+            const again = el.play();
+            if (again && typeof again.catch === 'function') again.catch(() => {});
+          });
+        }
+      };
+      document.addEventListener('visibilitychange', onHide);
+      cleanups.push(() => document.removeEventListener('visibilitychange', onHide));
+      return () => cleanups.forEach((fn) => fn());
+    }, [urls.far, urls.glass, running]);
+
+    if (failed) {
+      return h(
+        'div',
+        { className: 'nw-scene', 'data-mode': 'canvas', 'aria-hidden': 'true' },
+        h(SceneCanvas, { running: running, seed: props && props.seed }),
+      );
+    }
+
+    return h(
+      'div',
+      { className: 'nw-scene', 'data-mode': 'video', 'aria-hidden': 'true' },
+      h('video', {
+        ref: farRef,
+        className: 'nw-scene-far',
+        src: urls.far || undefined,
+        autoPlay: true,
+        loop: true,
+        muted: true,
+        playsInline: true,
+        preload: 'auto',
+        tabIndex: -1,
+        disablePictureInPicture: true,
+        disableRemotePlayback: true,
+      }),
+      glassOn
+        ? h('video', {
+            ref: glassRef,
+            className: 'nw-scene-glass',
+            src: urls.glass || undefined,
+            autoPlay: true,
+            loop: true,
+            muted: true,
+            playsInline: true,
+            preload: 'auto',
+            tabIndex: -1,
+            disablePictureInPicture: true,
+            disableRemotePlayback: true,
+          })
+        : null,
+      h('div', { className: 'nw-scene-air', 'aria-hidden': 'true' }),
+      h('div', { className: 'nw-scene-desk', 'aria-hidden': 'true' }),
+      h(SceneProps, null),
+    );
+  };
+
+  /* ============================================================ the desk ====
+     Everything that makes the grey band a desk instead of a gradient: a warm
+     pool from the lamp that is off to the right, a pen lying where you put it
+     down, a mug at the edge of the crop. Painted once into a small canvas —
+     static by design, so it costs nothing per frame and never twitches. */
+  function paintDesk(ctx, w, h) {
+    if (!(w > 8) || !(h > 8)) return;
+
+    // ---- lamp pool -------------------------------------------------------
+    // Off-canvas lamp at the upper right: a wide, very soft warm blob that only
+    // ever brightens; it must never add a visible edge of its own.
+    // Kept deliberately weak and pushed off the corner: a lamp that lights the
+    // whole sheet is just a yellow wash, and the words have to stay the darkest
+    // thing on screen.
+    const lamp = ctx.createRadialGradient(w * 0.95, -h * 0.75, 0, w * 0.95, -h * 0.75, Math.max(w * 0.44, h * 1.6));
+    lamp.addColorStop(0, 'rgba(255,214,152,.17)');
+    lamp.addColorStop(0.40, 'rgba(255,206,142,.07)');
+    lamp.addColorStop(1, 'rgba(255,200,140,0)');
+    ctx.fillStyle = lamp;
+    ctx.fillRect(0, 0, w, h);
+
+    // ---- grain -----------------------------------------------------------
+    ctx.save();
+    ctx.globalAlpha = 0.10;
+    ctx.strokeStyle = 'rgba(226,232,226,.5)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 26; i += 1) {
+      const y = h * (0.16 + (i / 26) * 0.78);
+      const x0 = (i % 3) * 40;
+      ctx.beginPath();
+      ctx.moveTo(x0, y);
+      ctx.lineTo(w - ((i * 37) % 120), y + (i % 2 ? 0.6 : -0.6));
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // ---- the mug, cropped by the right edge ------------------------------
+    const mx = w - 26;
+    const my = h - 26;
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,.45)';
+    ctx.shadowBlur = 18;
+    ctx.shadowOffsetY = 6;
+    const mug = ctx.createLinearGradient(mx - 46, 0, mx + 46, 0);
+    mug.addColorStop(0, '#3a4340');
+    mug.addColorStop(0.44, '#59635d');
+    mug.addColorStop(0.72, '#46504b');
+    mug.addColorStop(1, '#2c3331');
+    ctx.fillStyle = mug;
+    ctx.beginPath();
+    ctx.ellipse(mx, my - 34, 48, 12, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(mx - 48, my - 34, 96, 46);
+    ctx.restore();
+    // rim, and the tea line just under it
+    ctx.strokeStyle = 'rgba(214,226,220,.42)';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.ellipse(mx, my - 34, 48, 12, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(198,150,96,.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(mx, my - 31, 42, 9, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    // a thread of steam, because it is raining outside
+    ctx.strokeStyle = 'rgba(232,238,234,.13)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(mx - 8, my - 50);
+    ctx.bezierCurveTo(mx - 16, my - 70, mx + 6, my - 84, mx - 2, my - 108);
+    ctx.stroke();
+
+    // ---- the pen ---------------------------------------------------------
+    // Lying at a slight angle to the right of the sheet's foot, nib towards the
+    // words: the one object that says "somebody just stopped writing here".
+    const px = w - 250;
+    const py = h - 44;
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(-0.12);
+    ctx.shadowColor = 'rgba(0,0,0,.5)';
+    ctx.shadowBlur = 12;
+    ctx.shadowOffsetY = 5;
+    const body = ctx.createLinearGradient(0, -5, 0, 5);
+    body.addColorStop(0, '#4b5450');
+    body.addColorStop(0.35, '#232927');
+    body.addColorStop(0.72, '#171b1a');
+    body.addColorStop(1, '#3a423e');
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.moveTo(-78, -4.6);
+    ctx.lineTo(52, -4.6);
+    ctx.quadraticCurveTo(64, -4.6, 66, 0);
+    ctx.quadraticCurveTo(64, 4.6, 52, 4.6);
+    ctx.lineTo(-78, 4.6);
+    ctx.quadraticCurveTo(-86, 4.6, -86, 0);
+    ctx.quadraticCurveTo(-86, -4.6, -78, -4.6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // brass band + clip (outside the shadow pass so they stay crisp)
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(-0.12);
+    const brass = ctx.createLinearGradient(0, -4, 0, 4);
+    brass.addColorStop(0, '#d8b26a');
+    brass.addColorStop(0.5, '#9c7a34');
+    brass.addColorStop(1, '#6d5220');
+    ctx.fillStyle = brass;
+    ctx.fillRect(30, -4.8, 7, 9.6);
+    ctx.strokeStyle = 'rgba(216,180,110,.75)';
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(40, -4.2);
+    ctx.lineTo(74, -4.2);
+    ctx.quadraticCurveTo(80, -4.2, 80, -0.4);
+    ctx.lineTo(80, -0.4);
+    ctx.stroke();
+    // one clean specular line along the barrel
+    ctx.strokeStyle = 'rgba(255,255,255,.17)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(-64, -2.1);
+    ctx.lineTo(46, -2.1);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /** Static desk props: lamp pool, mug, pen. Repaints only when resized. */
+  function SceneProps() {
+    const ref = React.useRef(null);
+    React.useEffect(() => {
+      const canvas = ref.current;
+      if (!canvas) return undefined;
+      const paint = () => {
+        const rect = canvas.getBoundingClientRect();
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        const w = Math.max(1, Math.round(rect.width));
+        const h = Math.max(1, Math.round(rect.height));
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h);
+        paintDesk(ctx, w, h);
+      };
+      paint();
+      if (typeof ResizeObserver !== 'function') return undefined;
+      const ro = new ResizeObserver(paint);
+      ro.observe(canvas);
+      return () => ro.disconnect();
+    }, []);
+    return h('canvas', { ref, className: 'nw-scene-props', 'aria-hidden': 'true' });
+  }
+
+  /**
+   * NW.Scene fallback renderer — canvas + loop. Props:
+   *   running: boolean   (false → the loop stops and the last frame stays)
+   *   seed?:   number
+   * The component owns its own sizing so a resize never needs a React re-render
+   * of the editor's manuscript.
+   */
+  function SceneCanvas(props) {
+    const canvasRef = React.useRef(null);
+    const stateRef = React.useRef(null);
+    const rafRef = React.useRef(0);
+    const running = props && props.running !== false;
+    const seed = (props && props.seed) || 7;
+
+    React.useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return undefined;
+      const ctx = canvas.getContext('2d');
+      const host = canvas.parentElement || canvas;
+      let stopped = false;
+      let last = 0;
+
+      const resize = () => {
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        const rect = host.getBoundingClientRect();
+        const w = Math.max(240, Math.round(rect.width));
+        const h = Math.max(200, Math.round(rect.height));
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
+        canvas.style.width = w + 'px';
+        canvas.style.height = h + 'px';
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        stateRef.current = create({ width: w, height: h }, seed);
+      };
+
+      resize();
+      const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(resize) : null;
+      if (ro) ro.observe(host);
+
+      const step = (now) => {
+        if (stopped) return;
+        rafRef.current = requestAnimationFrame(step);
+        // ~30fps: rain does not need 60, and this loop shares a thread with the
+        // textarea's own measurement passes.
+        if (now - last < 32) return;
+        last = now;
+        const st = stateRef.current;
+        if (!st) return;
+        paint(ctx, st, now / 1000);
+      };
+
+      if (running) rafRef.current = requestAnimationFrame(step);
+
+      const onHide = () => {
+        if (document.hidden) {
+          cancelAnimationFrame(rafRef.current);
+          rafRef.current = 0;
+        } else if (running && !rafRef.current && !stopped) {
+          last = 0;
+          rafRef.current = requestAnimationFrame(step);
+        }
+      };
+      document.addEventListener('visibilitychange', onHide);
+
+      return () => {
+        stopped = true;
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = 0;
+        if (ro) ro.disconnect();
+        document.removeEventListener('visibilitychange', onHide);
+      };
+    }, [running, seed]);
+
+    return h('canvas', {
+      ref: canvasRef,
+      className: 'nw-scene-canvas',
+      'aria-hidden': 'true',
+    });
+  }
+
+  NW.CSS_PARTS.push(`
+/* ================================================================ 窗外 ====
+   One pane, no frame: the glass is the whole writing column, so the tree line
+   and the rain are never interrupted by a mullion. The paper sits on top of it. */
+.nw-scene{
+  position:absolute;inset:0;width:100%;height:100%;
+  display:block;z-index:0;pointer-events:none;overflow:hidden;
+  background:#b9c9cd;
+}
+.nw-scene-far,
+.nw-scene-glass,
+.nw-scene-canvas{
+  position:absolute;inset:0;display:block;width:100%;height:100%;
+  object-fit:cover;pointer-events:none;
+}
+/* 窗外：真实的树，真实的风。A rainy afternoon, not a night: lift the clip
+   toward the paper's own value so the glass reads as daylight behind it. */
+.nw-scene-far{
+  filter:brightness(1.06) saturate(1.1) contrast(1.03);
+  transform:scale(1.04);
+}
+/* 玻璃：rain running down the pane, screened over the forest. Screen keeps the
+   droplets (bright) and drops the clip's own背景, so the trees stay visible
+   through the water instead of being covered by it. */
+.nw-scene-glass{
+  mix-blend-mode:screen;
+  opacity:.66;
+  filter:brightness(1.14) contrast(1.06);
+  transform:scale(1.07);
+}
+/* One sky reflection on the glass and only a whisper of edge darkening: the
+   pane must stay transparent, the paper must stay the brightest thing here. */
+.nw-scene-air{
+  position:absolute;inset:0;pointer-events:none;
+  background:
+    radial-gradient(120% 90% at 16% 2%, rgba(255,255,255,.17) 0%, rgba(255,255,255,.05) 44%, rgba(255,255,255,0) 72%),
+    linear-gradient(180deg, rgba(6,10,10,.09) 0%, rgba(6,10,10,0) 20%, rgba(6,10,10,0) 76%, rgba(6,10,10,.13) 100%);
+}
+/* The sill the paper stands on: slate, no wood, never lighter than the glass.
+   It has to be nearly opaque, or the droplets keep showing through and the
+   sheet reads as pasted onto the weather instead of lying on a desk. The far
+   edge catches the window light; the near edge falls away into shadow. */
+.nw-scene-desk{
+  position:absolute;left:0;right:0;bottom:0;height:186px;pointer-events:none;
+  background:
+    linear-gradient(180deg, rgba(48,56,53,.62) 0%, rgba(33,37,35,.95) 12%, rgba(28,31,30,.99) 46%, rgba(19,22,21,1) 100%),
+    radial-gradient(120% 60% at 50% 0%, rgba(196,212,206,.20), rgba(196,212,206,0) 62%);
+}
+.nw-scene-desk::before{
+  content:'';position:absolute;left:0;right:0;top:0;height:1px;
+  background:linear-gradient(90deg, rgba(214,226,220,0) 0%, rgba(214,226,220,.34) 18%, rgba(214,226,220,.42) 50%, rgba(214,226,220,.30) 82%, rgba(214,226,220,0) 100%);
+}
+.nw-scene-desk::after{
+  content:'';position:absolute;left:0;right:0;top:1px;height:26px;
+  background:linear-gradient(180deg, rgba(170,186,180,.10), rgba(170,186,180,0));
+}
+/* The desk props (lamp pool, mug, pen) are painted into this canvas, which sits
+   above the desk band and below the sheet. */
+.nw-scene-props{
+  position:absolute;left:0;right:0;bottom:0;width:100%;height:214px;
+  pointer-events:none;
+}
+/* With the window behind it the surface itself must stop painting a wall. */
+.nw-surface[data-scene="1"]{background:transparent;}
+.nw-surface[data-scene="1"] .nw-scroll{background:transparent;}
+`);
+})();
+
+/* ==== 48-desk.js ==== */
+;(() => {
+  'use strict';
+
+  // ============================================================================
+  // 精神空间 · 桌面 (R164)
+  //
+  // Two things live here, and both exist because the writing surface stopped
+  // being a grey rectangle:
+  //
+  // 1. THE SHEET. The paper is painted on `.nw-scroll` — the element that does
+  //    not move — instead of on `.nw-page`, which is as tall as the manuscript
+  //    and therefore dragged its own edges up the panel as you wrote. On a real
+  //    desk the paper stays put and the words advance; that is the whole point
+  //    of writing on paper, so the paint had to move to the stationary box.
+  //    `.nw-page` keeps its padding (the margin of the page) and loses its fill.
+  //
+  // 2. THE PILE. Finished pages lie at the left of the sheet, stacked newest on
+  //    top, each one carrying the real words of that page (60-editor.js slices
+  //    them out of the manuscript — nothing here is sample text). The pile is
+  //    the only honest way to show progress in a page-shaped editor: you can
+  //    count them, read them, and click one to take it back onto the desk.
+  //
+  // The rule that keeps this from looking like a skin: every number in the pile
+  // comes from a measurement of the actual text, and the pile only ever holds
+  // pages that have completely left the top of the sheet.
+  // ============================================================================
+
+  NW.CSS_PARTS.push(`
+/* ================================================================ 桌面 ==== */
+
+/* ---- the sheet ----------------------------------------------------------- */
+/* Only in 窗外 mode: with the scene off the surface keeps its old flat look, so
+   an existing writer's page does not silently change shape under them. */
+.nw-surface[data-scene="1"] .nw-scroll{
+  width:min(var(--nw-width,760px),calc(100% - 104px));
+  /* The bottom margin is the desk: the scene draws a slate surface under the
+     paper's front edge, and without a strip of it the sheet reads as floating
+     in the weather instead of lying on something. The top margin is the glass:
+     a sheet pushed right up against the top edge hides the window it is
+     supposed to be sitting in front of. */
+  margin:40px auto 112px;
+  /* A sheet of paper, not a card: warm fill, one hairline at the edge, and two
+     shadows — a tight contact shadow that keeps it on the desk and a long soft
+     one that puts air under it. The window light is a second, very soft layer
+     that only touches the top of the sheet, so the text never loses contrast.
+     The two multiply layers are the paper itself: a 140px fibre grain you can
+     see in the margins, and a 420px mottle that keeps the sheet from being one
+     flat colour. Both are alpha-thin — legibility of 20px type comes first. */
+  background-image:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='p'><feTurbulence type='fractalNoise' baseFrequency='.86' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='140' height='140' filter='url(%23p)' opacity='.16'/></svg>"),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='420' height='420'><filter id='m'><feTurbulence type='fractalNoise' baseFrequency='.011' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='420' height='420' filter='url(%23m)' opacity='.13'/></svg>"),
+    linear-gradient(0deg, rgba(122,98,66,.13) 0, rgba(122,98,66,.05) 1.6%, rgba(122,98,66,0) 4.2%),
+    radial-gradient(130% 46% at 50% -6%, rgba(255,247,226,.55) 0%, rgba(255,247,226,0) 62%),
+    linear-gradient(179deg, #fffdf7 0%, #fdfaf1 38%, #faf4e6 78%, #f6eedd 100%);
+  background-size:140px 140px, 420px 420px, 100% 100%, auto, auto;
+  background-blend-mode:multiply, multiply, normal, normal, normal;
+  border-radius:2px;
+  box-shadow:
+    0 0 0 1px rgba(118,98,68,.17),
+    0 1px 0 0 rgba(255,255,255,.9) inset,
+    0 -1px 0 0 rgba(255,255,255,.62) inset,
+    -1px 0 0 0 rgba(255,255,255,.5) inset,
+    0 0 42px rgba(126,102,66,.07) inset,
+    0 1px 0 0 rgba(150,126,92,.20),
+    0 2px 0 -1px rgba(126,104,72,.16),
+    1px 0 0 0 rgba(255,255,255,.55),
+    2px 0 0 -1px rgba(96,78,52,.22),
+    0 2px 0 0 rgba(255,255,255,.5),
+    3px 0 0 -1px rgba(96,78,52,.14),
+    10px 4px 22px -14px rgba(2,6,8,.75),
+    0 2px 6px -2px rgba(8,12,14,.5),
+    0 22px 40px -22px rgba(6,10,12,.72),
+    0 64px 84px -62px rgba(0,0,0,.86);
+  /* The words run out at the sheet's edge the way a page being written does;
+     these two inner shadows are what stop that edge from looking like a crop. */
+  scrollbar-width:none;
+  scrollbar-gutter:auto;
+}
+.nw-surface[data-scene="1"] .nw-scroll::-webkit-scrollbar{width:0;height:0;}
+.nw-surface[data-scene="1"] .nw-scroll::before,
+.nw-surface[data-scene="1"] .nw-scroll::after{
+  content:'';position:sticky;left:0;right:0;display:block;height:22px;
+  pointer-events:none;z-index:6;
+}
+.nw-surface[data-scene="1"] .nw-scroll::before{
+  top:0;margin-bottom:-22px;
+  background:linear-gradient(180deg, rgba(253,249,240,.92), rgba(253,249,240,0));
+}
+.nw-surface[data-scene="1"] .nw-scroll::after{
+  bottom:0;margin-top:-22px;
+  background:linear-gradient(0deg, rgba(250,244,230,.92), rgba(250,244,230,0));
+}
+.nw-surface[data-scene="1"] .nw-page{
+  background:none;
+  border:0;
+  border-radius:0;
+  box-shadow:none;
+}
+/* One settle per finished page: a half-second breathe so the eye connects the
+   word that just left the top of the sheet with the sheet that arrives in the
+   pile. Transform/opacity only — no layout, no repaint of the text. */
+@keyframes nw-sheet-settle{
+  0%   {--nw-settle:0;}
+  38%  {--nw-settle:1;}
+  100% {--nw-settle:0;}
+}
+.nw-surface[data-scene="1"] .nw-scroll.is-settle{
+  animation:nw-sheet-settle .52s cubic-bezier(.25,.8,.3,1) 1;
+}
+.nw-surface[data-scene="1"] .nw-scroll.is-settle.is-back{
+  animation-duration:.38s;
+}
+
+/* ---- the pile ------------------------------------------------------------ */
+.nw-pile{
+  position:absolute;bottom:34px;z-index:3;
+  left:calc(50% - min(var(--nw-width,760px),calc(100% - 104px)) / 2 - 172px);
+  width:160px;height:224px;
+  perspective:900px;
+  font-family:var(--nw-reading-font);
+}
+.nw-card{
+  position:absolute;left:0;bottom:calc(var(--i, 0) * 7px);
+  width:152px;height:204px;
+  padding:11px 12px 15px;box-sizing:border-box;
+  overflow:hidden;text-align:left;
+  border:0;border-radius:1px;appearance:none;
+  background-image:linear-gradient(176deg,#fffdf6 0%,#fbf5e7 58%,#f4ead6 100%);
+  box-shadow:
+    0 0 0 1px rgba(96,80,54,.22),
+    0 1px 0 0 rgba(255,255,255,.9) inset,
+    0 2px 3px -1px rgba(0,0,0,.34),
+    0 14px 22px -12px rgba(0,0,0,.58);
+  transform-origin:50% 100%;
+  transform:translateY(0) rotate(calc(var(--i, 0) * -0.7deg));
+  transition:transform .26s cubic-bezier(.2,.7,.2,1), box-shadow .26s ease;
+  cursor:pointer;
+  z-index:calc(20 - var(--i, 0));
+}
+.nw-card:hover,
+.nw-card:focus-visible{
+  transform:translateY(-10px) rotate(0deg) scale(1.9);
+  box-shadow:
+    0 0 0 1px rgba(120,100,70,.16),
+    0 1px 0 0 rgba(255,255,255,.9) inset,
+    0 26px 40px -22px rgba(0,0,0,.6);
+  z-index:40;
+  outline:none;
+}
+.nw-card:focus-visible{box-shadow:0 0 0 2px var(--nw-find-ring), 0 26px 40px -22px rgba(0,0,0,.6);}
+.nw-card-head{
+  font-size:8px;line-height:1.3;letter-spacing:.16em;text-transform:none;
+  color:rgba(122,92,58,.8);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  margin-bottom:6px;
+}
+.nw-card-body{
+  font-size:7.6px;line-height:1.82;letter-spacing:.01em;text-indent:2em;
+  color:rgba(52,47,40,.62);
+  word-break:break-all;
+  -webkit-mask-image:linear-gradient(180deg,#000 0,#000 74%,rgba(0,0,0,.05) 100%);
+  mask-image:linear-gradient(180deg,#000 0,#000 74%,rgba(0,0,0,.05) 100%);
+}
+.nw-card-foot{
+  position:absolute;left:0;right:0;bottom:6px;text-align:center;
+  font-size:7.5px;letter-spacing:.14em;color:rgba(122,92,58,.72);
+  font-variant-numeric:tabular-nums;
+}
+/* the sheet that has just been added lifts in from the top-right, the sheet
+   that came back slides under the pile — both are the same card, so the two
+   directions read as one object moving, not as a list re-rendering */
+@keyframes nw-card-in{
+  from{opacity:0;transform:translate(14px,-16px) rotate(-3.4deg) scale(.96);}
+  to{opacity:1;}
+}
+.nw-card[data-fresh="1"]{animation:nw-card-in .42s cubic-bezier(.2,.8,.25,1) 1;}
+.nw-pile-count{
+  position:absolute;left:0;bottom:-20px;width:152px;text-align:center;
+  font-size:9.5px;letter-spacing:.16em;color:rgba(236,240,240,.62);
+  text-shadow:0 1px 2px rgba(0,0,0,.35);
+  font-variant-numeric:tabular-nums;
+}
+@container nw (max-width: 1060px){
+  .nw-pile{display:none;}
+}
+`);
+})();
+
 /* ==== 50-shelf.js ==== */
 ;(() => {
   'use strict';
@@ -10312,476 +11423,6 @@ window.__ModuleLoader__.load({
 `);
 })();
 
-/* ==== 56-search.js ==== */
-;(() => {
-  'use strict';
-
-  // ============================================================== 查阅 ======
-  //
-  // R133. A writer in the middle of a paragraph should not have to open a
-  // browser, lose the page, and come back with the sentence cold. 查阅 is one
-  // keystroke away (Alt+S), answers with the model, and closes with Esc. It
-  // never writes into the manuscript, never touches the caret and never keeps
-  // a history — closing it leaves the desk exactly as it was.
-  //
-  // The answer is the point; the links are the receipts. The host reads Bing
-  // first and hands the model five snippets to stand on, so the prose is not
-  // pure recall. When the model is unavailable the panel falls back to those
-  // links instead of an empty pane.
-  // ===========================================================================
-
-  const EXAMPLES = [
-    '民国一块大洋能买什么',
-    '乌篷船为什么叫乌篷',
-    '《故乡》是哪一年写的',
-  ];
-
-  function tr(key, ...args) {
-    return typeof NW.t === 'function' ? NW.t(key, ...args) : key;
-  }
-
-  function hostOf(url) {
-    try {
-      return String(new URL(url).hostname || '').replace(/^www\./i, '');
-    } catch (err) {
-      return '';
-    }
-  }
-
-  function externalUrl(engine, query) {
-    const q = String(query || '').trim();
-    if (!q) return '';
-    const base =
-      engine === 'baidu'
-        ? 'https://www.baidu.com/s?wd='
-        : 'https://www.bing.com/search?q=';
-    return base + encodeURIComponent(q);
-  }
-
-  function openInBrowser(url) {
-    if (!url) return false;
-    try {
-      return !!window.open(url, '_blank', 'noopener,noreferrer');
-    } catch (err) {
-      return false;
-    }
-  }
-
-  /** The model writes markdown; the sheet reads as prose, so strip the syntax. */
-  function readable(text) {
-    const raw = String(text == null ? '' : text);
-    const plain =
-      NW.format && typeof NW.format.markdownToPlain === 'function'
-        ? NW.format.markdownToPlain(raw)
-        : raw;
-    return String(plain).split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
-  }
-
-  NW.SearchPanel = function SearchPanel(props) {
-    const open = !!(props && props.open);
-    const onClose = props && typeof props.onClose === 'function' ? props.onClose : function () {};
-
-    const inputRef = React.useRef(null);
-    const seqRef = React.useRef(0);
-    const [query, setQuery] = React.useState('');
-    const [last, setLast] = React.useState('');
-    const [answer, setAnswer] = React.useState('');
-    const [sources, setSources] = React.useState([]);
-    const [note, setNote] = React.useState('');
-    const [busy, setBusy] = React.useState(false);
-    const [slow, setSlow] = React.useState(false);
-    const [error, setError] = React.useState('');
-
-    React.useEffect(() => {
-      if (!open) return undefined;
-      const timer = setTimeout(() => {
-        if (inputRef.current) inputRef.current.focus();
-      }, 30);
-      return () => clearTimeout(timer);
-    }, [open]);
-
-    React.useEffect(() => {
-      if (!open) return undefined;
-      const onKey = (ev) => {
-        if (ev.key === 'Escape') {
-          ev.stopPropagation();
-          ev.preventDefault();
-          onClose();
-        }
-      };
-      document.addEventListener('keydown', onKey, true);
-      return () => document.removeEventListener('keydown', onKey, true);
-    }, [open, onClose]);
-
-    // The model leg takes a while; after four seconds the sheet admits it.
-    React.useEffect(() => {
-      if (!busy) {
-        setSlow(false);
-        return undefined;
-      }
-      const timer = setTimeout(() => setSlow(true), 4000);
-      return () => clearTimeout(timer);
-    }, [busy]);
-
-    function reset() {
-      setAnswer('');
-      setSources([]);
-      setNote('');
-      setError('');
-    }
-
-    function run(explicit) {
-      const q = String(explicit == null ? query : explicit).trim();
-      if (!q) return;
-      // While the model is still thinking, Enter only restarts when the writer
-      // has changed the question — otherwise it is a no-op, not a duplicate call.
-      if (busy && q === last) return;
-      const seq = (seqRef.current += 1);
-      setBusy(true);
-      reset();
-      setLast(q);
-
-      const call =
-        NW.search && typeof NW.search.ask === 'function'
-          ? NW.search.ask(q)
-          : Promise.reject(new Error('模型接口没有加载，刷新一下页面'));
-
-      call
-        .then((data) => {
-          if (seq !== seqRef.current) return;
-          const nextSources = data && Array.isArray(data.sources) ? data.sources : [];
-          setSources(nextSources);
-          setNote(data && data.note ? String(data.note) : '');
-          setAnswer(data && data.answer ? String(data.answer) : '');
-          setBusy(false);
-          if (!(data && data.answer) && !nextSources.length) {
-            setError('这次什么也没找到，换个说法再试');
-          }
-        })
-        .catch((err) => {
-          if (seq !== seqRef.current) return;
-          setBusy(false);
-          setError(err && err.message ? err.message : '没有答上来，再试一次');
-        });
-    }
-
-    function onKeyDown(ev) {
-      if (ev.isComposing || ev.keyCode === 229) return;
-      if (ev.key === 'Enter' && !ev.shiftKey) {
-        ev.preventDefault();
-        run();
-      }
-    }
-
-    if (!open) return null;
-
-    const currentQuery = String(query || '').trim();
-    const shownQuery = last || currentQuery;
-    const answerParts = readable(answer);
-
-    let body;
-    if (busy) {
-      body = h(
-        'div',
-        { className: 'nw-look-wait', 'aria-live': 'polite' },
-        [0, 1, 2].map((i) =>
-          h(
-            'div',
-            { key: 'w' + i, className: 'nw-look-waitrow', style: { animationDelay: i * 90 + 'ms' } },
-            h('span', { className: 'nw-look-waitline nw-look-waitline-title' }),
-            h('span', { className: 'nw-look-waitline' }),
-          ),
-        ),
-        h('div', { className: 'nw-look-waittext' }, slow
-          ? tr('模型正在把材料理成一段话…')
-          : tr('在必应里找材料…')),
-      );
-    } else if (error && !answerParts.length && !sources.length) {
-      body = h(
-        'div',
-        { className: 'nw-look-error', role: 'status' },
-        h('div', null, error),
-        shownQuery
-          ? h(
-              'button',
-              {
-                type: 'button',
-                className: 'nw-look-errorbtn',
-                onClick: () => openInBrowser(externalUrl('baidu', shownQuery)),
-              },
-              tr('在百度里打开「{0}」', shownQuery),
-            )
-          : null,
-      );
-    } else if (answerParts.length || sources.length) {
-      body = h(
-        'div',
-        { className: 'nw-look-answerbox' },
-        note ? h('div', { className: 'nw-look-note2' }, note) : null,
-        answerParts.length
-          ? h(
-              'div',
-              { className: 'nw-look-answer' },
-              answerParts.map((part, i) => h('p', { key: 'p' + i }, part)),
-            )
-          : null,
-        sources.length
-          ? h(
-              'div',
-              { className: 'nw-look-srcs' },
-              h('div', { className: 'nw-look-srcshead' }, tr('来源')),
-              sources.map((row, i) =>
-                h(
-                  'a',
-                  {
-                    key: 's' + i,
-                    className: 'nw-look-srcrow',
-                    href: row.url,
-                    target: '_blank',
-                    rel: 'noopener noreferrer',
-                    title: row.title || row.url,
-                  },
-                  h('span', { className: 'nw-look-srctitle' }, row.title || row.url),
-                  h('span', { className: 'nw-look-srchost' }, hostOf(row.url)),
-                ),
-              ),
-            )
-          : null,
-        answerParts.length
-          ? h('div', { className: 'nw-look-disclaimer' }, tr('答案由模型整理，关键处点开来路核一下。'))
-          : null,
-      );
-    } else {
-      body = h(
-        'div',
-        { className: 'nw-look-empty' },
-        h('div', { className: 'nw-look-emptyhead' }, tr('问一件想知道的事，直接给答案')),
-        h('div', { className: 'nw-look-examples' },
-          EXAMPLES.map((text) =>
-            h(
-              'button',
-              {
-                key: text,
-                type: 'button',
-                className: 'nw-look-example',
-                onClick: () => {
-                  setQuery(text);
-                  run(text);
-                },
-              },
-              text,
-            ),
-          ),
-        ),
-        h('div', { className: 'nw-look-note' }, tr('只查资料，不会改动稿子，也不会记住你问过什么。')),
-      );
-    }
-
-    return h(
-      'div',
-      { className: 'nw-look', onMouseDown: (ev) => { if (ev.target === ev.currentTarget) onClose(); } },
-      h(
-        'div',
-        { className: 'nw-look-card', role: 'dialog', 'aria-label': tr('查阅'), 'aria-modal': 'false' },
-        h(
-          'form',
-          {
-            className: 'nw-look-form',
-            onSubmit: (ev) => {
-              ev.preventDefault();
-              run();
-            },
-          },
-          h('span', { className: 'nw-look-ico', 'aria-hidden': 'true' }, NW.icon ? NW.icon('search', { size: 16 }) : null),
-          h('input', {
-            ref: inputRef,
-            className: 'nw-look-input',
-            value: query,
-            placeholder: tr('问一件想知道的事'),
-            'aria-label': tr('查阅'),
-            autoComplete: 'off',
-            spellCheck: false,
-            onChange: (ev) => setQuery(ev.target.value),
-            onKeyDown: onKeyDown,
-          }),
-          query
-            ? h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'nw-look-clear',
-                  'aria-label': tr('清除'),
-                  onClick: () => {
-                    seqRef.current += 1;
-                    setQuery('');
-                    setBusy(false);
-                    reset();
-                    if (inputRef.current) inputRef.current.focus();
-                  },
-                },
-                NW.icon ? NW.icon('x', { size: 13 }) : null,
-              )
-            : h('kbd', { className: 'nw-look-esc' }, 'Esc'),
-        ),
-        h('div', { className: 'nw-look-body' }, body),
-        h(
-          'div',
-          { className: 'nw-look-foot' },
-          h(
-            'span',
-            { className: 'nw-look-src' },
-            busy
-              ? tr('必应 · 模型 · 只读')
-              : answerParts.length
-                ? (sources.length
-                    ? tr('模型整理 · {0} 条来源', sources.length)
-                    : tr('模型整理 · 无外部来源'))
-                : tr('只读，不改稿'),
-          ),
-          h(
-            'div',
-            { className: 'nw-look-links' },
-            h(
-              'button',
-              {
-                type: 'button',
-                className: 'nw-look-link',
-                disabled: !shownQuery,
-                onClick: () => openInBrowser(externalUrl('bing', shownQuery)),
-              },
-              tr('在必应打开'),
-            ),
-            h('span', { className: 'nw-look-sep', 'aria-hidden': 'true' }, '·'),
-            h(
-              'button',
-              {
-                type: 'button',
-                className: 'nw-look-link',
-                disabled: !shownQuery,
-                onClick: () => openInBrowser(externalUrl('baidu', shownQuery)),
-              },
-              tr('在百度打开'),
-            ),
-          ),
-        ),
-      ),
-    );
-  };
-
-  NW.CSS_PARTS.push(`
-/* ================================================================ 查阅 ====
-   A sheet laid on the desk, not a dialog wheeled in: same paper vocabulary as
-   the dock (hairline edge, one soft lift), one accent at a time. The layer is
-   transparent on purpose — the manuscript stays visible and the writer can see
-   where they will return to. */
-.nw-look{position:absolute;inset:0;z-index:var(--nw-z-panel,20);}
-.nw-look-card{
-  position:absolute;left:50%;top:11vh;transform:translateX(-50%);
-  width:min(560px,calc(100% - 56px));max-height:min(68vh,620px);
-  display:flex;flex-direction:column;overflow:hidden;
-  background:var(--nw-panel);color:var(--nw-fg);
-  border:1px solid var(--nw-line-soft);border-radius:14px;
-  box-shadow:var(--nw-shadow-3);
-  font-family:var(--nw-ui-font);
-  animation:nw-look-in 140ms ease-out;
-}
-@keyframes nw-look-in{
-  from{opacity:0;transform:translate(-50%,-6px);}
-  to{opacity:1;transform:translate(-50%,0);}
-}
-.nw-look-form{
-  display:flex;align-items:center;gap:10px;
-  padding:14px 16px;border-bottom:1px solid var(--nw-line-soft);
-}
-.nw-look-ico{display:inline-flex;color:var(--nw-fg-soft);}
-.nw-look-input{
-  flex:1 1 auto;min-width:0;padding:3px 0;border:0;outline:none;background:transparent;
-  color:var(--nw-fg);font:inherit;font-size:15.5px;line-height:1.6;
-}
-.nw-look-input::placeholder{color:color-mix(in srgb, var(--nw-fg) 36%, transparent);}
-.nw-look-esc{
-  flex:0 0 auto;padding:2px 6px;border:1px solid var(--nw-line-soft);border-radius:5px;
-  color:var(--nw-fg-soft);font:11px/1.4 var(--nw-ui-font);letter-spacing:.02em;
-}
-.nw-look-clear{
-  flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
-  width:24px;height:24px;padding:0;border:0;border-radius:50%;
-  background:transparent;color:var(--nw-fg-soft);cursor:pointer;
-}
-.nw-look-clear:hover{color:var(--nw-fg);background:color-mix(in srgb, var(--nw-fg) 5%, transparent);}
-.nw-look-body{overflow:auto;min-height:132px;padding:4px 0;}
-.nw-look-answerbox{padding:16px 18px 14px;}
-.nw-look-answer{
-  font-family:var(--nw-reading-font);
-  font-size:14.5px;line-height:1.88;letter-spacing:.01em;
-  color:color-mix(in srgb, var(--nw-fg) 94%, transparent);
-}
-.nw-look-answer p{margin:0 0 10px;white-space:pre-wrap;}
-.nw-look-answer p:last-child{margin-bottom:0;}
-.nw-look-note2{
-  margin:0 0 10px;padding-left:9px;border-left:2px solid var(--nw-line-soft);
-  font-size:11.5px;line-height:1.7;color:var(--nw-fg-soft);
-}
-.nw-look-srcs{
-  margin-top:16px;padding-top:11px;border-top:1px solid var(--nw-line-soft);
-}
-.nw-look-srcshead{
-  font-size:10.5px;letter-spacing:.14em;color:var(--nw-fg-soft);
-  margin-bottom:6px;
-}
-.nw-look-srcrow{
-  display:flex;align-items:baseline;gap:8px;
-  padding:4px 0;text-decoration:none;color:inherit;
-}
-.nw-look-srctitle{
-  flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  font-size:12px;color:color-mix(in srgb, var(--nw-fg) 78%, transparent);
-}
-.nw-look-srcrow:hover .nw-look-srctitle{color:var(--nw-brand);}
-.nw-look-srchost{flex:0 0 auto;font-size:10.5px;color:var(--nw-fg-soft);}
-.nw-look-disclaimer{
-  margin-top:12px;font-size:10.5px;line-height:1.6;
-  color:var(--nw-fg-soft);opacity:.85;
-}
-.nw-look-empty{padding:26px 18px 22px;}
-.nw-look-emptyhead{font-size:13px;color:var(--nw-fg-soft);}
-.nw-look-examples{display:flex;flex-direction:column;align-items:flex-start;gap:2px;margin-top:10px;}
-.nw-look-example{
-  border:0;background:transparent;padding:5px 0;color:var(--nw-fg);
-  font:13px/1.6 var(--nw-ui-font);text-align:left;cursor:pointer;opacity:.82;
-}
-.nw-look-example:hover{opacity:1;color:var(--nw-brand);}
-.nw-look-note{margin-top:12px;font-size:11px;color:var(--nw-fg-soft);opacity:.8;}
-.nw-look-error{padding:26px 18px;font-size:13px;line-height:1.7;color:var(--nw-fg-soft);}
-.nw-look-errorbtn{
-  margin-top:10px;padding:5px 2px;border:0;border-bottom:1px solid var(--nw-line-soft);
-  background:transparent;color:var(--nw-fg);font:12.5px/1.5 var(--nw-ui-font);cursor:pointer;
-}
-.nw-look-errorbtn:hover{color:var(--nw-brand);border-bottom-color:currentColor;}
-.nw-look-wait{padding:22px 18px 8px;}
-.nw-look-waitrow{margin-bottom:12px;opacity:.5;animation:nw-look-pulse 900ms ease-in-out infinite alternate;}
-.nw-look-waitline{display:block;height:8px;border-radius:4px;background:color-mix(in srgb, var(--nw-fg) 9%, transparent);}
-.nw-look-waitline-title{width:58%;margin-bottom:6px;height:10px;}
-.nw-look-waitline:not(.nw-look-waitline-title){width:86%;}
-.nw-look-waittext{padding-bottom:14px;font-size:11.5px;color:var(--nw-fg-soft);}
-@keyframes nw-look-pulse{from{opacity:.34;}to{opacity:.62;}}
-.nw-look-foot{
-  display:flex;align-items:center;justify-content:space-between;gap:12px;
-  padding:7px 14px;border-top:1px solid var(--nw-line-soft);
-  font-size:11px;line-height:1.6;color:var(--nw-fg-soft);
-}
-.nw-look-links{display:flex;align-items:center;gap:6px;}
-.nw-look-link{
-  border:0;background:transparent;padding:2px 1px;margin:0;
-  color:var(--nw-fg-soft);font:inherit;cursor:pointer;
-}
-.nw-look-link:hover:not(:disabled){color:var(--nw-brand);}
-.nw-look-link:disabled{opacity:.4;cursor:default;}
-.nw-look-sep{opacity:.5;}
-.nw-look-card :focus-visible{outline:2px solid var(--nw-brand);outline-offset:-2px;}
-`);
-})();
-
 /* ==== 60-editor.js ==== */
 ;(() => {
   'use strict';
@@ -11864,8 +12505,6 @@ const SEL_EMIT_MS = 120;
     // R16 ③: the lock button lives next to the home button so the writing surface
     // keeps its own controls even when DSH chrome is hidden (immersive).
     const onLock = typeof p.onLock === 'function' ? p.onLock : null;
-    // R133: 查阅 — the one action in the capsule that does not change the page.
-    const onLookup = typeof p.onLookup === 'function' ? p.onLookup : null;
     // R22: keyboard shortcuts for the two most common structural actions. The
     // editor owns the keystrokes because it has focus; the app owns the actions.
     const onNewChapter = typeof p.onNewChapter === 'function' ? p.onNewChapter : null;
@@ -11878,6 +12517,36 @@ const SEL_EMIT_MS = 120;
     const notesLane = p.notesLane === true && !immersive;
     /** Page width actually applied; immersive mode guarantees a wide canvas. */
     const effPageWidth = immersive ? Math.max(pageWidth, 880) : pageWidth;
+
+    // ---- R164 the pages of the manuscript -----------------------------------
+    //
+    // The writer asked for two things that only make sense together:
+    //   「纸要写完一页摞一页」 and 「向上滑动看内容时，能把那一页拿回来」.
+    // Both are about ONE number: how many pages have completely left the top of
+    // the sheet. That number is measured, not counted by the caret, because the
+    // caret sits in the middle of the window (typewriter mode) and its page is
+    // still visible — stacking it would contradict the words on screen.
+    //
+    // So: a page is one windowful of lines (L = floor(sheet height / line
+    // height)), the pages are laid on the sheet from the top, and
+    //   finished = floor((scrollTop - paddingTop) / pageH)
+    // is how many of them are gone. Scroll down and a page crosses the top edge
+    // and lies down in the pile; scroll up and it comes back onto the sheet. The
+    // same variable drives both directions, which is what makes the pile honest:
+    // there is no way to see a page in the pile whose words are still on the
+    // sheet, and no way to lose a page by scrolling.
+    //
+    // `list[i]` carries the REAL characters of page i (sliced out of the
+    // manuscript by measurePages), so a card in the pile is the page, not a
+    // picture of one — you can read it, and clicking it puts it back.
+    const sceneOn = settings.scene !== false;
+    const [pageState, setPageState] = React.useState({
+      list: [],
+      finished: 0,
+      total: 0,
+      fresh: -1,
+      back: false,
+    });
 
     const chapter = p.chapter || null;
     const chapterId = chapter && chapter.id != null ? chapter.id : null;
@@ -11944,6 +12613,18 @@ const SEL_EMIT_MS = 120;
     const surfaceRef = React.useRef(null);
     const scrollRef = React.useRef(null);
     const pageRef = React.useRef(null);
+    // R164: the off-screen mirror used to find where the pages break, the
+    // signature that keeps it from re-measuring an unchanged manuscript, and
+    // the last page numbers we published (so a scroll can tell a page leaving
+    // from a page coming back without re-measuring anything).
+    const pageMirrorRef = React.useRef(null);
+    const pageSigRef = React.useRef('');
+    const pageStateRef = React.useRef({ list: [], finished: 0, total: 0, fresh: -1, back: false });
+    // The sheet is asked for one settle animation per finished page; a page
+    // coming back must not animate it, or the desk would twitch on every
+    // upward scroll.
+    const settleTimerRef = React.useRef(0);
+    const pagesTimerRef = React.useRef(0);
     const titleRef = React.useRef(null);
     // R41 ①: the title last accepted by the app. Escape restores it, and it is
     // reset on every chapter switch so a stale string can never be restored
@@ -13627,7 +14308,265 @@ const SEL_EMIT_MS = 120;
      * Interleaving the two would force a synchronous re-layout per write, which
      * is what made fast typing feel sticky.
      */
+    // ---- R164 the page engine -----------------------------------------------
+    //
+    // Three small pieces, in the order they run:
+    //   pageMetrics()  — how tall a page is (one windowful of lines)
+    //   measurePages() — where the pages break, and the words on each one
+    //   syncFinished() — how many pages have left the top of the sheet right now
+    // The first two are cached and debounced; the third runs on every scroll and
+    // is pure arithmetic, because a 60fps scroll must never re-measure text.
+
+    /** One windowful of lines, in pixels, plus the sheet's top padding. */
+    function pageMetrics(view) {
+      const ta = taRef.current;
+      const sc = (view && view.sc) || scrollRef.current;
+      const page = pageRef.current;
+      if (!ta || !sc || !page) return null;
+      const cs = getComputedStyle(ta);
+      const lh = parseFloat(cs.lineHeight);
+      const winH = sc.clientHeight;
+      // 3 lines is the floor: under that a "page" is not a page, and the
+      // arithmetic below would produce a pile that flickers while typing.
+      const lines = lh > 0 ? Math.floor((winH - 1) / lh) : 0;
+      if (!(lines >= 3)) return null;
+      return {
+        lh,
+        lines,
+        height: lines * lh,
+        padTop: parseFloat(getComputedStyle(page).paddingTop) || 0,
+      };
+    }
+
+    /** The top of the line box that holds character `at` of the mirror. */
+    function mirrorTopAt(mirror, node, at, len) {
+      const range = mirror.__nwRange || (mirror.__nwRange = document.createRange());
+      let i = Math.max(0, Math.min(len - 1, at));
+      // A newline paints nothing, so a hit on one tells us nothing; step
+      // forward a few characters to land on the first glyph of the next line,
+      // which is the geometry the page break is defined by.
+      for (let guard = 0; guard < 8 && i < len; guard += 1) {
+        range.setStart(node, i);
+        range.setEnd(node, Math.min(len, i + 1));
+        const rects = range.getClientRects();
+        if (rects.length) return rects[0].top;
+        i += 1;
+      }
+      return Infinity;
+    }
+
+    /** First character whose line starts at or below `targetTop`. */
+    function offsetAtTop(mirror, node, len, targetTop, from) {
+      let lo = Math.max(0, from || 0);
+      let hi = len;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (mirrorTopAt(mirror, node, mid, len) >= targetTop - 0.5) hi = mid;
+        else lo = mid + 1;
+      }
+      return lo;
+    }
+
+    /** Trim a page's words down to what a 152×204 card can actually show. */
+    function cardTextOf(raw) {
+      const flat = String(raw || '').replace(/[ \t\u3000]+/g, ' ').replace(/\n+/g, '\n').trim();
+      return flat.length > 240 ? flat.slice(0, 240) : flat;
+    }
+
+    /**
+     * Measure where the pages break. Runs off the keystroke path (debounced by
+     * schedulePages), because it lays the whole chapter out in a hidden mirror
+     * once and then binary-searches a handful of character offsets against it.
+     */
+    function measurePages(view) {
+      const ta = taRef.current;
+      const page = pageRef.current;
+      const m = pageMetrics(view);
+      if (!ta || !page || !m) return;
+      const text = ta.value || '';
+      const cs = getComputedStyle(ta);
+      const colW = Math.max(
+        40,
+        ta.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0),
+      );
+      // Everything that can move a page break. The chapter id is in there so a
+      // switch re-measures even when the new chapter happens to be as long.
+      const sig = [
+        chapterId,
+        text.length,
+        m.lines,
+        m.lh.toFixed(2),
+        Math.round(colW),
+        cs.fontFamily,
+        cs.fontSize,
+        cs.letterSpacing,
+        cs.textIndent,
+        cs.textAlign,
+      ].join('|');
+      if (sig === pageSigRef.current) return;
+      pageSigRef.current = sig;
+
+      const offsets = [0];
+      const len = text.length;
+      // Past this size the binary searches would be felt while typing; the pile
+      // keeps working from the geometry, it just stops slicing pages exactly.
+      if (len > 0 && len <= 60000) {
+        const mirror = pageMirrorRef.current || (pageMirrorRef.current = document.createElement('div'));
+        const st = mirror.style;
+        st.position = 'absolute';
+        st.left = '-99999px';
+        st.top = '0';
+        st.visibility = 'hidden';
+        st.pointerEvents = 'none';
+        st.whiteSpace = 'pre-wrap';
+        st.overflowWrap = 'anywhere';
+        st.wordBreak = 'break-word';
+        st.font = cs.font;
+        st.lineHeight = cs.lineHeight;
+        st.letterSpacing = cs.letterSpacing;
+        st.textIndent = cs.textIndent;
+        st.textAlign = cs.textAlign;
+        st.tabSize = cs.tabSize;
+        st.padding = '0';
+        st.margin = '0';
+        st.border = '0';
+        st.width = colW.toFixed(2) + 'px';
+        if (!mirror.isConnected) document.body.appendChild(mirror);
+        mirror.textContent = text;
+        const node = mirror.firstChild;
+        if (node && node.nodeType === 3) {
+          const firstTop = mirrorTopAt(mirror, node, 0, len);
+          const lastTop = mirrorTopAt(mirror, node, len - 1, len);
+          if (Number.isFinite(firstTop) && Number.isFinite(lastTop)) {
+            let prev = 0;
+            // 400 pages is a year of writing in one chapter; beyond that we stop
+            // slicing rather than loop forever on a paste of a novel.
+            for (let n = 1; n <= 400; n += 1) {
+              const target = firstTop + n * m.height;
+              if (target > lastTop) break;
+              const at = offsetAtTop(mirror, node, len, target, prev);
+              if (at <= prev || at > len - 1) break;
+              offsets.push(at);
+              prev = at;
+            }
+          }
+        }
+      }
+
+      const list = offsets.map((start, i) => ({
+        n: i,
+        start,
+        end: i + 1 < offsets.length ? offsets[i + 1] : len,
+        text: '',
+        head: '',
+        blank: false,
+      }));
+      // The last boundary can land exactly on the end of the text; that is not
+      // an extra page, it is the end of the last one.
+      if (list.length > 1 && list[list.length - 1].start >= len) list.pop();
+      for (let i = 0; i < list.length; i += 1) {
+        const raw = text.slice(list[i].start, list[i].end);
+        list[i].text = cardTextOf(raw);
+        list[i].blank = !list[i].text;
+        list[i].head = chapterTitle || '';
+      }
+      publishPages({ list, total: list.length }, m);
+    }
+
+    /** Copy the page numbers into React state, but only when they moved. */
+    function publishPages(next, m) {
+      const sc = scrollRef.current;
+      const prev = pageStateRef.current;
+      // Clamp against the list we are publishing, not the one on screen: a
+      // first measurement of a long chapter arrives with pages nobody has
+      // counted yet, and clamping to the old (shorter) list would freeze the
+      // pile at the number it had when the editor opened.
+      const metrics = m || pageMetrics(null);
+      const gone = sc && metrics
+        ? Math.floor((sc.scrollTop - metrics.padTop + 1) / metrics.height)
+        : 0;
+      const finished = Math.max(0, Math.min(next.list.length, gone));
+      const same =
+        prev.list === next.list &&
+        prev.finished === finished &&
+        prev.total === next.total &&
+        prev.fresh === -1;
+      if (same) return;
+      const fresh = finished > prev.finished ? finished - 1 : -1;
+      const back = finished < prev.finished;
+      const value = { list: next.list, finished, total: next.total, fresh, back };
+      pageStateRef.current = value;
+      setPageState(value);
+      if (fresh >= 0) flashSettle(false);
+      else if (back) flashSettle(true);
+    }
+
+    /** How many pages have completely left the top of the sheet. */
+    function finishedCount(sc, m) {
+      const metrics = m || pageMetrics(null);
+      if (!sc || !metrics) return 0;
+      const gone = Math.floor((sc.scrollTop - metrics.padTop + 1) / metrics.height);
+      const total = pageStateRef.current.list.length;
+      return Math.max(0, Math.min(total, gone));
+    }
+
+    /** One breathe of the sheet when a page lands in the pile (or comes back). */
+    function flashSettle(isBack) {
+      const sc = scrollRef.current;
+      if (!sc) return;
+      sc.classList.remove('is-settle', 'is-back');
+      // Reflow-free restart of the CSS animation.
+      void sc.offsetWidth;
+      sc.classList.add('is-settle');
+      if (isBack) sc.classList.add('is-back');
+      window.clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = window.setTimeout(() => {
+        sc.classList.remove('is-settle', 'is-back');
+      }, isBack ? 420 : 560);
+    }
+
+    /** Re-read the page count after a scroll — arithmetic only, no measuring. */
+    function syncFinished() {
+      const sc = scrollRef.current;
+      const prev = pageStateRef.current;
+      if (!sc || !prev.list.length) return;
+      const m = pageMetrics(null);
+      if (!m) return;
+      const finished = finishedCount(sc, m);
+      if (finished === prev.finished) return;
+      const value = {
+        list: prev.list,
+        total: prev.total,
+        finished,
+        fresh: finished > prev.finished ? finished - 1 : -1,
+        back: finished < prev.finished,
+      };
+      pageStateRef.current = value;
+      setPageState(value);
+      if (finished > prev.finished) flashSettle(false);
+      else flashSettle(true);
+    }
+
+    /** Put page `n` back on the sheet (the pile is clickable). */
+    function bringBackPage(n) {
+      const sc = scrollRef.current;
+      const m = pageMetrics(null);
+      if (!sc || !m) return;
+      const target = Math.round(m.padTop + n * m.height);
+      sc.scrollTo({ top: target, behavior: 'smooth' });
+    }
+
+    /** Debounced page measurement — coalesced, never inside the keystroke. */
+    function schedulePages() {
+      window.clearTimeout(pagesTimerRef.current);
+      pagesTimerRef.current = window.setTimeout(() => {
+        pagesTimerRef.current = 0;
+        measurePages(null);
+      }, 220);
+    }
+
     function refresh(wantCenter) {
+
       const ta = taRef.current;
       if (!ta) {
         emitSelection();
@@ -13694,6 +14633,11 @@ const SEL_EMIT_MS = 120;
       // R73: the viewport may have just moved (typewriter centring after the
       // drag-release): keep the 修改建议 button glued to the selected words.
       reseatSelBtn();
+      // R164: the page count is pure arithmetic over the scroll position we just
+      // wrote, so it can be refreshed here; the words on the cards are measured
+      // off the keystroke path by schedulePages().
+      syncFinished();
+      schedulePages();
     }
 
     /**
@@ -15543,6 +16487,10 @@ const SEL_EMIT_MS = 120;
         // scroll can leave it alone — but the card points at words, so it goes.
         if (markViewRef.current) closeMarkView();
         markManual();
+        // R164: the writer is moving the sheet by hand. A page that scrolls back
+        // up past the top edge comes back out of the pile right here — this is
+        // the "拿回来" half of the page metaphor, and it needs no measuring.
+        syncFinished();
       };
       scrollHooksRef.current = { wheel: onWheel, touchmove: onTouchMove, scroll: onScroll };
 
@@ -15953,6 +16901,36 @@ const SEL_EMIT_MS = 120;
           )
         : null;
 
+    // R164 — the pile. Newest page on top; eight is what fits beside the sheet
+    // before the stack stops reading as a stack and starts reading as a wall.
+    // The cards are buttons, so they are reachable by keyboard and a tap puts
+    // that page back on the sheet.
+    const PILE_SHOWN = 8;
+    const pileList = pageState.list.slice(0, Math.min(pageState.finished, PILE_SHOWN));
+    const pile = pageState.finished > 0
+      ? h(
+          'div',
+          { className: 'nw-pile' },
+          pileList.map((page, k) => h(
+            'button',
+            {
+              key: 'page-' + page.n,
+              type: 'button',
+              className: 'nw-card',
+              style: { '--i': k },
+              'data-fresh': pageState.fresh === page.n ? '1' : undefined,
+              title: NW.t('第') + (page.n + 1) + NW.t('页') + ' · ' + NW.t('拿回桌上'),
+              'aria-label': NW.t('第') + (page.n + 1) + NW.t('页') + ' · ' + NW.t('拿回桌上'),
+              onClick: () => bringBackPage(page.n),
+            },
+            h('span', { className: 'nw-card-head' }, page.head || chapterTitle || NW.t('这一页')),
+            h('span', { className: 'nw-card-body', 'aria-hidden': 'true' }, page.text || ' '),
+            h('span', { className: 'nw-card-foot' }, String(page.n + 1)),
+          )),
+          h('div', { className: 'nw-pile-count' }, NW.t('已写') + ' ' + pageState.finished + ' ' + NW.t('页')),
+        )
+      : null;
+
     const body = chapter
       ? h(
           'div',
@@ -16176,39 +17154,40 @@ const SEL_EMIT_MS = 120;
         // R11: caret blink is a setting; the attribute is what the CSS rule reads
         // (paintCaret rewrites animation-name, so an inline style would be undone).
         'data-caret-blink': caretBlink ? '1' : '0',
+        // R164: 窗外 mode — the surface itself stops painting a background and
+        // the whole look moves to the scene canvas + 48-desk.css. Everything
+        // that restyles the writing surface keys off this attribute, so a writer
+        // who turns the window off keeps the flat page they had before.
+        'data-scene': sceneOn ? '1' : '0',
         // Filled in by syncScroller(): 'self' | 'ancestor' | 'document'.
         // Diagnostics: tells you which element typewriter mode actually drives.
         'data-scroller': scrollerKind,
         style: surfaceStyle,
       },
+      // R164: one pane of glass, no frame, no wood — the canvas draws the far
+      // side (sky, trees in the wind, rain on the glass). It is the first child
+      // so every other layer paints over it, and it does nothing at all when the
+      // setting is off or the tab is hidden.
+      sceneOn ? h(NW.Scene, { running: true, seed: 7 }) : null,
       h('div', { className: 'nw-scroll', ref: scrollRef, tabIndex: -1 }, body),
+      // R164: the pile of finished pages at the left of the sheet. It holds only
+      // pages that have completely left the top of the sheet, and each card
+      // carries the real words of that page (pageState.list) — clicking a card
+      // scrolls that page back onto the sheet, which is what taking one back
+      // means. The count under the pile is the same number the cards show.
+      pile,
       // R46: the fade that keeps the current line in front of the eye. They sit
       // outside .nw-scroll because a scrolling ancestor would drag them along;
       // paintFocus() keeps them in viewport coordinates instead.
       h('div', { className: 'nw-veil nw-veil-top', ref: veilTopRef, 'aria-hidden': 'true' }),
       h('div', { className: 'nw-veil nw-veil-bot', ref: veilBotRef, 'aria-hidden': 'true' }),
       findBar,
-      // R134：角上只剩「查阅」「回到首页」「锁定」。段落导航与标注铅笔都撤了
+      // R164：角上只剩「回到首页」「锁定」。查阅（搜索）整块删掉——写作面上
+      // 不留会分神的入口；要找资料就去读一遍那一页，或者退出写作。
       // ——标注改在「读一遍」里做，写作面上只做裁决。
       h(
             'div',
             { className: 'nw-surface-acts' },
-            onLookup
-              ? h(
-                  'button',
-                  {
-                    type: 'button',
-                    className: 'nw-actbtn',
-                    title: NW.t('查阅') + ' (Alt+S)',
-                    'aria-label': NW.t('查阅'),
-                    onClick: (ev) => {
-                      if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-                      onLookup();
-                    },
-                  },
-                  NW.icon('search', { size: 16 }),
-                )
-              : null,
             onHome
               ? h(
                   'button',
@@ -21888,12 +22867,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * 退出阅读时光标还在原来那一句上。
      */
     const [readAt, setReadAt] = useState(null);
-    /**
-     * R133: 查阅 — a knowledge lookup that floats over whatever is open. It is
-     * a glance, not a route: the shelf, the manuscript and the caret all stay
-     * exactly where they were, and Esc returns the writer to the same sentence.
-     */
-    const [lookupOpen, setLookupOpen] = useState(false);
     // 点了另一本书的「读整本」时，它的章节还没加载完（selectNovel 是异步的），
     // 先记下这本书，等它的章节到了再把阅读页打开。
     const readPendingRef = useRef(null);
@@ -23712,27 +24685,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       return () => window.removeEventListener('keydown', onKey, true);
     }, [locked, doLock]);
 
-    // R133: Alt+S opens 查阅 from anywhere — the shelf, the writing page, even
-    // behind the reading overlay. A plain chord (no Ctrl/Cmd) on purpose: this
-    // is a pause for a fact, not a command, and it must not collide with the
-    // browser's own find/search.
-    useEffect(() => {
-      const onKey = (ev) => {
-        if (!ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
-        if (String(ev.key || '').toLowerCase() !== 's') return;
-        ev.preventDefault();
-        ev.stopPropagation();
-        if (locked) return;
-        setLookupOpen((open) => !open);
-      };
-      window.addEventListener('keydown', onKey, true);
-      return () => window.removeEventListener('keydown', onKey, true);
-    }, [locked]);
-
-    // A locked studio has no lookup; drop it rather than leave it waiting.
-    useEffect(() => {
-      if (locked) setLookupOpen(false);
-    }, [locked]);
+    // R164: 查阅（Alt+S 搜索面板）整块删掉——它不是写作面的功能。
 
     // Global shortcut: Ctrl/Cmd+\ shows or hides the chapter shelf. It is the
     // keyboard twin of the restore handle, so a collapsed shelf can never trap
@@ -24796,10 +25749,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                         setView('home');
                         setShelfOpen(true);
                       },
-                      // R133: 查阅 lives with the other page-level acts in the
-                      // corner capsule. One icon, no label — it is a glance,
-                      // not a mode, and it should not compete with the paper.
-                      onLookup: () => setLookupOpen(true),
                       // R33: the 目录 toggle is gone (首页 now restores the
                       // shelf). Lock stays so the writing surface keeps its own
                       // controls even when DSH chrome is hidden.
@@ -25002,12 +25951,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             wordText: '',
             counterText: counterText,
           }),
-      // R133: 查阅 — above the manuscript, below dialogs. It has no mask, so the
-      // writing page stays legible behind it: a lookup is a pause, not a place.
-      h(NW.SearchPanel, {
-        open: lookupOpen && !locked,
-        onClose: () => setLookupOpen(false),
-      }),
       DialogHost
         ? h(DialogHost, {
             dialog: dialog,
@@ -31268,6 +32211,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               }),
             ),
             rowToggle('光标闪烁', draft.caretBlink !== false, (v) => set('caretBlink', v)),
+            rowToggle(
+              '窗外的雨',
+              draft.scene !== false,
+              (v) => set('scene', v),
+              NW.t('一整块玻璃：外面下雨、有树、有风。关掉就是一页白纸，不画窗也不费电。'),
+            ),
             rowToggle('打字机模式', draft.typewriter, (v) => set('typewriter', v)),
             rowToggle('沉浸模式（隐藏所有面板；Esc 退出，Ctrl+Shift+F 或 Ctrl+Alt+F 切换）', draft.immersive, (v) => set('immersive', v)),
             rowToggle(

@@ -2491,6 +2491,12 @@
               }),
             ),
             rowToggle('光标闪烁', draft.caretBlink !== false, (v) => set('caretBlink', v)),
+            rowToggle(
+              '窗外的雨',
+              draft.scene !== false,
+              (v) => set('scene', v),
+              NW.t('一整块玻璃：外面下雨、有树、有风。关掉就是一页白纸，不画窗也不费电。'),
+            ),
             rowToggle('打字机模式', draft.typewriter, (v) => set('typewriter', v)),
             rowToggle('沉浸模式（隐藏所有面板；Esc 退出，Ctrl+Shift+F 或 Ctrl+Alt+F 切换）', draft.immersive, (v) => set('immersive', v)),
             rowToggle(

@@ -54,6 +54,10 @@
   // phone instead) gets taken to the change instead of being left behind.
   const PEER_FOLLOW_IDLE_MS = 3000;
   const MEASURE_MS = 60; // caret measurement / autosize throttle
+  // R135: how long after the last keystroke the lamp drops to 40%, and how long
+  // the dog-ear stays folded when a chapter is reopened on a saved caret.
+  const LAMP_IDLE_MS = 2000;
+  const FOLD_LINGER_MS = 6000;
 // R99: pushing the selection to the App re-renders the whole tree (status bar,
 // shelf). Typing used to do that on every keystroke; 120ms is invisible to the
 // writer but cuts the renders by an order of magnitude.
@@ -360,8 +364,8 @@ const SEL_EMIT_MS = 120;
   background-image:var(--nw-texture,none);
   font-family:var(--nw-ui-font,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",system-ui,sans-serif);
   font-size:16px;line-height:1.6;
-  transition:background-color var(--nw-dur) var(--nw-ease, cubic-bezier(.2,.7,.2,1)),
-             color var(--nw-dur) var(--nw-ease, cubic-bezier(.2,.7,.2,1));
+  transition:background-color var(--nw-dur-theme,var(--nw-dur)) var(--nw-ease, cubic-bezier(.2,.7,.2,1)),
+             color var(--nw-dur-theme,var(--nw-dur)) var(--nw-ease, cubic-bezier(.2,.7,.2,1));
   /* Reading measure. --nw-pad-x is the fixed gutter of the writing column;
      --nw-gutter-x is the extra lane kept free for the floating dock pinned to
      the bottom-right of the pane (CONTRACT-R3 section 7: the text's right edge
@@ -401,6 +405,8 @@ const SEL_EMIT_MS = 120;
   --nw-bg:#faf4e9;--nw-fg:#1b1813;--nw-soft:#6d6558;--nw-rule:#e6dccb;
   --nw-caret-color:#1b1813;--nw-caret:#1b1813;--nw-sel:rgba(27,24,19,.14);
   --nw-accent:#c4532f;
+  /* R135: the pool of lamp light on the line being written. Warm on paper. */
+  --nw-lamp-ink:rgba(232,171,56,.16);
   --nw-scroll-thumb:rgba(27,24,19,.18);--nw-scroll-thumb-hover:rgba(27,24,19,.32);
   --nw-panel:#fdf8ef;--nw-panel-border:#e6dccb;--nw-panel-shadow:0 8px 24px rgba(64,44,24,.09);
   --nw-btn-bg:#f3ecdf;--nw-btn-fg:#1b1813;--nw-btn-border:#e6dccb;--nw-btn-hover:#eae1d1;
@@ -418,6 +424,8 @@ const SEL_EMIT_MS = 120;
   --nw-bg:#cce8cf;--nw-fg:#1f2a20;--nw-soft:#55684f;--nw-rule:#b6d6ba;
   --nw-caret-color:#1f2a20;--nw-caret:#1f2a20;--nw-sel:rgba(31,42,32,.18);
   --nw-accent:#2f6b3c;
+  /* R135: green stock under a warm bulb — the pool stays creamy, not greenish. */
+  --nw-lamp-ink:rgba(255,246,214,.22);
   --nw-scroll-thumb:rgba(31,42,32,.22);--nw-scroll-thumb-hover:rgba(31,42,32,.36);
   --nw-panel:#ddf1de;--nw-panel-border:#b6d6ba;--nw-panel-shadow:0 8px 24px rgba(31,42,32,.14);
   --nw-btn-bg:#c1e0c5;--nw-btn-fg:#1f2a20;--nw-btn-border:#a9cbaa;--nw-btn-hover:#b3d8b8;
@@ -434,6 +442,9 @@ const SEL_EMIT_MS = 120;
   --nw-bg:#151517;--nw-fg:#f9fafb;--nw-soft:#adb2b8;--nw-rule:#2c2c2e;
   --nw-caret-color:#f9fafb;--nw-caret:#f9fafb;--nw-sel:rgba(249,250,251,.16);
   --nw-accent:#e0a46a;
+  /* R135: the night sheet is lit by the moon, not a lamp: cool, and half the
+     strength of daylight — a bright pool on a dark page would glare. */
+  --nw-lamp-ink:rgba(150,178,214,.10);
   --nw-scroll-thumb:rgba(249,250,251,.18);--nw-scroll-thumb-hover:rgba(249,250,251,.32);
   --nw-panel:#232324;--nw-panel-border:#ffffff1f;--nw-panel-shadow:0 8px 24px rgba(0,0,0,.5);
   --nw-btn-bg:#2c2c2e;--nw-btn-fg:#f9fafb;--nw-btn-border:#ffffff1f;--nw-btn-hover:#353638;
@@ -448,6 +459,8 @@ const SEL_EMIT_MS = 120;
   --nw-bg:#ecdfbe;--nw-fg:#1a1913;--nw-soft:#5a5546;--nw-rule:#d3c8a9;
   --nw-caret-color:#1a1913;--nw-caret:#1a1913;--nw-sel:rgba(26,25,19,.16);
   --nw-accent:#8c2b22;
+  /* R135: newsprint already carries a warm cast; the pool only deepens it. */
+  --nw-lamp-ink:rgba(255,238,190,.20);
   --nw-scroll-thumb:rgba(26,25,19,.20);--nw-scroll-thumb-hover:rgba(26,25,19,.36);
   --nw-panel:#f4ecd6;--nw-panel-border:#d9cfae;--nw-panel-shadow:0 8px 22px rgba(80,64,32,.14);
   --nw-btn-bg:#e4d7b4;--nw-btn-fg:#2a271e;--nw-btn-border:#d3c8a9;--nw-btn-hover:#dbcca6;
@@ -473,6 +486,9 @@ const SEL_EMIT_MS = 120;
   --nw-bg:#ffffff;--nw-fg:#14171a;--nw-soft:#6a7078;--nw-rule:#e6e8eb;
   --nw-caret-color:#14171a;--nw-caret:#14171a;--nw-sel:rgba(20,23,26,.14);
   --nw-accent:#d0021b;
+  /* R135: a plate-white magazine is the one theme where a warm pool is a
+     studio light rather than a desk lamp — soft and nearly neutral. */
+  --nw-lamp-ink:rgba(255,241,214,.14);
   --nw-scroll-thumb:rgba(20,23,26,.16);--nw-scroll-thumb-hover:rgba(20,23,26,.30);
   --nw-panel:#ffffff;--nw-panel-border:#e6e8eb;--nw-panel-shadow:0 10px 30px rgba(20,23,26,.08);
   --nw-btn-bg:#fafafa;--nw-btn-fg:#14171a;--nw-btn-border:#e6e8eb;--nw-btn-hover:#f1f2f3;
@@ -521,7 +537,9 @@ const SEL_EMIT_MS = 120;
 .nw-page{
   width:min(var(--nw-width,760px),100%);margin:0 auto;padding:var(--nw-pad-y) 0;
   border-radius:var(--nw-r-card);
-  transition:box-shadow var(--nw-dur) var(--nw-ease,ease);
+  transition:box-shadow var(--nw-dur-theme,var(--nw-dur)) var(--nw-ease,ease),
+             background-color var(--nw-dur-theme,var(--nw-dur)) var(--nw-ease,ease),
+             border-color var(--nw-dur-theme,var(--nw-dur)) var(--nw-ease,ease);
 }
 @container nw (min-width: 780px){
   .nw-page{
@@ -658,6 +676,49 @@ const SEL_EMIT_MS = 120;
 @keyframes nw-caret-blink-b{0%,49.99%{opacity:1;}50%,100%{opacity:0;}}
 @media (prefers-reduced-motion: reduce){
   .nw-cursor{animation:none;}
+}
+
+/* R135: 光标行的那一点灯光。写作时这一行像被台灯照到，停笔两秒退回四成
+   亮度。它画在墨迹之下（base）、纸之上，所以纸看起来是被照亮的，而不是
+   被高亮选中的。位置完全由 paintLamp() 从同一份光标测量里写入（top /
+   height / --nw-lamp-x），不自己量几何；这里只负责形状与明暗的过渡。 */
+.nw-lamp{
+  position:absolute;left:0;top:0;width:100%;height:0;
+  pointer-events:none;user-select:none;z-index:var(--nw-z-base);
+  background:radial-gradient(340px 100% at var(--nw-lamp-x,40%) 50%,
+    var(--nw-lamp-ink,rgba(232,171,56,.16)) 0%, transparent 72%);
+  opacity:0;transition:opacity var(--nw-dur-long) var(--nw-ease,ease);
+}
+.nw-lamp[data-on="1"]{opacity:1;}
+.nw-lamp[data-on="1"][data-dim="1"]{opacity:.4;}
+
+/* R135: 停笔处的折角。重开一章落回上次停笔那一行时，纸的右缘折起一个小
+   角；敲第一个字、或过六秒，它就展平。折角是纸背面（比纸面深一点点）加
+   一道折痕，不抢正文。 */
+.nw-fold{
+  position:absolute;right:0;top:0;width:12px;height:12px;
+  pointer-events:none;user-select:none;z-index:var(--nw-z-float);
+  opacity:0;transform-origin:100% 0;transform:scale(.72) translateY(-1px);
+  transition:opacity var(--nw-dur-long) var(--nw-ease,ease),
+             transform var(--nw-dur-long) var(--nw-ease,ease);
+}
+.nw-fold[data-on="1"]{opacity:1;transform:none;}
+.nw-fold::before{
+  content:'';position:absolute;inset:0;
+  clip-path:polygon(0 0,0 100%,100% 100%);
+  background:linear-gradient(135deg,
+    color-mix(in srgb,var(--nw-fg) 11%, var(--nw-panel,#fdf8ef)) 0 56%,
+    color-mix(in srgb,var(--nw-fg) 3%, var(--nw-panel,#fdf8ef)) 56% 100%);
+}
+.nw-fold::after{
+  content:'';position:absolute;left:0;top:0;width:17px;height:1px;
+  background:var(--nw-line-soft,rgba(27,24,19,.14));
+  transform-origin:0 0;transform:rotate(45deg);
+}
+/* Without a drawn paper edge (the card only appears at >=780px) a dog-ear has
+    nothing to fold against — it would just be a smudge in the margin. */
+@container nw (max-width:779px){
+  .nw-fold{display:none;}
 }
 
 /* highlight mirror: sits behind the transparent textarea, draws marks only */
@@ -809,49 +870,12 @@ const SEL_EMIT_MS = 120;
 }
 .nw-mark-view-btn:hover{background:var(--nw-btn-hover);}
 .nw-mark-view-btn[data-danger="1"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 45%, var(--nw-line-strong));}
-/* R53c：写作区不再有「标记」按钮。左上角那颗铅笔被用户点名去掉了——它常驻在
-   纸面上方，占着一格视觉重量，而标注是低频动作。现在入口改成**右键**：选中一段
-   字，按右键才弹出这张小菜单（浏览器原生菜单被拦下），没选中就还是原生菜单，
-   复制粘贴照旧。看不见的入口，也就不会碍眼。 */
-.nw-mark-menu{
-  position:absolute;z-index:var(--nw-z-float);
-  display:flex;flex-direction:column;gap:1px;
-  width:146px;padding:3px;
-  border-radius:var(--nw-r-control);
-  border:1px solid var(--nw-line-strong);
-  background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
-  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);
-  animation:nw-fade-in .1s var(--nw-ease, ease) both;
-}
-/* 菜单顶上那行小字：有选区就显示要标的那几个字，没选区就说清楚为什么按不动。 */
-.nw-mark-menu-quote{
-  max-width:100%;padding:0 4px 3px;
-  color:var(--nw-soft);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-}
-.nw-mark-menu-btn{
-  display:flex;align-items:center;gap:7px;
-  height:26px;padding:0 7px;border:0;border-radius:var(--nw-r-hair);
-  background:transparent;color:var(--nw-fg);cursor:pointer;
-  font-family:inherit;font-size:var(--nw-fs-tiny);text-align:left;white-space:nowrap;
-}
-.nw-mark-menu-btn:hover{background:var(--nw-btn-hover);}
-.nw-mark-menu-btn:disabled{opacity:.42;cursor:default;background:transparent;}
-/* 菜单里的样本：一段 20px 宽的假字，用真实的那种线画出来，选之前就能看见结果。 */
-.nw-mark-menu-swatch{
-  flex:0 0 auto;width:20px;height:14px;
-  border-radius:2px;
-  background:color-mix(in srgb, var(--nw-fg) 12%, transparent);
-}
-.nw-mark-menu-swatch[data-kind="underline"]{
-  box-shadow:inset 0 -2px 0 var(--nw-mark-underline, var(--nw-brand));
-}
-.nw-mark-menu-swatch[data-kind="strike"]{
-  background-image:linear-gradient(to bottom, transparent calc(50% - 1px), var(--nw-mark-strike, var(--nw-danger)) calc(50% - 1px), var(--nw-mark-strike, var(--nw-danger)) calc(50% + 1px), transparent calc(50% + 1px));
-}
-.nw-mark-menu-swatch[data-kind="comment"]{
-  background:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 28%, transparent);
-  box-shadow:none;
+/* R134：这张卡上「接受」是主按钮——它是裁决里唯一样子会改正文的那一下。 */
+.nw-mark-view-btn[data-primary="1"]{
+  border-color:color-mix(in srgb, var(--nw-brand) 45%, var(--nw-line-strong));
+  background:color-mix(in srgb, var(--nw-brand) 8%, var(--nw-btn-bg));
+  color:var(--nw-brand);
+  font-weight:600;
 }
 
 /* R73：选中文字后浮出的小方钮。一个按钮、一句话，落在指针松开处的右下角。
@@ -876,44 +900,6 @@ const SEL_EMIT_MS = 120;
 }
 .nw-selbtn:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
 .nw-selbtn .nw-selbtn-txt{line-height:1;}
-
-/* R77：段落导航。盖在纸面左上角，不往正文里插任何东西，所以滚动、排版都不受影响。 */
-.nw-paranav{
-  position:absolute;left:14px;top:52px;width:272px;max-height:62%;
-  display:flex;flex-direction:column;z-index:var(--nw-z-float);
-  border:1px solid var(--nw-line-strong);border-radius:12px;
-  background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
-  overflow:hidden;animation:nw-fade-in .12s var(--nw-ease,ease) both;
-}
-.nw-paranav-head{
-  display:flex;align-items:center;gap:6px;flex:0 0 auto;
-  padding:8px 10px;border-bottom:1px solid var(--nw-line);
-  font-size:12px;color:var(--nw-fg-soft);
-}
-.nw-paranav-title{font-weight:600;color:var(--nw-fg);}
-.nw-paranav-count{font-size:10px;opacity:.7;font-variant-numeric:tabular-nums;}
-.nw-paranav-x{
-  display:inline-flex;padding:2px;border:0;border-radius:6px;
-  background:transparent;color:var(--nw-fg-soft);cursor:pointer;
-}
-.nw-paranav-x:hover{background:var(--nw-btn-hover,color-mix(in srgb,var(--nw-fg) 6%,transparent));color:var(--nw-fg);}
-.nw-paranav-list{flex:1 1 auto;min-height:0;overflow:auto;padding:4px;}
-.nw-paranav-row{
-  display:flex;gap:7px;width:100%;padding:5px 7px;
-  border:0;border-radius:7px;background:transparent;color:var(--nw-fg);
-  cursor:pointer;text-align:left;font-family:inherit;font-size:12px;
-}
-.nw-paranav-row:hover{background:var(--nw-btn-hover,color-mix(in srgb,var(--nw-fg) 6%,transparent));}
-.nw-paranav-n{
-  flex:0 0 auto;width:18px;text-align:right;padding-top:2px;
-  font-size:10px;opacity:.55;font-variant-numeric:tabular-nums;
-}
-.nw-paranav-t{
-  flex:1 1 auto;min-width:0;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  font-family:var(--nw-reading-font,inherit);
-}
-.nw-paranav-empty{padding:14px 10px;font-size:12px;color:var(--nw-fg-soft);text-align:center;}
 
 /* caret measuring mirror: same box, never painted */
 .nw-caret{
@@ -1106,6 +1092,36 @@ const SEL_EMIT_MS = 120;
     /** Page width actually applied; immersive mode guarantees a wide canvas. */
     const effPageWidth = immersive ? Math.max(pageWidth, 880) : pageWidth;
 
+    // ---- R164 the pages of the manuscript -----------------------------------
+    //
+    // The writer asked for two things that only make sense together:
+    //   「纸要写完一页摞一页」 and 「向上滑动看内容时，能把那一页拿回来」.
+    // Both are about ONE number: how many pages have completely left the top of
+    // the sheet. That number is measured, not counted by the caret, because the
+    // caret sits in the middle of the window (typewriter mode) and its page is
+    // still visible — stacking it would contradict the words on screen.
+    //
+    // So: a page is one windowful of lines (L = floor(sheet height / line
+    // height)), the pages are laid on the sheet from the top, and
+    //   finished = floor((scrollTop - paddingTop) / pageH)
+    // is how many of them are gone. Scroll down and a page crosses the top edge
+    // and lies down in the pile; scroll up and it comes back onto the sheet. The
+    // same variable drives both directions, which is what makes the pile honest:
+    // there is no way to see a page in the pile whose words are still on the
+    // sheet, and no way to lose a page by scrolling.
+    //
+    // `list[i]` carries the REAL characters of page i (sliced out of the
+    // manuscript by measurePages), so a card in the pile is the page, not a
+    // picture of one — you can read it, and clicking it puts it back.
+    const sceneOn = settings.scene !== false;
+    const [pageState, setPageState] = React.useState({
+      list: [],
+      finished: 0,
+      total: 0,
+      fresh: -1,
+      back: false,
+    });
+
     const chapter = p.chapter || null;
     const chapterId = chapter && chapter.id != null ? chapter.id : null;
 
@@ -1171,6 +1187,18 @@ const SEL_EMIT_MS = 120;
     const surfaceRef = React.useRef(null);
     const scrollRef = React.useRef(null);
     const pageRef = React.useRef(null);
+    // R164: the off-screen mirror used to find where the pages break, the
+    // signature that keeps it from re-measuring an unchanged manuscript, and
+    // the last page numbers we published (so a scroll can tell a page leaving
+    // from a page coming back without re-measuring anything).
+    const pageMirrorRef = React.useRef(null);
+    const pageSigRef = React.useRef('');
+    const pageStateRef = React.useRef({ list: [], finished: 0, total: 0, fresh: -1, back: false });
+    // The sheet is asked for one settle animation per finished page; a page
+    // coming back must not animate it, or the desk would twitch on every
+    // upward scroll.
+    const settleTimerRef = React.useRef(0);
+    const pagesTimerRef = React.useRef(0);
     const titleRef = React.useRef(null);
     // R41 ①: the title last accepted by the app. Escape restores it, and it is
     // reset on every chapter switch so a stale string can never be restored
@@ -1182,6 +1210,18 @@ const SEL_EMIT_MS = 120;
     const caretRef = React.useRef(null);
     // The painted thick caret (positioned by paintCaret from measureCaret).
     const cursorRef = React.useRef(null);
+    // R135: the lamp that follows the caret's line, and the dog-ear that marks
+    // where the pen was left when a chapter is reopened. Both are painted from
+    // the same measurement plan as the caret, so neither measures on its own.
+    const lampRef = React.useRef(null);
+    const foldRef = React.useRef(null);
+    const lampDimRef = React.useRef(0);
+    // R135: true while the dog-ear should stay folded. Set when a chapter is
+    // reopened on a saved caret, cleared by the first keystroke or by the
+    // six-second timer, whichever comes first.
+    const foldPendingRef = React.useRef(false);
+    const foldTimerRef = React.useRef(0);
+    const lampTimerRef = React.useRef(0);
     // R46: the two veils that fade everything but the line being written.
     const veilTopRef = React.useRef(null);
     const veilBotRef = React.useRef(null);
@@ -1303,46 +1343,17 @@ const SEL_EMIT_MS = 120;
     const [markView, setMarkView] = React.useState(null);
     const markViewRef = React.useRef(null);
     markViewRef.current = markView;
-    // R53：写作区不再有「选字弹条」。标注动作收进左上角的动作胶囊：一个铅笔
-    // 按钮开一张小菜单（下划线 / 删除线 / 批注）。菜单只认**按下那一刻**的选区，
-    // 所以它开着的这段时间里正文选区可以随便变，不会标错地方。
-    // R53c：那个按钮撤了，入口改成右键。
-    const [markMenu, setMarkMenu] = React.useState(null);
-    const markMenuRef = React.useRef(null);
-    markMenuRef.current = markMenu;
+    // R134：写作区不再新建标注。下划线/删除线/批注都在「读一遍」里做，这里只
+    // 认已经存在的标注：点它开一张卡，卡片上只有「接受」和「拒绝」。
     // R73：「选中文字 → 修改建议」的那颗小钮。R53 之所以把选字弹条撤掉，是因为
     // 一条三按钮的横条压在正在选的字上面；这一颗只有一个按钮，落在指针松开处的
     // 右下角，选中一消失它就自己走，所以不需要任何关闭动作。
     const [selBtn, setSelBtn] = React.useState(null);
     const selBtnRef = React.useRef(null);
     selBtnRef.current = selBtn;
-    // R77: 本章段落导航。长章里「跳到第五段」比滚轮可靠得多；列表只在打开时
-    // 扫一遍正文，不跟着每次按键重算。
-    const [paraNav, setParaNav] = React.useState(null);
     /** 页边批注签的容器（.nw-mark-gutter），由 paintGutter() 直接填 DOM。 */
     const gutterRef = React.useRef(null);
 
-    // R53c：菜单现在从右键弹出（没有常驻按钮了）。按下菜单以外的任何地方、
-    // 或按 Escape 都会收起。捕获阶段监听，这样在纸面上按下开始选字时也能先
-    // 把菜单清掉。
-    React.useEffect(() => {
-      if (!markMenu) return undefined;
-      const onDown = (ev) => {
-        const t = ev.target;
-        if (t && typeof t.closest === 'function' && t.closest('.nw-mark-menu')) return;
-        closeMarkMenu();
-      };
-      const onKey = (ev) => {
-        if (ev.key !== 'Escape') return;
-        closeMarkMenu();
-      };
-      document.addEventListener('mousedown', onDown, true);
-      window.addEventListener('keydown', onKey, true);
-      return () => {
-        document.removeEventListener('mousedown', onDown, true);
-        window.removeEventListener('keydown', onKey, true);
-      };
-    }, [markMenu]);
     /** Right-hand blank currently reserved for the floating dock, in px. */
     const dockLaneRef = React.useRef(-1);
 
@@ -2611,6 +2622,138 @@ const SEL_EMIT_MS = 120;
     }
 
     /**
+     * R135: writes the lamp pool. Same contract as paintCaret — style writes
+     * only, no geometry reads, deduped through expando fields so a plain render
+     * never touches the DOM.
+     *
+     * The pool is a band exactly one line tall, centred on the caret's own
+     * column, in the theme's lamp colour (warm for the day themes, a dimmer
+     * cool moonlight for night). Typing keeps it at full strength; two seconds
+     * of stillness drops it to 40% so a paused page is not a lit stage.
+     */
+    function paintLamp(plan) {
+      const el = lampRef.current;
+      if (!el) return;
+      const on = !!(plan && plan.visible);
+      if (on) {
+        // The pool is taller than the line so the falloff spreads above and
+        // below it instead of clipping to a hard one-line band: the line sits
+        // in the upper third of the box, which puts the brightest part on the
+        // text and the fade into the blank paper around it.
+        const lineH = Math.max(8, Math.round(plan.height));
+        const boxH = Math.round(lineH * 2.6);
+        const top = Math.round(plan.top) - Math.round(lineH * 0.8) + 'px';
+        const hh = boxH + 'px';
+        const xx = Math.round(plan.left) + 'px';
+        if (el.__nwLy !== top) {
+          el.style.top = top;
+          el.__nwLy = top;
+        }
+        if (el.__nwLh !== hh) {
+          el.style.height = hh;
+          el.__nwLh = hh;
+        }
+        if (el.__nwLx !== xx) {
+          el.style.setProperty('--nw-lamp-x', xx);
+          el.__nwLx = xx;
+        }
+      }
+      const want = on ? '1' : '0';
+      if (el.getAttribute('data-on') !== want) el.setAttribute('data-on', want);
+      if (on) {
+        const dim = lampDimRef.current ? '1' : '0';
+        if (el.getAttribute('data-dim') !== dim) el.setAttribute('data-dim', dim);
+      }
+    }
+
+    /**
+     * R135: typing wakes the lamp back to full and restarts its two-second
+     * rest timer. Only two style writes at most per keystroke, and none while
+     * the lamp is already at full strength.
+     */
+    function lampTyping() {
+      if (lampDimRef.current !== 0) {
+        lampDimRef.current = 0;
+        const el = lampRef.current;
+        if (el) el.setAttribute('data-dim', '0');
+      }
+      if (lampTimerRef.current) clearTimeout(lampTimerRef.current);
+      lampTimerRef.current = setTimeout(() => {
+        lampTimerRef.current = 0;
+        lampDimRef.current = 1;
+        const el = lampRef.current;
+        if (el) el.setAttribute('data-dim', '1');
+      }, LAMP_IDLE_MS);
+    }
+
+    /** R135: folds the dog-ear down for this chapter opening. */
+    function foldLand() {
+      foldPendingRef.current = true;
+      if (foldTimerRef.current) clearTimeout(foldTimerRef.current);
+      foldTimerRef.current = setTimeout(() => {
+        foldTimerRef.current = 0;
+        foldPendingRef.current = false;
+        const el = foldRef.current;
+        if (el) el.setAttribute('data-on', '0');
+      }, FOLD_LINGER_MS);
+    }
+
+    /** R135: first keystroke (or a click elsewhere) unfolds it at once. */
+    function foldClear() {
+      if (foldTimerRef.current) {
+        clearTimeout(foldTimerRef.current);
+        foldTimerRef.current = 0;
+      }
+      if (!foldPendingRef.current) return;
+      foldPendingRef.current = false;
+      const el = foldRef.current;
+      if (el) el.setAttribute('data-on', '0');
+    }
+
+    /**
+     * R135: writes the dog-ear. `plan` carries the caret line's top in
+     * content coordinates; the corner is pinned to the paper's right edge by
+     * CSS, so only its vertical place is written here (top, never transform —
+     * transform owns the fold/unfold animation).
+     */
+    function paintFold(plan) {
+      const el = foldRef.current;
+      if (!el) return;
+      const on = !!(plan && plan.visible);
+      if (on) {
+        const top = Math.round(plan.top) + 'px';
+        if (el.__nwFy !== top) {
+          el.style.top = top;
+          el.__nwFy = top;
+        }
+      }
+      const want = on ? '1' : '0';
+      if (el.getAttribute('data-on') !== want) el.setAttribute('data-on', want);
+    }
+
+    /** R135: the caret line, or null when the fold is not wanted. */
+    function planFoldPaint(getM) {
+      if (!foldPendingRef.current) return null;
+      return { visible: true, top: (getM() || {}).lineTop || 0 };
+    }
+
+    /**
+     * R135: the lamp follows the line the pen is on. Unlike the caret it stays
+     * lit while a range is selected — you are still on that line, and having
+     * the light blink out every time you select a sentence reads as a flicker.
+     * It is off while the editor is unfocused or an IME is composing.
+     */
+    function planLampPaint(getM) {
+      const ta = taRef.current;
+      if (!ta) return null;
+      if (composingRef.current || !winFocusedRef.current) return null;
+      if (ta !== (ta.ownerDocument || document).activeElement) return null;
+      const m = getM();
+      if (!m) return null;
+      return { left: m.left, top: m.lineTop, height: m.height, visible: true };
+    }
+
+    /**
      * R46/R54b: places the two veils so that the middle of the pane stays
      * unfaded and everything above and below it fades.
      *
@@ -2739,7 +2882,265 @@ const SEL_EMIT_MS = 120;
      * Interleaving the two would force a synchronous re-layout per write, which
      * is what made fast typing feel sticky.
      */
+    // ---- R164 the page engine -----------------------------------------------
+    //
+    // Three small pieces, in the order they run:
+    //   pageMetrics()  — how tall a page is (one windowful of lines)
+    //   measurePages() — where the pages break, and the words on each one
+    //   syncFinished() — how many pages have left the top of the sheet right now
+    // The first two are cached and debounced; the third runs on every scroll and
+    // is pure arithmetic, because a 60fps scroll must never re-measure text.
+
+    /** One windowful of lines, in pixels, plus the sheet's top padding. */
+    function pageMetrics(view) {
+      const ta = taRef.current;
+      const sc = (view && view.sc) || scrollRef.current;
+      const page = pageRef.current;
+      if (!ta || !sc || !page) return null;
+      const cs = getComputedStyle(ta);
+      const lh = parseFloat(cs.lineHeight);
+      const winH = sc.clientHeight;
+      // 3 lines is the floor: under that a "page" is not a page, and the
+      // arithmetic below would produce a pile that flickers while typing.
+      const lines = lh > 0 ? Math.floor((winH - 1) / lh) : 0;
+      if (!(lines >= 3)) return null;
+      return {
+        lh,
+        lines,
+        height: lines * lh,
+        padTop: parseFloat(getComputedStyle(page).paddingTop) || 0,
+      };
+    }
+
+    /** The top of the line box that holds character `at` of the mirror. */
+    function mirrorTopAt(mirror, node, at, len) {
+      const range = mirror.__nwRange || (mirror.__nwRange = document.createRange());
+      let i = Math.max(0, Math.min(len - 1, at));
+      // A newline paints nothing, so a hit on one tells us nothing; step
+      // forward a few characters to land on the first glyph of the next line,
+      // which is the geometry the page break is defined by.
+      for (let guard = 0; guard < 8 && i < len; guard += 1) {
+        range.setStart(node, i);
+        range.setEnd(node, Math.min(len, i + 1));
+        const rects = range.getClientRects();
+        if (rects.length) return rects[0].top;
+        i += 1;
+      }
+      return Infinity;
+    }
+
+    /** First character whose line starts at or below `targetTop`. */
+    function offsetAtTop(mirror, node, len, targetTop, from) {
+      let lo = Math.max(0, from || 0);
+      let hi = len;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (mirrorTopAt(mirror, node, mid, len) >= targetTop - 0.5) hi = mid;
+        else lo = mid + 1;
+      }
+      return lo;
+    }
+
+    /** Trim a page's words down to what a 152×204 card can actually show. */
+    function cardTextOf(raw) {
+      const flat = String(raw || '').replace(/[ \t\u3000]+/g, ' ').replace(/\n+/g, '\n').trim();
+      return flat.length > 240 ? flat.slice(0, 240) : flat;
+    }
+
+    /**
+     * Measure where the pages break. Runs off the keystroke path (debounced by
+     * schedulePages), because it lays the whole chapter out in a hidden mirror
+     * once and then binary-searches a handful of character offsets against it.
+     */
+    function measurePages(view) {
+      const ta = taRef.current;
+      const page = pageRef.current;
+      const m = pageMetrics(view);
+      if (!ta || !page || !m) return;
+      const text = ta.value || '';
+      const cs = getComputedStyle(ta);
+      const colW = Math.max(
+        40,
+        ta.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0),
+      );
+      // Everything that can move a page break. The chapter id is in there so a
+      // switch re-measures even when the new chapter happens to be as long.
+      const sig = [
+        chapterId,
+        text.length,
+        m.lines,
+        m.lh.toFixed(2),
+        Math.round(colW),
+        cs.fontFamily,
+        cs.fontSize,
+        cs.letterSpacing,
+        cs.textIndent,
+        cs.textAlign,
+      ].join('|');
+      if (sig === pageSigRef.current) return;
+      pageSigRef.current = sig;
+
+      const offsets = [0];
+      const len = text.length;
+      // Past this size the binary searches would be felt while typing; the pile
+      // keeps working from the geometry, it just stops slicing pages exactly.
+      if (len > 0 && len <= 60000) {
+        const mirror = pageMirrorRef.current || (pageMirrorRef.current = document.createElement('div'));
+        const st = mirror.style;
+        st.position = 'absolute';
+        st.left = '-99999px';
+        st.top = '0';
+        st.visibility = 'hidden';
+        st.pointerEvents = 'none';
+        st.whiteSpace = 'pre-wrap';
+        st.overflowWrap = 'anywhere';
+        st.wordBreak = 'break-word';
+        st.font = cs.font;
+        st.lineHeight = cs.lineHeight;
+        st.letterSpacing = cs.letterSpacing;
+        st.textIndent = cs.textIndent;
+        st.textAlign = cs.textAlign;
+        st.tabSize = cs.tabSize;
+        st.padding = '0';
+        st.margin = '0';
+        st.border = '0';
+        st.width = colW.toFixed(2) + 'px';
+        if (!mirror.isConnected) document.body.appendChild(mirror);
+        mirror.textContent = text;
+        const node = mirror.firstChild;
+        if (node && node.nodeType === 3) {
+          const firstTop = mirrorTopAt(mirror, node, 0, len);
+          const lastTop = mirrorTopAt(mirror, node, len - 1, len);
+          if (Number.isFinite(firstTop) && Number.isFinite(lastTop)) {
+            let prev = 0;
+            // 400 pages is a year of writing in one chapter; beyond that we stop
+            // slicing rather than loop forever on a paste of a novel.
+            for (let n = 1; n <= 400; n += 1) {
+              const target = firstTop + n * m.height;
+              if (target > lastTop) break;
+              const at = offsetAtTop(mirror, node, len, target, prev);
+              if (at <= prev || at > len - 1) break;
+              offsets.push(at);
+              prev = at;
+            }
+          }
+        }
+      }
+
+      const list = offsets.map((start, i) => ({
+        n: i,
+        start,
+        end: i + 1 < offsets.length ? offsets[i + 1] : len,
+        text: '',
+        head: '',
+        blank: false,
+      }));
+      // The last boundary can land exactly on the end of the text; that is not
+      // an extra page, it is the end of the last one.
+      if (list.length > 1 && list[list.length - 1].start >= len) list.pop();
+      for (let i = 0; i < list.length; i += 1) {
+        const raw = text.slice(list[i].start, list[i].end);
+        list[i].text = cardTextOf(raw);
+        list[i].blank = !list[i].text;
+        list[i].head = chapterTitle || '';
+      }
+      publishPages({ list, total: list.length }, m);
+    }
+
+    /** Copy the page numbers into React state, but only when they moved. */
+    function publishPages(next, m) {
+      const sc = scrollRef.current;
+      const prev = pageStateRef.current;
+      // Clamp against the list we are publishing, not the one on screen: a
+      // first measurement of a long chapter arrives with pages nobody has
+      // counted yet, and clamping to the old (shorter) list would freeze the
+      // pile at the number it had when the editor opened.
+      const metrics = m || pageMetrics(null);
+      const gone = sc && metrics
+        ? Math.floor((sc.scrollTop - metrics.padTop + 1) / metrics.height)
+        : 0;
+      const finished = Math.max(0, Math.min(next.list.length, gone));
+      const same =
+        prev.list === next.list &&
+        prev.finished === finished &&
+        prev.total === next.total &&
+        prev.fresh === -1;
+      if (same) return;
+      const fresh = finished > prev.finished ? finished - 1 : -1;
+      const back = finished < prev.finished;
+      const value = { list: next.list, finished, total: next.total, fresh, back };
+      pageStateRef.current = value;
+      setPageState(value);
+      if (fresh >= 0) flashSettle(false);
+      else if (back) flashSettle(true);
+    }
+
+    /** How many pages have completely left the top of the sheet. */
+    function finishedCount(sc, m) {
+      const metrics = m || pageMetrics(null);
+      if (!sc || !metrics) return 0;
+      const gone = Math.floor((sc.scrollTop - metrics.padTop + 1) / metrics.height);
+      const total = pageStateRef.current.list.length;
+      return Math.max(0, Math.min(total, gone));
+    }
+
+    /** One breathe of the sheet when a page lands in the pile (or comes back). */
+    function flashSettle(isBack) {
+      const sc = scrollRef.current;
+      if (!sc) return;
+      sc.classList.remove('is-settle', 'is-back');
+      // Reflow-free restart of the CSS animation.
+      void sc.offsetWidth;
+      sc.classList.add('is-settle');
+      if (isBack) sc.classList.add('is-back');
+      window.clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = window.setTimeout(() => {
+        sc.classList.remove('is-settle', 'is-back');
+      }, isBack ? 420 : 560);
+    }
+
+    /** Re-read the page count after a scroll — arithmetic only, no measuring. */
+    function syncFinished() {
+      const sc = scrollRef.current;
+      const prev = pageStateRef.current;
+      if (!sc || !prev.list.length) return;
+      const m = pageMetrics(null);
+      if (!m) return;
+      const finished = finishedCount(sc, m);
+      if (finished === prev.finished) return;
+      const value = {
+        list: prev.list,
+        total: prev.total,
+        finished,
+        fresh: finished > prev.finished ? finished - 1 : -1,
+        back: finished < prev.finished,
+      };
+      pageStateRef.current = value;
+      setPageState(value);
+      if (finished > prev.finished) flashSettle(false);
+      else flashSettle(true);
+    }
+
+    /** Put page `n` back on the sheet (the pile is clickable). */
+    function bringBackPage(n) {
+      const sc = scrollRef.current;
+      const m = pageMetrics(null);
+      if (!sc || !m) return;
+      const target = Math.round(m.padTop + n * m.height);
+      sc.scrollTo({ top: target, behavior: 'smooth' });
+    }
+
+    /** Debounced page measurement — coalesced, never inside the keystroke. */
+    function schedulePages() {
+      window.clearTimeout(pagesTimerRef.current);
+      pagesTimerRef.current = window.setTimeout(() => {
+        pagesTimerRef.current = 0;
+        measurePages(null);
+      }, 220);
+    }
+
     function refresh(wantCenter) {
+
       const ta = taRef.current;
       if (!ta) {
         emitSelection();
@@ -2772,6 +3173,11 @@ const SEL_EMIT_MS = 120;
       };
       const scrollTarget = planCaretScroll(!!wantCenter, view, getM);
       const caretPlan = planCaretPaint(view, getM);
+      // R135: the lamp trails the caret line but survives a selection (the
+      // caret itself hides then); the fold only appears after a chapter lands
+      // on a saved caret.
+      const lampPlan = planLampPaint(getM);
+      const foldPlan = planFoldPaint(getM);
       const focusOrigin = focusOn ? surfaceOrigin(view) : 0;
       // R71: the band is the caret's paragraph. Measured in the read phase
       // (a Range over the caret mirror, no DOM writes) and cached, because
@@ -2793,12 +3199,19 @@ const SEL_EMIT_MS = 120;
       settleLanding(view);
       if (scrollTarget != null) setScrollTop(scrollTarget, view);
       paintCaret(caretPlan);
+      paintLamp(lampPlan);
+      paintFold(foldPlan);
       paintFocus(view, focusOrigin);
       rebuildHighlights();
       emitSelection();
       // R73: the viewport may have just moved (typewriter centring after the
       // drag-release): keep the 修改建议 button glued to the selected words.
       reseatSelBtn();
+      // R164: the page count is pure arithmetic over the scroll position we just
+      // wrote, so it can be refreshed here; the words on the cards are measured
+      // off the keystroke path by schedulePages().
+      syncFinished();
+      schedulePages();
     }
 
     /**
@@ -2986,6 +3399,9 @@ const SEL_EMIT_MS = 120;
       valueRef.current = ta.value;
       dirtyRef.current = true;
       typedAtRef.current = nowMs();
+      // R135: a keystroke both wakes the lamp and unfolds the dog-ear.
+      lampTyping();
+      foldClear();
       // R26: tell the app the buffer is dirty *now*. The debounce is 1200ms and
       // without this the status bar keeps claiming 已保存 for the whole second
       // after a keystroke — the "dirty" branch in the app was unreachable.
@@ -3318,53 +3734,6 @@ const SEL_EMIT_MS = 120;
       for (let i = 0; i < signs.length; i += 1) signs[i].removeAttribute('data-active');
     }
 
-    /**
-     * R53c: the marking menu, opened by right-clicking a selection.
-     *
-     * The range is frozen at the moment the menu opens. The menu never appears
-     * by itself — selecting words used to pop a three-button bar right over the
-     * words being selected, which is what the writer asked to get rid of. Now
-     * it only shows up when the writer asks for it (right-click), and it opens
-     * at the pointer, next to the words instead of at the page corner.
-     */
-    function openMarkMenu(ev) {
-      const ta = taRef.current;
-      if (!ta) return;
-      const a = Number(ta.selectionStart) || 0;
-      const b = Number(ta.selectionEnd) || 0;
-      const start = Math.min(a, b);
-      const end = Math.max(a, b);
-      const text = ta.value.slice(start, end);
-      const hasRange = end > start && !!String(text).trim() && end - start <= 4000;
-      // 右键点在哪，菜单就长在哪。菜单是 .nw-surface 的直接子节点（固定在纸面
-      // 之上，不跟着纸滚），所以坐标按 surface 换算；先右后左、先下后上夹在
-      // 纸面之内。
-      const surf = surfaceRef.current;
-      const surfRect = surf ? surf.getBoundingClientRect() : null;
-      const menuW = 152;
-      const menuH = 132;
-      let x = surfRect && ev ? Number(ev.clientX) - surfRect.left + 2 : 14;
-      let y = surfRect && ev ? Number(ev.clientY) - surfRect.top + 2 : 46;
-      if (surfRect) {
-        if (x + menuW > surfRect.width - 8) x = Math.max(8, x - menuW - 4);
-        if (y + menuH > surfRect.height - 8) y = Math.max(8, y - menuH - 4);
-        x = Math.max(8, Math.min(x, Math.max(8, surfRect.width - menuW - 8)));
-      }
-      setMarkView(null);
-      setMarkMenu({
-        start: start,
-        end: end,
-        quote: String(text || '').slice(0, 240),
-        hasRange: hasRange,
-        x: Math.round(x),
-        y: Math.round(y),
-      });
-    }
-
-    function closeMarkMenu() {
-      setMarkMenu((cur) => (cur ? null : cur));
-    }
-
     // ------------------------------------------------- 选中 → 修改建议 (R73) --
     /**
      * Where the button should sit for a given character offset: just under the
@@ -3511,121 +3880,41 @@ const SEL_EMIT_MS = 120;
       }
     }
 
-    // ------------------------------------------------------ 段落导航 (R77) --
     /**
-     * One row per non-empty line. A chapter of 3000 characters is 10–30 of them,
-     * which is exactly the size a writer can scan; splitting on blank lines
-     * instead would show one row for a whole scene.
+     * R134: 裁决一条标注——接受或拒绝。
+     *
+     * 批注：接受＝用批注写的那句话替换被标注的原文（作者在「读一遍」里写下的
+     * 就是他想让这句话变成的样子）；拒绝＝原文一个字不动。
+     * 删除线：接受＝把被划掉的几个字删掉；拒绝＝原文一个字不动。
+     * 不论选哪个，这条标注都到此为止——裁决过的线不该继续挂在纸上。
+     *
+     * 改文本走 replaceRange，其它标注的位移由 commitSave 里的 save-diff 通道
+     * 自动跟上（commitSave → onMarksShift），这边不手写位移。
      */
-    function openParaNav() {
-      const ta = taRef.current;
-      if (!ta) {
-        setParaNav((cur) => (cur ? null : cur));
+    function decideMarkOf(mark, accept) {
+      if (!mark) return;
+      const kind = String(mark.kind || 'underline');
+      const id = mark.id;
+      if (kind === 'underline') {
+        removeMarkOf(id);
         return;
       }
-      const items = [];
-      const source = ta.value;
-      const re = /[^\n]+/g;
-      let match = re.exec(source);
-      while (match && items.length < 500) {
-        const raw = match[0];
-        const trimmed = raw.trim();
-        if (trimmed) {
-          items.push({ start: match.index, length: raw.length, text: trimmed.slice(0, 26) });
-        }
-        match = re.exec(source);
-      }
-      setParaNav({ items: items });
-    }
-
-    function jumpPara(item) {
-      const api = apiRef.current;
-      if (api && item) {
-        const start = Math.max(0, Number(item.start) || 0);
-        const end = start + Math.max(1, Number(item.length) || 1);
-        if (typeof api.centerRange === 'function') api.centerRange(start, end);
-        if (typeof api.setHighlights === 'function') {
-          api.setHighlights([{ start: start, end: end, id: 'para-anchor', active: true }]);
-        }
-      }
-      setParaNav(null);
       const ta = taRef.current;
       if (ta) {
-        try {
-          ta.focus();
-        } catch (err) {
-          /* the editor may be gone */
+        const len = ta.value.length;
+        const start = clampNum(numOf(mark.start, 0), 0, len);
+        const end = clampNum(numOf(mark.end, start), start, len);
+        if (accept) {
+          if (kind === 'comment') {
+            const note = String(mark.note || '').trim();
+            // 没写字就没什么可替换的：这一条按「拒绝」处理，只把标注收掉。
+            if (note) replaceRange(start, end, note);
+          } else if (kind === 'strike' && end > start) {
+            replaceRange(start, end, '');
+          }
         }
       }
-    }
-
-    /**
-     * R53: create (or retype) a mark over the range the menu was opened on.
-     *
-     * Duplicates are killed at the source: the same words never become two
-     * marks. Marking a span that is already marked just changes its type, and
-     * marking it with the type it already has only puts the card back on it.
-     * The database does the same merge, so a refresh cannot resurrect a twin.
-     */
-    function createMarkOfSelection(kind) {
-      const menu = markMenuRef.current;
-      const ta = taRef.current;
-      if (!menu || !ta) return;
-      if (!menu.hasRange) return;
-      const start = clampNum(menu.start, 0, ta.value.length);
-      const end = clampNum(menu.end, start, ta.value.length);
-      if (end <= start) return;
-      const text = ta.value.slice(start, end);
-      const rows = marksRef.current || [];
-      const existing = rows.find((r) => r && sameSpan(r, { start: start, end: end }));
-      closeMarkMenu();
-      if (existing) {
-        const existingNote = String(existing.note || '').trim();
-        // R53e：写着字的线就是批注，不能靠再点一次「下划线」把它降回一条线——
-        // 那样要么丢掉作者写的话，要么存进去又被 db 判回 comment，界面上闪一下
-        // 等于没反应。有字就只把卡片开出来，线本身不动。
-        if (existingNote && String(kind) !== 'comment') {
-          openMarkView(existing, null);
-          return;
-        }
-        if (String(existing.kind) === String(kind)) {
-          // Nothing to draw: the line is already on the paper. Just show it.
-          openMarkView(existing, null);
-          return;
-        }
-        marksRef.current = rows.map((r) => (r && sameSpan(r, { start: start, end: end })
-          ? Object.assign({}, r, { kind: kind })
-          : r));
-        rebuildHighlights();
-        if (typeof p.onMarkCreate === 'function') {
-          const retyped = p.onMarkCreate(Object.assign({}, existing, { kind: kind }));
-          if (retyped && typeof retyped.catch === 'function') retyped.catch(() => {});
-        }
-        const row = (marksRef.current || []).find((r) => r && sameSpan(r, { start: start, end: end }));
-        if (row) openMarkView(row, null);
-        return;
-      }
-      const id = 'mk-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36);
-      const draft = {
-        id: id,
-        // Without this the row is thrown away by db.cleanMark (which requires a
-        // chapter) — every mark drawn in the writing surface used to vanish.
-        chapterId: chapterIdRef.current || (chapter && chapter.id) || '',
-        kind: kind,
-        start: start,
-        end: end,
-        quote: String(text || '').slice(0, 240),
-        note: '',
-      };
-      // Paint it at once: the app round-trips through IndexedDB before the list
-      // comes back, and a line that appears a beat late reads as "it didn't work".
-      marksRef.current = rows.concat([draft]);
-      rebuildHighlights();
-      if (typeof p.onMarkCreate === 'function') {
-        const created = p.onMarkCreate(draft);
-        if (created && typeof created.catch === 'function') created.catch(() => {});
-      }
-      if (kind === 'comment') openMarkView(draft, null);
+      removeMarkOf(id);
     }
 
     /** Delete a mark from the card, painting the change immediately. */
@@ -4403,10 +4692,6 @@ const SEL_EMIT_MS = 120;
           const ta = taRef.current;
           if (ta) ta.focus();
         },
-        /** R117: the phone bar hides the corner capsule, so 段落 needs a door. */
-        openParaNav() {
-          openParaNav();
-        },
         /**
          * R103: put the caret where the writer stopped and make sure it is on
          * screen. "继续写" switches the view while the pane is still laying out,
@@ -4552,6 +4837,11 @@ const SEL_EMIT_MS = 120;
       // Switching chapters is not typing here: the first peer edit in the new
       // chapter should still be able to show itself.
       typedAtRef.current = -1e9;
+      // R135: the lamp and the dog-ear belong to the outgoing chapter — drop
+      // them here so the incoming one never flashes the previous line's light.
+      // foldLand() below re-arms the fold if this chapter has a saved caret.
+      lampDimRef.current = 0;
+      foldClear();
       // R46: the cached caret line belonged to the old chapter's text.
       focusTopRef.current = -1;
       // R71: so did the cached paragraph band.
@@ -4622,6 +4912,10 @@ const SEL_EMIT_MS = 120;
           // retries below just give layout a few chances to become real.
           landPendingRef.current = caretAt;
           landDeadlineRef.current = Date.now() + 4000;
+          // R135: a chapter reopened exactly where the pen stopped gets a
+          // folded corner on that line. A fresh chapter (no saved caret) does
+          // not — there is nothing to point back at.
+          foldLand();
           const land = () => {
             const ta2 = taRef.current;
             if (!ta2 || chapterIdRef.current !== nextId) return;
@@ -4767,6 +5061,10 @@ const SEL_EMIT_MS = 120;
         // scroll can leave it alone — but the card points at words, so it goes.
         if (markViewRef.current) closeMarkView();
         markManual();
+        // R164: the writer is moving the sheet by hand. A page that scrolls back
+        // up past the top edge comes back out of the pile right here — this is
+        // the "拿回来" half of the page metaphor, and it needs no measuring.
+        syncFinished();
       };
       scrollHooksRef.current = { wheel: onWheel, touchmove: onTouchMove, scroll: onScroll };
 
@@ -4977,6 +5275,15 @@ const SEL_EMIT_MS = 120;
           window.clearTimeout(noticeTimerRef.current);
           noticeTimerRef.current = 0;
         }
+        // R135: the lamp's rest timer and the dog-ear's linger timer are ours.
+        if (lampTimerRef.current) {
+          window.clearTimeout(lampTimerRef.current);
+          lampTimerRef.current = 0;
+        }
+        if (foldTimerRef.current) {
+          window.clearTimeout(foldTimerRef.current);
+          foldTimerRef.current = 0;
+        }
         flushNow(); // last chance: never lose a debounce window
       };
     }, []);
@@ -5009,81 +5316,23 @@ const SEL_EMIT_MS = 120;
     const matchPos = matchTotal ? Math.min(find.index + 1, matchTotal) : 0;
     const countText = find.notice || (find.query ? matchPos + '/' + matchTotal : '');
 
-    // R53c：标记菜单——从**右键**弹出（角上那颗铅笔已按用户要求撤掉），永远不会
-    // 因为「选中了字」自己冒出来。三行，每行带一小段样本，选之前就能看见画出来
-    // 是什么样。`onMouseDown` preventDefault 是为了保住冻结的选区——菜单被点时
-    // textarea 若失焦，selectionStart/End 就没了。
-    const markMenuBar = markMenu
-      ? h(
-          'div',
-          {
-            className: 'nw-mark-menu',
-            role: 'menu',
-            'aria-label': NW.t('标一下'),
-            // R53c：跟着右键的位置走，不再是左上角那个固定点。
-            style: { left: (markMenu.x || 0) + 'px', top: (markMenu.y || 0) + 'px' },
-            onMouseDown: (ev) => {
-              if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-            },
-          },
-          h(
-            'div',
-            { className: 'nw-mark-menu-quote' },
-            markMenu.hasRange
-              ? '「' + String(markMenu.quote || '').slice(0, 14) + '」'
-              : NW.t('先选中一段字'),
-          ),
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'nw-mark-menu-btn',
-              role: 'menuitem',
-              disabled: !markMenu.hasRange,
-              onClick: () => createMarkOfSelection('underline'),
-            },
-            h('span', { className: 'nw-mark-menu-swatch', 'data-kind': 'underline' }),
-            NW.t('下划线'),
-          ),
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'nw-mark-menu-btn',
-              role: 'menuitem',
-              disabled: !markMenu.hasRange,
-              onClick: () => createMarkOfSelection('strike'),
-            },
-            h('span', { className: 'nw-mark-menu-swatch', 'data-kind': 'strike' }),
-            NW.t('删除线'),
-          ),
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'nw-mark-menu-btn',
-              role: 'menuitem',
-              disabled: !markMenu.hasRange,
-              onClick: () => createMarkOfSelection('comment'),
-            },
-            h('span', { className: 'nw-mark-menu-swatch', 'data-kind': 'comment' }),
-            NW.t('批注'),
-          ),
-        )
-      : null;
-
+    // R134: 编辑页不再新建标注——下划线、删除线、批注都在「读一遍」里做，写作面上
+    // 右键也不再弹那张三行菜单。这里留下的唯一动作是**裁决**：点纸上已有的标注，
+    // 开一张只有「接受 / 拒绝」的卡。
     // R51: the read-only mark card. Deliberately no <textarea> in it: the
     // writing surface is where the line is, so it is where you find out what the
     // line says; writing the note happens in 读一遍, where the whole page is
-    // yours and there is room to think. 删除 is here because deleting is a
-    // reading-time decision — you see the line is wrong and it is gone.
+    // yours and there is room to think.
     //
     // R53g：这张卡上不再有引文，也没有「知道了」。引文是刚点的那句字，正文里就在
     // 眼前，抄一遍只是把同一句话说了两次；「知道了」是为了关掉一张本来不该挡路的
     // 卡而多出来的一个动作——点别处就收，卡片自己会走。批注还留着它那句话本身
-    // （那是这条批注存在的理由），下划线和删除线则只剩一个「删除」。
-    const markIsLine = markView && markView.mark
-      && String(markView.mark.kind) !== 'comment';
+    // （那是这条批注存在的理由）。
+    //
+    // R134：卡片从「删除」升级成裁决——批注与删除线给「接受 / 拒绝」，接受会真的
+    // 改正文（见 decideMarkOf）；下划线没有「该改成什么」的语义，仍只有一个删除。
+    const markKind = markView && markView.mark ? String(markView.mark.kind || 'underline') : '';
+    const markIsLine = markKind === 'strike' || markKind === 'underline';
     const markCard =
       markView && markView.mark
         ? h(
@@ -5100,30 +5349,42 @@ const SEL_EMIT_MS = 120;
                 if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
               },
             },
-            markIsLine
-              ? null
-              : h(
+            markKind === 'comment'
+              ? h(
                 'div',
                 {
                   className: 'nw-mark-view-note',
                   'data-empty': String(markView.mark.note || '').trim() ? '0' : '1',
                 },
                 String(markView.mark.note || '').trim() || NW.t('在「读一遍」里写这句话'),
-              ),
+              )
+              : null,
             h(
               'div',
               { className: 'nw-mark-view-acts' },
-              h('button', {
-                type: 'button',
-                className: 'nw-mark-view-btn',
-                'data-danger': '1',
-                onClick: () => {
-                  // R52: go through removeMarkOf so the line disappears in this
-                  // frame instead of waiting for the list to come back from
-                  // IndexedDB — otherwise 删除 looks like it did nothing.
-                  removeMarkOf(markView.mark.id);
-                },
-              }, NW.t('删除')),
+              markKind === 'underline'
+                ? h('button', {
+                  type: 'button',
+                  className: 'nw-mark-view-btn',
+                  'data-danger': '1',
+                  onClick: () => removeMarkOf(markView.mark.id),
+                }, NW.t('删除'))
+                : h('button', {
+                  type: 'button',
+                  className: 'nw-mark-view-btn',
+                  'data-primary': '1',
+                  title: markKind === 'comment'
+                    ? NW.t('用批注里的话替换原文')
+                    : NW.t('删掉被划掉的这几个字'),
+                  onClick: () => decideMarkOf(markView.mark, true),
+                }, NW.t('接受')),
+              markKind === 'underline'
+                ? null
+                : h('button', {
+                  type: 'button',
+                  className: 'nw-mark-view-btn',
+                  onClick: () => decideMarkOf(markView.mark, false),
+                }, NW.t('拒绝')),
             ),
           )
         : null;
@@ -5214,6 +5475,36 @@ const SEL_EMIT_MS = 120;
           )
         : null;
 
+    // R164 — the pile. Newest page on top; eight is what fits beside the sheet
+    // before the stack stops reading as a stack and starts reading as a wall.
+    // The cards are buttons, so they are reachable by keyboard and a tap puts
+    // that page back on the sheet.
+    const PILE_SHOWN = 8;
+    const pileList = pageState.list.slice(0, Math.min(pageState.finished, PILE_SHOWN));
+    const pile = pageState.finished > 0
+      ? h(
+          'div',
+          { className: 'nw-pile' },
+          pileList.map((page, k) => h(
+            'button',
+            {
+              key: 'page-' + page.n,
+              type: 'button',
+              className: 'nw-card',
+              style: { '--i': k },
+              'data-fresh': pageState.fresh === page.n ? '1' : undefined,
+              title: NW.t('第') + (page.n + 1) + NW.t('页') + ' · ' + NW.t('拿回桌上'),
+              'aria-label': NW.t('第') + (page.n + 1) + NW.t('页') + ' · ' + NW.t('拿回桌上'),
+              onClick: () => bringBackPage(page.n),
+            },
+            h('span', { className: 'nw-card-head' }, page.head || chapterTitle || NW.t('这一页')),
+            h('span', { className: 'nw-card-body', 'aria-hidden': 'true' }, page.text || ' '),
+            h('span', { className: 'nw-card-foot' }, String(page.n + 1)),
+          )),
+          h('div', { className: 'nw-pile-count' }, NW.t('已写') + ' ' + pageState.finished + ' ' + NW.t('页')),
+        )
+      : null;
+
     const body = chapter
       ? h(
           'div',
@@ -5252,7 +5543,15 @@ const SEL_EMIT_MS = 120;
           h(
             'div',
             { className: 'nw-stack', ref: stackRef },
+            // R135: a soft pool of light under the line being written. It sits
+            // below the highlight mirror so ink always stays on top of light,
+            // and it is painted from the same plan as the caret — transform and
+            // opacity only, so it costs no extra measurement.
+            h('div', { className: 'nw-lamp', ref: lampRef, 'aria-hidden': 'true' }),
             h('div', { className: 'nw-hl', ref: hlRef, 'aria-hidden': 'true' }),
+            // R135: the dog-ear that says "you stopped here". It folds in when a
+            // chapter reopens on a saved caret and unfolds on the first keystroke.
+            h('div', { className: 'nw-fold', ref: foldRef, 'aria-hidden': 'true' }),
             h('div', { className: 'nw-caret', ref: caretRef, 'aria-hidden': 'true' }),
             // Thick caret: painted from the same mirror measurement the
             // typewriter uses, so its line always matches the centred one.
@@ -5310,6 +5609,9 @@ const SEL_EMIT_MS = 120;
               onFocus: () => {
                 // R71: focusing the manuscript lights its paragraph again.
                 editorFocusedRef.current = true;
+                // R135: arriving at the page also starts the lamp's rest timer —
+                // the line is lit, and if nothing is typed it settles to 40%.
+                lampTyping();
                 scheduleMeasure(false);
                 repaintFocusSoon();
               },
@@ -5325,22 +5627,10 @@ const SEL_EMIT_MS = 120;
                 syncSelBtn();
                 scheduleMeasure(true);
               },
-              // R53c：标注的唯一入口。选中一段字再按右键 → 在指针旁弹出小菜单；
-              // 没选中就原样放行，浏览器自己的复制/粘贴菜单照旧。这样纸面上不
-              // 再需要任何常驻按钮。
-              // 右键直接点在一条已有的线上（且没有选中文字）时，按「看批注」处理：
-              // 那一下的意思几乎总是「这条线写了什么」。
+              // R134：写作面不再新建标注，右键也不再弹菜单。只在「右键点在一条
+              // 已有的线上」时开那张裁决卡；其余情况原样放行，浏览器自己的
+              // 复制/粘贴菜单照旧。
               onContextMenu: (ev) => {
-                const ta = taRef.current;
-                if (!ta) return;
-                const a = Number(ta.selectionStart) || 0;
-                const b = Number(ta.selectionEnd) || 0;
-                const hasRange = Math.max(a, b) - Math.min(a, b) > 0;
-                if (hasRange) {
-                  if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-                  openMarkMenu(ev);
-                  return;
-                }
                 const hit = markAtPoint(ev);
                 if (hit) {
                   if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
@@ -5393,7 +5683,7 @@ const SEL_EMIT_MS = 120;
             h('br'),
             // R77 (B5): 两个「看不见的入口」写在空状态里——它们是这一轮之前
             // 最容易没人发现的功能。
-            NW.t('选中文字：右键标注，或点浮出的「修改建议」'),
+            NW.t('选中文字：右键标注，或点浮出的「AI建议」'),
           ),
         );
 
@@ -5407,8 +5697,8 @@ const SEL_EMIT_MS = 120;
             type: 'button',
             className: 'nw-selbtn',
             style: { left: selBtn.x + 'px', top: selBtn.y + 'px' },
-            title: NW.t('给选中的文字提修改建议'),
-            'aria-label': NW.t('修改建议'),
+            title: NW.t('给选中的文字提AI建议'),
+            'aria-label': NW.t('AI建议'),
             onMouseDown: (ev) => {
               if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
             },
@@ -5419,51 +5709,7 @@ const SEL_EMIT_MS = 120;
             },
           },
           NW.icon('sparkle', { size: 13 }),
-          h('span', { className: 'nw-selbtn-txt' }, NW.t('修改建议')),
-        )
-      : null;
-
-    // R77: 段落导航面板。盖在纸面左上，不在正文里插任何元素。
-    const paraPanel = paraNav
-      ? h(
-          'div',
-          { className: 'nw-paranav', role: 'dialog', 'aria-label': NW.t('段落导航') },
-          h(
-            'div',
-            { className: 'nw-paranav-head' },
-            h('span', { className: 'nw-paranav-title' }, NW.t('段落')),
-            h('span', { className: 'nw-paranav-count' }, String(paraNav.items.length)),
-            h('span', { style: { flex: '1 1 auto' } }),
-            h(
-              'button',
-              {
-                type: 'button',
-                className: 'nw-paranav-x',
-                'aria-label': NW.t('关闭段落导航'),
-                onClick: () => setParaNav(null),
-              },
-              NW.icon('x', { size: 13 }),
-            ),
-          ),
-          h(
-            'div',
-            { className: 'nw-paranav-list' },
-            paraNav.items.length === 0
-              ? h('div', { className: 'nw-paranav-empty' }, NW.t('这一章还没有正文'))
-              : paraNav.items.map((item, index) =>
-                  h(
-                    'button',
-                    {
-                      key: 'p' + index,
-                      type: 'button',
-                      className: 'nw-paranav-row',
-                      onClick: () => jumpPara(item),
-                    },
-                    h('span', { className: 'nw-paranav-n' }, String(index + 1)),
-                    h('span', { className: 'nw-paranav-t' }, item.text),
-                  ),
-                ),
-          ),
+          h('span', { className: 'nw-selbtn-txt' }, NW.t('AI建议')),
         )
       : null;
 
@@ -5482,41 +5728,40 @@ const SEL_EMIT_MS = 120;
         // R11: caret blink is a setting; the attribute is what the CSS rule reads
         // (paintCaret rewrites animation-name, so an inline style would be undone).
         'data-caret-blink': caretBlink ? '1' : '0',
+        // R164: 窗外 mode — the surface itself stops painting a background and
+        // the whole look moves to the scene canvas + 48-desk.css. Everything
+        // that restyles the writing surface keys off this attribute, so a writer
+        // who turns the window off keeps the flat page they had before.
+        'data-scene': sceneOn ? '1' : '0',
         // Filled in by syncScroller(): 'self' | 'ancestor' | 'document'.
         // Diagnostics: tells you which element typewriter mode actually drives.
         'data-scroller': scrollerKind,
         style: surfaceStyle,
       },
+      // R164: one pane of glass, no frame, no wood — the canvas draws the far
+      // side (sky, trees in the wind, rain on the glass). It is the first child
+      // so every other layer paints over it, and it does nothing at all when the
+      // setting is off or the tab is hidden.
+      sceneOn ? h(NW.Scene, { running: true, seed: 7 }) : null,
       h('div', { className: 'nw-scroll', ref: scrollRef, tabIndex: -1 }, body),
+      // R164: the pile of finished pages at the left of the sheet. It holds only
+      // pages that have completely left the top of the sheet, and each card
+      // carries the real words of that page (pageState.list) — clicking a card
+      // scrolls that page back onto the sheet, which is what taking one back
+      // means. The count under the pile is the same number the cards show.
+      pile,
       // R46: the fade that keeps the current line in front of the eye. They sit
       // outside .nw-scroll because a scrolling ancestor would drag them along;
       // paintFocus() keeps them in viewport coordinates instead.
       h('div', { className: 'nw-veil nw-veil-top', ref: veilTopRef, 'aria-hidden': 'true' }),
       h('div', { className: 'nw-veil nw-veil-bot', ref: veilBotRef, 'aria-hidden': 'true' }),
       findBar,
-      // R53c：角落胶囊里只剩「回到首页」和「锁定」。原来那颗标记铅笔被用户点名
-      // 去掉了——标注是低频动作，不值得常驻一格视觉重量。入口改成选中字之后按
-      // 右键（见 textarea 的 onContextMenu），菜单开在指针旁边。
+      // R164：角上只剩「回到首页」「锁定」。查阅（搜索）整块删掉——写作面上
+      // 不留会分神的入口；要找资料就去读一遍那一页，或者退出写作。
+      // ——标注改在「读一遍」里做，写作面上只做裁决。
       h(
             'div',
             { className: 'nw-surface-acts' },
-            // R77: 段落导航。长章里「跳到第五段」比滚轮可靠。
-            h(
-              'button',
-              {
-                type: 'button',
-                className: 'nw-actbtn',
-                title: NW.t('段落导航'),
-                'aria-label': NW.t('段落导航'),
-                'aria-expanded': paraNav ? 'true' : 'false',
-                onClick: (ev) => {
-                  if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-                  openParaNav();
-                },
-              },
-              NW.icon('list', { size: 16 }),
-            ),
-            h('span', { className: 'nw-acts-div', 'aria-hidden': 'true' }),
             onHome
               ? h(
                   'button',
@@ -5545,9 +5790,7 @@ const SEL_EMIT_MS = 120;
             // 目录 toggle is gone — one button, one meaning, and the corner
             // stops needing a hairline to separate three things.
             onLock ? h('span', { className: 'nw-acts-div', 'aria-hidden': 'true' }) : null,
-            // R53c：这里原来有一颗铅笔按钮（R53 的入口），用户点名去掉了——它常驻
-            // 在纸面上方，为一件事关标注的低频动作占一格视觉重量。入口改到右键
-            // 菜单（见 textarea 的 onContextMenu），没有可见按钮，也就没有遮挡。
+            // R134：标注不再从写作面新建，这里也就没有标注入口了。
             onLock
               ? h(
                   'button',
@@ -5565,9 +5808,7 @@ const SEL_EMIT_MS = 120;
                 )
               : null,
           ),
-      markMenuBar,
       selBtnBar,
-      paraPanel,
     );
   };
 })();

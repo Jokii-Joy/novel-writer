@@ -33,6 +33,18 @@
     lineHeight: 2,
     pageWidth: 760,
     /**
+     * R125: 阅读页每页分几栏。2 = 期刊那种双栏（一栏 22–30 字，行短、回头少），
+     * 1 = 传统单栏。面板窄到放不下两栏时会自动退回一栏，不会压成一行十来个字。
+     */
+    readColumns: 2,
+  // R131: 朗读。engine 存在本机偏好里（nw.tts.engine），这里放的是「声音」与
+  // 自定义接口的地址/密钥/模型——它们要跟着设置一起存，换台机器也带得走。
+  ttsEdgeVoice: 'zh-CN-XiaoxiaoNeural',
+  ttsApiUrl: '',
+  ttsApiKey: '',
+  ttsApiModel: 'tts-1',
+  ttsApiVoice: 'alloy',
+    /**
      * R100: the daily word goal drives the home-screen ring and the status bar.
      * Kept small on purpose — a goal you can hit on a bad day is what makes the
      * next session start; a number that only works on a good day becomes guilt.
@@ -45,6 +57,13 @@
     theme: 'claude',
     typewriter: false,
     immersive: false,
+    /**
+     * R164: 窗外. true = the writing surface sits in front of one pane of glass
+     * with the rain and the wind outside it (see 47-scene.js). false = the plain
+     * paper surface the plugin had before, which is also the low-power mode:
+     * with the scene off no canvas is mounted at all.
+     */
+    scene: true,
     /**
      * Caret appearance (R11). The editor paints its own caret (.nw-cursor) on top
      * of a transparent native one, so width/colour/blink are plain settings rather
@@ -1825,7 +1844,7 @@
     const row = Object.assign({ id: wanted || uid('rev'), updatedAt: stamp }, clean);
     if (!row.createdAt) row.createdAt = stamp;
     const ok = await writeBatch([{ store: 'revisions', type: 'put', value: row }]);
-    if (!ok) throw new Error('保存修改建议失败');
+    if (!ok) throw new Error('保存AI建议失败');
     notify();
     return row;
   }
