@@ -8,6 +8,30 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.9.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第一百六十一轮（R161）**添了几种笔迹：楷体、仿宋、书宋**：
+  - 用户实拍（原话）：「给我添加几个字体，楷体，仿宋，书宋」。
+  - **原来只有四个下拉项，而且「楷体」那项列在最前面的是霞鹜文楷**——这台机器上没装
+    （Chrome 报回来的平台字体：`LXGW WenKai` → Noto Sans SC），所以选了「楷体 / 文艺」
+    拿到的其实是一张黑体，和选项名对不上。仿宋、书宋干脆不在列表里。
+  - **字体从下拉框换成一排「用各自字体画的 chip」**：
+    `NW.dialogs.Settings` 的外观页里，`字体` 这一项现在是 7 个按钮
+    （宋体 / 书宋 / 楷体 / 仿宋 / 霞鹜文楷 / 黑体 / 等宽），每个按钮的
+    `style.fontFamily` 就是它代表的那条字体栈，**选之前就能看清字形**；下面还给一行
+    正文范例（`.nw-font-preview`），跟着当前值实时变。存进 `settings.fontFamily` 的
+    仍然是**整条字体栈**（不是名字），编辑器 `fontStackOf()` 与阅读页
+    `--nw-read-serif` 读同一个值，两边不会各显一套。
+  - **这一台机器上真正命中的面**（`CSS.getPlatformFontsForNode`，不是 `document.fonts.check`——
+    后者对任何名字都答 true）：`KaiTi`→KaiTi、`FangSong`→FangSong、`STSong`→STSong（华文宋体）、
+    `STKaiti`/`STFangsong`/`KaiTi_GB2312`/`FangSong_GB2312`/`SimSun`/`SimHei` 也都在；
+    「书宋」与「方正书宋_GBK」这两个名字本机没有，所以书宋那条把 `STSong` 排在后面兜底，
+    装了方正书宋的机器会优先用自己的（实测落点：书宋 → STSong ✓）。
+  - 验收：`fontpick.mjs` 把 7 条栈逐条塞进阅读页的 `settings.fontFamily`，读回的平台字体是
+    宋体→Noto Serif SC、书宋→STSong、楷体→KaiTi、仿宋→FangSong、霞鹜文楷→KaiTi（未装，
+    仍是楷体兜底）、黑体→SimHei、等宽→NSimSun，正文段落 / 纸面镜像 / 页码三处的
+    `font-family` 与 `--nw-read-serif` 全部同步；`pickui.mjs` 挂的是真 `NW.dialogs.Settings`，
+    点「楷体」后 `onSettings` 收到 `{fontFamily:"\"KaiTi\",\"Kaiti SC\",\"STKaiti\",\"KaiTi_GB2312\",serif"}`，
+    chip 高亮与范例字同步换。
+
 - 第一百六十轮（R160）**纸要柔体，有弯曲**：
   - 用户实拍（原话）：「翻页后，左右字体看着不同。纸要柔体，有弯曲」。
   - **翻完一页，一张白纸永久盖在左半页上**：`stopFlip()` 末尾还有一段 R158 之前留下的

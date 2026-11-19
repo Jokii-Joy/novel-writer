@@ -856,6 +856,20 @@
 }
 .nw-chip:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
 
+/* ----------------------------------------------------------- font picker --- */
+/* R161：字体选择不再是下拉框——每个笔迹用自身字体画一个 chip，下面一行正文范例。
+   两个尺寸都比 .nw-chip 大一号，因为要看清字形，而不是看清控件。 */
+.nw-font-pick{display:flex;flex-wrap:wrap;gap:8px;}
+.nw-font-chip{
+  height:34px;padding:0 14px;font-size:15px;letter-spacing:.02em;
+}
+.nw-font-preview{
+  margin-top:10px;padding:10px 12px;border-radius:var(--nw-r-control);
+  background:var(--nw-sunken);color:var(--nw-fg);
+  font-size:16px;line-height:1.7;letter-spacing:.01em;
+  border:1px solid transparent;
+}
+
 .nw-submit-table{display:flex;flex-direction:column;gap:var(--nw-sp-0);}
 .nw-submit-line{
   display:flex;align-items:center;gap:var(--nw-sp-3);
@@ -1058,70 +1072,7 @@
   .nw-prep-step[data-now="1"] .nw-prep-dot{animation:none;}
 }
 
-/* ---------------------------------------------------------------- pairing -- */
-/* R34 ③: the phone pairing dialog. The QR arrives as inline SVG from the host,
-   so CSS only has to give it a quiet white plate — a code drawn on a tinted
-   background loses the contrast scanners depend on. */
-.nw-pair{display:flex;flex-direction:column;gap:var(--nw-sp-3);}
-.nw-pair-box{
-  display:flex;align-items:flex-start;gap:var(--nw-sp-4);
-  padding:var(--nw-sp-3);border:1px solid var(--nw-line);border-radius:var(--nw-r-card);
-  background:var(--nw-panel);
-}
-.nw-pair-code{
-  flex:0 0 auto;display:flex;align-items:center;justify-content:center;
-  padding:8px;border-radius:var(--nw-r-control);
-  background:#ffffff; /* deliberately literal: the quiet zone must be paper */
-}
-.nw-pair-code > svg{display:block;width:180px;height:180px;}
-.nw-pair-meta{display:flex;flex-direction:column;gap:6px;min-width:0;}
-.nw-pair-addr{font-size:var(--nw-fs-second);font-weight:600;color:var(--nw-fg);word-break:break-all;}
-.nw-pair-timer{font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);}
-.nw-pair-empty{
-  display:flex;align-items:center;justify-content:center;min-height:120px;
-  border:1px dashed var(--nw-line-strong);border-radius:var(--nw-r-card);
-  font-size:var(--nw-fs-second);color:var(--nw-fg-soft);text-align:center;padding:var(--nw-sp-3);
-}
-.nw-pair-actions{display:flex;gap:var(--nw-sp-2);}
-.nw-pair-peers{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;list-style:none;}
-.nw-pair-peer{
-  display:flex;align-items:center;gap:var(--nw-sp-2);
-  padding:var(--nw-sp-2) var(--nw-sp-3);border:1px solid var(--nw-line-soft);
-  border-radius:var(--nw-r-control);background:var(--nw-surface-1);
-}
-.nw-pair-peername{font-size:var(--nw-fs-second);font-weight:600;color:var(--nw-fg);}
-.nw-pair-peer .nw-hint-block{margin-left:auto;margin-bottom:0;}
-/* R34: the two values the phone form asks for, printed so they can be typed
-   (or copied) instead of scanned. Monospace + user-select:all so one click
-   selects the whole token for a manual copy. */
-.nw-pair-stack{display:flex;flex-direction:column;gap:var(--nw-sp-3);}
-.nw-pair-manual{
-  margin:0;padding:var(--nw-sp-2) var(--nw-sp-3);
-  border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
-  background:var(--nw-sunken);display:flex;flex-direction:column;gap:4px;
-}
-.nw-pair-manual-head{font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);line-height:1.6;}
-.nw-pair-manual-row{display:flex;align-items:baseline;gap:var(--nw-sp-2);min-width:0;}
-.nw-pair-manual-key{flex:0 0 auto;font-size:var(--nw-fs-micro);color:var(--nw-fg-soft);}
-.nw-pair-manual-value{
-  flex:1 1 auto;min-width:0;font-family:var(--nw-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);
-  font-size:var(--nw-fs-second);color:var(--nw-fg);overflow-wrap:anywhere;user-select:all;
-}
-.nw-pair-manual-acts{display:flex;gap:var(--nw-sp-2);margin-top:2px;}
-/* R38: the settings page renders the panel in place — this wrapper gives it a
-   quiet frame of its own instead of the modal's padding, and the peers list a
-   heading that reads as a section rather than a second dialog. */
-.nw-pair-inline{
-  padding:var(--nw-sp-3);border:1px solid var(--nw-line-soft);
-  border-radius:var(--nw-r-card);background:var(--nw-surface-1);
-}
-.nw-pair-inline > .nw-pair-box{background:var(--nw-panel);}
-.nw-pair-inline .nw-pair-actions{align-items:center;flex-wrap:wrap;}
-.nw-pair-subhead{
-  margin:var(--nw-sp-2) 0 0;font-size:var(--nw-fs-micro);font-weight:600;
-  letter-spacing:.02em;color:var(--nw-fg-soft);
-}
-
+/* ----------------------------------------------------------- model picker -- */
 /* R34: model picker shown when every configured model failed. The tried list is
    the useful half — it turns 「打不开」 into 「这三个都不通，各自的原因如下」. */
 .nw-picker-tried{
@@ -1133,9 +1084,5 @@
 .nw-picker-tried > li{display:flex;gap:var(--nw-sp-2);align-items:baseline;font-size:var(--nw-fs-micro);line-height:1.6;}
 .nw-picker-triedname{flex:0 0 auto;color:var(--nw-fg);font-weight:600;}
 .nw-picker-triedmsg{flex:1 1 auto;min-width:0;color:var(--nw-fg-soft);overflow-wrap:anywhere;}
-@media (max-width:520px){
-  .nw-pair-box{flex-direction:column;align-items:center;}
-  .nw-pair-code > svg{width:150px;height:150px;}
-}
 `);
 })();

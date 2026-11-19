@@ -175,14 +175,19 @@
    * Theme chip: a colour swatch plus its label. The actual colours live in the
    * stylesheet (data-theme-swatch attributes), so this stays theme-agnostic.
    */
-  function themeChoice(entry, active, onPick) {
+  function themeChoice(entry, active, onPick, disabled) {
     return h(
       'button',
       {
         key: entry.value,
         type: 'button',
         className: 'nw-choice' + (active ? ' nw-choice-on' : ''),
+        // R133：跟随系统开着时，手动色块不参与决定主题——留着能看见调色板，
+        // 但按下去不会生效，所以直接禁用，避免「点了没反应」。
+        disabled: !!disabled,
+        style: disabled ? { opacity: 0.45, cursor: 'default' } : undefined,
         onClick: () => {
+          if (disabled) return;
           if (typeof onPick === 'function') onPick(entry.value);
         },
         'aria-pressed': active ? 'true' : 'false',
@@ -243,6 +248,26 @@
   ];
 
   /**
+   * R161：可选的笔迹。存的是一整条字体栈（settings.fontFamily），编辑器与阅读页
+   * 读的是同一个值（`60-editor.js` 的 `fontStackOf` 会把它原样交给 CSS，
+   * `62-read.js` 把它写到 `--nw-read-serif`）。
+   *
+   * 每条前面的名字是这台机器上真正会命中的那个面——Chrome 报回来的平台字体：
+   * Windows 的 KaiTi / FangSong / STSong（华文宋体）都在，所以楷体、仿宋、书宋
+   * 放前面就不会被系统替代成黑体；「书宋」这个名字只有装了方正书宋的机器才有，
+   * 所以它后面接着 STSong 兜底，没装也还是宋体。
+   */
+  const FONT_PRESETS = [
+    { value: '"Noto Serif SC","Source Han Serif SC","Songti SC",serif', label: '宋体' },
+    { value: '"书宋","方正书宋_GBK","FZShuSong-Z01S","STSong","Songti SC","SimSun",serif', label: '书宋' },
+    { value: '"KaiTi","Kaiti SC","STKaiti","KaiTi_GB2312",serif', label: '楷体' },
+    { value: '"FangSong","STFangsong","FangSong_GB2312","仿宋",serif', label: '仿宋' },
+    { value: '"LXGW WenKai","KaiTi","Kaiti SC",serif', label: '霞鹜文楷' },
+    { value: '"SimHei","Heiti SC","Microsoft YaHei",sans-serif', label: '黑体' },
+    { value: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace', label: '等宽' },
+  ];
+
+  /**
    * Settings sections, in render order. The order here IS the order of the
    * `section(...)` calls in NW.dialogs.Settings — the helper assigns `data-tab`
    * by call index, which is what keeps a 2000-line single-file dialog from
@@ -254,7 +279,6 @@
     { id: 'export', label: '导出与文件', icon: 'download' },
     { id: 'privacy', label: '隐私与锁定', icon: 'lock' },
     { id: 'submit', label: '投稿', icon: 'mail' },
-    { id: 'lan', label: '手机同步', icon: 'refresh' },
     { id: 'keys', label: '快捷键', icon: 'keyboard' },
   ];
 
@@ -1138,270 +1162,6 @@
     );
   };
 
-  // =========================================================== Proofread ====
-  NW.dialogs.Proofread = function Proofread(props) {
-    const p = props || {};
-    const [state, setState] = useState({ loading: false, models: null, error: '', provider: '', model: '' });
-    const [suggestions, setSuggestions] = useState(null);
-    // The offsets in a suggestion only mean anything against the text they were
-    // computed from; a dialog stays open for minutes while the editor keeps
-    // accepting keystrokes, so keep the snapshot and refuse a stale apply.
-    const sourceRef = useRef('');
-    const [decided, setDecided] = useState({});
-    const [running, setRunning] = useState(false);
-    const [applying, setApplying] = useState(false);
-
-    const loadModels = useCallback(async () => {
-      setState((prev) => Object.assign({}, prev, { loading: true, error: '' }));
-      try {
-        const data = await NW.ai.models();
-        const current = (data && data.current) || {};
-        const list = (data && data.models) || [];
-        const settings = p.settings || {};
-        let provider = settings.proofreadProvider || current.provider || (list[0] && list[0].provider) || '';
-        let model = settings.proofreadModel || current.model || '';
-        const has = (pv, mv) => list.some((row) => row && row.provider === pv && row.id === mv);
-        if (!has(provider, model)) {
-          const first = list.filter((row) => row && row.provider === provider)[0] || list[0];
-          if (first) {
-            provider = first.provider;
-            model = first.id;
-          }
-        }
-        setState({ loading: false, models: data, error: '', provider: provider, model: model });
-      } catch (err) {
-        setState({ loading: false, models: null, error: errText(err, '无法获取可用模型'), provider: '', model: '' });
-      }
-    }, [p.settings]);
-
-    useEffect(() => {
-      loadModels();
-    }, [loadModels]);
-
-    const modelOptions = useMemo(() => {
-      const list = (state.models && state.models.models) || [];
-      const current = (state.models && state.models.current) || {};
-      const options = list.map((row) => ({
-        value: row.provider + '\u0000' + row.id,
-        label: (row.name || row.id) + ' · ' + row.provider,
-      }));
-      // The provider/model the harness itself uses is always a valid target,
-      // even when discovery returned nothing for it (some providers expose no
-      // model list at all). Surface it so the dialog is never unusable.
-      if (current.provider && current.model) {
-        const value = current.provider + '\u0000' + current.model;
-        if (!options.some((opt) => opt.value === value)) {
-          options.unshift({ value: value, label: current.model + ' · ' + current.provider + '（当前默认）' });
-        }
-      }
-      return options;
-    }, [state.models]);
-
-    const currentValue = state.provider && state.model ? state.provider + '\u0000' + state.model : '';
-
-    const run = async () => {
-      const text = textOf(p);
-      if (!text.trim()) {
-        setState((prev) => Object.assign({}, prev, { error: '当前章节还没有内容' }));
-        return;
-      }
-      setRunning(true);
-      setState((prev) => Object.assign({}, prev, { error: '' }));
-      setSuggestions(null);
-      setDecided({});
-      try {
-        // R34: failover — if the chosen model is unreachable the client walks
-        // the other configured models, and only then offers the picker. The
-        // panel itself stays the writer's explicit choice, so `preferred` wins
-        // whenever it works and nothing changes for the happy path.
-        const data = await NW.ai.proofreadSafe({
-          provider: state.provider,
-          model: state.model,
-          text: text,
-          mode: 'typo',
-          // R29: the brief edited in Settings → 写作, if the writer wrote one.
-          rules: String((p.settings && p.settings.proofreadRules) || ''),
-          onRetry: (candidate) => {
-            setState((prev) => Object.assign({}, prev, { error: NW.t('换用 {0} 重试…', candidate.label) }));
-          },
-        });
-        const usedModel = (data && data.usedModel) || null;
-        if (usedModel && (usedModel.provider !== state.provider || usedModel.model !== state.model)) {
-          setState((prev) => Object.assign({}, prev, { provider: usedModel.provider, model: usedModel.model, error: '' }));
-          if (typeof p.onToast === 'function') p.onToast(NW.t('原模型没有响应，已改用 {0}', usedModel.label), 'warn');
-        }
-        const rows = ((data && data.suggestions) || []).map((row, index) => ({
-          id: row.id == null ? 's' + index : row.id,
-          start: Number(row.start) || 0,
-          end: Number(row.end) || 0,
-          original: String(row.original == null ? '' : row.original),
-          replacement: String(row.replacement == null ? '' : row.replacement),
-          reason: String(row.reason == null ? '' : row.reason),
-          type: String(row.type == null ? '' : row.type),
-        }));
-        sourceRef.current = text;
-        setSuggestions(rows);
-        const initial = {};
-        rows.forEach((row) => {
-          initial[row.id] = false;
-        });
-        setDecided(initial);
-        if (rows.length === 0 && typeof p.onToast === 'function') p.onToast('没有发现需要修改的地方', 'ok');
-      } catch (err) {
-        setState((prev) => Object.assign({}, prev, { error: errText(err, '校对失败') }));
-      } finally {
-        setRunning(false);
-      }
-    };
-
-    const acceptAll = () => {
-      const next = {};
-      (suggestions || []).forEach((row) => {
-        next[row.id] = true;
-      });
-      setDecided(next);
-    };
-    const rejectAll = () => {
-      const next = {};
-      (suggestions || []).forEach((row) => {
-        next[row.id] = false;
-      });
-      setDecided(next);
-    };
-
-    const acceptedCount = (suggestions || []).filter((row) => decided[row.id]).length;
-
-    const apply = async () => {
-      if (acceptedCount === 0) {
-        if (typeof p.onToast === 'function') p.onToast('没有勾选任何修改', 'error');
-        return;
-      }
-      const live = textOf(p);
-      if (sourceRef.current && live !== sourceRef.current) {
-        const message = '正文在校对之后改过，建议的位置已经对不上。请重新校对一次再应用。';
-        setState((prev) => Object.assign({}, prev, { error: message }));
-        if (typeof p.onToast === 'function') p.onToast(message, 'error');
-        return;
-      }
-      setApplying(true);
-      try {
-        const text = live;
-        const ids = new Set();
-        (suggestions || []).forEach((row) => {
-          if (decided[row.id]) ids.add(row.id);
-        });
-        const next = NW.format.applyEdits(text, suggestions || [], ids);
-        const api = p.editorApi && p.editorApi.current;
-        if (api && typeof api.setContent === 'function') api.setContent(next);
-        if (typeof p.onRefreshData === 'function') await p.onRefreshData();
-        if (typeof p.onToast === 'function') p.onToast('已应用 ' + acceptedCount + ' 处修改', 'ok');
-        if (typeof p.onClose === 'function') p.onClose();
-      } catch (err) {
-        if (typeof p.onToast === 'function') p.onToast(errText(err, '应用失败'), 'error');
-      } finally {
-        setApplying(false);
-      }
-    };
-
-    const body = [];
-
-    body.push(
-      h(
-        'div',
-        { className: 'nw-inline', style: { gap: '8px', marginBottom: '10px', flexWrap: 'wrap' } },
-        NW.ui.select({
-          options: modelOptions.length ? modelOptions : [{ value: '', label: state.loading ? '加载中…' : '无可用模型' }],
-          value: currentValue,
-          ariaLabel: '校对模型',
-          onChange: (value) => {
-            const parts = String(value).split('\u0000');
-            setState((prev) => Object.assign({}, prev, { provider: parts[0] || '', model: parts[1] || '' }));
-          },
-          style: { flex: '1 1 220px', width: 'auto' },
-        }),
-        NW.ui.btn({ kind: 'primary', onClick: run, disabled: running || !currentValue, children: running ? '校对中…' : NW.t('AI 校对') }),
-      ),
-    );
-
-    if (running) body.push(h('div', { className: 'nw-inline' }, NW.ui.spinner('正在检查错别字、词语误用与标点…')));
-    if (state.error) body.push(h('div', { className: 'nw-lock-error', role: 'alert' }, state.error));
-
-    if (suggestions && suggestions.length > 0) {
-      body.push(
-        h(
-          'div',
-          { className: 'nw-inline', style: { justifyContent: 'space-between', margin: '4px 0 8px' } },
-          h('span', { className: 'nw-dim' }, '共 ' + suggestions.length + ' 条建议 · 已选 ' + acceptedCount + ' 条'),
-          h(
-            'span',
-            { style: { display: 'inline-flex', gap: '6px' } },
-            NW.ui.btn({ kind: 'ghost', onClick: acceptAll, children: NW.t('全部接受') }),
-            NW.ui.btn({ kind: 'ghost', onClick: rejectAll, children: NW.t('全部拒绝') }),
-          ),
-        ),
-      );
-      body.push(
-        h(
-          'div',
-          { className: 'nw-suggest-list', role: 'list' },
-          suggestions.map((row) =>
-            h(
-              'div',
-              { key: row.id, className: 'nw-suggest', role: 'listitem', 'data-on': decided[row.id] ? '1' : '0' },
-              h('input', {
-                type: 'checkbox',
-                checked: !!decided[row.id],
-                'aria-label': '接受这条修改',
-                onChange: (ev) => setDecided((prev) => Object.assign({}, prev, { [row.id]: ev.target.checked })),
-              }),
-              h(
-                'div',
-                { className: 'nw-suggest-body' },
-                h(
-                  'div',
-                  { className: 'nw-suggest-diff' },
-                  h('del', null, row.original || '∅'),
-                  h('span', { className: 'nw-suggest-arrow', 'aria-hidden': 'true' }, ' → '),
-                  h('ins', null, row.replacement || '∅'),
-                ),
-                row.reason ? h('div', { className: 'nw-suggest-reason' }, row.reason) : null,
-                row.type ? h('div', { className: 'nw-suggest-type' }, row.type) : null,
-              ),
-              h(
-                'div',
-                { className: 'nw-suggest-actions' },
-                NW.ui.btn({
-                  kind: 'ghost',
-                  onClick: () => setDecided((prev) => Object.assign({}, prev, { [row.id]: true })),
-                  children: NW.t('接受'),
-                }),
-                NW.ui.btn({
-                  kind: 'ghost',
-                  onClick: () => setDecided((prev) => Object.assign({}, prev, { [row.id]: false })),
-                  children: NW.t('拒绝'),
-                }),
-              ),
-            ),
-          ),
-        ),
-      );
-    } else if (suggestions && suggestions.length === 0 && !running) {
-      body.push(NW.ui.empty('没有发现问题，可以放心继续写作。'));
-    }
-
-    return modal(
-      NW.t('AI 校对'),
-      h('div', null, body),
-      h(
-        'div',
-        { style: { display: 'flex', gap: '8px' } },
-        closeBtn(p),
-        NW.ui.btn({ kind: 'primary', onClick: apply, disabled: applying || acceptedCount === 0, children: NW.t('应用') + (acceptedCount ? ' (' + acceptedCount + ')' : '') }),
-      ),
-      '640px',
-      p.onClose,
-    );
-  };
 
   // ============================================================= Typeset ====
   NW.dialogs.Typeset = function Typeset(props) {
@@ -1835,7 +1595,6 @@
   NW.dialogs.Settings = function Settings(props) {
     const p = props || {};
     const settings = p.settings || {};
-    const lanSync = p.syncState || {};
     const [draft, setDraft] = useState(() => Object.assign({}, settings));
     const set = (key, value) => {
       const next = Object.assign({}, draft, { [key]: value });
@@ -2062,9 +1821,6 @@
       }
       return [{ value: '', label: '跟随默认模型' }].concat(options);
     }, [models]);
-
-    /** R29: kept for the proofread dialog's own fallback, not for Settings. */
-    const proofreadValue = draft.proofreadProvider && draft.proofreadModel ? draft.proofreadProvider + '\u0000' + draft.proofreadModel : '';
 
     /**
      * R29: one picker per AI job. A job's model is a provider+model pair, so the
@@ -2528,14 +2284,20 @@
               children: h(
                 'div',
                 { style: { display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: '8px' } },
-                THEME_OPTIONS.map((entry) => themeChoice(entry, (draft.theme || 'claude') === entry.value, (value) => set('theme', value))),
+                THEME_OPTIONS.map((entry) => themeChoice(
+                  entry,
+                  (draft.theme || 'claude') === entry.value,
+                  (value) => set('theme', value),
+                  draft.themeAuto === true,
+                )),
               ),
             }),
-            // R77 (B2): 跟随系统深浅色。开着时主题由系统决定，两个下拉决定
-            // 「系统亮用哪套、系统暗用哪套」——九套主题里主观上最像白天/黑夜的那两套。
+            // R77 (B2) / R133：跟随系统深浅色。开着时主题由系统决定——系统深色
+            // 用下面选的那套，系统浅色则在非深色主题里随机抽一套，并每半小时
+            // 换一套。浅色随机不再是单独开关：跟随系统本身就是「交给环境」的意思。
             NW.ui.field({
               label: NW.t('跟随系统深浅色'),
-              hint: NW.t('开着时：系统是浅色用下面第一套，系统切到深色自动换第二套。'),
+              hint: NW.t('系统切到浅色时，从浅色、护眼、报纸、杂志里随机一套，之后每半小时自动换一套；深色时用下面选的那套。'),
               children: NW.ui.toggle({
                 checked: draft.themeAuto === true,
                 label: NW.t('跟随系统'),
@@ -2543,26 +2305,15 @@
               }),
             }),
             draft.themeAuto
-              ? h(
-                  'div',
-                  { className: 'nw-grid2' },
-                  NW.ui.field({
-                    label: NW.t('系统为浅色时用'),
-                    children: NW.ui.select({
-                      value: draft.themeLight || 'claude',
-                      onChange: (value) => set('themeLight', value),
-                      options: THEME_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label })),
-                    }),
+              ? NW.ui.field({
+                  label: NW.t('系统为深色时用'),
+                  hint: NW.t('浅色一侧不再指定：每次进入浅色都会换一套，免得每天打开都是同一个白天。'),
+                  children: NW.ui.select({
+                    value: draft.themeDark || 'night',
+                    onChange: (value) => set('themeDark', value),
+                    options: THEME_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label })),
                   }),
-                  NW.ui.field({
-                    label: NW.t('系统为深色时用'),
-                    children: NW.ui.select({
-                      value: draft.themeDark || 'night',
-                      onChange: (value) => set('themeDark', value),
-                      options: THEME_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label })),
-                    }),
-                  }),
-                )
+                })
               : null,
             // R113: the lock screen follows the reading theme by default; the
             // night room can be pinned for writers who liked that version.
@@ -2579,18 +2330,42 @@
                 onChange: (value) => set('lockDark', value === 'dark'),
               }),
             }),
+            // R161：字体从四项下拉换成「按笔迹列出来的一排」——每个名字用它自己的
+            // 字体画，挑的时候就能看见长什么样；下面还给一行正文范例。
             NW.ui.field({
               label: NW.t('字体'),
-              children: NW.ui.select({
-                value: draft.fontFamily || '',
-                onChange: (value) => set('fontFamily', value),
-                options: [
-                  { value: '"Noto Serif SC","Source Han Serif SC","Songti SC",serif', label: '宋体 / 衬线' },
-                  { value: '"Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif', label: '黑体 / 无衬线' },
-                  { value: '"LXGW WenKai","Kaiti SC","KaiTi",serif', label: '楷体 / 文艺' },
-                  { value: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace', label: '等宽' },
-                ],
-              }),
+              hint: NW.t('点一下换一种笔迹。楷体、仿宋、书宋都在这台机器上；装过方正书宋或霞鹜文楷的会优先用你装的。'),
+              children: [
+                h(
+                  'div',
+                  { className: 'nw-font-pick', role: 'group', 'aria-label': NW.t('字体') },
+                  FONT_PRESETS.map((preset) =>
+                    h(
+                      'button',
+                      {
+                        key: preset.value,
+                        type: 'button',
+                        className: 'nw-chip nw-font-chip',
+                        'data-active': String(draft.fontFamily || '') === preset.value ? '1' : '0',
+                        'aria-pressed': String(draft.fontFamily || '') === preset.value ? 'true' : 'false',
+                        style: { fontFamily: preset.value },
+                        title: preset.value,
+                        onClick: () => set('fontFamily', preset.value),
+                      },
+                      preset.label,
+                    ),
+                  ),
+                ),
+                h(
+                  'div',
+                  {
+                    className: 'nw-font-preview',
+                    style: { fontFamily: String(draft.fontFamily || '') || FONT_PRESETS[0].value },
+                    'aria-hidden': 'true',
+                  },
+                  NW.t('她站在檐下，看雨水沿着一片叶子的脉络走到尽头。'),
+                ),
+              ],
             }),
             h(
               'div',
@@ -2607,6 +2382,71 @@
             NW.ui.field({
               label: NW.t('页宽') + ' · ' + (draft.pageWidth || 760) + 'px',
               children: rangeInput({ value: draft.pageWidth || 760, min: 560, max: 1000, step: 20, onChange: (v) => set('pageWidth', v) }),
+            }),
+            // R125: 每页栏数。不放在「阅读」里给个数字，是因为这是一个口味选择：
+            // 一栏像纸书，两栏像期刊。放得太隐蔽也没用，它就在字号行距旁边。
+            NW.ui.field({
+              label: NW.t('每页栏数'),
+              hint: NW.t('双栏把一页正文排成两栏（期刊那种），一行二十来字更好读；面板太窄会自动回到一栏。'),
+              children: NW.ui.seg({
+                ariaLabel: NW.t('每页栏数'),
+                value: Number(draft.readColumns) >= 2 ? '2' : '1',
+                onChange: (v) => set('readColumns', Number(v)),
+                options: [
+                  { value: '1', label: NW.t('一栏') },
+                  { value: '2', label: NW.t('双栏') },
+                ],
+              }),
+            }),
+            // R131: 朗读的自定义接口。引擎本身在阅读页那个喇叭旁边切（那里
+            // 才是「听着听着想换一个」的地方），这里放的是地址、密钥和音色——
+            // 它们不该在弹层里挤着填。
+            NW.ui.field({
+              label: NW.t('朗读接口地址'),
+              hint: NW.t('任何 OpenAI /v1/audio/speech 兼容的接口：填到 /v1 也行，填完整的 …/audio/speech 也行。留空则不用「自定义」引擎。'),
+              children: h('input', {
+                type: 'text',
+                className: 'nw-input',
+                placeholder: 'http://127.0.0.1:8880/v1',
+                value: String(draft.ttsApiUrl || ''),
+                onChange: (ev) => set('ttsApiUrl', ev.target.value),
+              }),
+            }),
+            h(
+              'div',
+              { className: 'nw-grid2' },
+              NW.ui.field({
+                label: NW.t('朗读接口密钥'),
+                hint: NW.t('本地服务通常留空。'),
+                children: h('input', {
+                  type: 'password',
+                  className: 'nw-input',
+                  placeholder: 'sk-…',
+                  value: String(draft.ttsApiKey || ''),
+                  onChange: (ev) => set('ttsApiKey', ev.target.value),
+                }),
+              }),
+              NW.ui.field({
+                label: NW.t('朗读模型'),
+                children: h('input', {
+                  type: 'text',
+                  className: 'nw-input',
+                  placeholder: 'tts-1',
+                  value: String(draft.ttsApiModel || ''),
+                  onChange: (ev) => set('ttsApiModel', ev.target.value),
+                }),
+              }),
+            ),
+            NW.ui.field({
+              label: NW.t('朗读音色'),
+              hint: NW.t('接口那边的音色名：alloy / nova / 或本地模型自己的名字。'),
+              children: h('input', {
+                type: 'text',
+                className: 'nw-input',
+                placeholder: 'alloy',
+                value: String(draft.ttsApiVoice || ''),
+                onChange: (ev) => set('ttsApiVoice', ev.target.value),
+              }),
             }),
             // R11 ④: the caret is painted by the editor itself (.nw-cursor), so its
             // thickness, colour and blink are plain settings instead of a stylesheet
@@ -2652,7 +2492,7 @@
             ),
             rowToggle('光标闪烁', draft.caretBlink !== false, (v) => set('caretBlink', v)),
             rowToggle('打字机模式', draft.typewriter, (v) => set('typewriter', v)),
-            rowToggle('沉浸模式（隐藏所有面板，Esc 或 Ctrl+Shift+F 退出）', draft.immersive, (v) => set('immersive', v)),
+            rowToggle('沉浸模式（隐藏所有面板；Esc 退出，Ctrl+Shift+F 或 Ctrl+Alt+F 切换）', draft.immersive, (v) => set('immersive', v)),
             rowToggle(
               '只照亮光标所在的那一段',
               draft.focusDim !== false,
@@ -2708,34 +2548,17 @@
               h('span', null, '封面图片'),
               NW.ui.btn({ onClick: () => openSibling(p, 'export', {}), children: '在导出面板中选择…' }),
             ),
-            // R29: three AI jobs, three models. Each defaults to the harness
-            // model; the writer picks a cheap one for proofreading and a strong
-            // one for the editorial advice if they want. 「跟随默认模型」 is the
-            // shipped state, not a placeholder — an unset pair really does fall
-            // through to the harness selection on the Host side.
-            modelPicker('AI 校对模型', 'proofreadProvider', 'proofreadModel', '只做错别字与标点这类机械校对，可以选便宜快的模型。'),
-            NW.ui.field({
-              label: 'AI 校对要求',
-              hint: '这段要求会拼在校对提示词后面，与内置规则冲突时以你的为准。清空即恢复默认。',
-              children: NW.ui.textarea({
-                rows: 4,
-                // R30: the default used to live only in the hint, so the box
-                // looked empty and the writer had to invent the wording before
-                // they could change a word of it. The default is now the actual
-                // value, editable in place; an untouched default is stored as
-                // '' so a future change to the text still reaches everyone.
-                value: String(draft.proofreadRules || NW.aiProofreadDefaultRules()),
-                placeholder: NW.aiProofreadDefaultRules(),
-                onChange: (v) =>
-                  set(
-                    'proofreadRules',
-                    String(v || '').trim() === NW.aiProofreadDefaultRules().trim() ? '' : v,
-                  ),
-                ariaLabel: 'AI 校对要求',
-              }),
-            }),
+            // R29: two AI jobs, two models. Each defaults to the harness model;
+            // the writer picks a strong one for the editorial advice if they
+            // want. 「跟随默认模型」 is the shipped state, not a placeholder — an
+            // unset pair really does fall through to the harness selection on
+            // the Host side.
+            // R118: the 「AI 校对模型 / 要求」 pair is gone — that angle now runs
+            // inside AI建议 (the `words` focus), so there is nothing to tune
+            // separately. The old settings keys stay in DEFAULT_SETTINGS for
+            // migrating libraries, they are simply no longer rendered here.
             modelPicker('AI 投稿模型', 'submitProvider', 'submitModel', '生成投稿邮件正文与按期刊要求排版时使用。'),
-            modelPicker('AI 修改建议模型', 'adviceProvider', 'adviceModel', '通读全章给出修改建议，建议用能力更强的模型。'),
+            modelPicker('AI建议模型', 'adviceProvider', 'adviceModel', '通读全章给出AI建议，建议用能力更强的模型。'),
           ),
         ),
         // -------------------------------------------------- 3 导出与文件 ----
@@ -3233,68 +3056,6 @@
           ),
           { ref: submitSectionRef },
         ),
-        // ------------------------------------------------------ 6 手机同步 ----
-        // R38 fix: `section(title, children, extra)` renders exactly one child. The
-        // variadic call written here dropped everything after the intro paragraph —
-        // the panel, the sync status and the LAN addresses never reached the DOM,
-        // and the pairing element ended up spread onto the <section> as props.
-        section(
-          '手机同步',
-          h(
-            'div',
-            null,
-            [
-            h('p', { className: 'nw-hint-block' }, '手机装好 App 后配对一次即可。之后只要在同一个 Wi-Fi 下，修改会自动双向同步；不同书各自保留，同一本书以最后修改时间为准。'),
-            // R38: the pairing panel is rendered in place instead of behind a button
-            // that swapped this window for another one. The values a phone needs are
-            // what people come here for; hiding them one click deeper was the bug.
-            h(PairPanel, { onToast: typeof p.onToast === 'function' ? p.onToast : null }),
-            // R36: users who turned on 正文加密 need to know that syncing does not
-            // carry the encryption to the phone — the desktop decrypts on the way
-            // out, because the phone has no key and never will.
-            draft.encryption === true
-              ? h('p', { className: 'nw-hint-block' }, '正文加密已开启：同步时桌面会先解密再交给手机，所以手机上看到的是明文；同步缓存仍用本机密钥加密存放。')
-              : null,
-            h(
-              'div',
-              { className: 'nw-row' },
-              h('span', null, '同步状态'),
-              h(
-                'span',
-                { className: 'nw-dim' },
-                // R38: a phone sync never touches the browser's own counters — it goes
-                // host-to-phone — so `lastSyncAt` (written by the host when a phone
-                // merges) is the honest answer. The browser counters stay as a
-                // fallback for the old in-page sync paths.
-                lanSync && lanSync.lastSyncAt
-                  ? NW.t('最近一次同步 {0}', NW.fmtDate(lanSync.lastSyncAt))
-                  : lanSync && lanSync.pulledAt
-                    ? NW.t('最近一次收到手机改动 {0}', NW.fmtDate(lanSync.pulledAt))
-                    : lanSync && lanSync.lastPushAt
-                      ? NW.t('最近一次交给同步 {0}', NW.fmtDate(lanSync.lastPushAt))
-                      : NW.t('还没有同步过'),
-              ),
-            ),
-            // Why the address is spelled out even though there is a QR: the phone
-            // sometimes cannot use a camera (emulator, cracked screen), and the
-            // number is also the fastest way to tell whether the desktop is on the
-            // same subnet as the phone at all.
-            lanSync && lanSync.lan && lanSync.lan.running && lanSync.lan.addresses && lanSync.lan.addresses.length
-              ? h(
-                  'div',
-                  { className: 'nw-row' },
-                  h('span', null, '局域网地址'),
-                  h('span', { className: 'nw-dim' }, lanSync.lan.addresses.map((row) => row.url).join('  ·  ')),
-                )
-              : h(
-                  'div',
-                  { className: 'nw-row' },
-                  h('span', null, '局域网地址'),
-                  h('span', { className: 'nw-dim' }, '未启动（生成配对码时会自动启动）'),
-                ),
-            ],
-          ),
-        ),
         // ---------------------------------------------------- 7 快捷键 ----
         section(
           '快捷键',
@@ -3312,7 +3073,7 @@
               ['Esc', '退出沉浸模式'],
               // R22: the two new in-editor shortcuts.
               ['Alt + N', NW.t('新章节')],
-              ['Alt + A', NW.t('修改建议')],
+              ['Alt + A', NW.t('AI建议')],
               ['Tab', '插入两个全角空格'],
               // R44: the reading view pages with the arrows, so say so where the
               // rest of the keys are listed rather than only in the footer hint.
@@ -3644,7 +3405,7 @@
         .recommend(
           { wordCount: count, genre: suggestGenreOf(count), title: String((activeNovel && activeNovel.title) || '') },
           6,
-          { excerpt, provider: settings.submitProvider || settings.proofreadProvider, model: settings.submitModel || settings.proofreadModel },
+          { excerpt, provider: settings.submitProvider, model: settings.submitModel },
         )
         .then((data) => {
           if (!alive) return;
@@ -4953,250 +4714,6 @@
     if (code === 'blank') return '空行';
     return '格式';
   }
-
-  // ============================================================== Pair =====
-  /**
-   * 手机配对—the two values a phone needs, and the devices already paired.
-   *
-   * R38: this is a panel, not a dialog. It used to be reachable only through a
-   * 「显示配对地址和配对码…」 button that closed the settings window and opened a
-   * second one, so reading a code and then typing it on the phone meant juggling
-   * two windows — and on a small laptop the second window covered the first.
-   * The settings section renders this in place now; `NW.dialogs.Pair` is a thin
-   * wrapper kept for the header entry point, so both roads share one
-   * implementation instead of drifting apart.
-   */
-  function PairPanel(props) {
-    const p = props || {};
-    const [info, setInfo] = useState(null);
-    const [busy, setBusy] = useState('');
-    const [error, setError] = useState('');
-    const [peers, setPeers] = useState(null);
-    const [left, setLeft] = useState(0);
-
-    const refreshPeers = () => {
-      NW.io.pair
-        .peers()
-        .then((data) => setPeers(Array.isArray(data && data.peers) ? data.peers : []))
-        .catch(() => setPeers([]));
-    };
-
-    useEffect(() => {
-      refreshPeers();
-      return undefined;
-    }, []);
-
-    // R38: this panel *is* the address and the code, so it must not open empty
-    // and wait for someone to find 「生成配对码」 — that was the complaint. Ask for
-    // one on mount, and reuse a still-valid offer when there is one: opening
-    // settings again mid-pairing must not invalidate the code being typed on the
-    // phone.
-    const bootRef = useRef(false);
-    useEffect(() => {
-      if (bootRef.current) return undefined;
-      bootRef.current = true;
-      let alive = true;
-      const bootBusy = NW.t('正在生成配对信息…');
-      setBusy(bootBusy);
-      NW.io.pair
-        .status()
-        .then((data) => {
-          if (!alive) return null;
-          if (data && data.active && data.token) {
-            setInfo(data);
-            return null;
-          }
-          return NW.io.pair.start().then((fresh) => {
-            if (alive) setInfo(fresh);
-          });
-        })
-        .catch((err) => {
-          if (alive) setError(errText(err, '生成配对码失败'));
-        })
-        .then(() => {
-          if (alive) setBusy((current) => (current === bootBusy ? '' : current));
-        });
-      return () => {
-        alive = false;
-      };
-    }, []);
-
-    // Countdown, not a progress bar: the only useful fact about a pairing code is
-    // how long it is still good for.
-    useEffect(() => {
-      if (!info || !info.expiresAt) return undefined;
-      const tick = () => setLeft(Math.max(0, Math.round((Number(info.expiresAt) - Date.now()) / 1000)));
-      tick();
-      const timer = setInterval(tick, 1000);
-      return () => clearInterval(timer);
-    }, [info]);
-
-    // Poll for "did the phone accept yet" while the code is on screen — the
-    // desktop cannot know otherwise, and without this the panel would still say
-    // 「等待扫码」 after a successful pair.
-    // The countdown above re-renders once a second, so this effect must not
-    // depend on `left`: doing so tore down and rebuilt the interval before its
-    // first tick ever ran and the desktop never noticed a successful pair.
-    const pairedRef = useRef(false);
-    useEffect(() => {
-      if (!info || !info.expiresAt) return undefined;
-      pairedRef.current = false;
-      const timer = setInterval(() => {
-        if (pairedRef.current) return;
-        if (Number(info.expiresAt) <= Date.now()) return;
-        NW.io.pair
-          .status()
-          .then((data) => {
-            if (!data || data.active !== false || pairedRef.current) return;
-            pairedRef.current = true;
-            // The offer is consumed by the accept, so the code on screen is dead
-            // text now. Drop it rather than leave a countdown running next to a
-            // code that would only answer 「过期」 if typed.
-            setInfo(null);
-            refreshPeers();
-            p.onToast && p.onToast('手机已配对', 'ok');
-          })
-          .catch(() => {});
-      }, 2500);
-      return () => clearInterval(timer);
-    }, [info]);
-
-    function showCode() {
-      setError('');
-      setBusy('正在生成配对码…');
-      NW.io.pair
-        .start()
-        .then((data) => {
-          setInfo(data);
-          refreshPeers();
-        })
-        .catch((err) => setError(errText(err, '生成配对码失败')))
-        .then(() => setBusy(''));
-    }
-
-    function unpair(peer) {
-      NW.ui
-        .confirm(`解除与「${peer.name}」的配对？这台设备之后需要重新扫码才能同步。`, {
-          title: '解除配对',
-          danger: true,
-          okText: '解除',
-        })
-        .then((yes) => {
-          if (!yes) return null;
-          return NW.io.pair.remove(peer.id).then(() => {
-            refreshPeers();
-            p.onToast && p.onToast('已解除配对', 'ok');
-          });
-        })
-        .catch((err) => setError(errText(err, '解除配对失败')));
-    }
-
-    // Copy as two lines: the phone form has one field per line. Pasting the whole
-    // thing into the address field also works — the app splits a `nw1:` payload.
-    function copyManual() {
-      const text = `${info.address || ''}:${info.port || '?'}\n${info.token || ''}`;
-      const toast = (message, kind) => p.onToast && p.onToast(message, kind);
-      try {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(text).then(
-            () => toast(NW.t('已复制地址和配对码'), 'ok'),
-            () => toast(NW.t('复制失败，请手动选中这两行'), 'warn'),
-          );
-          return;
-        }
-      } catch (error) {
-        // Clipboard API missing or blocked (no secure context) — fall through.
-      }
-      const area = document.createElement('textarea');
-      area.value = text;
-      area.style.position = 'fixed';
-      area.style.opacity = '0';
-      document.body.appendChild(area);
-      area.select();
-      let copied = false;
-      try {
-        copied = document.execCommand('copy');
-      } catch (error) {
-        copied = false;
-      }
-      document.body.removeChild(area);
-      toast(copied ? NW.t('已复制地址和配对码') : NW.t('复制失败，请手动选中这两行'), copied ? 'ok' : 'warn');
-    }
-
-    return h('div', { className: 'nw-pair nw-pair-inline' }, [
-      h(
-        'p',
-        { className: 'nw-hint-block' },
-        NW.t('在手机上打开「精神空间」→「配对」，把下面的「电脑地址」和「配对码」填进去；也可以「改成扫码」对准二维码。配对一次即可，之后在同一个 Wi-Fi 下会自动同步。'),
-      ),
-      error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
-      info
-        ? h('div', { className: 'nw-pair-stack' }, [
-            // Typing comes first: the address and code are what the phone form
-            // actually asks for, and a code that is printed can always be copied.
-            info.token
-              ? h('div', { className: 'nw-pair-manual' }, [
-                  h('div', { className: 'nw-pair-manual-head' }, NW.t('在手机「配对」里填这两行')),
-                  h('div', { className: 'nw-pair-manual-row' }, [
-                    h('span', { className: 'nw-pair-manual-key' }, NW.t('电脑地址')),
-                    h('code', { className: 'nw-pair-manual-value' }, `${info.address || '未知'}:${info.port || '?'}`),
-                  ]),
-                  h('div', { className: 'nw-pair-manual-row' }, [
-                    h('span', { className: 'nw-pair-manual-key' }, NW.t('配对码')),
-                    h('code', { className: 'nw-pair-manual-value' }, String(info.token)),
-                  ]),
-                ])
-              : null,
-            h('div', { className: 'nw-pair-box' }, [
-              h('div', { className: 'nw-pair-code', 'aria-hidden': 'true', dangerouslySetInnerHTML: { __html: String(info.svg || '') } }),
-              h('div', { className: 'nw-pair-meta' }, [
-                h('div', { className: 'nw-pair-addr' }, NW.t('电脑地址：{0}:{1}', info.address || '未知', info.port || '?')),
-                Array.isArray(info.addresses) && info.addresses.length > 1
-                  ? h('div', { className: 'nw-hint-block' }, NW.t('其他可能地址：{0}', info.addresses.slice(1).join('、')))
-                  : null,
-                h('div', { className: 'nw-pair-timer' }, left > 0 ? NW.t('配对码 {0} 秒后失效', left) : NW.t('配对码已失效，请重新生成')),
-                h('div', { className: 'nw-hint-block' }, NW.t('也可以让手机「改成扫码」对准这个二维码')),
-              ]),
-            ]),
-          ])
-        : h('div', { className: 'nw-pair-empty' }, busy ? NW.ui.spinner('正在生成配对信息…') : '点下面的「生成配对码」。'),
-      h(
-        'div',
-        { className: 'nw-pair-actions' },
-        NW.ui.btn({ kind: 'primary', onClick: showCode, disabled: !!busy, children: info ? NW.t('重新生成') : NW.t('生成配对码') }),
-        info && info.token ? NW.ui.btn({ kind: 'ghost', onClick: copyManual, children: NW.t('复制这两行') }) : null,
-      ),
-      h('h3', { className: 'nw-pair-subhead' }, NW.t('已配对设备')),
-      peers === null
-        ? NW.ui.spinner(NW.t('正在读取…'))
-        : !peers.length
-          ? h('p', { className: 'nw-hint-block' }, NW.t('还没有配对任何设备。'))
-          : h(
-              'ul',
-              { className: 'nw-pair-peers' },
-              peers.map((peer) =>
-                h(
-                  'li',
-                  { key: peer.id, className: 'nw-pair-peer' },
-                  h('span', { className: 'nw-pair-peername' }, peer.name || NW.t('未命名设备')),
-                  h('span', { className: 'nw-hint-block' }, peer.lastSyncAt ? NW.t('上次同步 {0}', NW.fmtDate(peer.lastSyncAt)) : NW.t('还没有同步过')),
-                  NW.ui.btn({ kind: 'ghost', onClick: () => unpair(peer), children: NW.t('解除配对') }),
-                ),
-              ),
-            ),
-    ]);
-  }
-
-  NW.dialogs.Pair = function Pair(props) {
-    const p = props || {};
-    return modal(
-      '手机配对',
-      h(PairPanel, { onToast: typeof p.onToast === 'function' ? p.onToast : null }),
-      [closeBtn(p)],
-      '560px',
-      p.onClose,
-    );
-  };
 
   // ============================================================ Versions ====
   NW.dialogs.Versions = function Versions(props) {

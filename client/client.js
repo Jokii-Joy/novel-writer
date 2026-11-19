@@ -6915,6 +6915,20 @@ window.__ModuleLoader__.load({
 }
 .nw-chip:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
 
+/* ----------------------------------------------------------- font picker --- */
+/* R161：字体选择不再是下拉框——每个笔迹用自身字体画一个 chip，下面一行正文范例。
+   两个尺寸都比 .nw-chip 大一号，因为要看清字形，而不是看清控件。 */
+.nw-font-pick{display:flex;flex-wrap:wrap;gap:8px;}
+.nw-font-chip{
+  height:34px;padding:0 14px;font-size:15px;letter-spacing:.02em;
+}
+.nw-font-preview{
+  margin-top:10px;padding:10px 12px;border-radius:var(--nw-r-control);
+  background:var(--nw-sunken);color:var(--nw-fg);
+  font-size:16px;line-height:1.7;letter-spacing:.01em;
+  border:1px solid transparent;
+}
+
 .nw-submit-table{display:flex;flex-direction:column;gap:var(--nw-sp-0);}
 .nw-submit-line{
   display:flex;align-items:center;gap:var(--nw-sp-3);
@@ -29011,6 +29025,26 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   ];
 
   /**
+   * R161：可选的笔迹。存的是一整条字体栈（settings.fontFamily），编辑器与阅读页
+   * 读的是同一个值（`60-editor.js` 的 `fontStackOf` 会把它原样交给 CSS，
+   * `62-read.js` 把它写到 `--nw-read-serif`）。
+   *
+   * 每条前面的名字是这台机器上真正会命中的那个面——Chrome 报回来的平台字体：
+   * Windows 的 KaiTi / FangSong / STSong（华文宋体）都在，所以楷体、仿宋、书宋
+   * 放前面就不会被系统替代成黑体；「书宋」这个名字只有装了方正书宋的机器才有，
+   * 所以它后面接着 STSong 兜底，没装也还是宋体。
+   */
+  const FONT_PRESETS = [
+    { value: '"Noto Serif SC","Source Han Serif SC","Songti SC",serif', label: '宋体' },
+    { value: '"书宋","方正书宋_GBK","FZShuSong-Z01S","STSong","Songti SC","SimSun",serif', label: '书宋' },
+    { value: '"KaiTi","Kaiti SC","STKaiti","KaiTi_GB2312",serif', label: '楷体' },
+    { value: '"FangSong","STFangsong","FangSong_GB2312","仿宋",serif', label: '仿宋' },
+    { value: '"LXGW WenKai","KaiTi","Kaiti SC",serif', label: '霞鹜文楷' },
+    { value: '"SimHei","Heiti SC","Microsoft YaHei",sans-serif', label: '黑体' },
+    { value: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace', label: '等宽' },
+  ];
+
+  /**
    * Settings sections, in render order. The order here IS the order of the
    * `section(...)` calls in NW.dialogs.Settings — the helper assigns `data-tab`
    * by call index, which is what keeps a 2000-line single-file dialog from
@@ -31073,18 +31107,42 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 onChange: (value) => set('lockDark', value === 'dark'),
               }),
             }),
+            // R161：字体从四项下拉换成「按笔迹列出来的一排」——每个名字用它自己的
+            // 字体画，挑的时候就能看见长什么样；下面还给一行正文范例。
             NW.ui.field({
               label: NW.t('字体'),
-              children: NW.ui.select({
-                value: draft.fontFamily || '',
-                onChange: (value) => set('fontFamily', value),
-                options: [
-                  { value: '"Noto Serif SC","Source Han Serif SC","Songti SC",serif', label: '宋体 / 衬线' },
-                  { value: '"Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif', label: '黑体 / 无衬线' },
-                  { value: '"LXGW WenKai","Kaiti SC","KaiTi",serif', label: '楷体 / 文艺' },
-                  { value: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace', label: '等宽' },
-                ],
-              }),
+              hint: NW.t('点一下换一种笔迹。楷体、仿宋、书宋都在这台机器上；装过方正书宋或霞鹜文楷的会优先用你装的。'),
+              children: [
+                h(
+                  'div',
+                  { className: 'nw-font-pick', role: 'group', 'aria-label': NW.t('字体') },
+                  FONT_PRESETS.map((preset) =>
+                    h(
+                      'button',
+                      {
+                        key: preset.value,
+                        type: 'button',
+                        className: 'nw-chip nw-font-chip',
+                        'data-active': String(draft.fontFamily || '') === preset.value ? '1' : '0',
+                        'aria-pressed': String(draft.fontFamily || '') === preset.value ? 'true' : 'false',
+                        style: { fontFamily: preset.value },
+                        title: preset.value,
+                        onClick: () => set('fontFamily', preset.value),
+                      },
+                      preset.label,
+                    ),
+                  ),
+                ),
+                h(
+                  'div',
+                  {
+                    className: 'nw-font-preview',
+                    style: { fontFamily: String(draft.fontFamily || '') || FONT_PRESETS[0].value },
+                    'aria-hidden': 'true',
+                  },
+                  NW.t('她站在檐下，看雨水沿着一片叶子的脉络走到尽头。'),
+                ),
+              ],
             }),
             h(
               'div',
