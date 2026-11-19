@@ -23,6 +23,13 @@
     再落回摞位：`translate + scale(≈1.7) + rotate(-2.8deg) + opacity .2 + blur(1px)`
     → 原位，520ms `cubic-bezier(.22,.72,.24,1)`，只动 transform/opacity/filter，
     结束 `anim.cancel()` 把样式还给 CSS。
+  - **纸是竖的**：纸的宽高比改成 1 : 1.414（A4）。以前 `.nw-scroll` 是一个
+    `flex:1 1 auto` 的横矩形，窗口越宽纸越扁，看着像桌上放了张卡片。
+    现在高度由窗口决定（`--nw-sheet-h = 100vh - 116px`），宽度跟着高度走
+    （`width: min(页宽设置, 高度 × 0.7071)`），所以窗口变大是"纸变大"，
+    不是"纸变扁"；`.nw-scroll` 还要 `flex:0 0 auto`，否则会被列布局拉满高度。
+    代价：一行的字变少（1440×900 下纸 485×686，正文 19 字一行）——
+    这是同一支 20px 的字放在一张约 12.8cm 宽的小纸上必然的结果。
   - **路由缺席时也该看到真雨**：宿主的前缀路由（`GET /novel-writer/api/scene.forest`）
     只在进程启动时注册，旧进程里它回的是 `{ok:false, error:{code:"method-not-allowed"}}`，
     而 `<video>` 把这段 JSON 当成解码失败。所以影像同时内联进 bundle（`client/src/46-scene-media.js`，

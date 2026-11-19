@@ -32,13 +32,21 @@
 /* Only in 窗外 mode: with the scene off the surface keeps its old flat look, so
    an existing writer's page does not silently change shape under them. */
 .nw-surface[data-scene="1"] .nw-scroll{
-  width:min(var(--nw-width,760px),calc(100% - 104px));
-  /* The bottom margin is the desk: the scene draws a slate surface under the
-     paper's front edge, and without a strip of it the sheet reads as floating
-     in the weather instead of lying on something. The top margin is the glass:
-     a sheet pushed right up against the top edge hides the window it is
-     supposed to be sitting in front of. */
-  margin:40px auto 112px;
+  /* A sheet of paper is portrait. The writer's measure survives as a cap on the
+     width, but the window's height is what decides it: make the window wider
+     and the sheet stays the same shape instead of turning into a card lying on
+     the desk. 1 : 1.414 is A4; anything flatter reads as a landscape rectangle
+     no matter how good the paper texture is. */
+  --nw-sheet-h:calc(100vh - 116px);
+  width:min(var(--nw-width,760px),calc(var(--nw-sheet-h) * 0.70709));
+  /* .nw-scroll is a flex child of the column shell (flex:1 1 auto), which would
+     stretch the sheet to the whole height and undo the portrait ratio. */
+  flex:0 0 auto;
+  height:var(--nw-sheet-h);
+  /* Vertically centred, so the strip of desk the scene draws under the front
+     edge stays visible however tall the window is — the sheet lies on the desk
+     instead of floating in the weather. */
+  margin:auto auto;
   /* A sheet of paper, not a card: warm fill, one hairline at the edge, and two
      shadows — a tight contact shadow that keeps it on the desk and a long soft
      one that puts air under it. The window light is a second, very soft layer
