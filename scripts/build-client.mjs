@@ -134,6 +134,38 @@ if (lockScreen.status !== 0) {
   process.exit(1);
 }
 
+// R118: auto-lock is invisible until it fails ("怎么不自动锁定了"). The idle
+// clock is tested against a fake clock, and the scheduler's three load-bearing
+// properties (ref-based timer, wake re-check, lock-before-touch) are pinned so a
+// future refactor cannot quietly restore the bug.
+const autoLock = spawnSync(process.execPath, [join(here, 'verify-autolock.mjs')], {
+  stdio: 'inherit',
+});
+if (autoLock.status !== 0) {
+  console.error('build-client: auto-lock regressed (scheduler or idle clock)');
+  process.exit(1);
+}
+
+// R129: 目录里的「读这一章 / 读整本」是一次跨四个文件的接线（图标 → 目录行
+// → App 状态 → 阅读页起读章）。任何一段被删掉都只是「点了没反应」，不会报错。
+const readEntry = spawnSync(process.execPath, [join(here, 'verify-read-entry.mjs')], {
+  stdio: 'inherit',
+});
+if (readEntry.status !== 0) {
+  console.error('build-client: 目录里的阅读入口断了（图标 / 行 / 状态 / startId 之一）');
+  process.exit(1);
+}
+
+// R130: 朗读用的是浏览器自带的 speechSynthesis，坏掉时没有任何报错——
+// 只是按了没声音、念一句就停、或者关掉阅读页还在念。所以静态钉住。
+const readTts = spawnSync(process.execPath, [join(here, 'verify-read-tts.mjs')], {
+  stdio: 'inherit',
+});
+if (readTts.status !== 0) {
+  console.error('build-client: 朗读 regressed（图标 / 逐段 / 卸载停声 / 偏好之一）');
+  process.exit(1);
+}
+
 // R101: the module loader only proves the factory runs; the panel can still
 // throw on its first render (that is exactly how R100 shipped a blank screen —
 // a dependency array read a `const` declared further down). Render App and

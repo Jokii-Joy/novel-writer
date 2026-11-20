@@ -12,7 +12,7 @@
   // R20 rebuilt the whole table from scratch. The old set was drawn on a 16×16
   // canvas, which left too little room between strokes: at a 16px render every
   // glyph sat within 1.5…14.5 and the 1.5 stroke turned to mush (the gear grew
-  // four stray ticks, the star-burst "proofread" read as a splat). This set uses
+  // four stray ticks, the old star-burst read as a splat). This set uses
   // a 20×20 grid with a 2-unit optical margin, so the same nominal stroke has
   // 25% more breathing room and corners stay clean.
   //
@@ -46,6 +46,24 @@
       'M6.6 4.2v12',
       'M8.8 8.2h4.4',
       'M8.8 11h4.4',
+    ],
+    // 摊开的书：书脊 + 左右两页。用在目录里「读这一章」与「读整本」上，
+    // 与「新建小说」的合上的书区分开。
+    openbook: [
+      'M10 6.1C8.5 5 6.6 4.6 4.2 4.8v9.8c2.4-.2 4.3.2 5.8 1.3',
+      'M10 6.1c1.5-1.1 3.4-1.5 5.8-1.3v9.8c-2.4-.2-4.3.2-5.8 1.3',
+      'M10 6.1v9.8',
+    ],
+    // 喇叭（朗读）。mute 是同一个喇叭加一道斜杠，两个共用外框，切换时不会跳。
+    volume: [
+      'M4.2 8.2h2.6l3.6-3.1v9.8L6.8 11.8H4.2z',
+      'M13.4 7.4a3.4 3.4 0 0 1 0 5.2',
+      'M15.6 5.2a6.4 6.4 0 0 1 0 9.6',
+    ],
+    volumeoff: [
+      'M4.2 8.2h2.6l3.6-3.1v9.8L6.8 11.8H4.2z',
+      'M13.2 7.8l4.4 4.4',
+      'M17.6 7.8l-4.4 4.4',
     ],
     doc: ['M5.2 3.2h6.2l4 4v9.6H5.2z', 'M11.4 3.2v4h4'],
     save: [
@@ -119,12 +137,8 @@
     folder: ['M3.2 5.4h5.2l2 2.4h6.4v8.8H3.2z'],
 
     // ---- writing tools -----------------------------------------------------
-    proofread: [
-      'M3.4 6h7',
-      'M3.4 10h7',
-      'M3.4 14h4.2',
-      'M14.2 4.4l1 2.4 2.4 1-2.4 1-1 2.4-1-2.4-2.4-1 2.4-1z',
-    ],
+    // R118: the `proofread` star-burst is gone with the 「AI 校对」 dialog; the
+    // 字词与标点 angle now reuses the same AI建议 card, so no glyph is needed.
     typeset: ['M3.4 5.2h13.2', 'M3.4 9h8.8', 'M3.4 12.8h13.2', 'M3.4 16.6h6.2'],
     typewriter: ['M10 6.6v6.8', 'M3.4 10h4.2', 'M12.4 10h4.2', 'M6.6 3.6h6.8'],
     send: ['M17 3.2L3.4 8.8l5.4 2.4 2.4 5.4z', 'M8.8 11.2l8.2-8'],

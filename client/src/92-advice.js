@@ -394,6 +394,7 @@
     const KIND = {
       rhythm: '节奏', diction: '用词', pov: '视角', detail: '画面', dialogue: '对话',
       structure: '结构', character: '人物', logic: '逻辑', emotion: '情绪', redundancy: '冗余',
+      words: '字词',
     };
     return h(
       'div',
@@ -404,7 +405,7 @@
         'data-active': p.active ? '1' : '0',
         tabIndex: 0,
         role: 'group',
-        'aria-label': NW.t('修改建议'),
+        'aria-label': NW.t('AI建议'),
         onClick: () => {
           if (typeof p.onReveal === 'function') p.onReveal(item);
         },
@@ -873,7 +874,7 @@
         // writer typed after pressing Enter.
         const note = nextNote == null ? noteRef.current : nextNote;
         // R29: this panel has its own model — the writer may want the editorial
-        // read on a stronger model than the proofreader.
+        // read on a stronger model than the mechanical 字词与标点 pass.
         const provider = (p.settings && p.settings.adviceProvider) || undefined;
         const model = (p.settings && p.settings.adviceModel) || undefined;
         try {
@@ -970,7 +971,7 @@
           if (err && err.code === 'aborted') return;
           const keep = imported.concat(streamed);
           setItems(keep.length ? keep : null);
-          setError(errText(err, '获取修改建议失败'));
+          setError(errText(err, '获取AI建议失败'));
         } finally {
           if (runRef.current === token) setBusy(false);
           if (runAbortRef.current === controller) runAbortRef.current = null;
@@ -1232,6 +1233,7 @@
       { value: 'logic', label: '逻辑' },
       { value: 'emotion', label: '情绪' },
       { value: 'redundancy', label: '冗余' },
+      { value: 'words', label: '字词与标点' },
     ];
 
     // ---- 接受 / 拒绝 / 撤销 (R73) -------------------------------------------
@@ -1503,7 +1505,7 @@
     const head = h(
       'div',
       { className: 'nw-suggest-head' },
-      h('span', { className: 'nw-suggest-title' }, NW.t('修改建议')),
+      h('span', { className: 'nw-suggest-title' }, NW.t('AI建议')),
       items && items.length > 0 ? h('span', { className: 'nw-suggest-count' }, items.length + ' 条') : null,
       h('span', { style: { flex: '1 1 auto' } }),
       NW.ui.iconBtn(
@@ -1549,7 +1551,7 @@
         );
       }),
       // R74: says out loud that the chips are optional *and* multi-select — the
-      // writer asked for both, and ten unlit pills read as "nothing works".
+      // writer asked for both, and eleven unlit pills read as "nothing works".
       // R75: and it says what to do next, now that pressing a pill does not run.
       h(
         'span',
@@ -1925,7 +1927,7 @@
       'aside',
       {
         className: 'nw-suggest',
-        'aria-label': NW.t('修改建议'),
+        'aria-label': NW.t('AI建议'),
         /* R25: no inline width in auto mode — the CSS clamp measures the bench.
            An inline width only exists once the writer has dragged the grip. */
         style: Number(p.width) > 0 ? { width: clampNum(Number(p.width), 300, 640) + 'px' } : null,
@@ -2195,7 +2197,7 @@
           if (runRef.current !== token) return;
           if (err && err.code === 'aborted') return;
           setItems(null);
-          setError(errText(err, '获取修改建议失败'));
+          setError(errText(err, '获取AI建议失败'));
         } finally {
           if (runRef.current === token) setBusy(false);
         }
@@ -2460,7 +2462,7 @@
     const head = h(
       'div',
       { className: 'nw-selwin-head' },
-      h('span', { className: 'nw-selwin-title' }, NW.t('修改建议')),
+      h('span', { className: 'nw-selwin-title' }, NW.t('AI建议')),
       h('span', { className: 'nw-selwin-count' }, NW.t('选中 {0} 字', selectedCount)),
       h('span', { style: { flex: '1 1 auto' } }),
       NW.ui.iconBtn(NW.icon('x', { size: 16 }), NW.t('关闭'), () => {
@@ -2561,7 +2563,7 @@
 
     return h(
       'aside',
-      { className: 'nw-selwin', 'aria-label': NW.t('选中文字的修改建议') },
+      { className: 'nw-selwin', 'aria-label': NW.t('选中文字的AI建议') },
       head,
       selectedText
         ? h('div', { className: 'nw-selwin-src' }, selectedText)

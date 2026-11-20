@@ -288,7 +288,7 @@ if (!positionDecls.length) {
   );
 }
 
-// ---- 6. R63: the card is five rows and nothing else -----------------------
+// ---- 6. R63: the card is four rows and nothing else (R118: was five) -----
 // The R63 redesign gave the menu a notch, the rows a trailing arrow and the FAB
 // an inner ring — three new painted layers inside the dock. Each one is another
 // chance to put a box over a button, which is the R59 failure mode one level in:
@@ -296,8 +296,10 @@ if (!positionDecls.length) {
 // and swallows the click.
 //
 // Two invariants keep that honest:
-//   (i)  the menu's children are exactly the five item() rows — no header, no
-//        footer, no spacer. Anything else is card that answers the pointer,
+//   (i)  the menu's children are exactly the four item() rows — no header, no
+//        footer, no spacer. Anything else is card that answers the pointer.
+//        R118: AI 校对 merged into AI建议, so the menu went from five rows
+//        (一键排版 / AI建议 / AI 校对 / 读一遍 / 投稿) to four,
 //   (ii) a row carries no margin: a vertical margin between rows is a dead band
 //        *inside* the card, which reads as "the gap between two buttons is
 //        broken" while looking like a layout detail.
@@ -314,15 +316,15 @@ if (appFiles.length) {
   const rows = parts.length - 1;
   const extra = (parts.slice(0, -1).join('').match(/\bh\(/g) || []).length;
   const local = [];
-  if (rows !== 5) local.push(`.nw-dock-menu — renders ${rows} item(...) rows, expected 5`);
+  if (rows !== 4) local.push(`.nw-dock-menu — renders ${rows} item(...) rows, expected 4`);
   if (extra) {
     local.push(
-      `.nw-dock-menu — renders ${extra} extra element(s) beside the five rows; anything that is not a ` +
+      `.nw-dock-menu — renders ${extra} extra element(s) beside the four rows; anything that is not a ` +
       'button row is a strip of card that resolves the pointer to an arrow and swallows the click',
     );
   }
   problems.push(...local);
-  if (!local.length) notes.push('.nw-dock-menu — five rows and nothing else in the menu');
+  if (!local.length) notes.push('.nw-dock-menu — four rows and nothing else in the menu');
 }
 
 {
@@ -459,9 +461,11 @@ if (appFiles.length) {
   if (!/dockRef\s*:\s*dockRef/.test(src) || !/ref\s*:\s*p\.dockRef/.test(src)) {
     local.push('dockRef — not threaded from App into the Dock root node');
   }
-  if (!/\(\s*adviceOpen\s*\|\|\s*selAdvice\s*\)\s*&&\s*!immersive\s*\?\s*null\s*:\s*dock/.test(src)) {
+  // R118: the dock is skipped whenever the advice column or the selection
+  // window owns the right lane, in both normal and immersive writing.
+  if (!/adviceOpen\s*\|\|\s*selAdvice\s*\?\s*null\s*:\s*dock/.test(src)) {
     local.push(
-      'dock render — not hidden while the 修改建议 column or the 选中改写 window is open; the FAB covers ' +
+      'dock render — not hidden while the AI建议 column or the 选中改写 window is open; the FAB covers ' +
       'the suggestions and swallows the close click',
     );
   }

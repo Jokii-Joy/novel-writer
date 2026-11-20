@@ -21,6 +21,16 @@
   --nw-ease-pop:cubic-bezier(.22,1.16,.36,1);
   --nw-dur:.18s;
   --nw-dur-long:.28s;
+  /* R135: only the palette cross-fade uses this, so the half-hourly automatic
+     swap can dissolve without slowing every hover on the page with it. */
+  --nw-dur-theme:var(--nw-dur);
+}
+
+/* R135: 自动轮换是「换一屋子的光」，不是换皮。应用在换主题前后约 1.4 秒里挂上
+   data-theme-slow="1"，纸、底色、墨色一起慢慢走；手动点主题不走这条路，仍然
+   180ms。减弱动效时 05-css.js 的 !important 会把它压回快切，这是想要的行为。 */
+.nw-root[data-theme-slow="1"]{
+  --nw-dur-theme:1.2s;
 }
 
 @keyframes nw-fade-up{

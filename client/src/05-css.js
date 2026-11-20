@@ -118,8 +118,8 @@
      97-theme.js only remain as a belt-and-braces fallback for old engines. */
   container-type:inline-size;
   container-name:nw;
-  transition:background-color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease),
-    color var(--nw-dur,var(--nw-dur)) var(--nw-ease,ease);
+  transition:background-color var(--nw-dur-theme,var(--nw-dur)) var(--nw-ease,ease),
+    color var(--nw-dur-theme,var(--nw-dur)) var(--nw-ease,ease);
 }
 .nw-root *{box-sizing:border-box;}
 .nw-root ::selection{background:color-mix(in srgb, var(--nw-brand) 22%, transparent);}
@@ -271,9 +271,7 @@
       h('span', null, h('i', { className: 'nw-dot', 'data-state': s.saveState || 'idle' }), s.saveText || ''),
       h('span', { className: 'nw-spacer', style: { flex: 1 } }),
       s.middle || null,
-      // R117: the save folder / auto-save sentence is desktop wallpaper on a
-      // phone status bar; the narrow tier hides it by this class.
-      h('span', { className: 'nw-status-sync' }, s.syncText || ''),
+      h('span', null, s.syncText || ''),
       h('span', null, s.wordText || ''),
       h('span', null, s.counterText || ''),
     );

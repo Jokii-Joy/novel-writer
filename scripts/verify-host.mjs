@@ -32,7 +32,6 @@ const secrets = await import(new URL('../lib/secrets.js', import.meta.url).href)
 const ai = await import(new URL('../lib/ai.js', import.meta.url).href);
 const library = await import(new URL('../lib/library.js', import.meta.url).href);
 const { unzipSync } = await import(new URL('../lib/zip.js', import.meta.url).href);
-const lansync = await import(new URL('../lib/lansync.js', import.meta.url).href);
 const clientState = await import(new URL('../lib/client-state.js', import.meta.url).href);
 const smtp = await import(new URL('../lib/smtp.js', import.meta.url).href);
 const imap = await import(new URL('../lib/imap.js', import.meta.url).href);
@@ -1210,59 +1209,6 @@ for (const expected of ['webServer', 'docx', 'epub', 'secrets', 'ai']) {
 for (const r of results) console.log(`    ${r.ok ? '✓' : '✗'} ${r.name.padEnd(10)} ${r.detail}`);
 
 // ---------------------------------------------------------------------------
-// 9. lansync merge (book-level LWW, tombstones, sealed repair, push lock)
-// ---------------------------------------------------------------------------
-console.log('\n[9] lansync 合并与镜像串行化');
-const { mergeLibraries, pushLibrary, pullLibrary, readSyncState, writeSyncState } = lansync;
-
-const bookOf = (id, updatedAt, extra = {}) => ({
-  id,
-  title: '书' + id,
-  updatedAt,
-  chapters: [{ id: id + 'c', title: '章', content: '正文' }],
-  ...extra,
-});
-const sealedOf = (id, updatedAt) => ({
-  id,
-  title: '书' + id,
-  updatedAt,
-  chapters: [{ id: id + 'c', title: '章', content: 'enc:v1:AAAA' }],
-});
-
-// a delete made on the phone while the desktop was away must land
-const tombNewer = mergeLibraries({ books: [bookOf('a', 1000)] }, { books: [{ ...bookOf('a', 2000), deleted: true }] });
-check('更新的墓碑覆盖活书', tombNewer.library.books[0].deleted === true && tombNewer.stats.deleted === 1, JSON.stringify(tombNewer.stats));
-// ...but an edit made after the delete is a deliberate resurrection (the R34 bug)
-const tombOlder = mergeLibraries({ books: [bookOf('a', 3000)] }, { books: [{ ...bookOf('a', 2000), deleted: true }] });
-check('删除之后又编辑的书会复活', tombOlder.library.books[0].deleted === false && tombOlder.stats.localWins === 1, JSON.stringify(tombOlder.stats));
-// exact tie must not let the tombstone destroy the edit
-const tombTie = mergeLibraries({ books: [bookOf('a', 1500)] }, { books: [{ ...bookOf('a', 1500), deleted: true }] });
-check('同毫秒的墓碑不吞掉编辑', tombTie.library.books[0].deleted === false, JSON.stringify(tombTie.stats));
-// rule 5: an all-ciphertext copy never beats a readable one, whatever the clock says
-const repaired = mergeLibraries({ books: [sealedOf('a', 9000)] }, { books: [bookOf('a', 1000)] });
-check('整本密文输给可读副本（规则 5）', repaired.library.books[0].chapters[0].content === '正文' && repaired.stats.repaired === 1, JSON.stringify(repaired.stats));
-const keepSealed = mergeLibraries({ books: [bookOf('a', 9000)] }, { books: [sealedOf('a', 1000)] });
-check('可读副本不会被密文顶掉', keepSealed.library.books[0].chapters[0].content === '正文', JSON.stringify(keepSealed.stats));
-// single-sided books are taken as-is, tombstones included
-const added = mergeLibraries({ books: [] }, { books: [bookOf('n', 1), { ...bookOf('d', 2), deleted: true }] });
-check('单边书照收（含墓碑）', added.library.books.length === 2 && added.stats.added === 1 && added.stats.deleted === 1, JSON.stringify(added.stats));
-check('活书排在墓碑前面', added.library.books[0].deleted === false && added.library.books[1].deleted === true);
-
-// Concurrent pushes must not lose a book: the lock makes the second merge read
-// what the first one wrote. Without it the later write drops the earlier book.
-await writeSyncState({ books: [] });
-await Promise.all([
-  pushLibrary({ books: [bookOf('p1', 2000)] }),
-  pushLibrary({ books: [bookOf('p2', 3000)] }),
-  pushLibrary({ books: [bookOf('p3', 4000)] }),
-]);
-const afterConcurrent = await pullLibrary();
-const ids = afterConcurrent.library.books.map((b) => b.id).sort().join(',');
-check('并发 push 不丢书', ids === 'p1,p2,p3', ids);
-const stored = await readSyncState();
-check('落盘内容与 pull 一致', stored.books.length === 3, String(stored.books.length));
-
-// ---------------------------------------------------------------------------
 // 8b. library.mirrorLibrary 增量 (R78)
 // ---------------------------------------------------------------------------
 console.log('\n[8b] library.mirrorLibrary {changed}');
@@ -1446,6 +1392,71 @@ console.log('\n[8f] 跨站请求守卫');
   check('同源 Origin + JSON → 放行', same && same.ok === true, JSON.stringify(same).slice(0, 120));
   const bare = await post({});
   check('无 Origin 的 JSON 请求（非浏览器客户端）→ 放行', bare && bare.ok === true, JSON.stringify(bare).slice(0, 120));
+}
+
+// ---------------------------------------------------------------------------
+// R131: 朗读（tts）—— 自定义接口那条路是真的走 HTTP，所以用本地假接口跑一遍
+// ---------------------------------------------------------------------------
+console.log('\n[R131] 朗读：edge / baidu / 自定义 API');
+{
+  const http = await import('node:http');
+  // 一个假的 OpenAI /v1/audio/speech：回 8 个字节的 MP3 头，记下它收到的请求。
+  const mp3 = Buffer.from([0xff, 0xf3, 0x48, 0xc4, 0x00, 0x00, 0x00, 0x00]);
+  let seen = null;
+  const server = http.createServer((req, res) => {
+    const parts = [];
+    req.on('data', (chunk) => parts.push(chunk));
+    req.on('end', () => {
+      let body = {};
+      try {
+        body = JSON.parse(Buffer.concat(parts).toString('utf8'));
+      } catch (error) {
+        body = {};
+      }
+      seen = { url: req.url, auth: req.headers.authorization, body };
+      res.writeHead(200, { 'content-type': 'audio/mpeg' });
+      res.end(mp3);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+
+  const ok = await call('tts', {
+    engine: 'api',
+    text: '窑上的雪还没化。',
+    rate: 1.2,
+    api: { url: `http://127.0.0.1:${port}/v1`, key: 'sk-test', model: 'tts-1', voice: 'alloy' },
+  });
+  const payload = ok.json && ok.json.data ? ok.json.data : {};
+  const audio = payload.audio ? Buffer.from(payload.audio, 'base64') : Buffer.alloc(0);
+  check(
+    'tts：自定义引擎回 base64 音频与 mime',
+    !!(ok.json && ok.json.ok === true && payload.engine === 'api' && payload.mime === 'audio/mpeg' && audio.equals(mp3)),
+    JSON.stringify({ ok: ok.json && ok.json.ok, engine: payload.engine, mime: payload.mime, bytes: audio.length }),
+  );
+  check(
+    'tts：填到 /v1 会自动补 /audio/speech',
+    !!(seen && seen.url === '/v1/audio/speech'),
+    seen ? seen.url : '(没有请求)',
+  );
+  check(
+    'tts：密钥走 Bearer，返回格式 mp3，速度被夹在 0.5–2',
+    !!(seen && seen.auth === 'Bearer sk-test' && seen.body.response_format === 'mp3'
+      && Math.abs(Number(seen.body.speed) - 1.2) < 1e-9 && seen.body.input === '窑上的雪还没化。'),
+    JSON.stringify(seen && { auth: seen.auth, speed: seen.body.speed, format: seen.body.response_format }),
+  );
+
+  const noUrl = await call('tts', { engine: 'api', text: 'x', api: {} });
+  check('tts：没填接口地址 → tts-no-url', !!(noUrl.json && noUrl.json.ok === false && noUrl.json.error.code === 'tts-no-url'));
+  const wrong = await call('tts', { engine: 'system', text: 'x' });
+  check('tts：系统语音不走宿主 → tts-wrong-engine', !!(wrong.json && wrong.json.ok === false && wrong.json.error.code === 'tts-wrong-engine'));
+  const blank = await call('tts', { engine: 'api', text: '   ' });
+  check('tts：空文本 → tts-empty', !!(blank.json && blank.json.ok === false && blank.json.error.code === 'tts-empty'));
+
+  const dead = await call('tts', { engine: 'api', text: 'x', api: { url: `http://127.0.0.1:${port + 1}/v1` } });
+  check('tts：接口连不上 → tts-offline', !!(dead.json && dead.json.ok === false && dead.json.error.code === 'tts-offline'));
+
+  await new Promise((resolve) => server.close(resolve));
 }
 
 // ---------------------------------------------------------------------------

@@ -461,19 +461,10 @@
     return api('models', {});
   }
 
-  function proofread(input) {
-    const data = input || {};
-    const payload = {
-      provider: data.provider,
-      model: data.model,
-      text: String(data.text == null ? '' : data.text),
-      mode: data.mode || 'typo',
-    };
-    // R29: only send the writer's brief when there is one — the host already
-    // knows the shipped default and must not be handed an empty override.
-    if (data.rules) payload.rules = String(data.rules);
-    return api('proofread', payload, { timeoutMs: AI_TIMEOUT_MS });
-  }
+  // R118: `proofread` / `proofreadSafe` were removed with the 「AI 校对」 panel.
+  // The mechanical angle now rides inside AI建议 (`revise` with focus `words`),
+  // so the client no longer calls the Host's `proofread` route at all. The route
+  // and `lib/ai.js#proofread` stay for the LAN phone API and verify-host.
 
   /**
    * R34: ask the writer to pick a model, then try that one.
@@ -489,47 +480,7 @@
     return { provider: String(picked.provider), model: String(picked.model) };
   }
 
-  /**
-   * `proofread` with automatic model failover.
-   *
-   * The happy path costs exactly one extra request (the model list); that list
-   * is already cached by the Settings dialog in the same tick, so the practical
-   * cost of "always have a fallback" is one fetch per action.
-   */
-  async function proofreadSafe(input) {
-    const body = input || {};
-    let list = null;
-    try {
-      list = await models();
-    } catch (err) {
-      list = null;
-    }
-    const preferred = { provider: body.provider, model: body.model };
-    const call = (candidate) => proofread(Object.assign({}, body, { provider: candidate.provider, model: candidate.model }));
-    const result = await withModelFallback(list, preferred, call, {
-      emptyMessage: NW.t('还没有配置可用的模型，请先在 Harness 里登录一个模型提供方。'),
-      onRetry: body.onRetry,
-    });
-    if (result.ok) return Object.assign({}, result.data, { usedModel: result.used, failovers: result.tried });
-    // Everything failed: offer the picker once. A writer who chose the wrong
-    // model on purpose should not have to go to Settings and come back.
-    const picked = await askModelForRetry({
-      kind: 'proofread',
-      label: 'AI 校对',
-      tried: result.tried,
-      models: list,
-      preferred: preferred,
-    });
-    if (picked) {
-      const second = await call(picked);
-      return Object.assign({}, second, { usedModel: picked, failovers: result.tried });
-    }
-    const err = result.error || new Error(NW.t('模型调用失败'));
-    err.tried = result.tried;
-    throw err;
-  }
-
-  /** `revise` with automatic model failover (same contract as `proofreadSafe`). */
+  /** `revise` with automatic model failover. */
   async function reviseSafe(input) {
     const body = input || {};
     let list = null;
@@ -547,7 +498,7 @@
     if (result.ok) return Object.assign({}, result.data, { usedModel: result.used, failovers: result.tried });
     const picked = await askModelForRetry({
       kind: 'revise',
-      label: '修改建议',
+      label: 'AI建议',
       tried: result.tried,
       models: list,
       preferred: preferred,
@@ -606,8 +557,8 @@
   // two helpers below let every AI surface retry across the other configured
   // models before giving up.
   //
-  // They live here rather than in each dialog because there are four callers
-  // (proofread, typeset advice, submit.prepare, revise) and the ordering rule is
+  // They live here rather than in each dialog because there are three callers
+  // (typeset advice, submit.prepare, revise) and the ordering rule is
   // identical: the model the writer chose first, then the harness default, then
   // anything else the host knows about.
 
@@ -1371,66 +1322,6 @@
     return { suggestions: suggestions, model: model, emptyReplies: emptyReplies };
   }
 
-  // ---- LAN sync / pairing (R34) ---------------------------------------------
-  // The phone talks to the host over HTTP; these wrappers are what the desktop
-  // side of that conversation calls, so both ends speak the same method names.
-
-  /** Shows a pairing QR: `{payload, svg, token, expiresAt, addresses, port}`. */
-  function pairStart() {
-    return api('pair.start', {});
-  }
-
-  function pairStatus() {
-    return api('pair.status', {});
-  }
-
-  function pairCancel() {
-    return api('pair.cancel', {});
-  }
-
-  function pairAccept(input) {
-    const body = input && typeof input === 'object' ? input : {};
-    return api('pair.accept', {
-      token: String(body.token || ''),
-      deviceId: String(body.deviceId || ''),
-      deviceName: String(body.deviceName || ''),
-      publicKey: String(body.publicKey || ''),
-      address: String(body.address || ''),
-    });
-  }
-
-  function peersList() {
-    return api('pair.peers', {});
-  }
-
-  function peerRemove(id) {
-    return api('pair.remove', { id: String(id || '') });
-  }
-
-  function lanInfo() {
-    return api('pair.info', {});
-  }
-
-  /**
-   * Pushes the whole library into the host's sync mirror.
-   *
-   * `books` is `[{id,title,author,updatedAt,deleted,chapters}]` — the same shape
-   * the merge engine and the phone use. Sending the library whole (rather than a
-   * diff) keeps the contract honest: book-level LWW needs both sides' timestamps,
-   * and a delta would have to reconstruct them anyway.
-   */
-  function syncPush(books) {
-    return api('sync.push', { books: Array.isArray(books) ? books : [] });
-  }
-
-  function syncPull() {
-    return api('sync.pull', {});
-  }
-
-  function syncApply(books) {
-    return api('sync.apply', { books: Array.isArray(books) ? books : [] });
-  }
-
   // ---- client state / password verifier (R80) -------------------------------
   //
   // localStorage and IndexedDB both live in the Harness WebView profile, which a
@@ -1496,6 +1387,10 @@
     clipboard: {
       write: clipboardWrite,
     },
+    /** R131: one paragraph of speech from the host (Edge online / custom API). */
+    tts: {
+      speak: (payload) => api('tts', payload, { timeoutMs: 120000 }),
+    },
     library: {
       get: libraryGet,
       set: librarySet,
@@ -1535,46 +1430,44 @@
       read: inboxRead,
       remove: inboxDelete,
     },
-    pair: {
-      start: pairStart,
-      status: pairStatus,
-      cancel: pairCancel,
-      accept: pairAccept,
-      peers: peersList,
-      remove: peerRemove,
-      info: lanInfo,
-    },
-    sync: {
-      push: syncPush,
-      pull: syncPull,
-      apply: syncApply,
-    },
   };
+
+  /**
+   * R133: 查阅. A lookup is deliberately outside NW.ai — it is a network read,
+   * not an editorial suggestion, and the panel must stay usable when no model
+   * is configured at all.
+   */
+  function searchQuery(engine, query) {
+    return api(
+      'search',
+      { engine: String(engine || 'bing'), query: String(query == null ? '' : query) },
+      { timeoutMs: 20000 },
+    );
+  }
+
+  /*
+   * R133 ②: the model route. Bing is read on the host as material, the answer
+   * comes back as prose plus the links it rested on. The timeout covers both
+   * legs (12s for the RSS read, up to 90s for the model).
+   */
+  function askQuestion(question) {
+    return api('ask', { question: String(question == null ? '' : question) }, { timeoutMs: 120000 });
+  }
+
+  NW.search = { query: searchQuery, ask: askQuestion };
 
   NW.ai = {
     models: models,
-    proofread: proofread,
     revise: revise,
     reviseSelection: reviseSelection,
     reviseSelectionStream: reviseSelectionStream,
     // R91: the chapter-level stream; `reviseSafe` remains the failover fallback.
     reviseStream: reviseStream,
     selftest: selftest,
-    // R34: failover-aware variants. `proofread` / `revise` stay bare so the
-    // dialogs that manage their own picker keep exact control.
-    proofreadSafe: proofreadSafe,
+    // R34: failover-aware variants. `revise` stays bare so the dialogs that
+    // manage their own picker keep exact control.
     reviseSafe: reviseSafe,
     reviseSelectionSafe: reviseSelectionSafe,
     candidates: modelCandidates,
-  };
-
-  /**
-   * R29: the same starter brief the Host ships with, shown in the settings
-   * hint. Duplicated on purpose — reading it back from the Host would need a
-   * round trip to render a hint, and a stale copy in the hint is harmless while
-   * a missing one looks broken.
-   */
-  NW.aiProofreadDefaultRules = function aiProofreadDefaultRules() {
-    return '只找确凿的错别字、词语误用、标点错误与重复字；不改风格、不改剧情、不调整人称或时态；没有把握的地方一律不报。';
   };
 })();

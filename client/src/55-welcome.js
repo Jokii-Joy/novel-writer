@@ -330,7 +330,6 @@
     const resumeRow = rollups.find((row) => row && row.resume) || null;
     const resumeTarget =
       resumeRow && typeof p.onResumeChapter === 'function' ? resumeRow : null;
-    const microEnabled = !!(resumeTarget && typeof p.onMicroGoal === 'function');
 
     const header = NW.h(
       'header',
@@ -355,13 +354,11 @@
         'div',
         { className: 'nw-welcome-actions' },
         // R100: 「继续写」 is the one button the home screen exists for — it lands
-        // on the chapter the writer left, not merely on the shelf. 「只写 100 字」
-        // is the same door with a goal small enough to walk through on a bad day.
+        // on the chapter the writer left, not merely on the shelf.
+        // R118: 「只写 100 字」 is gone; the home screen keeps the 今日目标 ring as
+        // its only goal affordance.
         resumeTarget
           ? btn(tr('继续写'), () => p.onResumeChapter(resumeTarget.novel.id, resumeTarget.resume.id), 'primary', 'pencil')
-          : null,
-        microEnabled
-          ? btn(tr('只写 100 字'), () => p.onMicroGoal(resumeTarget.novel.id, resumeTarget.resume.id, 100), 'ghost', 'clock')
           : null,
         btn(tr('新建小说'), () => typeof p.onNewNovel === 'function' && p.onNewNovel(), resumeTarget ? 'ghost' : 'primary', 'plus'),
         btn(tr('导入'), () => typeof p.onImport === 'function' && p.onImport(), 'ghost', 'upload'),

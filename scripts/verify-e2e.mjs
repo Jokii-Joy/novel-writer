@@ -3,8 +3,8 @@
 //
 // Unlike verify-host.mjs (which drives the lib modules in-process with stubs),
 // this script talks to the RUNNING Host over real HTTP. It therefore proves the
-// deployed plugin — route registration, document engines, AI proofreading and
-// cloud backup — actually works end to end.
+// deployed plugin — route registration, document engines, AI advice and the
+// legacy proofread route kept for the old mobile app — actually works end to end.
 //
 // Prerequisites:
 //   1. the plugin is installed and enabled in the current profile

@@ -137,7 +137,8 @@ console.log('verify-advice-paste: 从别的 AI 粘贴进来的建议');
   const tpl = String(parser.TEMPLATE || '');
   ok('模板是一段可复制的提示词（含原文 / JSON / 一字不差）', /原文/.test(tpl) && /JSON/.test(tpl) && /一字不差/.test(tpl));
   ok('模板自带示例，照着填即可', /问题/.test(tpl) && /建议/.test(tpl));
-  ok('十种类型对卡片可见', Array.isArray(parser.kinds) && parser.kinds.length === 10, String(parser.kinds && parser.kinds.length));
+  ok('十一种类型对卡片可见', Array.isArray(parser.kinds) && parser.kinds.length === 11, String(parser.kinds && parser.kinds.length));
+  ok('字词与标点角度可解析', Array.isArray(parser.kinds) && parser.kinds.includes('words'));
 }
 
 // ------------------------------------------------------------- full prompt --

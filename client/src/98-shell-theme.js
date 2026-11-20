@@ -96,9 +96,10 @@
 .nw-root[data-theme="night"] .nw-toast{background:#2c2c2e;}
 /* R21/R63/R64/R65: the rows are transparent boxes and each one paints its own
    paper chip through ::before, so at night the chip has to be *lighter* than the
-   page to look raised — hence the 7% override instead of the daylight 4%. The
-   FAB needs nothing here any more: R65 made it one flat brand-red circle, and
-   the night palette's brand is already tuned for a dark page. */
+   page to look raised — hence the 7% override instead of the daylight 4%.
+   R132: the FAB now wears the same chip as the rows (it used to be one flat
+   brand-red circle), so this override covers it too — the disc gets the same
+   night lift, and only its hover/expand tint goes red. */
 .nw-root[data-theme="night"] .nw-dock{
   --nw-dock-card:color-mix(in srgb, var(--nw-fg) 7%, var(--nw-bg));
 }

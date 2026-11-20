@@ -204,11 +204,11 @@ check('默认每日目标是 500 字（0 关闭）', () => {
   assert.ok(/dailyGoal:\s*500,/.test(dbSrc), 'DEFAULT_SETTINGS carries dailyGoal: 500');
 });
 
-check('首页有「继续写」与「只写 100 字」两个入口', () => {
+check('首页只剩「继续写」一个启动入口（R118 移除「只写 100 字」）', () => {
   assert.ok(welcomeSrc.includes("tr('继续写')"), 'resume button exists');
   assert.ok(welcomeSrc.includes("p.onResumeChapter(resumeTarget.novel.id, resumeTarget.resume.id)"), 'resume lands on the remembered chapter');
-  assert.ok(welcomeSrc.includes("tr('只写 100 字')"), 'micro goal button exists');
-  assert.ok(welcomeSrc.includes("p.onMicroGoal(resumeTarget.novel.id, resumeTarget.resume.id, 100)"), 'micro goal starts at 100');
+  assert.ok(!welcomeSrc.includes("tr('只写 100 字')"), 'the micro goal button is gone');
+  assert.ok(!welcomeSrc.includes('onMicroGoal'), 'nothing wires a micro goal any more');
 });
 
 check('今天变成可点击的目标环', () => {
@@ -219,15 +219,12 @@ check('今天变成可点击的目标环', () => {
   assert.ok(welcomeSrc.includes("'data-done'"), 'met goal has its own state');
 });
 
-check('App 接线：目标、微目标、完成提示', () => {
+check('App 接线：目标环与目标编辑，且微目标已彻底移除', () => {
   const appSrc = read('90-app.js');
   assert.ok(appSrc.includes('dailyGoal: dailyGoal'), 'Welcome receives the goal');
   assert.ok(appSrc.includes('onSetDailyGoal: editDailyGoal'), 'goal editor is wired');
-  assert.ok(appSrc.includes('onMicroGoal: startMicroGoal'), 'micro goal starter is wired');
-  assert.ok(appSrc.includes("const MICRO_GOAL_KEY = 'nw.microGoal'"), 'micro goal survives a reload');
-  assert.ok(appSrc.includes('微目标达成'), 'finishing the goal says so once');
   assert.ok(appSrc.includes("title: '每日字数目标'"), 'the goal prompt exists');
-  assert.ok(appSrc.includes('nw-microbar'), 'the thin bar is rendered');
+  assert.ok(!/microGoal|microWritten|microActive|MICRO_GOAL|nw-microbar/.test(appSrc), 'no micro goal state, CSS or toast survives');
 });
 
 check('「继续写」恢复精确光标位置', () => {

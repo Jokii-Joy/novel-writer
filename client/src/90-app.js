@@ -8,7 +8,7 @@
   const LS_TYPE_SCALE = 'nw.typeScale.v3';
   const LS_SIDEBAR_AUTO = 'nw.sidebarAutoCollapsed';
   const LS_SHELF_OPEN = 'nw.shelfOpen';
-// AI建议 column (R12 ②): the writer who opens the critique panel usually
+// 修改建议 column (R12 ②): the writer who opens the critique panel usually
 // wants it back next session, so both the toggle and the drag width persist.
 const LS_ADVICE_OPEN = 'nw.adviceOpen';
 const LS_ADVICE_WIDTH = 'nw.adviceWidth';
@@ -66,6 +66,48 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   }
 
   /**
+   * R100: the micro goal ("只写 100 字") is a promise to the writer, not a
+   * setting — it belongs to one sitting on one chapter. It lives in
+   * localStorage because it must survive a reload (the whole point is that the
+   * bar is still there when the writer comes back), and it is deliberately
+   * small: `{novelId, chapterId, target, baseline, startedAt}` where `baseline`
+   * is today's ledger value when the goal started, so the bar measures words
+   * written *since* the click rather than today's total.
+   */
+  const MICRO_GOAL_KEY = 'nw.microGoal';
+
+  function readMicroGoal() {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = window.localStorage.getItem(MICRO_GOAL_KEY);
+      const row = raw ? JSON.parse(raw) : null;
+      if (!row || typeof row !== 'object') return null;
+      const target = Number(row.target);
+      const baseline = Number(row.baseline);
+      if (!Number.isFinite(target) || !Number.isFinite(baseline)) return null;
+      return {
+        novelId: row.novelId == null ? null : row.novelId,
+        chapterId: row.chapterId == null ? null : row.chapterId,
+        target: Math.max(1, Math.round(target)),
+        baseline: Math.max(0, baseline),
+        startedAt: Number(row.startedAt) || 0,
+      };
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function writeMicroGoal(row) {
+    if (typeof window === 'undefined') return;
+    try {
+      if (row) window.localStorage.setItem(MICRO_GOAL_KEY, JSON.stringify(row));
+      else window.localStorage.removeItem(MICRO_GOAL_KEY);
+    } catch (err) {
+      /* a full quota must never block writing */
+    }
+  }
+
+  /**
    * R80: fill in the layout preferences a wiped WebView profile lost.
    *
    * Only missing keys are touched — whatever this profile already recorded stays
@@ -100,7 +142,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   // layout (which has no top bar at all — Esc is the only way out).
   NW.CSS_PARTS.push(`
 .nw-main{position:relative;}
-/* R12 ②: AI建议 is a column beside the manuscript, not a modal. A dialog
+/* R12 ②: 修改建议 is a column beside the manuscript, not a modal. A dialog
    hides the text it is talking about; a column keeps the passage and the advice
    on screen at once, so 「这一段」 can actually be looked at while reading why. */
 .nw-bench{
@@ -111,6 +153,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   container-type:inline-size;container-name:bench;
 }
 .nw-bench-paper{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;min-height:0;position:relative;}
+/* R100: 微目标 — a 3px line at the top of the paper. Quiet by design: it answers
+   "how much is left" without asking the writer to look at it. */
+.nw-microbar{
+  position:absolute;top:0;left:0;right:0;height:3px;z-index:4;
+  background:color-mix(in srgb,var(--nw-line) 38%,transparent);
+  pointer-events:none;overflow:hidden;
+}
+.nw-microbar-fill{
+  display:block;height:100%;
+  background:linear-gradient(90deg,color-mix(in srgb,var(--nw-brand) 55%,transparent),var(--nw-brand));
+  transition:width .35s ease;
+}
 /* R28 ①: the reserved lane is gone. R24/R27 carved 348px out of the manuscript by
    padding the surface, which narrowed the page and pushed the prose right the
    moment the card opened — the exact two things the writer asked us to stop
@@ -453,7 +507,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 /* ======================= R73：选中改写 / 接受 / 已接收 =======================
 
    选中一段字 → 纸面上浮出一个小方钮 → 在正文右侧开一扇并排的窗口。窗口是
-   .nw-bench 的第三个 flex 子项（和 AI建议 栏同一个位置逻辑），所以它**把正文
+   .nw-bench 的第三个 flex 子项（和 修改建议 栏同一个位置逻辑），所以它**把正文
    挤窄**而不是盖在正文上：要看懂一条修改，原文和改后必须同时在视野里。
 
    卡片三态靠边框颜色区分：待定 / 已接受（绿）/ 已拒绝（红）。颜色读的是主题
@@ -803,13 +857,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    是保险：哪天某个名字长过它那一级，宁可把台阶踩平，也不许把字裁掉。
    高度只给变量，窄屏那条 .nw-dock-btn{height:36px} 仍然能一把压平。
    R67b：宽度不是随手排的等差数列，而是「这一行自己起码要多宽 + 一样多的余量」。
-   四字行 8.21em、三字行 7.21em、两字行 6.21em（14px 字号下量出来的），各加 0.5em
-   余量就成了下面几个数。上一版顶层给到 10.4em 而那一行只有四字，左边空出一大块。
-   R118：AI 校对并入 AI建议，菜单从五行变四行，「AI建议」是三字行，阶梯整体收紧。 */
+   四字行 8.21em、'AI 校对' 7.5em、三字行 7.21em、两字行 6.21em（14px 字号下量出来的），
+   各加 0.5em 余量就成了下面五个数。上一版顶层给到 10.4em 而那一行只有四字，
+   左边空出一大块——用户说的「AI 校对按钮左边的空白太多了」就是这个。 */
 .nw-dock-menu .nw-dock-btn:nth-child(1){--nw-dock-w:8.7em;--nw-dock-h:46px;}
-.nw-dock-menu .nw-dock-btn:nth-child(2){--nw-dock-w:8em;--nw-dock-h:44px;}
-.nw-dock-menu .nw-dock-btn:nth-child(3){--nw-dock-w:7.7em;--nw-dock-h:42px;}
-.nw-dock-menu .nw-dock-btn:nth-child(4){--nw-dock-w:6.7em;--nw-dock-h:40px;}
+.nw-dock-menu .nw-dock-btn:nth-child(2){--nw-dock-w:8.7em;--nw-dock-h:44px;}
+.nw-dock-menu .nw-dock-btn:nth-child(3){--nw-dock-w:8em;--nw-dock-h:42px;}
+.nw-dock-menu .nw-dock-btn:nth-child(4){--nw-dock-w:7.7em;--nw-dock-h:40px;}
+.nw-dock-menu .nw-dock-btn:nth-child(5){--nw-dock-w:6.7em;--nw-dock-h:38px;}
 .nw-dock-btn::before{
   content:'';position:absolute;inset:4px 0;z-index:-1;
   border-radius:calc(var(--nw-r-control) + 2px);
@@ -875,56 +930,37 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    一种红（--nw-brand 原色，不掺墨也不做径向渐变）、一条 50% 的圆边、一条
    中性浮影。上一版的墨色、内圈发丝环、品牌色染影全部去掉，只留「一个圆」。
    盒子仍 52×52、border-radius:0、形状由 ::before 画——R56 起的不变式，碰
-   外观不碰命中区。静止 .9，悬停与展开到 1。
-   R132：红圆退场。它是纸面上最亮的像素，眼睛先落在工具上、不在字上；改成
-   和菜单行同一张皮（--nw-dock-card，即「纸色 + 4% 墨」，夜盘由 98-shell-theme
-   抬到 7%）、一条发丝边、一条中性浮影，图标回到墨色。只有悬停/展开时皮上才
-   浮一层 8% 品牌雾、笔尖才转品牌红——红色从此只留给章线、光标与当前章。
-   尺寸 52→44。所有颜色都走主题变量，五套阅读主题各取各的纸色，不写死任何值。 */
+   外观不碰命中区。静止 .9，悬停与展开到 1。 */
 .nw-dock-fab{
   position:relative;isolation:isolate;
   display:flex;align-items:center;justify-content:center;
-  width:44px;height:44px;padding:0;flex:0 0 auto;
+  width:52px;height:52px;padding:0;flex:0 0 auto;
   border-radius:0;border:0;background:transparent;
-  color:color-mix(in srgb, var(--nw-fg) 82%, var(--nw-bg));
+  color:var(--nw-on-brand,#fff);
   cursor:pointer;
-  transition:color .2s var(--nw-ease, ease);
 }
 .nw-dock-fab::before{
   content:'';position:absolute;inset:0;z-index:-1;
   border-radius:50%;
   pointer-events:none;
-  background:var(--nw-dock-card);
-  border:1px solid color-mix(in srgb, var(--nw-line-soft) 60%, transparent);
+  background:var(--nw-brand);
   box-shadow:
-    0 4px 10px -4px color-mix(in srgb, var(--nw-fg) 18%, transparent),
-    0 1px 2px color-mix(in srgb, var(--nw-fg) 8%, transparent);
+    0 8px 20px -8px color-mix(in srgb, var(--nw-brand) 60%, transparent),
+    0 2px 6px -1px color-mix(in srgb, var(--nw-fg) 16%, transparent);
   opacity:.9;
   transition:opacity .2s var(--nw-ease, ease),
-    background .2s var(--nw-ease, ease),
-    border-color .2s var(--nw-ease, ease),
     box-shadow .2s var(--nw-ease, ease),
     filter .2s var(--nw-ease, ease);
 }
-.nw-dock-fab:hover,
-.nw-dock-fab:focus-visible,
-.nw-dock-fab[aria-expanded="true"]{color:var(--nw-brand);}
 .nw-dock-fab:hover::before,
 .nw-dock-fab:focus-visible::before,
-.nw-dock-fab[aria-expanded="true"]::before{
-  opacity:1;
-  background:color-mix(in srgb, var(--nw-brand) 8%, var(--nw-dock-card));
-  border-color:color-mix(in srgb, var(--nw-brand) 26%, transparent);
-  box-shadow:
-    0 4px 12px -4px color-mix(in srgb, var(--nw-brand) 22%, transparent),
-    0 1px 2px color-mix(in srgb, var(--nw-fg) 8%, transparent);
-}
-.nw-dock-fab:active::before{filter:brightness(.97);}
+.nw-dock-fab[aria-expanded="true"]::before{opacity:1;}
+.nw-dock-fab:active::before{filter:brightness(.95);}
 .nw-dock-fab:focus-visible{outline:none;}
 .nw-dock-fab:focus-visible::before{
   box-shadow:
-    0 4px 12px -4px color-mix(in srgb, var(--nw-brand) 22%, transparent),
-    0 1px 2px color-mix(in srgb, var(--nw-fg) 8%, transparent),
+    0 8px 20px -8px color-mix(in srgb, var(--nw-brand) 60%, transparent),
+    0 2px 6px -1px color-mix(in srgb, var(--nw-fg) 16%, transparent),
     0 0 0 3px color-mix(in srgb, var(--nw-brand) 40%, transparent);
 }
 .nw-dock-fab > *{pointer-events:none;}
@@ -934,6 +970,88 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   transition:transform .22s var(--nw-ease-pop, ease);
 }
 .nw-dock-fab[aria-expanded="true"] .nw-dock-fabicon{transform:rotate(90deg);}
+
+/* ---- R117: phone bottom bar ----------------------------------------------
+   The floating dock reserves a lane on the right of every line (88px total on
+   a phone) so its FAB never sits on a character. That is the wrong trade on a
+   390px screen: the lane is always there, the dock is only needed sometimes,
+   and the manuscript lost a third of its width for it.
+
+   So at phone width the same five actions become a real bottom bar inside
+   .nw-main's flex column. It owns its height, the editor gets the rest, and
+   nothing floats over the text. The FAB and its ladder of rows do not render
+   at all in this mode (see Dock's compact branch); these selectors only paint
+   the bar and its 「更多」 sheet. */
+.nw-dock.nw-dock-bar{
+  position:relative;left:auto;right:auto;top:auto;bottom:auto;
+  flex:0 0 auto;width:100%;
+  flex-direction:row;align-items:stretch;justify-content:space-between;
+  gap:2px;
+  padding:5px 6px calc(5px + env(safe-area-inset-bottom, 0px));
+  background:var(--nw-panel);
+  border:0;
+  border-top:1px solid var(--nw-line-soft);
+  box-shadow:0 -1px 0 color-mix(in srgb, var(--nw-fg) 3%, transparent);
+  z-index:var(--nw-z-float);
+  /* The sheet's backdrop is fixed and z-index:0; isolate the bar so it cannot
+     compete with anything outside it, and lift the items above that backdrop
+     (negative z-index would paint them under the bar's own background). */
+  isolation:isolate;
+}
+/* Immersive keeps the bar out of the picture: the App only passes compact for
+   non-immersive, so this is a safety net for a mid-session immersive toggle. */
+.nw-dock.nw-dock-bar[data-immersive="1"]{
+  background:transparent;border-top-color:transparent;box-shadow:none;
+}
+.nw-dock-baritem{
+  position:relative;z-index:1;
+  flex:1 1 0;min-width:0;height:48px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:2px;padding:0 1px;border:0;border-radius:var(--nw-r-control);
+  background:transparent;color:var(--nw-fg-soft);
+  font-family:var(--nw-ui-font);font-size:11px;line-height:1;letter-spacing:.01em;
+  cursor:pointer;-webkit-tap-highlight-color:transparent;
+}
+.nw-dock-baritem[data-active="1"]{
+  color:var(--nw-brand);
+  background:color-mix(in srgb, var(--nw-brand) 9%, transparent);
+}
+.nw-dock-baritem[data-blocked="1"]{opacity:.45;}
+.nw-dock-baritem:active{filter:brightness(.97);}
+.nw-dock-baricon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;}
+.nw-dock-barname{white-space:nowrap;font-weight:500;}
+/* The sheet floats above the bar, not over the status bar, and only exists as
+   long as its own state. The backdrop is a button so a tap anywhere closes it
+   — the same behaviour as the desktop dock's outside-click, but one layer. */
+.nw-dock-sheetback{
+  position:fixed;inset:0;z-index:0;
+  margin:0;padding:0;border:0;border-radius:0;
+  background:rgba(10, 8, 6, .18);
+  cursor:default;
+}
+.nw-dock-sheet{
+  position:absolute;left:8px;right:8px;bottom:calc(100% + 8px);z-index:2;
+  display:grid;grid-template-columns:repeat(3, minmax(0, 1fr));gap:6px;
+  padding:10px;border-radius:14px;
+  border:1px solid var(--nw-line);
+  background:var(--nw-panel);
+  box-shadow:0 -12px 32px -14px color-mix(in srgb, var(--nw-fg) 22%, transparent),
+    var(--nw-shadow-3);
+  animation:nw-dock-rise .18s var(--nw-ease-pop, cubic-bezier(.22,1.16,.36,1)) both;
+}
+.nw-dock-sheetitem{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:6px;height:58px;padding:0 2px;
+  border:1px solid var(--nw-line-soft);border-radius:var(--nw-r-control);
+  background:color-mix(in srgb, var(--nw-fg) 4%, var(--nw-panel));
+  color:var(--nw-fg);
+  font-family:var(--nw-ui-font);font-size:11px;line-height:1;
+  cursor:pointer;-webkit-tap-highlight-color:transparent;
+}
+.nw-dock-sheetitem[data-blocked="1"]{opacity:.5;}
+.nw-dock-sheetitem:active{filter:brightness(.97);}
+.nw-dock-sheeticon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;color:var(--nw-fg-soft);}
+.nw-dock-sheetname{white-space:nowrap;font-weight:500;}
 
 @media (prefers-reduced-motion: reduce){
   .nw-dock-menu,
@@ -946,7 +1064,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    了，悬浮在编辑器上」，又说「看着好瘦长」—— 那是 196px 宽 × 整屏高 的结果。
    现在是一张 420×最多 320 的悬浮卡片，钉在写作列**左上角**：写作时一直看得见正文，
    关掉只留一枚小圆钮。整块不参与 .nw-main 的布局，所以永远不会把正文挤窄。 */
-/* R24: 挪到左边。用户说「左侧没东西」—— 右边挤着AI建议栏和浮动坞，左边那片
+/* R24: 挪到左边。用户说「左侧没东西」—— 右边挤着修改建议栏和浮动坞，左边那片
    只有三个 28px 的角落按钮。放在 left:14px 还顺手解决了和查找栏的争位：查找栏
    占的是 top:10px right:14px，两者现在各占一角，谁都不用压谁。
    R28/R30: 早期版本让 .nw-bench-paper 用 padding-left 让出一条 348px 的车道，
@@ -1193,32 +1311,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     return { theme: mapped };
   }
 
-  /**
-   * R120: the pool behind 「浅色主题随机切换」.
-   *
-   * `night` is deliberately absent. The setting exists to vary the *daytime*
-   * page; a random dark palette would be the opposite of what the writer asked
-   * for, and it would also fight 「跟随系统深浅色」 (which owns when the night
-   * room appears). Declared once at module level so the list is not rebuilt on
-   * every keystroke.
-   */
-  const LIGHT_THEMES = ['claude', 'eye', 'newspaper', 'magazine'];
-
-  /**
-   * Picks one light theme. `avoid` is the theme currently on screen: it is
-   * skipped when more than one candidate remains, so re-rolling (turning the
-   * setting on, or a fresh launch landing on the same palette as last time)
-   * always produces a visible change. With a one-element pool the exclusion is
-   * dropped instead of returning nothing.
-   */
-  function pickLightTheme(avoid) {
-    const keep = String(avoid || '');
-    const pool = LIGHT_THEMES.length > 1 ? LIGHT_THEMES.filter((id) => id !== keep) : LIGHT_THEMES.slice();
-    const list = pool.length ? pool : LIGHT_THEMES;
-    const index = Math.floor(Math.random() * list.length);
-    return list[index] || 'claude';
-  }
-
   NW.App = function App() {
     const [ready, setReady] = useState(false);
     const [bootError, setBootError] = useState('');
@@ -1267,10 +1359,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * `lastPushAt` when this browser last handed its library over — shown in the
      * pairing dialog so "is it actually syncing?" has an answer visible on screen.
      */
+    const [lanSync, setLanSync] = useState({ books: 0, lastPushAt: 0, pulledAt: 0, pulled: 0, peers: 0, lastSyncAt: 0, lan: null, stats: null });
     /** Studio's own sidebar (the chapter tree) can be hidden independently of the host rail. */
-    const [shelfOpen, setShelfOpen] = useState(() => lsGet(LS_SHELF_OPEN) !== '0');
+    const [shelfOpen, setShelfOpen] = useState(() => {
+      const raw = lsGet(LS_SHELF_OPEN);
+      if (raw != null) return raw !== '0';
+      // R117: on a phone the shelf is a drawer over the manuscript, so opening
+      // to a drawer that hides the page is not a useful first screen. Desktop
+      // keeps the old open-by-default behaviour.
+      return !(typeof window !== 'undefined' && window.innerWidth <= 560);
+    });
     /**
-     * AI建议 column (R12 ②). Off by default: it costs a model call and most
+     * 修改建议 column (R12 ②). Off by default: it costs a model call and most
      * sessions are spent writing, not reviewing.
      */
     const [adviceOpen, setAdviceOpen] = useState(() => lsGet(LS_ADVICE_OPEN) === '1');
@@ -1331,7 +1431,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      */
     const [selAdvice, setSelAdvice] = useState(null);
     /**
-     * R73: 已接收的AI建议 for the whole library (rows are per chapter; the open
+     * R73: 已接收的修改建议 for the whole library (rows are per chapter; the open
      * chapter's slice is derived below). Loaded once on boot and refreshed
      * whenever a decision is made — the same list feeds the dock's column and the
      * selection window, so accepting in one place shows up in the other.
@@ -1347,6 +1447,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [dailyStats, setDailyStats] = useState({});
     const dailyStatsRef = useRef(dailyStats);
     dailyStatsRef.current = dailyStats;
+    // R100: 「只写 100 字」 — one sitting, one chapter, persisted across reloads.
+    const [microGoal, setMicroGoal] = useState(readMicroGoal);
     const dailyWordsRef = useRef({});
     // R95: which counting rule the baselines above were taken under. Toggling
     // 字数含标点 rescales every count, so the baselines have to be dropped.
@@ -1389,28 +1491,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       };
     }, []);
     /**
-     * R133: 跟随系统、且系统是浅色时从非深色主题里抽一套。抽一次定下来——
-     * 每渲染一次都重抽的话，改字号都会整页换面色。只在「进入自动浅色」的那一步
-     * 重抽：打开跟随系统，或系统从深翻到浅。
-     */
-    const [lightPick, setLightPick] = useState(() => pickLightTheme(''));
-    /**
      * R44: 读一遍 — the whole book laid out as pages, over the writing surface.
      * It is an overlay rather than a route on purpose: the editor stays mounted
      * underneath, so the caret, the scroll position and any unsaved buffer are
      * exactly where the writer left them when they close it.
      */
     const [readOpen, setReadOpen] = useState(false);
-    /**
-     * R129: 阅读页从哪一章开始。null = 跟着编辑器当前章（dock 上「读一遍」的老行为）；
-     * 一个章节 id = 目录里点的那一章；读整本时传这本书的第一章。
-     * 单独一个 state 而不是切编辑器的当前章，是因为「读一章」不该改变写作上下文——
-     * 退出阅读时光标还在原来那一句上。
-     */
-    const [readAt, setReadAt] = useState(null);
-    // 点了另一本书的「读整本」时，它的章节还没加载完（selectNovel 是异步的），
-    // 先记下这本书，等它的章节到了再把阅读页打开。
-    const readPendingRef = useRef(null);
     /**
      * 灵感便签 (R10): notes for the open book, plus whether the card is up.
      * R13 turned it into a floating card anchored to the corner of the paper
@@ -1452,6 +1538,46 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // whose editor has already unmounted (the 首页 → 继续写 race).
     const pendingSaveRef = useRef(null);
     const rootRef = useRef(null);
+    /**
+     * R117: whether the studio is in phone layout. The CSS breakpoint alone is
+     * not enough here: the dock changes *shape* on a phone (five floating rows +
+     * FAB become a five-slot bottom bar with its own sheet), which is a DOM
+     * decision, not a style one. Measured from `.nw-root` — the host rail may
+     * leave the panel much narrower than the phone viewport, and the container
+     * queries in 98b-responsive.js are keyed to this same box.
+     */
+    const [narrow, setNarrow] = useState(() => (typeof window !== 'undefined' ? window.innerWidth <= 560 : false));
+    useEffect(() => {
+      const read = () => {
+        const node = rootRef.current;
+        const w = node && node.clientWidth ? node.clientWidth : window.innerWidth;
+        setNarrow(w <= 560);
+      };
+      read();
+      const node = rootRef.current;
+      let ro = null;
+      if (node && typeof ResizeObserver === 'function') {
+        ro = new ResizeObserver(read);
+        try {
+          ro.observe(node);
+        } catch (err) {
+          /* very old engine: fall back to the resize listener below */
+        }
+      }
+      window.addEventListener('resize', read);
+      return () => {
+        if (ro) {
+          try {
+            ro.disconnect();
+          } catch (err) {
+            /* ignore */
+          }
+        }
+        window.removeEventListener('resize', read);
+      };
+      // The root node is replaced by the lock screen / boot error screens, so
+      // re-measure when one of those hands the panel back.
+    }, [ready, bootError, locked]);
     const aliveRef = useRef(true);
     /** R82: last chapter-open request; a slower earlier open must not win. */
     const chapterOpenSeqRef = useRef(0);
@@ -1496,6 +1622,17 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     }, [chapter && chapter.id, settings.countPunctuation]);
     const immersiveRef = useRef(false);
     immersiveRef.current = immersive;
+    // R43 ④: `pullSync` must not close over `novels`. Every keystroke that lands
+    // in the library calls setNovels, which used to invalidate the callback and
+    // rebuild the 6s interval — the timer restarted before it ever fired, so a
+    // phone edit could sit in the mirror for as long as the user kept typing.
+    // Read the list through a ref instead and keep the dependency list empty.
+    const novelsRef = useRef([]);
+    novelsRef.current = novels;
+    // Same reason: adopting a remote chapter is only safe when the buffer has
+    // nothing unsaved in it.
+    const saveStateRef = useRef('saved');
+    saveStateRef.current = saveState;
 
     // ------------------------------------------------------------- toasts ----
     /**
@@ -2073,7 +2210,120 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * failure is reported at most once per session so a broken folder never
      * spams the user while they are typing.
      */
-        const mirrorLibrary = useCallback(async (options) => {
+    /**
+     * R34 ④: the browser's library, in the shape the sync engine merges.
+     *
+     * Why the browser pushes at all: IndexedDB is the only place the real text
+     * lives, and the host cannot read it. `sync.push` hands the host a full copy
+     * on every library change, which is what lets a phone that comes online later
+     * pull a complete, current library without the desktop having been idle.
+     *
+     * The unit is a *book* — `{id,title,author,updatedAt,deleted,chapters}` — and
+     * `deleted` is only ever true for a book still sitting in the trash: that is
+     * the tombstone, and without it a book deleted on the phone would reappear on
+     * the next pull because the desktop simply had a copy of it.
+     */
+    const syncLibrary = useCallback(async () => {
+      try {
+        // Refuse to push while a password exists but the studio is locked: the
+        // rows would be `enc:v1:` ciphertext, and the phone cannot read them. The
+        // push effect already skips this state; the guard keeps a future caller
+        // from reintroducing the bug the decryption below exists to fix.
+        //
+        // `hasPassword()` is async (15-crypto.js): reading it without `await`
+        // used to make this guard true for everyone, because a Promise is always
+        // truthy and `isUnlocked()` is false on an install that never set a
+        // password. The result was no `sync.push` at all — the phone only ever
+        // received what the phone itself had pushed.
+        const hasPw = NW.crypto && typeof NW.crypto.hasPassword === 'function'
+          ? await NW.crypto.hasPassword()
+          : false;
+        if (hasPw && !NW.crypto.isUnlocked()) return null;
+        const snapshot = await NW.db.dump();
+        const grouped = new Map();
+        for (const row of snapshot.chapters || []) {
+          if (!row || row.novelId == null) continue;
+          if (!grouped.has(row.novelId)) grouped.set(row.novelId, []);
+          grouped.get(row.novelId).push(row);
+        }
+        const books = (snapshot.novels || []).map((novel) => {
+          const rows = (grouped.get(novel.id) || [])
+            .slice()
+            .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || String(a.id).localeCompare(String(b.id)));
+          return {
+            id: String(novel.id),
+            title: String(novel.title || ''),
+            author: String(novel.author || ''),
+            updatedAt: Number(novel.updatedAt) || Number(novel.createdAt) || 0,
+            deleted: novel.deleted === true,
+            chapters: rows.map((row) => ({
+              id: String(row.id),
+              title: String(row.title || ''),
+              content: String(row.content || ''),
+              order: Number(row.order) || 0,
+            })),
+          };
+        });
+        // A book deleted here has to leave a tombstone, or a phone that was
+        // offline during the deletion still holds a copy and hands it straight
+        // back on its next push. The trash store already records every deleted
+        // book (kind 'novel' plus the whole payload), so the tombstone is
+        // derived from it rather than kept in a second bookkeeping store that
+        // could drift out of step with the trash screen.
+        const live = new Set(books.map((book) => book.id));
+        for (const item of snapshot.trash || []) {
+          if (!item || item.kind !== 'novel') continue;
+          const gone = item.payload && item.payload.novel;
+          if (!gone || gone.id == null) continue;
+          const id = String(gone.id);
+          if (live.has(id)) continue;
+          books.push({
+            id,
+            title: String(gone.title || ''),
+            author: String(gone.author || ''),
+            // The deletion timestamp, not the book's: that is the moment the
+            // merge has to compare against a peer's copy of the same book.
+            updatedAt: Number(item.deletedAt) || 0,
+            deleted: true,
+            chapters: [],
+          });
+        }
+        // R36: with 正文加密 on, IndexedDB stores `enc:v1:` bodies. Pushing them
+        // raw is what made the phone show ciphertext: it holds no key and the
+        // host only relays. This is the one place that can decrypt, so it does —
+        // but only when the studio is unlocked, which `encryptionOn()` implies.
+        // A body that fails to decrypt is left sealed rather than blanked:
+        // showing a garbled chapter beats silently deleting it everywhere.
+        if (await NW.crypto.encryptionOn()) {
+          for (const book of books) {
+            for (const chapter of book.chapters) {
+              if (!chapter.content || !NW.crypto.isEncrypted(chapter.content)) continue;
+              try {
+                chapter.content = await NW.crypto.decryptText(chapter.content);
+              } catch (err) {
+                /* keep the ciphertext */
+              }
+            }
+          }
+        }
+        const data = await NW.io.sync.push(books);
+        if (!aliveRef.current) return data;
+        setLanSync((prev) =>
+          Object.assign({}, prev, {
+            books: Number(data && data.books) || books.length,
+            lastPushAt: Date.now(),
+            stats: (data && data.stats) || prev.stats,
+          })
+        );
+        return data;
+      } catch (err) {
+        // Sync is a background convenience: a failure must never surface as a
+        // toast on every keystroke. The pairing dialog reports it on demand.
+        return null;
+      }
+    }, [pushToast]);
+
+    const mirrorLibrary = useCallback(async (options) => {
       const silent = !!(options && options.silent === true);
       // `override` lets the caller pass the settings it just persisted: the
       // state update that follows is asynchronous, so the closure still holds
@@ -2248,7 +2498,40 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       return () => window.clearTimeout(timer);
     }, [ready, locked, autosaveSignature, mirrorLibrary, novels, chapters, notes, submissions, settings.libraryEncrypt]);
 
-        // Host capabilities (drives which export formats the UI offers). Best effort:
+    /**
+     * R34 ④: hand the library to the host's sync mirror.
+     *
+     * Separate from `autosaveSignature` on purpose — the mirror is only active
+     * when a folder has been chosen, while LAN sync should work for anyone who
+     * paired a phone. It is debounced a little longer than the folder save
+     * because the payload is the whole library and a phone pull is the only
+     * consumer, so a 2s lag is invisible.
+     */
+    const syncSignature = useMemo(() => {
+      const novelPart = novels.map((row) => [row && row.id, row && row.updatedAt].join(':')).join(',');
+      const chapterPart = chapters
+        .map((row) => [row && row.id, row && row.updatedAt, row && row.wordCount].join(':'))
+        .join(',');
+      return novelPart + '|' + chapterPart;
+    }, [novels, chapters]);
+
+    useEffect(() => {
+      if (!ready || locked || !syncSignature) return undefined;
+      const timer = window.setTimeout(() => {
+        syncLibrary();
+      }, 2000);
+      return () => window.clearTimeout(timer);
+    }, [ready, locked, syncSignature, syncLibrary]);
+
+    /**
+     * Poll for the phone's side.
+     *
+     * Lives next to `pullSync` at the bottom of the CRUD block, because the
+     * dependency array is evaluated during render — naming `pullSync` up here
+     * would read a `const` before it is initialised and take the whole panel down
+     * with a ReferenceError.
+     */
+    // Host capabilities (drives which export formats the UI offers). Best effort:
     // when the host half is missing the defaults above keep every format listed and
     // the export itself surfaces the real error.
     useEffect(() => {
@@ -2259,6 +2542,33 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         .then((data) => {
           if (!alive || !data || !data.capabilities) return;
           setCaps((prev) => Object.assign({}, prev, data.capabilities));
+        })
+        .catch(() => {});
+      return () => {
+        alive = false;
+      };
+    }, [ready, locked]);
+
+    // Which LAN addresses the phone can call. Read once per mount and after a
+    // pairing code is generated; the listener itself is started host-side, so a
+    // failure here just means the settings page shows "未启动".
+    useEffect(() => {
+      if (!ready || locked) return undefined;
+      let alive = true;
+      Promise.resolve()
+        .then(() => NW.io.pair.info())
+        .then((data) => {
+          if (!alive || !data) return;
+          // R38: keep the peers themselves, not just their count. The settings
+          // page now shows "最近一次同步" for the phone, and only the host knows
+          // when a phone last merged — this is the field that was always 0.
+          setLanSync((prev) =>
+            Object.assign({}, prev, {
+              peers: Array.isArray(data.peers) ? data.peers.length : prev.peers,
+              lastSyncAt: Array.isArray(data.peers) && data.peers.length ? data.peers.reduce((at, row) => Math.max(at, Number(row && row.lastSyncAt) || 0), 0) || prev.lastSyncAt : prev.lastSyncAt,
+              lan: { running: data.running === true, port: Number(data.port) || 0, addresses: Array.isArray(data.addresses) ? data.addresses : [] },
+            })
+          );
         })
         .catch(() => {});
       return () => {
@@ -2599,7 +2909,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     }, []);
 
     /**
-     * R73: 接受一条AI建议.
+     * R73: 接受一条修改建议.
      *
      * Writes ONE row and nothing else — the manuscript is the writer's, and
      * "accept" means "this edit is right, I will make it", not "apply it for me".
@@ -2636,7 +2946,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           await refreshRevisions();
           return row || null;
         } catch (err) {
-          pushToast(errText(err, '保存AI建议失败'), 'error');
+          pushToast(errText(err, '保存修改建议失败'), 'error');
           return null;
         }
       },
@@ -2651,7 +2961,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           if (!aliveRef.current) return;
           await refreshRevisions();
         } catch (err) {
-          pushToast(errText(err, '删除AI建议失败'), 'error');
+          pushToast(errText(err, '删除修改建议失败'), 'error');
         }
       },
       [pushToast, refreshRevisions],
@@ -2747,6 +3057,156 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       },
       [refreshMarks, refreshRevisions],
     );
+
+    /**
+     * R43 ④: after a pull, bring the *open* chapter up to date as well.
+     *
+     * `NW.db.applyBooks` only rewrites IndexedDB. The chapter being edited lives
+     * in React state, and the editor adopts new text only when its `chapter`
+     * prop changes (`60-editor.js` keys that effect on `chapter.content`), so an
+     * edit the phone made to the chapter you are staring at was written to the
+     * database and nowhere else — it only appeared after switching chapters or
+     * reloading. That read as "手机上的改动同步不到电脑".
+     *
+     * Two guards, both deliberate:
+     * - unsaved keystrokes win; adopting over them would throw them away;
+     * - the text is compared before `setChapter`, because re-rendering the
+     *   editor on every tick would move the caret while the author types.
+     */
+    const adoptRemoteChapter = useCallback(async (books) => {
+      const current = chapterRef.current;
+      if (!current || current.id == null) return false;
+      if (!Array.isArray(books) || !books.length) return false;
+      const mine = books.find(
+        (book) => book && book.id != null && String(book.id) === String(current.novelId),
+      );
+      // A deleted book is the shelf's business, not the editor's.
+      if (!mine || mine.deleted === true) return false;
+      if (saveStateRef.current === 'dirty' || saveStateRef.current === 'saving') return false;
+      let record = null;
+      try {
+        record = await NW.db.getChapter(current.id);
+      } catch (err) {
+        return false;
+      }
+      if (!record || record.id == null) return false;
+      const next = typeof record.content === 'string' ? record.content : '';
+      const api = editorRef.current;
+      let shown = '';
+      try {
+        shown = api && typeof api.getContent === 'function' ? String(api.getContent() || '') : '';
+      } catch (err) {
+        shown = '';
+      }
+      if (!shown) shown = String(current.content || '');
+      if (next === shown) return false;
+      if (!aliveRef.current) return false;
+      setChapter(record);
+      return true;
+    }, []);
+
+    /**
+     * R34 ④: pull the host mirror and apply whatever actually moved.
+     *
+     * Declared after refreshNovels/refreshChapters on purpose — a useCallback that
+     * captures them earlier would close over the temporal dead zone and the whole
+     * panel would fail to mount (the build gate catches it, but only after a full
+     * bundle pass).
+     *
+     * The diff matters more than the pull: the mirror holds the *merged* result,
+     * so applying it wholesale every few seconds would rewrite every chapter row
+     * on every tick and make the editor think the text changed underneath the
+     * caret. Only books whose remote `updatedAt` is strictly newer than the local
+     * row — or that the remote calls deleted while we still have them — reach
+     * `applyBooks`.
+     *
+     * No toast on success: this runs on a timer while the user is writing, and a
+     * book that arrived from the phone announces itself through the shelf.
+     */
+    const pullSync = useCallback(async () => {
+      try {
+        const data = await NW.io.sync.pull();
+        // R38: the pull doubles as the heartbeat for "did a phone sync recently".
+        // `lastSyncAt` is written host-side by markPeerSync(); before this the
+        // settings page could only report the browser's own counters, which a
+        // phone sync never touches — hence 「还没有同步过」 on a phone that had
+        // just synced. Fold it in before the early return so a quiet tick still
+        // refreshes the timestamp.
+        if (aliveRef.current) {
+          const hostSync = Number(data && data.lastSyncAt) || 0;
+          const peerCount = Number(data && data.peers) || 0;
+          setLanSync((prev) => {
+            if (hostSync <= Number(prev.lastSyncAt || 0) && peerCount === Number(prev.peers || 0)) return prev;
+            return Object.assign({}, prev, {
+              lastSyncAt: Math.max(Number(prev.lastSyncAt || 0), hostSync),
+              peers: peerCount || prev.peers,
+            });
+          });
+        }
+        const remote = data && data.library && Array.isArray(data.library.books) ? data.library.books : [];
+        if (!remote.length) return 0;
+        const local = new Map();
+        for (const row of novelsRef.current) if (row && row.id != null) local.set(String(row.id), row);
+        const wanted = [];
+        for (const book of remote) {
+          if (!book || book.id == null) continue;
+          const mine = local.get(String(book.id));
+          const theirs = Number(book.updatedAt) || 0;
+          if (!mine) {
+            // Unknown book: only take it if it is alive. A tombstone for a book we
+            // never had is noise from an earlier install.
+            if (book.deleted !== true) wanted.push(book);
+            continue;
+          }
+          if (book.deleted === true) {
+            wanted.push(book);
+            continue;
+          }
+          const ours = Number(mine.updatedAt) || 0;
+          if (theirs > ours) wanted.push(book);
+        }
+        if (!wanted.length) return 0;
+        const touched = await NW.db.applyBooks(wanted);
+        if (!touched) return 0;
+        await refreshNovels();
+        await refreshChapters();
+        // R47: a pull can also remove chapters, and their annotations go with
+        // them. Without this the underlines of a chapter the phone deleted would
+        // keep being drawn until the panel was reloaded.
+        await refreshMarks();
+        // R43 ④: applyBooks only rewrites IndexedDB. The open chapter lives in
+        // React state, and the editor adopts new text only when its `chapter`
+        // prop changes — so a phone edit to the chapter you are *looking at*
+        // landed in the database and nowhere else until you switched chapters.
+        // Re-read the buffer below, but never over unsaved keystrokes.
+        await adoptRemoteChapter(wanted);
+        if (!aliveRef.current) return touched;
+        setLanSync((prev) => Object.assign({}, prev, { pulledAt: Date.now(), pulled: touched }));
+        return touched;
+      } catch (err) {
+        return 0;
+      }
+    }, [refreshNovels, refreshChapters, adoptRemoteChapter, refreshMarks]);
+
+    /**
+     * Poll for the phone's side.
+     *
+     * There is no server push into the browser: the LAN listener writes to the
+     * host mirror, and the only way the page learns about it is by asking. Six
+     * seconds is a compromise — faster makes a 30-book library do needless work
+     * every tick, slower makes an edit on the phone feel like it did not arrive.
+     * `pullSync` short-circuits before touching IndexedDB when nothing changed.
+     */
+    useEffect(() => {
+      if (!ready || locked) return undefined;
+      const timer = window.setInterval(() => {
+        // R81: a hidden tab decrypts and merges the whole mirror every 6s for
+        // nothing. Skip the tick; the next visible one catches up.
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+        pullSync();
+      }, 6000);
+      return () => window.clearInterval(timer);
+    }, [ready, locked, pullSync]);
 
     const createNovel = useCallback(async () => {
       try {
@@ -2984,71 +3444,30 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       // R99: the flush is awaited — encryptAll reads the rows next, and starting
       // it while the flush was still in flight could seal (and then restore) the
       // pre-flush body.
-      //
-      // R118: two things used to keep the lock from ever landing, and both were
-      // silent (the caller is a timer, so nobody saw the pending promise):
-      //   1. a flush/snapshot that never settles, and
-      //   2. encryptAll on a large library, which can take a lot longer than the
-      //      writer expects between 「该锁了」 and the lock screen.
-      // The seal pass now has a deadline and the whole routine has a watchdog
-      // that drops the key and shows the lock screen no matter what the save
-      // layer is doing. Sealing is best-effort by design; being unlocked is not.
-      const dropKey = () => {
-        try {
-          if (NW.crypto && NW.crypto.lock) NW.crypto.lock();
+      await flushEditor();
+      await snapshotVersion();
+      try {
+        if (NW.crypto && NW.crypto.hasPassword && (await NW.crypto.hasPassword())) {
+          let sealed = 0;
+          try {
+            if (settings.encryption && NW.crypto.isUnlocked && NW.crypto.isUnlocked()) {
+              sealed = await NW.db.encryptAll();
+            }
+          } catch (err) {
+            /* encryption is best-effort; locking must still happen */
+          }
+          NW.crypto.lock();
           setLocked(true);
           setImmersive(false);
           setChapters((list) => list.map((row) => (row ? Object.assign({}, row, { content: '' }) : row)));
           setChapter(null);
           setDialog(null);
-        } catch (err) {
-          /* the watchdog is the last resort; never throw out of a timer */
+          if (sealed > 0) pushToast('已加密 ' + sealed + ' 段正文并上锁', 'ok');
+        } else {
+          setDialog({ kind: 'lockSetup' });
         }
-      };
-      const bail = setTimeout(dropKey, 6000);
-      const sealWithDeadline = (ms) =>
-        new Promise((resolve) => {
-          let settled = false;
-          const finish = (value) => {
-            if (settled) return;
-            settled = true;
-            resolve(value);
-          };
-          const timer = setTimeout(() => finish(-1), ms);
-          Promise.resolve()
-            .then(() => NW.db.encryptAll())
-            .then((n) => {
-              clearTimeout(timer);
-              finish(Number(n) || 0);
-            })
-            .catch(() => {
-              clearTimeout(timer);
-              finish(-1);
-            });
-        });
-      try {
-        await flushEditor();
-        await snapshotVersion();
-        try {
-          if (NW.crypto && NW.crypto.hasPassword && (await NW.crypto.hasPassword())) {
-            let sealed = 0;
-            try {
-              if (settings.encryption && NW.crypto.isUnlocked && NW.crypto.isUnlocked()) {
-                sealed = await sealWithDeadline(4000);
-              }
-            } catch (err) {
-              /* encryption is best-effort; locking must still happen */
-            }
-            dropKey();
-            if (sealed > 0) pushToast('已加密 ' + sealed + ' 段正文并上锁', 'ok');
-          } else {
-            setDialog({ kind: 'lockSetup' });
-          }
-        } catch (err) {
-          pushToast(errText(err, '锁定失败'), 'error');
-        }
-      } finally {
-        clearTimeout(bail);
+      } catch (err) {
+        pushToast(errText(err, '锁定失败'), 'error');
       }
     }, [flushEditor, snapshotVersion, pushToast, settings.encryption]);
 
@@ -3126,91 +3545,28 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [loadAll, pickInitial, pushToast],
     );
 
-    /**
-     * R118: 自动锁定为什么会「不锁」——两个都能静默失败的地方：
-     *
-     *  1. 原来的 effect 在 `settings`/`doLock` 身份一变就重建 15s 计时器。
-     *     任何一次重渲染或设置补丁都会把这段倒计时推后，于是「15 分钟没动静
-     *     就锁」在长会话里永远差一点点。
-     *  2. 窗口最小化或机器睡眠时，Chromium 会冻结/强节流计时器。等计时器再
-     *     跑起来，用户通常已经动过鼠标——而旧实现里「动鼠标」第一件事是
-     *     `NW.crypto.touch()` 刷新 idle，于是早就过期的会话在检查之前被
-     *     「原谅」了。
-     *
-     * 现在的调度与渲染身份无关：计时器只建一次，通过 ref 读最新的设置和
-     * 锁定函数；5s 一跳，另外在 visibilitychange / focus / pageshow 补检；
-     * 关键是 `touchActivity` 先判断会话是否已过期——过期就锁，而不是续命。
-     * 于是「回到一个放了一下午的窗口」落在锁屏上，而不是落在一段被悄悄
-     * 延长的会话里。
-     */
-    const lockSettingsRef = useRef(settings);
-    lockSettingsRef.current = settings;
-    const doLockRef = useRef(doLock);
-    doLockRef.current = doLock;
-    const lockAgeRef = useRef(0);
-    const wantAutoLock = useCallback(() => {
-      const live = lockSettingsRef.current || {};
-      const minutes = Number(live.autoLockMinutes) || 0;
-      if (!live.lockEnabled || minutes <= 0) return false;
-      if (!NW.crypto || !NW.crypto.autoLocked) return false;
-      try {
-        return !!NW.crypto.autoLocked(minutes);
-      } catch (err) {
-        return false;
-      }
-    }, []);
-    /** One lock request at a time — doLock awaits a flush and a seal pass. */
-    const requestLock = useCallback(() => {
-      const now = Date.now();
-      if (now - lockAgeRef.current < 1000) return;
-      lockAgeRef.current = now;
-      Promise.resolve(doLockRef.current && doLockRef.current()).catch(() => {});
-    }, []);
-
     const touchActivity = useCallback(() => {
-      // Check BEFORE forgiving the session: an expired idle clock must lock on
-      // the first sign of life, otherwise the very act of coming back rescues
-      // the session the timer was about to close.
-      if (wantAutoLock()) {
-        requestLock();
-        return;
-      }
       const now = Date.now();
       if (now - lastTouchRef.current < 4000) return;
       lastTouchRef.current = now;
       if (NW.crypto && NW.crypto.touch) NW.crypto.touch();
-    }, [wantAutoLock, requestLock]);
+    }, []);
 
     useEffect(() => {
       if (!ready || locked) return undefined;
-      const check = () => {
+      const timer = setInterval(() => {
         try {
-          if (wantAutoLock()) requestLock();
+          const minutes = Number(settings.autoLockMinutes) || 0;
+          if (!settings.lockEnabled || minutes <= 0) return;
+          if (NW.crypto && NW.crypto.autoLocked && NW.crypto.autoLocked(minutes)) {
+            doLock();
+          }
         } catch (err) {
           /* ignore */
         }
-      };
-      const timer = setInterval(check, 5000);
-      const onWake = () => {
-        try {
-          if (typeof document !== 'undefined' && document.hidden) return;
-          check();
-        } catch (err) {
-          /* ignore */
-        }
-      };
-      document.addEventListener('visibilitychange', onWake);
-      window.addEventListener('focus', onWake);
-      window.addEventListener('pageshow', onWake);
-      // Timers are throttled while hidden, so a session that expires in the
-      // background still lands on the lock screen the moment it comes back.
-      return () => {
-        clearInterval(timer);
-        document.removeEventListener('visibilitychange', onWake);
-        window.removeEventListener('focus', onWake);
-        window.removeEventListener('pageshow', onWake);
-      };
-    }, [ready, locked, wantAutoLock, requestLock]);
+      }, 15000);
+      return () => clearInterval(timer);
+    }, [ready, locked, settings.lockEnabled, settings.autoLockMinutes, doLock]);
 
     // Global shortcut: Ctrl/Cmd+Shift+L locks the studio.
     useEffect(() => {
@@ -3225,8 +3581,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       window.addEventListener('keydown', onKey, true);
       return () => window.removeEventListener('keydown', onKey, true);
     }, [locked, doLock]);
-
-    // R164: 查阅（Alt+S 搜索面板）整块删掉——它不是写作面的功能。
 
     // Global shortcut: Ctrl/Cmd+\ shows or hides the chapter shelf. It is the
     // keyboard twin of the restore handle, so a collapsed shelf can never trap
@@ -3307,7 +3661,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       // Immersive has no visible chrome by design, so the way out is announced
       // once through the existing toast channel instead of a permanent bar.
       // R43 ②: name the new chord too — Esc was the only way out before.
-      pushToast('已进入沉浸模式 · Esc 退出，Ctrl+Shift+F 或 Ctrl+Alt+F 切换', 'info');
+      pushToast('已进入沉浸模式 · Esc 或 Ctrl+Shift+F 退出', 'info');
     }, [applySettings, enterFullscreen, pushToast, settings.typewriter]);
 
     const exitImmersive = useCallback(() => {
@@ -3319,24 +3673,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       if (immersiveRef.current) exitImmersive();
       else enterImmersive();
     }, [enterImmersive, exitImmersive]);
-
-    /**
-     * R138: 点「阅读」就直接进整屏。三件事必须在同一次点击里做完：
-     *   ① 打开阅读页（它自己是 absolute inset:0 的浮层，盖住编辑器与书架）；
-     *   ② 把 `.nw-root` 提到视口（`.nw-reading`，见 62-read.js 顶部注释——
-     *      container-type 会把 fixed 祖先之外的后代困在插件那一列）；
-     *   ③ 向浏览器要真全屏。
-     * 第 ③ 步只能留在手势回调里：Chromium 在用户手势之外一律拒绝
-     * requestFullscreen，放进 effect 会被静默吞掉，于是「全屏」只剩插件那一列。
-     * 拿不到全屏也没关系——前两步已经让纸铺满宿主视口，只是边上还留着操作系统
-     * 的标题栏。
-     */
-    const openRead = useCallback((startId) => {
-      setDockOpen(false);
-      setReadAt(startId == null ? null : startId);
-      setReadOpen(true);
-      enterFullscreen();
-    }, [enterFullscreen]);
 
     // Escape leaves immersive mode (and the browser's own fullscreen Esc works
     // too — listen to fullscreenchange so the two stay in sync).
@@ -3382,46 +3718,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // (deleted, restored snapshot), drop the overlay instead of leaving it up
     // over an empty workspace.
     useEffect(() => {
-      if (!activeNovelId && readOpen) {
-        setReadOpen(false);
-        setReadAt(null);
-      }
+      if (!activeNovelId && readOpen) setReadOpen(false);
     }, [activeNovelId, readOpen]);
-
-    // R153：一次 Esc 就该回到进来之前的窗口。阅读页是全屏进来的（openRead 里
-    // ③），可浏览器把 Esc 留给「退出全屏」时，页面收不到这个键——人已经不在全屏
-    // 里了，卷子还摊着，看起来就是「Esc 没退回原来的窗口」。所以全屏一没，卷子
-    // 也合上：退出的落点和关闭按钮完全一致（编辑器原样在下面，光标与滚动都没动）。
-    useEffect(() => {
-      if (!readOpen) return undefined;
-      const onFsChange = () => {
-        let fs = null;
-        try {
-          fs = document.fullscreenElement || document.webkitFullscreenElement;
-        } catch (err) {
-          fs = null;
-        }
-        if (fs) return;
-        setReadOpen(false);
-        setReadAt(null);
-        window.requestAnimationFrame(() => {
-          const api = editorRef.current;
-          if (api && typeof api.focus === 'function') {
-            try {
-              api.focus();
-            } catch (err) {
-              /* the editor may be gone; nothing to restore */
-            }
-          }
-        });
-      };
-      document.addEventListener('fullscreenchange', onFsChange);
-      document.addEventListener('webkitfullscreenchange', onFsChange);
-      return () => {
-        document.removeEventListener('fullscreenchange', onFsChange);
-        document.removeEventListener('webkitfullscreenchange', onFsChange);
-      };
-    }, [readOpen]);
 
     // R43 ②: a keyboard way into and out of immersive mode.
     //
@@ -3433,18 +3731,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // otherwise a closed chapter would strand the user in a chrome-less room.
     useEffect(() => {
       const onKey = (ev) => {
-        // R136: `ev.key` 在 Shift 按住时是 'F'、在俄文/希腊文布局下是别的字母，
-        // 所以键盘位（ev.code）也算一种认法——两者有一个对上就算这个键。
-        const key = String(ev.key || '').toLowerCase();
-        const isF = key === 'f' || ev.code === 'KeyF';
-        const mod = ev.ctrlKey || ev.metaKey;
-        const chord = mod && ev.shiftKey && !ev.altKey && isF;
-        // R136: 有的宿主（含它自己的快捷键表）会先吞掉带 Shift 的组合键，窗口
-        // 这一层就再也收不到 Ctrl+Shift+F。Ctrl/⌘+Alt+F 不冲突于任何一方，作为
-        // 第二条通路保留；F11 依旧是「宿主愿意让出来才能用」的那条。
-        const altChord = mod && !ev.shiftKey && ev.altKey && isF;
+        const chord = (ev.ctrlKey || ev.metaKey) && ev.shiftKey && !ev.altKey
+          && String(ev.key || '').toLowerCase() === 'f';
         const plain = ev.key === 'F11' && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && !ev.altKey;
-        if (!chord && !altChord && !plain) return;
+        if (!chord && !plain) return;
         ev.preventDefault();
         ev.stopPropagation();
         if (locked) return;
@@ -3739,20 +4029,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [chapters, activeNovelId],
     );
 
-    // R129：另一本书的「读整本」——章节到位后再开阅读页，否则会读到上一本书。
-    React.useEffect(() => {
-      const pending = readPendingRef.current;
-      if (!pending) return;
-      if (String(pending.novelId) !== String(activeNovelId)) return;
-      if (!readChapters.length) return;
-      readPendingRef.current = null;
-      const first = readChapters[0];
-      // R138：从目录里点另一本书的「读整本」时，章节到位已经是异步之后了，
-      // 这时候再要全屏拿不到手势——但阅读页本身照样铺满视口（.nw-reading），
-      // 缺的只是浏览器那一层真全屏，可接受。
-      openRead(first ? first.id : null);
-    }, [activeNovelId, readChapters, openRead]);
-
     // R47: annotations of the open book. Books are the unit here because the
     // reading view shows a whole book and the editor only the open chapter —
     // one array serves both, and it stays stable across App renders so the
@@ -3807,50 +4083,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           ? Number(chapter.wordCount) || 0
           : 0;
     // R77 (B2): 主题最终落到哪一套。手动时就是 settings.theme，自动时按系统亮暗取。
-    // R133: 系统深色 → themeDark（默认 night）；系统浅色 → 在非深色主题里随机抽的
-    // 那一套（lightPick），不再读「系统为浅色时用」那个下拉——浅色随机已经不需要
-    // 单独开关，也不再需要一个固定指名。
     const autoTheme = settings.themeAuto === true;
-    const manualTheme = String(settings.theme || 'claude');
     const effectiveTheme = autoTheme
-      ? String(systemDark ? settings.themeDark || 'night' : lightPick)
-      : manualTheme;
-    // R135: 自动轮换时，换的是一屋子的光，不是换皮。手动点主题仍然 180ms 快切，
-    // 只有「跟随系统」自己换的那一下才慢慢来：先把时长放开，下一帧再换主题。
-    // 减弱动效时 05-css.js 的 !important 会把这段压回快切，这是想要的行为。
-    const [slowTheme, setSlowTheme] = useState(false);
-    const slowTimerRef = useRef(0);
-    useEffect(
-      () => () => {
-        if (slowTimerRef.current) clearTimeout(slowTimerRef.current);
-      },
-      [],
-    );
-    const autoLightRef = useRef(autoTheme && !systemDark);
-    // R135: 每次自动换主题都先挂上「慢换光」，1.4 秒后摘掉。手动点主题不会走
-    // 这两个入口，所以仍然是 180ms。换色与挂标记在同一次批处理里，样式表看到
-    // 新颜色时过渡时长已经是 1.2 秒，不是「换完了才补一个过渡」。
-    const pickThemeSlowly = useCallback(() => {
-      setSlowTheme(true);
-      if (slowTimerRef.current) clearTimeout(slowTimerRef.current);
-      slowTimerRef.current = setTimeout(() => {
-        slowTimerRef.current = 0;
-        setSlowTheme(false);
-      }, 1400);
-      setLightPick((prev) => pickLightTheme(prev));
-    }, []);
-    useEffect(() => {
-      const isAutoLight = autoTheme && !systemDark;
-      if (isAutoLight && !autoLightRef.current) pickThemeSlowly();
-      autoLightRef.current = isAutoLight;
-    }, [autoTheme, systemDark, pickThemeSlowly]);
-    // R133: 自动浅色不再「进来时换一次」就停住——只要还停在浅色里，每半小时
-    // 换一套，像一整天里桌面慢慢换气。深色固定用选的那套，不参与轮换。
-    useEffect(() => {
-      if (!(autoTheme && !systemDark)) return undefined;
-      const timer = setInterval(pickThemeSlowly, 30 * 60 * 1000);
-      return () => clearInterval(timer);
-    }, [autoTheme, systemDark, pickThemeSlowly]);
+      ? String(settings[systemDark ? 'themeDark' : 'themeLight'] || (systemDark ? 'night' : 'claude'))
+      : String(settings.theme || 'claude');
     // Hand the editor/read view a settings object whose `theme` is the resolved
     // one. Identity is stable while nothing changes, so panels do not re-render
     // on every tick.
@@ -3858,17 +4094,22 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       () => (settings.theme === effectiveTheme ? settings : Object.assign({}, settings, { theme: effectiveTheme })),
       [settings, effectiveTheme],
     );
-    // R167: the window is a setting, and it is drawn once for the whole room.
-    const sceneOn = settings.scene !== false;
     // R77: 今日进度。一条记录都没有时显示「今日 0 字」，不编数字。
     const todayWords = Number(dailyStats[dayKeyOf(Date.now())]) || 0;
-    // R100: 目标环从当天的账推导，绝不另算一套字数。
+    // R100: 目标环与微目标都从同一本账推导，绝不另算一套字数。
     const dailyGoal = Math.max(0, Math.round(Number(settings.dailyGoal) || 0));
+    const microWritten = microGoal ? Math.max(0, todayWords - microGoal.baseline) : 0;
+    const microActive = !!(
+      microGoal &&
+      chapter &&
+      String(chapter.id) === String(microGoal.chapterId) &&
+      microWritten < microGoal.target
+    );
 
     // ------------------------------------------------------ R100 goals ------
-    // Declared after `dailyGoal`: the closure reads it in its dependency array,
-    // and reading a `const` before its declaration would throw on the first
-    // render.
+    // Declared after `dailyGoal`/`microWritten`: these closures read them in
+    // their dependency arrays, and reading a `const` before its declaration
+    // would throw on the first render.
     const editDailyGoal = useCallback(async () => {
       const answer = await NW.ui.prompt({
         title: '每日字数目标',
@@ -3880,6 +4121,36 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       await applySettings({ dailyGoal: next });
       pushToast(next > 0 ? `每日目标：${next} 字` : '已关闭每日目标', 'ok');
     }, [applySettings, dailyGoal, pushToast]);
+
+    const startMicroGoal = useCallback(
+      (novelId, chapterId, target) => {
+        if (chapterId == null) return;
+        const baseline = Number(dailyStatsRef.current[dayKeyOf(Date.now())]) || 0;
+        const row = {
+          novelId: novelId == null ? null : novelId,
+          chapterId: chapterId,
+          target: Math.max(1, Math.round(Number(target) || 100)),
+          baseline: baseline,
+          startedAt: Date.now(),
+        };
+        writeMicroGoal(row);
+        setMicroGoal(row);
+        const open = chapterRef.current;
+        if (open && String(open.id) === String(chapterId)) setView('write');
+        else selectChapter(chapterId);
+      },
+      [selectChapter],
+    );
+
+    // The bar is a promise, not a nag: it disappears the moment the target is
+    // met, with one quiet toast and no dialog to dismiss.
+    useEffect(() => {
+      if (!microGoal) return;
+      if (microWritten < microGoal.target) return;
+      writeMicroGoal(null);
+      setMicroGoal(null);
+      pushToast(`微目标达成：${microGoal.target} 字。今天可以收工了。`, 'ok');
+    }, [microGoal, microWritten, pushToast]);
 
     const streakDays = (() => {
       const DAY = 86400000;
@@ -4009,6 +4280,22 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // was the one that vanished. It is dimmed down to a hint instead.
     const dock = h(Dock, {
           immersive: immersive,
+          // R117: on a phone the dock is a real bottom bar in the flex column,
+          // not a floating menu over the last line of the page. Immersive keeps
+          // the floating FAB: a permanent strip would defeat "pure canvas".
+          compact: narrow && !immersive,
+          shelfOpen: shelfOpen,
+          notesOpen: notesOpen,
+          onShelf: () => setShelfOpen(true),
+          onNotes: () => setNotesOpen((v) => !v),
+          onHome: () => setView('home'),
+          onLock: doLock,
+          // R117: 段落导航 lived in the corner capsule, which the phone bar
+          // replaces; expose it through 「更多」 so the feature does not vanish.
+          onParaNav: () => {
+            const api = editorRef.current;
+            if (api && typeof api.openParaNav === 'function') api.openParaNav();
+          },
           chapter: chapter,
           dockRef: dockRef,
           // R92: mouse in opens, mouse out closes (touch keeps the click toggle).
@@ -4022,6 +4309,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // the rest of the shell uses.
           onBlocked: (name) => {
             pushToast('先打开一章，再' + name, 'warn');
+          },
+          onProofread: () => {
+            setDockOpen(false);
+            openDialog('proofread');
           },
           onTypeset: () => {
             setDockOpen(false);
@@ -4052,46 +4343,41 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             );
           },
           // R44: 读一遍 — the same manuscript, at arm's length.
-          // R138: 点它进整屏（含浏览器全屏），不再只是面板里的浮层。
-          onRead: () => openRead(null),
+          onRead: () => {
+            setDockOpen(false);
+            setReadOpen(true);
+          },
         });
 
     return h(
       'div',
       {
-        // R137: 开卷时把整个面板提到视口上（`.nw-root` 带 container-type，
-        // fixed 会以它为包含块，所以必须提它自己，见 62-read.js 顶部注释）。
-        className:
-          'nw-root' +
-          (immersive ? ' nw-immersive' : '') +
-          (readOpen && activeNovelId ? ' nw-reading' : ''),
+        className: 'nw-root' + (immersive ? ' nw-immersive' : ''),
         ref: rootRef,
         'data-immersive': immersive ? '1' : undefined,
         // The shell follows the reading theme (see 98-shell-theme.js) so the
         // sidebar and toolbar never frame a page in a contradicting palette.
         'data-theme': themeSettings.theme || 'claude',
-        // R167: the window belongs to the whole room, not to the writing column.
-        // The scene is mounted once here (fixed, behind everything) so the tree
-        // and the sky can reach past the paper's margins to the edges of the
-        // screen; the editor only adds `data-scene` for the paper and the shelf.
-        'data-scene': sceneOn ? '1' : undefined,
-        // R135: only the automatic half-hourly swap asks for the slow dissolve.
-        'data-theme-slow': slowTheme ? '1' : undefined,
         onPointerMove: onRootPointerMove,
-        // R118: a click is activity too — and `touchActivity` is the one place
-        // that decides 「续命」 vs 「已经过期，上锁」.
-        onPointerDown: onRootPointerMove,
         onKeyDown: touchActivity,
         onWheel: touchActivity,
       },
-      // The window is one layer of glass behind the whole room: sidebar, paper
-      // and status bar all sit on it. Fixed so it never scrolls with a chapter.
-      sceneOn
-        ? h('div', { className: 'nw-window', 'aria-hidden': 'true' }, h(NW.Scene, { running: true, seed: 7 }))
-        : null,
       h(
         'div',
         { className: 'nw-body' },
+        // R117: on a phone the shelf is a drawer over the page, so tapping
+        // anywhere outside it must close it. The scrim is a real element (the
+        // drawer's spread shadow paints but cannot receive a tap), and it sits
+        // just below the drawer so its own buttons stay live.
+        narrow && showShelf
+          ? h('button', {
+              type: 'button',
+              className: 'nw-side-scrim',
+              tabIndex: -1,
+              'aria-label': NW.t('收起目录'),
+              onClick: () => setShelfOpen(false),
+            })
+          : null,
         showShelf
           ? h(
               'div',
@@ -4111,24 +4397,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 onRename: renameNode,
                 onDelete: deleteNode,
                 onMove: moveNode,
-                // R129：目录里直接读——「读这一章」把阅读页开到那一章的那一页，
-                // 「读整本」从第一章读起。两者都不动编辑器当前章。
-                onReadChapter: (id) => {
-                  if (id == null) return;
-                  openRead(id);
-                },
-                onReadBook: (novelId) => {
-                  const target = novelId == null ? activeNovelId : novelId;
-                  if (target == null) return;
-                  if (String(target) !== String(activeNovelId)) {
-                    // 换到那本书再读：等它的章节加载完，effect 会把阅读页打开。
-                    readPendingRef.current = { novelId: target };
-                    selectNovel(target);
-                    return;
-                  }
-                  const first = readChapters[0];
-                  openRead(first ? first.id : null);
-                },
                 // R77: 章节信息（状态 / 简介 / 目标字数）。
                 onChapterInfo: (id, title) => openDialog('chapterInfo', { chapterId: id, title: title }),
                 // R77: 设定集（人物 / 地点 / 道具 / 设定），按书打开。
@@ -4190,10 +4458,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 // from updatedAt; countPunctuation is part of the recount key.
                 dailyStats: dailyStats,
                 countPunctuation: settings.countPunctuation !== false,
-                // R100: 今天 becomes a goal ring; the target is edited by
-                // clicking it (the home screen keeps no other goal affordance).
+                // R100: 今天 becomes a goal ring, and 「只写 100 字」 starts a
+                // sitting-sized target on the chapter the writer is resuming.
                 dailyGoal: dailyGoal,
                 onSetDailyGoal: editDailyGoal,
+                onMicroGoal: startMicroGoal,
                 hasChapter: !!chapter,
                 journalCount: journalCount,
                 submissions: submissions,
@@ -4276,6 +4545,26 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       // manuscript for no reason.
                       'data-notes-lane': notesOpen && !immersive ? '1' : '0',
                     },
+                    // R100: the micro goal is a thin line at the top of the paper,
+                    // not a dialog. It is quiet on purpose — a progress bar you
+                    // cannot stop looking at is the opposite of encouragement.
+                    microActive
+                      ? h(
+                          'div',
+                          {
+                            className: 'nw-microbar',
+                            role: 'progressbar',
+                            'aria-valuemin': 0,
+                            'aria-valuemax': microGoal.target,
+                            'aria-valuenow': Math.min(microWritten, microGoal.target),
+                            title: `微目标 ${Math.min(microWritten, microGoal.target)} / ${microGoal.target} 字`,
+                          },
+                          h('span', {
+                            className: 'nw-microbar-fill',
+                            style: { width: Math.min(100, (microWritten / microGoal.target) * 100) + '%' },
+                          }),
+                        )
+                      : null,
                     h(NW.Editor, {
                       key: String(chapter.id),
                       chapter: chapter,
@@ -4332,7 +4621,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       },
                       onSelectionChange: onSelectionChange,
                       // R73: 选中文字后浮出的小方钮点下去就是这里。开这扇窗口意味着
-                      // 要并排看原文和改写，所以整章的AI建议栏先让位。
+                      // 要并排看原文和改写，所以整章的修改建议栏先让位。
                       onAdviceSelection: (sel) => {
                         if (!sel || !String(sel.text || '').trim()) return;
                         setSelAdvice(sel);
@@ -4415,8 +4704,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // 为空时全部 disabled），只剩下一枚关不掉的圆按钮压在快捷入口上。
           // 首页有自己的卡片和操作行，不需要这块坞。
           //
-          // R83: AI建议栏展开时整块坞不渲染。栏占着右侧车道，圆钮正好压在
-          // 建议卡片的下沿；收起状态下它也没有一个动作可点（AI建议正是打开
+          // R83: 修改建议栏展开时整块坞不渲染。栏占着右侧车道，圆钮正好压在
+          // 建议卡片的下沿；收起状态下它也没有一个动作可点（修改建议正是打开
           // 这一栏的入口），先让位，关掉栏再回来。R114: 沉浸模式里栏也能打开，
           // 坞同样让位，不让圆钮压在建议卡片下沿。
           // R98: 选中改写窗口是同一个车道的另一种形态，同样让位——否则圆钮浮在
@@ -4439,15 +4728,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             novel: activeNovel,
             chapters: readChapters,
             currentId: chapter ? chapter.id : null,
-            // R129：目录里点的章节优先于「编辑器当前章」。
-            startId: readAt,
             // The editor buffer can be ahead of the last autosave, so the open
             // chapter is read from the live text, not from the stored row.
             currentText: getEditorText(),
             settings: themeSettings,
-            // R131：朗读引擎里的「声音」下拉要能改设置（在线音色存进 settings），
-            // 阅读页本身不持有设置，只把改动交回来。
-            onReadSetting: (patch) => setSettings((prev) => ({ ...prev, ...patch })),
             // R47: reading is also when a writer notices — so this is where an
             // annotation can be drawn. The marks are the shell's, not the view's:
             // the same array feeds the editor underneath, so a line underlined
@@ -4461,10 +4745,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // they left, with the scroll position the pages covered up.
             onClose: () => {
               setReadOpen(false);
-              setReadAt(null);
-              // R138: 阅读页是自己要的全屏，关卷时还回去；不然宿主会一直停在
-              // 浏览器全屏里，看不到书架。
-              exitFullscreen();
               window.requestAnimationFrame(() => {
                 const api = editorRef.current;
                 if (api && typeof api.focus === 'function') {
@@ -4497,6 +4777,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 { className: 'nw-status-today', 'data-sign': todayWords < 0 ? 'down' : 'up' },
                 '今日 ' + (todayWords > 0 ? '+' : '') + NW.fmtWords(todayWords)
                   + (dailyGoal > 0 ? ' / ' + NW.fmtWords(dailyGoal) : '') + ' 字'
+                  + (microActive ? ' · 微目标 ' + microWritten + '/' + microGoal.target : '')
                   + (streakDays > 1 ? ' · 连续 ' + streakDays + ' 天' : ''),
               ),
             ),
@@ -4578,6 +4859,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // (backup, version history, submission, export defaults), so it needs
             // a way to open another dialog on top of itself.
             onOpenDialog: (kind, extra) => openDialog(kind, extra),
+            // R34 ③: the pairing QR lives in its own dialog so the settings page
+            // stays a list of fields rather than a wall of one-off actions.
+            onOpenPair: () => openDialog('pair'),
+            // What the phone will see. Refreshed whenever the library changes, so
+            // a sync that happens while this window is open carries the latest
+            // edits instead of a boot-time copy.
+            syncLibrary: syncLibrary,
+            syncState: lanSync,
             // Defaults the Export dialog seeds itself with (closing signature).
             exportDefaults: {
               appendText: String(settings.exportSignature || ''),
@@ -4701,6 +4990,131 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   function Dock(props) {
     const p = props || {};
     const open = !!p.open;
+    /**
+     * R117: the phone bar's 「更多」 sheet. It is local to the bar because the
+     * bar itself has no collapsed state — the five primary entries are always
+     * on screen, and only the secondary tools need a popover.
+     */
+    const [moreOpen, setMoreOpen] = useState(false);
+    useEffect(() => {
+      if (!p.compact) setMoreOpen(false);
+    }, [p.compact]);
+    useEffect(() => {
+      if (!moreOpen) return undefined;
+      const onPointerDown = (event) => {
+        const node = p.dockRef && p.dockRef.current;
+        if (node && event.target && node.contains(event.target)) return;
+        setMoreOpen(false);
+      };
+      const onKeyDown = (event) => {
+        if (event.key === 'Escape' && !event.defaultPrevented) setMoreOpen(false);
+      };
+      document.addEventListener('pointerdown', onPointerDown, true);
+      document.addEventListener('keydown', onKeyDown, true);
+      return () => {
+        document.removeEventListener('pointerdown', onPointerDown, true);
+        document.removeEventListener('keydown', onKeyDown, true);
+      };
+    }, [moreOpen, p.dockRef]);
+
+    if (p.compact) {
+      const blockedToast = (name) => {
+        if (typeof p.onBlocked === 'function') p.onBlocked(name);
+      };
+      /**
+       * One slot in the bottom bar. The 44px box is the hit target; the icon
+       * and the 11px label are painted inside it, so the bar stays one row
+       * tall and every label remains readable at 390px.
+       */
+      const barItem = (iconName, name, onClick, opts) => {
+        const o = opts || {};
+        const blocked = !!o.needsChapter && !p.chapter;
+        return h(
+          'button',
+          {
+            type: 'button',
+            className: 'nw-dock-baritem',
+            'data-active': o.active ? '1' : '0',
+            'data-blocked': blocked ? '1' : '0',
+            'aria-disabled': blocked ? 'true' : undefined,
+            'aria-label': name,
+            title: blocked ? name + '（先打开一章）' : name,
+            onClick: () => {
+              if (blocked) {
+                blockedToast(name);
+                return;
+              }
+              if (typeof onClick === 'function') onClick();
+            },
+          },
+          h('span', { className: 'nw-dock-baricon', 'aria-hidden': 'true' }, NW.icon(iconName, { size: 20 })),
+          h('span', { className: 'nw-dock-barname' }, name),
+        );
+      };
+      const sheetItem = (iconName, name, onClick, needsChapter) => {
+        const blocked = !!needsChapter && !p.chapter;
+        return h(
+          'button',
+          {
+            type: 'button',
+            className: 'nw-dock-sheetitem',
+            role: 'menuitem',
+            'data-blocked': blocked ? '1' : '0',
+            'aria-disabled': blocked ? 'true' : undefined,
+            'aria-label': name,
+            title: blocked ? name + '（先打开一章）' : name,
+            onClick: () => {
+              if (blocked) {
+                blockedToast(name);
+                return;
+              }
+              setMoreOpen(false);
+              if (typeof onClick === 'function') onClick();
+            },
+          },
+          h('span', { className: 'nw-dock-sheeticon', 'aria-hidden': 'true' }, NW.icon(iconName, { size: 20 })),
+          h('span', { className: 'nw-dock-sheetname' }, name),
+        );
+      };
+      return h(
+        'div',
+        {
+          className: 'nw-dock nw-dock-bar',
+          ref: p.dockRef,
+          'data-immersive': p.immersive ? '1' : '0',
+          'data-open': moreOpen ? '1' : '0',
+          role: 'toolbar',
+          'aria-label': NW.t('写作工具'),
+        },
+        moreOpen
+          ? h('button', {
+              type: 'button',
+              className: 'nw-dock-sheetback',
+              tabIndex: -1,
+              'aria-label': NW.t('关闭更多工具'),
+              onClick: () => setMoreOpen(false),
+            })
+          : null,
+        moreOpen
+          ? h(
+              'div',
+              { className: 'nw-dock-sheet', role: 'menu', 'aria-label': NW.t('更多工具') },
+              // 二次动作：和桌面坞同一组，只是收进「更多」。
+              sheetItem('typeset', NW.t('一键排版'), p.onTypeset, true),
+              sheetItem('list', NW.t('段落'), p.onParaNav, true),
+              sheetItem('proofread', NW.t('AI 校对'), p.onProofread, true),
+              sheetItem('send', NW.t('投稿'), p.onSubmit, true),
+              sheetItem('home', NW.t('首页'), p.onHome, false),
+              sheetItem('lock', NW.t('锁定'), p.onLock, false),
+            )
+          : null,
+        barItem('list', NW.t('目录'), p.onShelf, { active: p.shelfOpen }),
+        barItem('pencil', NW.t('灵感'), p.onNotes, { active: p.notesOpen, needsChapter: true }),
+        barItem('sparkle', NW.t('建议'), p.onAdvice, { needsChapter: true }),
+        barItem('book', NW.t('读一遍'), p.onRead, { needsChapter: true }),
+        barItem('more', NW.t('更多'), () => setMoreOpen((v) => !v), { active: moreOpen }),
+      );
+    }
 
     /**
      * One action row. `disabled` is still gone (R58): a disabled button fires
@@ -4747,14 +5161,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         { className: 'nw-dock-menu', 'data-open': open ? '1' : '0', role: 'menu', 'aria-hidden': open ? 'false' : 'true' },
         // R67b：顺序是按**名字的长短**排的，不是按重要性 —— 阶梯要从长到短，
         // 名字也要从长到短，两个方向一致才不会出现「最上面那级最长、字却最短，
-        // 中间空出一大块」。
-        // R118：AI 校对并入 AI建议 之后，菜单只剩四行；阶梯宽度也随之重排
-        // （见 .nw-dock-menu .nw-dock-btn 的 nth-child）。
-        // AI建议 toggles the advice column beside the paper, so its row stays
+        // 中间空出一大块」。所以「AI 校对」挪下来，紧挨在「读一遍」上面。
+        // 修改建议 toggles the advice column beside the paper, so its row stays
         // lit while that column is open.
         item('typeset', NW.t('一键排版'), p.onTypeset, true),
-        // R114: 沉浸模式也保留「AI建议」入口；栏和选区窗口都能并排显示。
-        item('sparkle', NW.t('AI建议'), p.onAdvice, true),
+        // R114: 沉浸模式也保留「修改建议」入口；栏和选区窗口都能并排显示。
+        item('sparkle', NW.t('修改建议'), p.onAdvice, true),
+        item('proofread', NW.t('AI 校对'), p.onProofread, true),
         item('book', NW.t('读一遍'), p.onRead, true),
         item('send', NW.t('投稿'), p.onSubmit, true),
       ),
@@ -4788,7 +5201,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    * gutter, so the two can be open at the same time. Collapsed it is a single
    * small tab, which is what the writer sees most of the time.
    */
-  /* AI建议 / 选中改写 (R73–R76) 已搬到 92-advice.js —— 它只通过
+  /* 修改建议 / 选中改写 (R73–R76) 已搬到 92-advice.js —— 它只通过
      props 与工作室说话，放在这里只是让 90-app 重新长出三千行。 */
 
 /** Clamp a number into [lo, hi]; non-finite input falls back to `lo`. */
@@ -5128,7 +5541,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       if (typeof p.onDone === 'function') p.onDone(null);
     });
     const tried = Array.isArray(req.tried) ? req.tried : [];
-    // R34: the caller passes a Chinese label ('AI 投稿' / 'AI建议' / '一键排版');
+    // R34: the caller passes a Chinese label ('AI 校对' / 'AI 投稿' / '修改建议');
     // translate it here so the picker reads as one sentence in either language.
     const label = NW.t(String(req.label || '本次请求'));
     const failedLine =

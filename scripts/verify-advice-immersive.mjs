@@ -54,9 +54,12 @@ check('选中改写窗口同样能在沉浸里并排出现', () => {
   assert.ok(!app.includes('selAdvice && !immersive'), 'no immersive gate on the window');
 });
 
-check('工具坞保留「修改建议」这一行', () => {
-  assert.ok(
-    app.includes("item('sparkle', NW.t('修改建议'), p.onAdvice, true)"),
+check('工具坞保留「AI建议」这一行', () => {
+  // R118: the dock label is 「AI建议」 now; accept the old wording only so a
+  // half-merged tree reports the real problem instead of a rename.
+  assert.match(
+    app,
+    /item\('sparkle', NW\.t\('(?:AI建议|修改建议)'\), p\.onAdvice, true\)/,
     'the dock row must exist',
   );
   assert.ok(!app.includes("p.immersive ? null : item('sparkle'"), 'the row must not be hidden in immersive mode');

@@ -374,9 +374,15 @@
           ? h(
               'span',
               { className: 'nw-row-actions', onClick: (ev) => ev.stopPropagation() },
-              makeIconBtn(icon('child'), tr('新建子章节'), () => api.createChild(ch.id)),
+              // R129: 目录行的「读这一章」——不切编辑器的当前章，只是把阅读页
+              // 开到这一章的那一页；退出阅读后光标仍在原来那一句上。
+              // 行上仍然只放四枚按钮（原来是 新建子章节/重命名/删除/更多）：
+              // 五枚时动作条会从行中间压到标题上，而「新建子章节」在「⋯」里
+              // 一点就有，不该为它挤掉标题。
+              makeIconBtn(icon('openbook'), tr('读这一章'), () => api.readChapter(ch)),
               makeIconBtn(icon('pencil'), tr('重命名'), () => api.rename(ch)),
-              makeIconBtn(icon('trash'), tr('删除'), () => api.remove(ch)),
+              // 删除留在「⋯」里：它本来就在菜单里，行上少一枚按钮，标题就能多
+              // 露出几个字（260px 宽的目录里这一段很值钱）。
               makeIconBtn(icon('more', 15), tr('更多操作'), (ev) => api.openMenu(ev, 'chapter', ch)),
             )
           : null,
@@ -671,6 +677,10 @@
     };
     api.createChild = (id) => {
       if (typeof P.onCreateChapter === 'function') P.onCreateChapter(id);
+    };
+    api.readChapter = (ch) => {
+      if (!ch || ch.id == null) return;
+      if (typeof P.onReadChapter === 'function') P.onReadChapter(ch.id);
     };
     api.rename = (ch) => {
       if (typeof P.onRename === 'function') P.onRename('chapter', ch.id, ch.title || '');
@@ -1042,6 +1052,10 @@
         h(
           'div',
           { className: 'nw-row-actions', onClick: (ev) => ev.stopPropagation() },
+          // R129：书行上也能直接「读整本」（从第一章读起）。
+          makeIconBtn(icon('openbook'), tr('读整本'), () => {
+            if (typeof P.onReadBook === 'function') P.onReadBook(n.id);
+          }),
           makeIconBtn(icon('pencil'), tr('重命名'), () => {
             if (typeof P.onRename === 'function') P.onRename('novel', n.id, n.title || '');
           }),
@@ -1321,6 +1335,36 @@
           style: { left: menu.x + 'px', top: menu.y + 'px' },
           onClick: (ev) => ev.stopPropagation(),
         },
+        // R129：阅读放在菜单第一项——「读一章」是目录里最常按的那个动作。
+        menu.kind === 'chapter'
+          ? menuItem(
+              'openbook',
+              tr('读这一章'),
+              () => {
+                if (typeof P.onReadChapter === 'function') P.onReadChapter(menu.id);
+                else toast(tr('阅读入口尚未接入'));
+              },
+              false,
+            )
+          : menuItem(
+              'openbook',
+              tr('读整本'),
+              () => {
+                if (typeof P.onReadBook === 'function') P.onReadBook(menu.id);
+                else toast(tr('阅读入口尚未接入'));
+              },
+              false,
+            ),
+        menu.kind === 'chapter'
+          ? menuItem(
+              'child',
+              tr('新建子章节'),
+              () => {
+                if (typeof P.onCreateChapter === 'function') P.onCreateChapter(menu.id);
+              },
+              false,
+            )
+          : null,
         menuItem(
           'download',
           tr('导出'),
@@ -1448,6 +1492,10 @@
           }),
           makeIconBtn(icon('plus', 18), tr('新建章节'), () => {
             if (typeof P.onCreateChapter === 'function') P.onCreateChapter(null);
+          }),
+          // R129: 从这一本书的第一页读起（目录里逐章读的另一半）。
+          makeIconBtn(icon('openbook', 18), tr('读整本'), () => {
+            if (typeof P.onReadBook === 'function') P.onReadBook();
           }),
           makeIconBtn(icon('upload', 18), tr('导入小说'), importNovel),
           makeIconBtn(icon('trash', 18), tr('回收站'), openTrash),

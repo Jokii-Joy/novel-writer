@@ -29,7 +29,7 @@
   // file with no outer `NW`, so it still falls back to `window.NW`.
   const NS = typeof NW !== 'undefined' && NW ? NW : (window.NW = window.NW || {});
 
-  /** The ten kinds the cards know, plus the labels a writer may paste. */
+  /** The eleven kinds the cards know, plus the labels a writer may paste. */
   const KIND_ALIASES = new Map();
   [
     ['rhythm', '节奏', 'pacing'],
@@ -42,6 +42,8 @@
     ['logic', '逻辑', '设定'],
     ['emotion', '情绪', '情感'],
     ['redundancy', '冗余', '重复', '啰嗦'],
+    // R118: the 字词与标点 angle folded in from the old 「AI 校对」 dialog.
+    ['words', '字词', '字词与标点', '标点', '错别字', 'typo', 'punct'],
   ].forEach(([kind, ...labels]) => {
     KIND_ALIASES.set(kind, kind);
     labels.forEach((label) => KIND_ALIASES.set(String(label).toLowerCase(), kind));
@@ -101,14 +103,14 @@
 
   /** The format block shown above the paste box — also copied as the prompt. */
   const TEMPLATE = [
-    '请按下面的格式给修改建议，每条之间空一行：',
+    '请按下面的格式给出AI建议，每条之间空一行：',
     '',
     '原文：从正文里逐字复制的一句（20~60 字）',
     '问题：一句话说清问题（不超过 40 字）',
     '理由：为什么是问题（不超过 60 字）',
     '建议：具体怎么改（不超过 80 字）',
     '改后：改后的文字（可选）',
-    '类型：节奏 / 用词 / 视角 / 画面 / 对话 / 结构 / 人物 / 逻辑 / 情绪 / 冗余（可选）',
+    '类型：节奏 / 用词 / 视角 / 画面 / 对话 / 结构 / 人物 / 逻辑 / 情绪 / 冗余 / 字词与标点（可选）',
     '严重度：高 / 中 / 低（可选）',
     '',
     '要求：原文必须与小说正文一字不差；没有值得改的就不要编。',
