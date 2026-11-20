@@ -8,6 +8,46 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.9.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第一百七十轮（R170）**阅读页一次翻一整张纸：页码终于跟着书走**：
+  - 用户原话：「修复精神空间插件阅读页面的显示效果bug：翻页页码，翻页动画等」。
+  - **根因**：R159 把编号口径定成「一次翻页推进一页」——对开时 `step` 是一页宽，
+    `page` 每趟 +1，于是台面永远停在「偶|奇」：1|2 → 2|3 → 3|4。纸的正面印旧右页
+    （i+2）、背面印新左页（next+1），在「+1」的模型里两者恰好是同一页：纸一翻过去，
+    左页重复右页刚读过的内容，纸背和纸面印同一个页码。R160 的注释还写着「纸的两面
+    本来印的就是同一页」——那是这个模型的产物，不是真书的物理。这就是用户说的
+    「页码不对、翻页动画怪」。`client/src/62-read.js` 的 `folioAt` 注释里留了这段
+    梳理，免得下一轮又改回去。
+  - **改法**：新增 `advance = cols > 1 ? 2 : 1`（对开一张纸两页，单栏一页）。
+    `maxPage` 对齐到最后一张纸的左页（`lastPage - lastPage % advance`）；
+    `turnTo` / `scrollToPage` / `go` / 滚动同步 / `measure` 的首次跳章与重排回位 /
+    拖拽预演与松手全部按 `advance` 取整或步进。纸面几何一个像素没动——`leafW`
+    本来就是半张纸，只是索引走错了：`frontAt = cur` 给旧右页、`backAt = next`
+    给新左页，落定后翻到的是相邻的两页（4/5、6/7……）。
+  - **书末那张白页**：总页数是单数时，最后一跨是「13 | 空白」（真书最后一张纸的
+    背面）。正文流里没有那块白，`scrollLeft` 停不到 `lastAt * step`，最后一页永远
+    读不到（R159 起就有）。在 `.nw-read-flow` 末尾加一块绝对定位的 `.nw-read-tail`：
+    它不参与分栏，只用盒子把 scrollable overflow 往右撑；`measure()` 写
+    `--nw-read-span`（正文末尾）与 `--nw-read-tail`（还差多少），`fit` 用
+    `span + tail - box` 算。纸面/封面的副本也带上同一块补白，否则最后一跨翻上去时
+    副本滚不到位、纸背印错页。白页上不印眉题与章名（页码本来就没有）。
+  - **走错的两条路**（留给以后）：给 flow 加 `padding-right` 撑不开滚动范围
+    （padding 算进 clientWidth，`maxScroll = sw - cw` 不变），而且 stage 是 flex
+    居中、flow 是 flex item，padding 会把它挤窄、分栏重排；`width = box + pad` 配
+    `margin-left`/负 `margin-right` 则被 Chrome 的 safe centering 整体左移，实测
+    `rect.x` 从 84 变成 -411。
+  - **验收（.probe/live/cine.mjs 冻结时钟逐帧 + battery.mjs，1440x900）**：
+    `sw` 8376 → 9024（+648 补白）、`step` 648、`total` 13；End 停在
+    「13 | 空白」，`scrollLeft` 7776 = 12 × 648（旧版被浏览器夹在 7128）；
+    前翻 3|4 → 5|6：纸面印 4、纸背印 5、台面 3|6，落定 5|6；回翻 3|4 → 1|2：
+    纸面 3、纸背 2、台面 1|4，落定 1|2；单栏（704px 宽）仍是 11 页、一次一页；
+    `prefers-reduced-motion` 下直接跳两张。没有 JS 报错，静止/转场都没有白纸残留。
+  - **构建**：24 parts、`client/client.js` 1,614,522 bytes / 1,515,811 字符。
+    `verify-autolock`、`verify-read-entry`、`verify-read-tts` 在 HEAD 上就是红的
+    （R118 的自动锁调度器、R44 的 `readAt` 接线、TTS 路由在 R164–R168 的撤回里丢了），
+    与本轮无关，其余脚本全过（load / async-guards / restore 16 / crypto-recovery 18 /
+    highlight-style / advice-paste 33 / advice-immersive 8 / shelf-detail 24 /
+    lock-screen 11）。
+
 - 第一百六十八轮（R168）**编辑页回到原来的样子**：
   - 用户原话：「没这个实力还是别折腾编辑页面了，还是原来的吧。」
   - 撤回 R164–R167 的全部写作面改造：写完一页摞一页的纸摞、收纸/还纸动画、

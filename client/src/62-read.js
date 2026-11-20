@@ -1000,6 +1000,15 @@
 .nw-read-stage .nw-read-flow:focus,
 .nw-read-stage .nw-read-flow:focus-visible{outline:none;box-shadow:none;}
 .nw-read-flow::-webkit-scrollbar{width:0;height:0;}
+/* R170：书末那张空白页。对开时最后一页若落在左页，右半是白页，正文流里没有
+   这块白，scrollLeft 就到不了那一跨。补白块绝对定位、不参与分栏，只用它的
+   盒子把 scrollable overflow 往右撑（--nw-read-span = 正文末尾，--nw-read-tail
+   = 还差多少，都由 measure() 写）。 */
+.nw-read-tail{
+  position:absolute;top:0;left:var(--nw-read-span, 0);
+  width:var(--nw-read-tail, 0);height:1px;
+  pointer-events:none;
+}
 .nw-read-stage[data-drag="1"] .nw-read-flow{cursor:grabbing;}
 /* Page edge notes fade while a page is in motion (they are pinned to a line,
    and that line is moving); they are re-painted once, after the turn ends. */
@@ -1325,6 +1334,12 @@
     // 中途会经过中间位置，不听会让页码在跳页时闪一下。
     const quietRef = React.useRef(0);
     const wheelRef = React.useRef({ acc: 0, at: 0 });
+    // R170：对开的最后一跨页是「奇数页在左、右半空白」（真书最后一张纸的背面）。
+    // 正文流里没有那块白，scrollLeft 到不了最后一跨，最后一页就永远读不到。正文
+    // 上不能加 padding（padding 属于 clientWidth，加了也撑不开滚动范围），所以在
+    // flow 末尾放一块绝对定位的空白：它不参与分栏，只把 scrollable overflow 往右
+    // 撑出去。tailRef 记下撑出去多少，下一次量版要从 scrollWidth 里减掉它。
+    const tailRef = React.useRef(0);
 
     // w = 栏宽（= 行宽），gap = 栏间距，total = 总页数。三者都来自真实布局测量。
     const [layout, setLayout] = React.useState({
@@ -1356,7 +1371,14 @@
     // 会把 page 记成滚不到的那一页——正文被浏览器夹回一页，数字却按后一页印，
     // 于是书末印出「25 | 26」这种对不上的号。
     const fitPage = layout.fit == null ? layout.total - 1 : layout.fit;
-    const maxPage = Math.max(0, Math.min(layout.total - 1, fitPage));
+    // R170：翻一次要推进**一整张纸**。对开时一张纸 = 两页（1|2 → 3|4），所以能停的
+    // 页号只能是 0、2、4……；单栏仍是一页。R159 把每次翻页改成只推进一页，结果对开
+    // 永远停在「偶|奇」，纸的两面印的是同一页，落定后左页重复右页刚读过的内容——
+    // 用户说的「页码不对、翻页动画怪」就是这个。纸面几何本来就是按整张纸算的
+    // （leafW = 半张纸），只是索引走错了，所以这里改索引、不动纸。
+    const advance = layout.cols > 1 ? 2 : 1;
+    const lastPage = Math.max(0, Math.min(layout.total - 1, fitPage));
+    const maxPage = lastPage - (lastPage % advance);
     // R55：一页有多宽（单页 = 一栏 + 栏距，对开 = 两栏 + 两个栏距里的一整段）。
     // 由 measure() 算好后放进 layout，凡是「翻一页」都读它，别再各自拼 w+gap。
     const step = layout.step || (layout.w + layout.gap);
@@ -1739,7 +1761,11 @@
       const s = step;
       if (!flow || !(s > 0)) return;
       const cur = pageRef.current;
-      const next = Math.max(0, Math.min(maxPage, index));
+      let next = Math.max(0, Math.min(maxPage, index));
+      // R170：台面只停在「整张纸」的起点上（对开时是偶数页号）。调用方给的索引
+      // 万一落在纸的中间（章首、TTS、外部跳页），也要夹到这张纸上，不能停在
+      // 半张纸的位置——那会让下一页重复当前右页的内容。
+      next -= next % advance;
       if (next === cur) return;
       const dir = next > cur ? 1 : -1;
       const still = typeof window.matchMedia === 'function'
@@ -1894,7 +1920,7 @@
       rafRef.current = window.requestAnimationFrame(frame);
       // 兜底：后台标签页里 rAF 会被冻住，时长 + 240ms 后一定收。
       flipTimerRef.current = window.setTimeout(land, dur + 240);
-    }, [step, maxPage, armFlip, stopFlip, repaintGutter, layout.cols, poseFlip]);
+    }, [step, maxPage, advance, armFlip, stopFlip, repaintGutter, layout.cols, poseFlip]);
 
     // 瞬间落到某一页：开场定位、窗口重排后的回位、TTS 念到下一页走这里。不翻纸。
     // R148：它原来只挪 scrollLeft 不写 pageRef/setPage——正文已经在那一页，
@@ -1904,7 +1930,10 @@
       const flow = flowRef.current;
       const s = step;
       if (!flow || !(s > 0)) return;
-      const at = Math.max(0, Math.min(maxPage, index));
+      let at = Math.max(0, Math.min(maxPage, index));
+      // R170：落到「整张纸」的起点。TTS 念到右页的句子时给出的是奇数页号，
+      // 夹到这张纸的左页即可——右页本来就在同一张纸上，不需要动。
+      at -= at % advance;
       pageRef.current = at;
       setPage(at);
       stopFlip();
@@ -1914,16 +1943,17 @@
       const stage = stageRef.current;
       if (stage) stage.removeAttribute('data-turn');
       repaintGutter();
-    }, [step, maxPage, stopFlip, repaintGutter]);
+    }, [step, maxPage, advance, stopFlip, repaintGutter]);
 
     // 所有入口（点击半页、滚轮、键盘、拖拽松手）都只走这一个函数。
     const go = React.useCallback((delta) => {
       // pageRef 是唯一真相：它只在落位时被写，所以连按也永远从屏幕上的那页起算。
       const cur = pageRef.current;
-      const next = Math.max(0, Math.min(maxPage, cur + delta));
+      // R170：一次翻一整张纸（对开两页、单栏一页）。
+      const next = Math.max(0, Math.min(maxPage, cur + delta * advance));
       if (next === cur) return;
       turnTo(next);
-    }, [maxPage, turnTo]);
+    }, [maxPage, advance, turnTo]);
 
     React.useEffect(() => () => clearTurns(), [clearTurns]);
 
@@ -2975,18 +3005,38 @@
       // scrollWidth 折算成栏数，再除以每页的栏数。旧公式 (scrollWidth + gap) / step
       // 只在「每页两栏 + 对开」这一种尺寸下碰巧对——单栏、或一页一栏的对开都会算错，
       // 书末的页码跟着错。
-      const span = flow.scrollWidth;
+      // R170：文末那截补白不是正文，量的时候先减掉。
+      const span = Math.max(0, flow.scrollWidth - tailRef.current);
       const unitW = colW + gap;
       const columns = unitW > 0 ? Math.max(1, Math.round((span + gap) / unitW)) : 1;
       const total = Math.max(1, Math.ceil(columns / Math.max(1, textCols)));
-      // 正文最多滚到 span - box，所以能整页停下的最后一页是 floor((span - box) / step)。
-      // 半页的尾巴（栏数是奇数）滚不满一整步，这里必须取整，否则 End 会停在
-      // 「正文被夹回一页、页码却按后一页印」的状态。
+      // R170：对开时能停的最后一页是「最后一张纸的左页」。书页数是单数时，最后
+      // 一张纸的右半是空白——正文流里没有那块白，滚动区就到不了那一跨。按最后一
+      // 跨的右缘算出还差多少，交给 flow 末尾那块绝对定位的补白去撑（它不参与
+      // 分栏，改了也只动 scrollable overflow）。
+      const adv = cols > 1 ? 2 : 1;
+      const lastAt = Math.max(0, total - 1 - ((total - 1) % adv));
+      const tail = step > 0 ? Math.max(0, Math.ceil(lastAt * step + box - span)) : 0;
+      if (stage) {
+        if (tail !== tailRef.current) {
+          tailRef.current = tail;
+          stage.style.setProperty('--nw-read-tail', tail + 'px');
+        }
+        stage.style.setProperty('--nw-read-span', Math.round(span) + 'px');
+      }
+      // 正文最多滚到「补白之后的右缘」，所以能整页停下的最后一页是
+      // floor((span + tail - box) / step)。半页的尾巴（栏数是奇数）滚不满一整步，
+      // 这里必须取整，否则 End 会停在「正文被夹回一页、页码却按后一页印」的状态。
       const fit = step > 0
-        ? Math.max(0, Math.min(total - 1, Math.floor((span - box) / step + 0.02)))
+        ? Math.max(0, Math.min(lastAt, Math.floor((span + tail - box) / step + 0.02)))
         : Math.max(0, total - 1);
       // 每一章从第几页开始：眉题要跟着当前页换章名，而翻页时绝不能去 DOM 里
       // 找——那是一个动画帧里最不该出现的事。这里量一次，翻页只查这个数组。
+      // R170：对开时一张纸两页，台面的页号必须落在纸的起点（0、2、4……）。
+      const snap = (v) => {
+        const at = Math.max(0, Math.min(lastAt, Math.floor(v)));
+        return at - (at % adv);
+      };
       const starts = [];
       for (let i = 0; i < chapters.length; i += 1) {
         const row = chapters[i];
@@ -3022,6 +3072,7 @@
           start = Math.round(mark.offsetLeft / step);
         }
         start = Math.max(0, Math.min(start, fit));
+        start = snap(start);
         pageRef.current = start;
         setPage(start);
         setShown(start);
@@ -3033,13 +3084,13 @@
         flow.style.scrollBehavior = wasBehavior;
       } else {
         setPage((cur) => {
-          const next = Math.max(0, Math.min(cur, fit));
+          const next = snap(Math.min(cur, fit));
           pageRef.current = next;
           return next;
         });
         // R148：重排后正文书页被 clamp 了，舞台页码也一起 clamp，别让数字
         // 停在一页已经不存在的页上。
-        setShown(Math.max(0, Math.min(shownPageRef.current, fit)));
+        setShown(snap(Math.min(shownPageRef.current, fit)));
         // R120: put the prose back on a page boundary. The step just changed
         // (a single page became a spread, or the panel was resized), while
         // scrollLeft still holds the old pixel offset -- off by part of a page,
@@ -3114,7 +3165,9 @@
           if (!s) return;
           // 自己滚的那一段不参与：页码已经由 go() 定好了。
           if (Date.now() < quietRef.current) return;
-          const index = Math.round(flow.scrollLeft / s);
+          // R170：对开时正文可以停在半张纸的中间（手指拖到一半松了），但页码
+          // 只认整张纸——取最近的纸边界，再向下取整到这张纸的左页。
+          const index = Math.round(flow.scrollLeft / (s * advance)) * advance;
           if (index !== pageRef.current) {
             pageRef.current = index;
             setPage(index);
@@ -3143,7 +3196,7 @@
         }
         flow.removeEventListener('scroll', onScroll);
       };
-    }, [step]);
+    }, [step, advance]);
 
     // 滚轮 / 触控板：竖着滚也要翻页。横向滚动容器对竖向滚轮没有反应，
     // 而看书的人不会先想一想该往哪个方向滚。
@@ -3274,7 +3327,8 @@
         // R142：纸有两个面，所以摆纸时要把「翻到哪一页」一起交进去。
         // R159：同 turnTo，纸背取的那一页两向不同（见那里的注释）。
         const cur = pageRef.current;
-        const nextAt = Math.max(0, Math.min(maxPage, cur + dir));
+        // R170：一趟翻一整张纸，拖拽的预演也一样。
+        const nextAt = Math.max(0, Math.min(maxPage, cur + dir * advance));
         armFlip(dir, cur, dir > 0 ? nextAt : Math.min(layout.total - 1, nextAt + 1));
       }
       const span = step > 0 ? step : 600;
@@ -3311,7 +3365,8 @@
       const delta = dx !== 0 ? dx : d.v;
       if (Math.abs(dx) > s * 0.15 || Math.abs(d.v) > 0.45) {
         const before = pageRef.current;
-        turnTo(before + (delta < 0 ? 1 : -1), d.angle);
+        // R170：松手翻一整张纸。
+        turnTo(before + (delta < 0 ? advance : -advance), d.angle);
         if (pageRef.current === before) stopFlip();
       } else {
         stopFlip();
@@ -3515,6 +3570,14 @@
       () => (mirrorRows.length ? renderChapters(mirrorRows, mirrorFrom, false) : null),
       [mirrorRows, mirrorFrom, renderChapters],
     );
+    // R170：纸面和封面上的副本也要有文末补白，否则最后一跨页翻上去时，
+    // 副本滚不到那一页（scrollLeft 被自己的 scrollWidth 夹住），纸背上印错页。
+    const mirrorTailed = React.useMemo(
+      () => (mirrorBody
+        ? [mirrorBody, h('div', { className: 'nw-read-tail', key: 'tail', 'aria-hidden': 'true' })]
+        : null),
+      [mirrorBody],
+    );
 
     // 正文重建后立刻重算页边批注签；`body` 变了说明分段/换页规则也可能变了。
     React.useLayoutEffect(() => {
@@ -3602,7 +3665,7 @@
         className: 'nw-read-copy',
         ref: (el) => { copyRef.current = el; },
         style: flowStyle,
-      }, mirrorBody),
+      }, mirrorTailed),
       h('span', {
         className: 'nw-read-shade',
         ref: (el) => { shadeRef.current = el; },
@@ -3648,11 +3711,12 @@
     // 出的正文窗口一致。
     // R149: 台面改成按「半」取：翻页途中被掀起的那一半先换（halfOverride），
     // 另一半等纸落地。整幅一份 folio 会让外缘的页码与它旁边的内容对不上。
-    // R159: 编号口径改成「一次翻页推进一页」。正文的 scrollLeft = page * step，
-    // 而 step 正好是一页宽（w + gap），所以停在 page = i 时，台面上左右两页就是
-    // i 与 i+1，印出来必须是 i+1 / i+2。旧代码 `idx * (spread ? 2 : 1)` 把每一趟
-    // 翻页都当成翻了两页，于是第一下之后所有页码都比正文多 1，越往后差得越多
-    // （正文第 20 页印成 24）——这就是「页码不对」的根。
+    // R170: 编号口径是「一次翻一张纸」。对开时正文的 scrollLeft = page * step，
+    // step 是一页宽，而 page 只取偶数，所以停在 page = i 时台面上左右两页就是
+    // i 与 i+1，印出来必须是 i+1 / i+2；单栏时 step 也是一页宽、page 每趟 +1，
+    // 印出来的仍是 i+1 / i+2。R159 曾把「一次翻一页」写进模型（对开也 +1），
+    // 结果台面永远停在「偶|奇」，纸的两面印同一页、落定后左页重复右页——那才是
+    // 用户说的「页码不对」。
     const folioAt = (idx) => {
       const startX = idx * pageStep;
       // 对开时右页就是紧挨着的下一张书页；单页两栏时右栏与左页同一页，取页首。
@@ -3673,11 +3737,11 @@
     const halfFolio = halfOverride ? folioAt(halfOverride.page) : null;
     const leftFolio = halfFolio && halfOverride.side === 'left' ? halfFolio : stageFolio;
     const rightFolio = halfFolio && halfOverride.side === 'right' ? halfFolio : stageFolio;
-    // R159：纸的一面只印一个号。这一页模型里，纸的两面本来印的就是同一页：
-    // 向前翻时正面压旧右页（i+1）、背面是新左页（next+1 = i+1）；向后翻时
-    // 正面压旧左页（i）、背面是新右页（next+2 = i+1）。所以两面各印一个号，
-    // 靠拷贝的 left 位移选出的那个窗口去挑槽，四个朝向印出来都是同一页。
-    // （原来背面回翻还要 row-reverse 再倒一次，反而把左槽的号印到右页上。）
+    // R170：纸的一面只印一个号，而两面印的是相邻的两页：向前翻，正面压旧右页
+    // （i+1）、背面是新左页（next+1）；向后翻，正面压旧左页（i+1）、背面是新右页
+    // （next+2）。靠拷贝的 left 位移选出的那个窗口去挑槽，四个朝向都印对了。
+    // （R159 的注释曾写「纸的两面本来印的就是同一页」——那是「一趟只推进一页」
+    // 带来的结果，不是真书的物理。）
     const frontFolio = stageFolio;
     const backFolio = turnPagesRef.current.live ? folioAt(turnPagesRef.current.to) : stageFolio;
     // 单栏时整页就是那张纸，没有「另一半」：纸一抬起来它就是新页了。
@@ -3687,6 +3751,11 @@
     // 页码按「书上印的那一页」算：对开是 n+1 / n+2，单栏就是 n+1。
     const pageLeft = spread ? leftFolio.left : shownFolio.left;
     const pageRight = spread ? rightFolio.right : shownFolio.right;
+    // R170：对开时书页数是单数，最后一跨的右半是空白页——白页上没有眉题，也没有
+    // 章节名，什么都不印（页码本来就没有）。
+    const rightBlank = spread && pageRight == null;
+    const headRight = rightBlank ? '' : runningRightChapter;
+    const footRightName = rightBlank ? '' : runningRightChapter;
 
     // 选中一段字之后浮出来的小工具条：就四个动作，不下拉、不弹窗。
     // 便签开着的时候收起来：那一版的选区已经交给便签了，再叠一个条子只是噪音。
@@ -4097,7 +4166,7 @@
               h(
                 'div',
                 { className: 'nw-read-head-slot', key: 'right', 'data-side': 'right' },
-                h('span', null, runningRightChapter),
+                h('span', null, headRight),
               ),
             ]
             : h(
@@ -4130,6 +4199,9 @@
             },
           },
           body,
+          // R170：文末补白。绝对定位、不参与分栏，只把滚动区往右撑到最后一跨的
+          // 右缘——否则书上最后一页（左页、右半空白）永远滚不到位。
+          h('div', { className: 'nw-read-tail', key: 'tail', 'aria-hidden': 'true' }),
         ),
         // 纸上的字：被掀走的那一页的副本。它按同样的栏宽排一遍，翻页时只改
         // scrollLeft，所以动画里没有任何布局（CSS 见 .nw-read-cover / .nw-read-flip）。
@@ -4137,7 +4209,7 @@
           ? h(
             'div',
             { className: 'nw-read-cover', ref: coverRef, 'data-half': 'left', 'aria-hidden': 'true' },
-            h('div', { className: 'nw-read-copy', ref: coverCopyRef, style: flowStyle }, mirrorBody),
+            h('div', { className: 'nw-read-copy', ref: coverCopyRef, style: flowStyle }, mirrorTailed),
           )
           : null,
         h('div', { className: 'nw-read-cast', ref: castRef, 'aria-hidden': 'true' }),
@@ -4178,7 +4250,7 @@
                 'div',
                 { className: 'nw-read-foot-slot', key: 'right', 'data-side': 'right' },
                 // 右页的章名要跟右页自己的眉题一致（一章可能从右页才开头）
-                h('span', { className: 'nw-read-foot-name' }, runningRightChapter),
+                h('span', { className: 'nw-read-foot-name' }, footRightName),
                 h('span', { className: 'nw-read-count' }, pageRight == null ? '' : String(pageRight)),
               ),
               h(
