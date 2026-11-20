@@ -8328,8 +8328,10 @@ window.__ModuleLoader__.load({
 /* 雨：rain in the air, drawn over the footage. Thin, diagonal, never a film on
    the glass — the tree has to stay legible through it. */
 .nw-scene-rain{
-  opacity:.82;
-  mix-blend-mode:screen;
+  /* Plain compositing, not screen: the streaks are painted with a dark edge and
+     a light one, and screen blending throws the dark edge away — which is
+     exactly the edge that carries a raindrop against a bright canopy. */
+  opacity:.92;
 }
 /* 玻璃：one pane, and the two things that tell the eye it is glass rather than
    a hole in the wall — a raking sky reflection across the upper left, and the
