@@ -3858,6 +3858,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       () => (settings.theme === effectiveTheme ? settings : Object.assign({}, settings, { theme: effectiveTheme })),
       [settings, effectiveTheme],
     );
+    // R167: the window is a setting, and it is drawn once for the whole room.
+    const sceneOn = settings.scene !== false;
     // R77: 今日进度。一条记录都没有时显示「今日 0 字」，不编数字。
     const todayWords = Number(dailyStats[dayKeyOf(Date.now())]) || 0;
     // R100: 目标环从当天的账推导，绝不另算一套字数。
@@ -4068,6 +4070,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         // The shell follows the reading theme (see 98-shell-theme.js) so the
         // sidebar and toolbar never frame a page in a contradicting palette.
         'data-theme': themeSettings.theme || 'claude',
+        // R167: the window belongs to the whole room, not to the writing column.
+        // The scene is mounted once here (fixed, behind everything) so the tree
+        // and the sky can reach past the paper's margins to the edges of the
+        // screen; the editor only adds `data-scene` for the paper and the shelf.
+        'data-scene': sceneOn ? '1' : undefined,
         // R135: only the automatic half-hourly swap asks for the slow dissolve.
         'data-theme-slow': slowTheme ? '1' : undefined,
         onPointerMove: onRootPointerMove,
@@ -4077,6 +4084,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         onKeyDown: touchActivity,
         onWheel: touchActivity,
       },
+      // The window is one layer of glass behind the whole room: sidebar, paper
+      // and status bar all sit on it. Fixed so it never scrolls with a chapter.
+      sceneOn
+        ? h('div', { className: 'nw-window', 'aria-hidden': 'true' }, h(NW.Scene, { running: true, seed: 7 }))
+        : null,
       h(
         'div',
         { className: 'nw-body' },

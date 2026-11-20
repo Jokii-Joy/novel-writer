@@ -646,26 +646,230 @@
         disablePictureInPicture: true,
         disableRemotePlayback: true,
       }),
-      glassOn
-        ? h('video', {
-            ref: glassRef,
-            className: 'nw-scene-glass',
-            src: urls.glass || undefined,
-            autoPlay: true,
-            loop: true,
-            muted: true,
-            playsInline: true,
-            preload: 'auto',
-            tabIndex: -1,
-            disablePictureInPicture: true,
-            disableRemotePlayback: true,
-          })
-        : null,
+      h('div', { className: 'nw-scene-deep', 'aria-hidden': 'true' }),
+      h(SceneRain, { running: running }),
+      h('div', { className: 'nw-scene-glass', 'aria-hidden': 'true' }),
       h('div', { className: 'nw-scene-air', 'aria-hidden': 'true' }),
-      h('div', { className: 'nw-scene-desk', 'aria-hidden': 'true' }),
-      h(SceneProps, null),
+      h('div', { className: 'nw-scene-sill', 'aria-hidden': 'true' }),
     );
   };
+
+  /* ================================================================== rain ===
+     Rain, not a wet lens. The first version of this window laid a filmed sheet
+     of droplets over the trees; the writer's answer was 「雨滴都在窗户上，看不清
+     外面什么样子」. So the droplets are gone and what is left is rain in the air:
+     thin diagonal streaks, driven by the same slow gust as everything else, and
+     a handful of beads that do slide down the glass — enough to read as weather
+     without ever hiding the tree. */
+  function SceneRain(props) {
+    const running = !(props && props.running === false);
+    const canvasRef = React.useRef(null);
+
+    React.useEffect(() => {
+      const cv = canvasRef.current;
+      if (!cv) return undefined;
+      const ctx = cv.getContext('2d');
+      if (!ctx) return undefined;
+      const still =
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      let w = 0;
+      let h = 0;
+      let dpr = 1;
+      let raf = 0;
+      let lastStamp = 0;
+      let clock = 0;
+      let visible = document.visibilityState !== 'hidden';
+      let field = { streaks: [], runs: [], beads: [] };
+
+      const rnd = (i) => {
+        const x = Math.sin(i * 127.1 + 311.7) * 43758.5453;
+        return x - Math.floor(x);
+      };
+
+      const gust = (t) =>
+        0.44 + 0.24 * Math.sin(t * 0.37) + 0.17 * Math.sin(t * 1.07 + 1.7) + 0.11 * Math.sin(t * 2.41 + 0.4);
+
+      const build = () => {
+        const area = Math.max(1, w * h);
+        const count = Math.round(Math.min(640, Math.max(220, area / 1550)));
+        const streaks = [];
+        for (let i = 0; i < count; i += 1) {
+          streaks.push({
+            x: rnd(i + 1) * (w + 80) - 40,
+            y: rnd(i + 37) * h,
+            len: 10 + rnd(i + 71) * 26,
+            z: 0.3 + rnd(i + 101) * 0.9,
+            fade: 0.09 + rnd(i + 131) * 0.17,
+          });
+        }
+        const runs = [];
+        for (let i = 0; i < 9; i += 1) {
+          runs.push({
+            x: 0.1 * w + rnd(i + 211) * 0.8 * w,
+            y: rnd(i + 233) * h,
+            speed: 16 + rnd(i + 251) * 34,
+            len: 26 + rnd(i + 271) * 62,
+            width: 0.9 + rnd(i + 293) * 0.9,
+            alpha: 0.18 + rnd(i + 307) * 0.16,
+          });
+        }
+        const beads = [];
+        for (let i = 0; i < 24; i += 1) {
+          beads.push({
+            x: rnd(i + 331) * w,
+            y: rnd(i + 353) * h,
+            r: 1.1 + rnd(i + 373) * 2.1,
+            alpha: 0.12 + rnd(i + 397) * 0.14,
+          });
+        }
+        field = { streaks, runs, beads };
+      };
+
+      const size = () => {
+        const box = cv.getBoundingClientRect();
+        w = Math.max(1, Math.round(box.width));
+        h = Math.max(1, Math.round(box.height));
+        dpr = Math.min(2, window.devicePixelRatio || 1);
+        cv.width = Math.max(1, Math.round(w * dpr));
+        cv.height = Math.max(1, Math.round(h * dpr));
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        build();
+      };
+
+      const draw = (dt) => {
+        const g = gust(clock);
+        const lean = 0.17 + g * 0.42;
+        ctx.clearRect(0, 0, w, h);
+
+        // Raining air: 1px strokes, brighter on the near layer.
+        for (let i = 0; i < field.streaks.length; i += 1) {
+          const s = field.streaks[i];
+          s.y += (150 + s.z * 520) * dt;
+          s.x += lean * s.z * 260 * dt;
+          if (s.y - s.len > h) {
+            s.y = -s.len - rnd(i + 409) * 60;
+            s.x = rnd(i + 421) * (w + 80) - 40;
+          }
+          if (s.x > w + 40) s.x -= w + 80;
+          // Two passes per streak: a wide, pale halo (the out-of-focus part of a
+          // drop) and a thin bright core. One pass alone reads as a scratch on
+          // the lens; the pair reads as falling water.
+          const a = s.fade * (0.8 + g * 0.7);
+          const x2 = s.x - lean * s.len;
+          const y2 = s.y - s.len;
+          ctx.beginPath();
+          ctx.moveTo(s.x, s.y);
+          ctx.lineTo(x2, y2);
+          // Water is darker than the sky it falls through and lighter than the
+          // leaves behind it, so one honest stroke is drawn twice: a dark line
+          // and a 1px highlight just off it. Against the bright canopy the dark
+          // edge carries the streak; against the sky the highlight does.
+          ctx.globalAlpha = Math.min(0.42, a * 0.9);
+          ctx.strokeStyle = '#22343a';
+          ctx.lineWidth = 0.95 + s.z * 0.8;
+          ctx.stroke();
+          ctx.globalAlpha = Math.min(0.5, a * 0.75);
+          ctx.strokeStyle = '#eaf6fa';
+          ctx.lineWidth = 0.7 + s.z * 0.45;
+          ctx.beginPath();
+          ctx.moveTo(s.x + 1.1, s.y);
+          ctx.lineTo(x2 + 1.1, y2);
+          ctx.stroke();
+        }
+
+        // The few drops that actually make it down the pane.
+        for (let i = 0; i < field.runs.length; i += 1) {
+          const d = field.runs[i];
+          d.y += d.speed * dt;
+          if (d.y - d.len * 0.4 > h) {
+            d.y = -d.len;
+            d.x = 0.1 * w + rnd(i + 433) * 0.8 * w;
+          }
+          const grad = ctx.createLinearGradient(0, d.y - d.len * 0.4, 0, d.y + d.width);
+          grad.addColorStop(0, 'rgba(232,242,242,0)');
+          grad.addColorStop(0.72, 'rgba(232,242,242,' + (d.alpha * 0.7).toFixed(3) + ')');
+          grad.addColorStop(1, 'rgba(246,252,252,' + d.alpha.toFixed(3) + ')');
+          ctx.globalAlpha = 0.85;
+          ctx.strokeStyle = grad;
+          ctx.lineWidth = d.width;
+          ctx.beginPath();
+          ctx.moveTo(d.x, d.y - d.len * 0.4);
+          ctx.lineTo(d.x - lean * d.len * 0.16, d.y);
+          ctx.stroke();
+          ctx.globalAlpha = Math.min(0.5, d.alpha * 1.9);
+          ctx.fillStyle = '#f4fbfb';
+          ctx.beginPath();
+          ctx.arc(d.x - lean * d.len * 0.16, d.y, d.width * 1.15, 0, 6.2832);
+          ctx.fill();
+        }
+
+        // Beads sitting on the glass — a breath, not a film.
+        for (let i = 0; i < field.beads.length; i += 1) {
+          const b = field.beads[i];
+          ctx.globalAlpha = b.alpha;
+          ctx.fillStyle = '#eef6f6';
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, b.r, 0, 6.2832);
+          ctx.fill();
+        }
+
+        ctx.globalAlpha = 1;
+      };
+
+      const tick = (stamp) => {
+        raf = 0;
+        if (!running || !visible) return;
+        if (!lastStamp) lastStamp = stamp;
+        const dt = Math.min(0.05, Math.max(0, (stamp - lastStamp) / 1000));
+        lastStamp = stamp;
+        // 30 fps ceiling: the rain does not need the paper's frame budget.
+        if (dt < 0.03) {
+          raf = window.requestAnimationFrame(tick);
+          return;
+        }
+        clock += dt;
+        draw(dt);
+        raf = window.requestAnimationFrame(tick);
+      };
+
+      size();
+      if (still) {
+        draw(0.016);
+      } else if (running) {
+        raf = window.requestAnimationFrame(tick);
+      }
+
+      const onHide = () => {
+        visible = document.visibilityState !== 'hidden';
+        lastStamp = 0;
+        if (visible && running && !still && !raf) raf = window.requestAnimationFrame(tick);
+      };
+      document.addEventListener('visibilitychange', onHide);
+
+      let obs = null;
+      if (typeof ResizeObserver === 'function') {
+        obs = new ResizeObserver(() => {
+          size();
+          if (still) draw(0.016);
+        });
+        obs.observe(cv);
+      }
+
+      return () => {
+        if (raf) window.cancelAnimationFrame(raf);
+        document.removeEventListener('visibilitychange', onHide);
+        if (obs) obs.disconnect();
+      };
+    }, [running]);
+
+    return h('canvas', {
+      ref: canvasRef,
+      className: 'nw-scene-rain',
+      'aria-hidden': 'true',
+    });
+  }
 
   /* ============================================================ the desk ====
      Everything that makes the grey band a desk instead of a gradient: a warm
@@ -915,57 +1119,86 @@
   background:#b9c9cd;
 }
 .nw-scene-far,
-.nw-scene-glass,
+.nw-scene-rain,
 .nw-scene-canvas{
   position:absolute;inset:0;display:block;width:100%;height:100%;
   object-fit:cover;pointer-events:none;
 }
-/* 窗外：真实的树，真实的风。A rainy afternoon, not a night: lift the clip
-   toward the paper's own value so the glass reads as daylight behind it. */
+/* 窗外：真实的树，真实的风。The clip is a bright afternoon under a big tree
+   already, so the lift is small — enough to put daylight behind the paper
+   without washing the leaves out. R167: the framing is deliberate — the canopy
+   sits in the lower half of the glass and the sky keeps the top, because 「一棵
+   大树的上半部分…占屏幕的一半」 is a composition, not a图库照片. Pulling the
+   frame down and zooming in also crops away the lens油光 at the corners. */
 .nw-scene-far{
-  filter:brightness(1.32) saturate(1.24) contrast(1.06);
-  transform:scale(1.04);
+  filter:brightness(1.05) saturate(1.12) contrast(1.05);
+  transform:scale(1.02);
+  object-position:32% 52%;
 }
-/* 玻璃：rain running down the pane, screened over the forest. Screen keeps the
-   droplets (bright) and drops the clip's own背景, so the trees stay visible
-   through the water instead of being covered by it. */
-.nw-scene-glass{
+/* Everything above the canopy is sky, drawn once: a wet, luminous grey-blue
+   with two soft clouds. The clip provides its own gaps of sky, so this only has
+   to hold the top of the glass and blend into the leaves. */
+.nw-scene-sky{
+  position:absolute;left:0;right:0;top:0;height:46%;pointer-events:none;
+  background:
+    radial-gradient(70% 120% at 22% 0%, rgba(255,255,255,.42) 0%, rgba(255,255,255,0) 62%),
+    radial-gradient(90% 90% at 78% 8%, rgba(214,228,230,.55) 0%, rgba(214,228,230,0) 70%),
+    linear-gradient(180deg, #9fb6bd 0%, #b3c7cb 46%, rgba(179,199,203,0) 100%);
+  mix-blend-mode:normal;
+  -webkit-mask-image:linear-gradient(180deg, #000 0%, #000 54%, rgba(0,0,0,0) 100%);
+  mask-image:linear-gradient(180deg, #000 0%, #000 54%, rgba(0,0,0,0) 100%);
+}
+/* 雨：rain in the air, drawn over the footage. Thin, diagonal, never a film on
+   the glass — the tree has to stay legible through it. */
+.nw-scene-rain{
+  opacity:.82;
   mix-blend-mode:screen;
-  opacity:.34;
-  filter:brightness(1.15) contrast(1.25);
-  transform:scale(1.07);
 }
-/* One sky reflection on the glass and only a whisper of edge darkening: the
-   pane must stay transparent, the paper must stay the brightest thing here. */
+/* 玻璃：one pane, and the two things that tell the eye it is glass rather than
+   a hole in the wall — a raking sky reflection across the upper left, and the
+   dark line of the reveal where the glass meets the opening at the top. */
+.nw-scene-glass{
+  position:absolute;inset:0;pointer-events:none;
+  background:
+    linear-gradient(74deg, rgba(255,255,255,0) 34%, rgba(255,255,255,.10) 40%, rgba(255,255,255,.03) 46%, rgba(255,255,255,0) 52%),
+    linear-gradient(180deg, rgba(8,12,12,.34) 0%, rgba(8,12,12,.10) 2.4%, rgba(8,12,12,0) 6%),
+    radial-gradient(120% 70% at 18% 0%, rgba(255,255,255,.10) 0%, rgba(255,255,255,0) 58%);
+}
+/* The window has to read as a window, not as a photo behind the words. Three
+   cues, all of them kept at the very edge so the single pane stays single: a
+   dark reveal where the glass meets the frame, a stone sill at the bottom, and
+   the sheerest reflection across the upper corner. No mullion, no wood. */
 .nw-scene-air{
   position:absolute;inset:0;pointer-events:none;
   background:
-    radial-gradient(120% 90% at 16% 2%, rgba(255,255,255,.17) 0%, rgba(255,255,255,.05) 44%, rgba(255,255,255,0) 72%),
-    linear-gradient(180deg, rgba(6,10,10,.06) 0%, rgba(6,10,10,0) 18%, rgba(6,10,10,0) 78%, rgba(6,10,10,.11) 100%);
+    radial-gradient(120% 90% at 16% 2%, rgba(255,255,255,.14) 0%, rgba(255,255,255,.04) 44%, rgba(255,255,255,0) 72%),
+    linear-gradient(180deg, rgba(6,10,10,.05) 0%, rgba(6,10,10,0) 20%, rgba(6,10,10,0) 76%, rgba(6,10,10,.09) 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,.12),
+    inset 0 0 46px rgba(6,12,14,.34),
+    inset 0 2px 0 rgba(255,255,255,.10);
 }
-/* The sill the paper stands on: slate, no wood, never lighter than the glass.
-   It has to be nearly opaque, or the droplets keep showing through and the
-   sheet reads as pasted onto the weather instead of lying on a desk. The far
-   edge catches the window light; the near edge falls away into shadow. */
-.nw-scene-desk{
-  position:absolute;left:0;right:0;bottom:0;height:186px;pointer-events:none;
+/* What is below the window: a hedge, out of focus, so the eye gets a近 and a
+   远 layer instead of one flat wall of leaves. */
+.nw-scene-deep{
+  position:absolute;left:0;right:0;bottom:0;height:26vh;pointer-events:none;
   background:
-    linear-gradient(180deg, rgba(48,56,53,.62) 0%, rgba(33,37,35,.95) 12%, rgba(28,31,30,.99) 46%, rgba(19,22,21,1) 100%),
-    radial-gradient(120% 60% at 50% 0%, rgba(196,212,206,.20), rgba(196,212,206,0) 62%);
+    radial-gradient(140% 120% at 50% 140%, rgba(66,92,68,.55) 0%, rgba(52,74,56,.42) 34%, rgba(40,58,44,0) 78%),
+    linear-gradient(180deg, rgba(38,54,40,0) 0%, rgba(38,54,40,.30) 58%, rgba(30,44,34,.5) 100%);
+  filter:blur(3px);
 }
-.nw-scene-desk::before{
+/* The sill: pale stone, catching the daylight, with the shadow the glass
+   throws on it. It is the bottom edge of the window opening. */
+.nw-scene-sill{
+  position:absolute;left:0;right:0;bottom:0;height:34px;pointer-events:none;
+  background:
+    linear-gradient(180deg, rgba(18,24,22,.34) 0%, rgba(18,24,22,0) 26%),
+    linear-gradient(180deg, #d3d8d2 26%, #c3c9c2 62%, #aeb4ad 100%);
+  box-shadow: 0 10px 22px -12px rgba(4,8,8,.8);
+}
+.nw-scene-sill::before{
   content:'';position:absolute;left:0;right:0;top:0;height:1px;
-  background:linear-gradient(90deg, rgba(214,226,220,0) 0%, rgba(214,226,220,.34) 18%, rgba(214,226,220,.42) 50%, rgba(214,226,220,.30) 82%, rgba(214,226,220,0) 100%);
-}
-.nw-scene-desk::after{
-  content:'';position:absolute;left:0;right:0;top:1px;height:26px;
-  background:linear-gradient(180deg, rgba(170,186,180,.10), rgba(170,186,180,0));
-}
-/* The desk props (lamp pool, mug, pen) are painted into this canvas, which sits
-   above the desk band and below the sheet. */
-.nw-scene-props{
-  position:absolute;left:0;right:0;bottom:0;width:100%;height:214px;
-  pointer-events:none;
+  background:linear-gradient(90deg, rgba(255,255,255,.1), rgba(255,255,255,.75) 50%, rgba(255,255,255,.1));
 }
 /* With the window behind it the surface itself must stop painting a wall. */
 .nw-surface[data-scene="1"]{background:transparent;}

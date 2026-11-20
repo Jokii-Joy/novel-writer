@@ -1114,6 +1114,13 @@ const SEL_EMIT_MS = 120;
     // manuscript by measurePages), so a card in the pile is the page, not a
     // picture of one — you can read it, and clicking it puts it back.
     const sceneOn = settings.scene !== false;
+    // R167: the window is mounted once by the app shell (it has to reach the
+    // edges of the room, not stop at the writing column). The editor only owns
+    // one when it is standing alone — the probe harness, or a future embed.
+    const ownScene = React.useMemo(
+      () => typeof document === 'undefined' || !document.querySelector('.nw-window'),
+      [],
+    );
     const [pageState, setPageState] = React.useState({
       list: [],
       finished: 0,
@@ -5948,7 +5955,13 @@ const SEL_EMIT_MS = 120;
       // side (sky, trees in the wind, rain on the glass). It is the first child
       // so every other layer paints over it, and it does nothing at all when the
       // setting is off or the tab is hidden.
-      sceneOn ? h(NW.Scene, { running: true, seed: 7 }) : null,
+      sceneOn && ownScene ? h(NW.Scene, { running: true, seed: 7 }) : null,
+      // R167: the sheet is a real element, not a ::before on the surface. The
+      // surface is the flex column; painting the paper on a pseudo-element of it
+      // worked until immersive mode restacked the column and the paint fell out
+      // from behind the text. A div in the same stacking context as the scroll
+      // keeps the paper behind the words in every mode.
+      sceneOn ? h('div', { className: 'nw-sheet', 'aria-hidden': 'true' }) : null,
       h('div', { className: 'nw-scroll', ref: scrollRef, tabIndex: -1 }, body),
       // R164: the pile of finished pages at the left of the sheet. It holds only
       // pages that have completely left the top of the sheet, and each card

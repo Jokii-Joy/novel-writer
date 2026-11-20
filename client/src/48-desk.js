@@ -28,25 +28,68 @@
   NW.CSS_PARTS.push(`
 /* ================================================================ 桌面 ==== */
 
+/* ---- the room ------------------------------------------------------------ */
+/* R167: 一整块玻璃 belongs to the room, not to the writing column. The scene is
+   fixed behind the shell (90-app.js mounts it), so what the window shows runs
+   past the paper's margins all the way to the edges of the screen — that is the
+   only way a big tree can fill half the view while A4 paper still fills the
+   middle. The sidebar and the status bar sit on the glass: the shelf keeps its
+   readable light panel, only slightly translucent, so the words on it stay
+   legible the way the R165 attempt failed to. */
+.nw-root[data-scene="1"]{background:transparent;}
+.nw-window{
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+}
+.nw-root[data-scene="1"] .nw-body,
+.nw-root[data-scene="1"] .nw-main,
+.nw-root[data-scene="1"] .nw-bench,
+.nw-root[data-scene="1"] .nw-bench-paper{background:transparent;}
+/* The studio rule that paints the writing column is .nw-surface:not(.nw-read)
+   — two classes, and it is declared later than the scene's own rule, so mine has
+   to name the room as well or the grey wall wins and the window is painted over
+   (that is what happened: the tree was there, behind an opaque column). */
+.nw-root[data-scene="1"] .nw-surface:not(.nw-read){background:transparent;}
+.nw-root[data-scene="1"] .nw-surface:not(.nw-read) .nw-scroll{background:transparent;}
+.nw-root[data-scene="1"] > .nw-body{position:relative;z-index:1;}
+.nw-root[data-scene="1"] .nw-status{
+  background:rgba(16,21,20,.62);
+  border-top-color:rgba(255,255,255,.08);
+  color:rgba(238,244,243,.78);
+  backdrop-filter:blur(8px) saturate(1.05);
+}
+.nw-root[data-scene="1"] .nw-status strong,
+.nw-root[data-scene="1"] .nw-status b{color:rgba(255,255,255,.9);}
+.nw-root[data-scene="1"] .nw-side{
+  background:rgba(250,251,252,.5);
+  backdrop-filter:blur(18px) saturate(1.04);
+  border-right-color:rgba(24,30,28,.10);
+}
+
+
 /* ---- the sheet ----------------------------------------------------------- */
 /* Only in 窗外 mode: with the scene off the surface keeps its old flat look, so
    an existing writer's page does not silently change shape under them. */
-.nw-surface[data-scene="1"] .nw-scroll{
-  /* A sheet of paper is portrait. The writer's measure survives as a cap on the
-     width, but the window's height is what decides it: make the window wider
-     and the sheet stays the same shape instead of turning into a card lying on
-     the desk. 1 : 1.414 is A4; anything flatter reads as a landscape rectangle
-     no matter how good the paper texture is. */
-  --nw-sheet-h:calc(100vh - 116px);
-  width:min(var(--nw-width,760px),calc(var(--nw-sheet-h) * 0.70709));
-  /* .nw-scroll is a flex child of the column shell (flex:1 1 auto), which would
-     stretch the sheet to the whole height and undo the portrait ratio. */
-  flex:0 0 auto;
-  height:var(--nw-sheet-h);
-  /* Vertically centred, so the strip of desk the scene draws under the front
-     edge stays visible however tall the window is — the sheet lies on the desk
-     instead of floating in the weather. */
-  margin:auto auto;
+/* R166: the sheet is full A4 now, not a card sized to the window. It is painted
+   on the surface itself (::before) and the scrolling text sits over it, because
+   a box that size cannot also be the scroller: a 794 × 1123 sheet is taller than
+   the window, so a scroll container of that height would clip the manuscript
+   instead of scrolling it. Paper behind, words in front, both stationary — the
+   words advance, the sheet does not. 794px is A4 at 96dpi; the writer's own
+   measure (设置里的页宽) stays in charge below that. */
+.nw-surface[data-scene="1"]{
+  position:relative;
+  overflow:hidden;
+  /* 620px is the narrowest A4 the 20px setting still reads well in (27 字/行),
+     and it is what buys the window half the screen. The writer's own 页宽 stays
+     in charge below that. */
+  --nw-sheet-w:min(var(--nw-width,760px), 620px, calc(100% - 36px));
+  --nw-sheet-top:40px;
+  --nw-sheet-h:calc(var(--nw-sheet-w) * 1.41421);
+}
+.nw-surface[data-scene="1"] .nw-sheet{
+  position:absolute;right:56px;top:var(--nw-sheet-top);
+  width:var(--nw-sheet-w);height:var(--nw-sheet-h);
+  pointer-events:none;
   /* A sheet of paper, not a card: warm fill, one hairline at the edge, and two
      shadows — a tight contact shadow that keeps it on the desk and a long soft
      one that puts air under it. The window light is a second, very soft layer
@@ -79,6 +122,30 @@
     0 2px 6px -2px rgba(8,12,14,.5),
     0 22px 40px -22px rgba(6,10,12,.72),
     0 64px 84px -62px rgba(0,0,0,.86);
+  z-index:1;
+}
+/* The scroller is only a window onto the 1123px sheet: same width, starts at the
+   sheet's top edge, and tall enough to show the part of the page you are writing
+   on. It paints nothing — the paper behind it is the sheet. */
+/* Immersive mode widens the page gutters to 96px, which is right for a wide
+   measure and wrong for a 620px sheet: 620-192 leaves 18 字/行. In the room the
+   sheet sets the measure, so the gutters come back to 44px and the sheet is
+   allowed a little more width. */
+.nw-surface[data-scene="1"][data-immersive="1"]{
+  --nw-pad-x:44px;
+  --nw-sheet-w:min(var(--nw-width,760px), 700px, calc(100% - 36px));
+}
+.nw-surface[data-scene="1"] .nw-scroll{
+  position:relative;
+  z-index:2;
+  width:var(--nw-sheet-w);
+  /* R167: the paper sits to the right, the glass to the left — the way a desk
+     faces a window. Centring it left only two slivers of weather on either side
+     (「都变成树了」); one wide opening on the left reads as a room. */
+  margin:var(--nw-sheet-top) 56px 0 auto;
+  background:none;
+  border-radius:0;
+  box-shadow:none;
   /* The words run out at the sheet's edge the way a page being written does;
      these two inner shadows are what stop that edge from looking like a crop. */
   scrollbar-width:none;

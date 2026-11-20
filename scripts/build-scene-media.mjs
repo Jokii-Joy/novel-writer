@@ -15,8 +15,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
 const out = join(root, 'client', 'src', '46-scene-media.js');
 const FILES = [
+  // The big tree is the window now; the droplet sheet that used to sit on top
+  // of it is gone (the rain is drawn in the air instead), so only one clip has
+  // to ride inside the bundle. Keep this one small — it is paid on every load.
   ['forest', join(root, 'assets', 'rain-forest.mp4')],
-  ['glass', join(root, 'assets', 'rain-window.mp4')],
 ];
 
 const rows = FILES.map(([key, file]) => {
