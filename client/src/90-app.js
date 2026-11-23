@@ -857,14 +857,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    是保险：哪天某个名字长过它那一级，宁可把台阶踩平，也不许把字裁掉。
    高度只给变量，窄屏那条 .nw-dock-btn{height:36px} 仍然能一把压平。
    R67b：宽度不是随手排的等差数列，而是「这一行自己起码要多宽 + 一样多的余量」。
-   四字行 8.21em、'AI 校对' 7.5em、三字行 7.21em、两字行 6.21em（14px 字号下量出来的），
-   各加 0.5em 余量就成了下面五个数。上一版顶层给到 10.4em 而那一行只有四字，
-   左边空出一大块——用户说的「AI 校对按钮左边的空白太多了」就是这个。 */
+   四字行 8.21em、三字行 7.21em、两字行 6.21em（14px 字号下量出来的），各加 0.5em
+   余量就成了下面几个数。上一版顶层给到 10.4em 而那一行只有四字，左边空出一大块。
+   R118：AI 校对并入 AI建议，菜单从五行变四行，「AI建议」是三字行，阶梯整体收紧。 */
 .nw-dock-menu .nw-dock-btn:nth-child(1){--nw-dock-w:8.7em;--nw-dock-h:46px;}
-.nw-dock-menu .nw-dock-btn:nth-child(2){--nw-dock-w:8.7em;--nw-dock-h:44px;}
-.nw-dock-menu .nw-dock-btn:nth-child(3){--nw-dock-w:8em;--nw-dock-h:42px;}
-.nw-dock-menu .nw-dock-btn:nth-child(4){--nw-dock-w:7.7em;--nw-dock-h:40px;}
-.nw-dock-menu .nw-dock-btn:nth-child(5){--nw-dock-w:6.7em;--nw-dock-h:38px;}
+.nw-dock-menu .nw-dock-btn:nth-child(2){--nw-dock-w:8em;--nw-dock-h:44px;}
+.nw-dock-menu .nw-dock-btn:nth-child(3){--nw-dock-w:7.7em;--nw-dock-h:42px;}
+.nw-dock-menu .nw-dock-btn:nth-child(4){--nw-dock-w:6.7em;--nw-dock-h:40px;}
 .nw-dock-btn::before{
   content:'';position:absolute;inset:4px 0;z-index:-1;
   border-radius:calc(var(--nw-r-control) + 2px);
@@ -4290,12 +4289,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           onNotes: () => setNotesOpen((v) => !v),
           onHome: () => setView('home'),
           onLock: doLock,
-          // R117: 段落导航 lived in the corner capsule, which the phone bar
-          // replaces; expose it through 「更多」 so the feature does not vanish.
-          onParaNav: () => {
-            const api = editorRef.current;
-            if (api && typeof api.openParaNav === 'function') api.openParaNav();
-          },
           chapter: chapter,
           dockRef: dockRef,
           // R92: mouse in opens, mouse out closes (touch keeps the click toggle).
@@ -4309,10 +4302,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // the rest of the shell uses.
           onBlocked: (name) => {
             pushToast('先打开一章，再' + name, 'warn');
-          },
-          onProofread: () => {
-            setDockOpen(false);
-            openDialog('proofread');
           },
           onTypeset: () => {
             setDockOpen(false);
@@ -5101,8 +5090,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               { className: 'nw-dock-sheet', role: 'menu', 'aria-label': NW.t('更多工具') },
               // 二次动作：和桌面坞同一组，只是收进「更多」。
               sheetItem('typeset', NW.t('一键排版'), p.onTypeset, true),
-              sheetItem('list', NW.t('段落'), p.onParaNav, true),
-              sheetItem('proofread', NW.t('AI 校对'), p.onProofread, true),
               sheetItem('send', NW.t('投稿'), p.onSubmit, true),
               sheetItem('home', NW.t('首页'), p.onHome, false),
               sheetItem('lock', NW.t('锁定'), p.onLock, false),
@@ -5161,13 +5148,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         { className: 'nw-dock-menu', 'data-open': open ? '1' : '0', role: 'menu', 'aria-hidden': open ? 'false' : 'true' },
         // R67b：顺序是按**名字的长短**排的，不是按重要性 —— 阶梯要从长到短，
         // 名字也要从长到短，两个方向一致才不会出现「最上面那级最长、字却最短，
-        // 中间空出一大块」。所以「AI 校对」挪下来，紧挨在「读一遍」上面。
-        // 修改建议 toggles the advice column beside the paper, so its row stays
+        // 中间空出一大块」。
+        // R118：AI 校对并入 AI建议 之后，菜单只剩四行；阶梯宽度也随之重排
+        // （见 .nw-dock-menu .nw-dock-btn 的 nth-child）。
+        // AI建议 toggles the advice column beside the paper, so its row stays
         // lit while that column is open.
         item('typeset', NW.t('一键排版'), p.onTypeset, true),
-        // R114: 沉浸模式也保留「修改建议」入口；栏和选区窗口都能并排显示。
-        item('sparkle', NW.t('修改建议'), p.onAdvice, true),
-        item('proofread', NW.t('AI 校对'), p.onProofread, true),
+        // R114: 沉浸模式也保留「AI建议」入口；栏和选区窗口都能并排显示。
+        item('sparkle', NW.t('AI建议'), p.onAdvice, true),
         item('book', NW.t('读一遍'), p.onRead, true),
         item('send', NW.t('投稿'), p.onSubmit, true),
       ),

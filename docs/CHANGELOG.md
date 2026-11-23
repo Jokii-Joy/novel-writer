@@ -8,6 +8,39 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.9.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第一百七十一轮（R171）**段落导航退场、AI 校对并入 AI建议（把 R168 误整份回退的两项补回来）**：
+  - 用户原话：「删除的怎么又回来了，段落导航，修改建议和AI校对合并了啊。你这是搞的啥啊」。
+  - **根因**：R168（b756083）为了让编辑页回到原来的样子，把 `60-editor.js` /
+    `90-app.js` / `10-db.js` / `95-dialogs.js` 整份 checkout 回 R161（30ee15e）——
+    `git diff 30ee15e b756083 --` 这四个文件是 0 行差异。而 R164（e355a59）在这四
+    个文件里做了两件事：删掉 R77 的段落导航、把「AI 校对」并进「AI建议」。R168 一
+    整份回滚，把这两件事一起带走了。用户浏览器里跑的一直是 R168 之前的客户端，直
+    到 DSH 重启、插件重新挂载、刷新页面，才第一次看见被回退的编辑页。
+  - **处理**：只补这两项，不恢复写作面（摞纸桌面、窗外真雨那些仍然不回来）。
+  - **删段落导航**：`60-editor.js` 删掉 `.nw-paranav` 样式块、`paraNav` 状态、
+    `openParaNav` / `jumpPara`、段落面板、角落胶囊里的段落按钮与它后面的分隔线、
+    return 里的 `paraPanel`；`90-app.js` 删掉 `onParaNav` 接线。现在该文件里
+    「paranav / paraNav / 段落导航」为 0 处，角落胶囊只剩「回到首页」「锁定」。
+  - **AI 校对并入 AI建议**：坞菜单从五行回到四行——一键排版 / **AI建议** / 读一遍 /
+    投稿，台阶 CSS 同步回到 R164 的四级。删掉坞里那行「AI 校对」：它指向
+    `openDialog('proofread')`，而 `NW.dialogs.Proofread` 从来不存在（`95-dialogs.js`
+    只注册 Lock / LockSetup / Export / Typeset / Backup / Settings / Submit /
+    Versions / Lore / ChapterInfo / Mail / Trash / SubmitManager / Journals），那一
+    行点了什么都不会发生，是死按钮；更多面板里的「段落」「AI 校对」两项一并删除。
+    合并本身（`words` 维度、芯片「字词与标点」、面板标题 `AI建议`）在 R164 之后已
+    经在基线里，本轮没动。
+  - **验收（.probe/live 探针站 + appshot）**：坞四行的实测宽度 122 / 112 / 108 / 94，
+    右缘对齐；点 AI建议 打开右侧栏，标题「AI建议」，十一个角度芯片齐全（节奏、用词、
+    视角、画面、对话、结构、人物、逻辑、情绪、冗余、字词与标点）。截图
+    `.probe/live/shots/dockmenu.png`、`dockfix.png`。
+  - **校验**：`node --check` 通过；`client/client.js` 重建后 1,607,951 bytes
+    （`nw-paranav` 0 处）。全部 `scripts/verify-*.mjs` 跑一遍，失败项与干净副本
+    （`git worktree add … HEAD`）逐条一致：autolock、dialog-kinds、e2e、host、
+    read-entry、read-spread、read-tts、welcome-stats 都是 HEAD 上就有的红，本轮
+    没有新增失败；其余全过（advice-immersive 8 / advice-paste 33 / advice-ui /
+    async-guards 24 / client-load / dock-hit / docs / highlight-style /
+    lock-screen 11 / restore 16 / shelf-detail 24）。
+
 - 第一百七十轮（R170）**阅读页一次翻一整张纸：页码终于跟着书走**：
   - 用户原话：「修复精神空间插件阅读页面的显示效果bug：翻页页码，翻页动画等」。
   - **根因**：R159 把编号口径定成「一次翻页推进一页」——对开时 `step` 是一页宽，

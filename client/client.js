@@ -11180,44 +11180,6 @@ const SEL_EMIT_MS = 120;
 .nw-selbtn:focus-visible{outline:2px solid var(--nw-brand);outline-offset:2px;}
 .nw-selbtn .nw-selbtn-txt{line-height:1;}
 
-/* R77：段落导航。盖在纸面左上角，不往正文里插任何东西，所以滚动、排版都不受影响。 */
-.nw-paranav{
-  position:absolute;left:14px;top:52px;width:272px;max-height:62%;
-  display:flex;flex-direction:column;z-index:var(--nw-z-float);
-  border:1px solid var(--nw-line-strong);border-radius:12px;
-  background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
-  overflow:hidden;animation:nw-fade-in .12s var(--nw-ease,ease) both;
-}
-.nw-paranav-head{
-  display:flex;align-items:center;gap:6px;flex:0 0 auto;
-  padding:8px 10px;border-bottom:1px solid var(--nw-line);
-  font-size:12px;color:var(--nw-fg-soft);
-}
-.nw-paranav-title{font-weight:600;color:var(--nw-fg);}
-.nw-paranav-count{font-size:10px;opacity:.7;font-variant-numeric:tabular-nums;}
-.nw-paranav-x{
-  display:inline-flex;padding:2px;border:0;border-radius:6px;
-  background:transparent;color:var(--nw-fg-soft);cursor:pointer;
-}
-.nw-paranav-x:hover{background:var(--nw-btn-hover,color-mix(in srgb,var(--nw-fg) 6%,transparent));color:var(--nw-fg);}
-.nw-paranav-list{flex:1 1 auto;min-height:0;overflow:auto;padding:4px;}
-.nw-paranav-row{
-  display:flex;gap:7px;width:100%;padding:5px 7px;
-  border:0;border-radius:7px;background:transparent;color:var(--nw-fg);
-  cursor:pointer;text-align:left;font-family:inherit;font-size:12px;
-}
-.nw-paranav-row:hover{background:var(--nw-btn-hover,color-mix(in srgb,var(--nw-fg) 6%,transparent));}
-.nw-paranav-n{
-  flex:0 0 auto;width:18px;text-align:right;padding-top:2px;
-  font-size:10px;opacity:.55;font-variant-numeric:tabular-nums;
-}
-.nw-paranav-t{
-  flex:1 1 auto;min-width:0;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  font-family:var(--nw-reading-font,inherit);
-}
-.nw-paranav-empty{padding:14px 10px;font-size:12px;color:var(--nw-fg-soft);text-align:center;}
-
 /* caret measuring mirror: same box, never painted */
 .nw-caret{
   position:absolute;left:0;top:0;width:100%;height:auto;overflow:visible;
@@ -11619,9 +11581,6 @@ const SEL_EMIT_MS = 120;
     const [selBtn, setSelBtn] = React.useState(null);
     const selBtnRef = React.useRef(null);
     selBtnRef.current = selBtn;
-    // R77: 本章段落导航。长章里「跳到第五段」比滚轮可靠得多；列表只在打开时
-    // 扫一遍正文，不跟着每次按键重算。
-    const [paraNav, setParaNav] = React.useState(null);
     /** 页边批注签的容器（.nw-mark-gutter），由 paintGutter() 直接填 DOM。 */
     const gutterRef = React.useRef(null);
 
@@ -13814,53 +13773,6 @@ const SEL_EMIT_MS = 120;
       }
     }
 
-    // ------------------------------------------------------ 段落导航 (R77) --
-    /**
-     * One row per non-empty line. A chapter of 3000 characters is 10–30 of them,
-     * which is exactly the size a writer can scan; splitting on blank lines
-     * instead would show one row for a whole scene.
-     */
-    function openParaNav() {
-      const ta = taRef.current;
-      if (!ta) {
-        setParaNav((cur) => (cur ? null : cur));
-        return;
-      }
-      const items = [];
-      const source = ta.value;
-      const re = /[^\n]+/g;
-      let match = re.exec(source);
-      while (match && items.length < 500) {
-        const raw = match[0];
-        const trimmed = raw.trim();
-        if (trimmed) {
-          items.push({ start: match.index, length: raw.length, text: trimmed.slice(0, 26) });
-        }
-        match = re.exec(source);
-      }
-      setParaNav({ items: items });
-    }
-
-    function jumpPara(item) {
-      const api = apiRef.current;
-      if (api && item) {
-        const start = Math.max(0, Number(item.start) || 0);
-        const end = start + Math.max(1, Number(item.length) || 1);
-        if (typeof api.centerRange === 'function') api.centerRange(start, end);
-        if (typeof api.setHighlights === 'function') {
-          api.setHighlights([{ start: start, end: end, id: 'para-anchor', active: true }]);
-        }
-      }
-      setParaNav(null);
-      const ta = taRef.current;
-      if (ta) {
-        try {
-          ta.focus();
-        } catch (err) {
-          /* the editor may be gone */
-        }
-      }
-    }
 
     /**
      * R53: create (or retype) a mark over the range the menu was opened on.
@@ -15726,49 +15638,6 @@ const SEL_EMIT_MS = 120;
         )
       : null;
 
-    // R77: 段落导航面板。盖在纸面左上，不在正文里插任何元素。
-    const paraPanel = paraNav
-      ? h(
-          'div',
-          { className: 'nw-paranav', role: 'dialog', 'aria-label': NW.t('段落导航') },
-          h(
-            'div',
-            { className: 'nw-paranav-head' },
-            h('span', { className: 'nw-paranav-title' }, NW.t('段落')),
-            h('span', { className: 'nw-paranav-count' }, String(paraNav.items.length)),
-            h('span', { style: { flex: '1 1 auto' } }),
-            h(
-              'button',
-              {
-                type: 'button',
-                className: 'nw-paranav-x',
-                'aria-label': NW.t('关闭段落导航'),
-                onClick: () => setParaNav(null),
-              },
-              NW.icon('x', { size: 13 }),
-            ),
-          ),
-          h(
-            'div',
-            { className: 'nw-paranav-list' },
-            paraNav.items.length === 0
-              ? h('div', { className: 'nw-paranav-empty' }, NW.t('这一章还没有正文'))
-              : paraNav.items.map((item, index) =>
-                  h(
-                    'button',
-                    {
-                      key: 'p' + index,
-                      type: 'button',
-                      className: 'nw-paranav-row',
-                      onClick: () => jumpPara(item),
-                    },
-                    h('span', { className: 'nw-paranav-n' }, String(index + 1)),
-                    h('span', { className: 'nw-paranav-t' }, item.text),
-                  ),
-                ),
-          ),
-        )
-      : null;
 
     return h(
       'div',
@@ -15803,23 +15672,6 @@ const SEL_EMIT_MS = 120;
       h(
             'div',
             { className: 'nw-surface-acts' },
-            // R77: 段落导航。长章里「跳到第五段」比滚轮可靠。
-            h(
-              'button',
-              {
-                type: 'button',
-                className: 'nw-actbtn',
-                title: NW.t('段落导航'),
-                'aria-label': NW.t('段落导航'),
-                'aria-expanded': paraNav ? 'true' : 'false',
-                onClick: (ev) => {
-                  if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-                  openParaNav();
-                },
-              },
-              NW.icon('list', { size: 16 }),
-            ),
-            h('span', { className: 'nw-acts-div', 'aria-hidden': 'true' }),
             onHome
               ? h(
                   'button',
@@ -15870,7 +15722,6 @@ const SEL_EMIT_MS = 120;
           ),
       markMenuBar,
       selBtnBar,
-      paraPanel,
     );
   };
 })();
@@ -21024,14 +20875,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
    是保险：哪天某个名字长过它那一级，宁可把台阶踩平，也不许把字裁掉。
    高度只给变量，窄屏那条 .nw-dock-btn{height:36px} 仍然能一把压平。
    R67b：宽度不是随手排的等差数列，而是「这一行自己起码要多宽 + 一样多的余量」。
-   四字行 8.21em、'AI 校对' 7.5em、三字行 7.21em、两字行 6.21em（14px 字号下量出来的），
-   各加 0.5em 余量就成了下面五个数。上一版顶层给到 10.4em 而那一行只有四字，
-   左边空出一大块——用户说的「AI 校对按钮左边的空白太多了」就是这个。 */
+   四字行 8.21em、三字行 7.21em、两字行 6.21em（14px 字号下量出来的），各加 0.5em
+   余量就成了下面几个数。上一版顶层给到 10.4em 而那一行只有四字，左边空出一大块。
+   R118：AI 校对并入 AI建议，菜单从五行变四行，「AI建议」是三字行，阶梯整体收紧。 */
 .nw-dock-menu .nw-dock-btn:nth-child(1){--nw-dock-w:8.7em;--nw-dock-h:46px;}
-.nw-dock-menu .nw-dock-btn:nth-child(2){--nw-dock-w:8.7em;--nw-dock-h:44px;}
-.nw-dock-menu .nw-dock-btn:nth-child(3){--nw-dock-w:8em;--nw-dock-h:42px;}
-.nw-dock-menu .nw-dock-btn:nth-child(4){--nw-dock-w:7.7em;--nw-dock-h:40px;}
-.nw-dock-menu .nw-dock-btn:nth-child(5){--nw-dock-w:6.7em;--nw-dock-h:38px;}
+.nw-dock-menu .nw-dock-btn:nth-child(2){--nw-dock-w:8em;--nw-dock-h:44px;}
+.nw-dock-menu .nw-dock-btn:nth-child(3){--nw-dock-w:7.7em;--nw-dock-h:42px;}
+.nw-dock-menu .nw-dock-btn:nth-child(4){--nw-dock-w:6.7em;--nw-dock-h:40px;}
 .nw-dock-btn::before{
   content:'';position:absolute;inset:4px 0;z-index:-1;
   border-radius:calc(var(--nw-r-control) + 2px);
@@ -24457,12 +24307,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           onNotes: () => setNotesOpen((v) => !v),
           onHome: () => setView('home'),
           onLock: doLock,
-          // R117: 段落导航 lived in the corner capsule, which the phone bar
-          // replaces; expose it through 「更多」 so the feature does not vanish.
-          onParaNav: () => {
-            const api = editorRef.current;
-            if (api && typeof api.openParaNav === 'function') api.openParaNav();
-          },
           chapter: chapter,
           dockRef: dockRef,
           // R92: mouse in opens, mouse out closes (touch keeps the click toggle).
@@ -24476,10 +24320,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // the rest of the shell uses.
           onBlocked: (name) => {
             pushToast('先打开一章，再' + name, 'warn');
-          },
-          onProofread: () => {
-            setDockOpen(false);
-            openDialog('proofread');
           },
           onTypeset: () => {
             setDockOpen(false);
@@ -25268,8 +25108,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               { className: 'nw-dock-sheet', role: 'menu', 'aria-label': NW.t('更多工具') },
               // 二次动作：和桌面坞同一组，只是收进「更多」。
               sheetItem('typeset', NW.t('一键排版'), p.onTypeset, true),
-              sheetItem('list', NW.t('段落'), p.onParaNav, true),
-              sheetItem('proofread', NW.t('AI 校对'), p.onProofread, true),
               sheetItem('send', NW.t('投稿'), p.onSubmit, true),
               sheetItem('home', NW.t('首页'), p.onHome, false),
               sheetItem('lock', NW.t('锁定'), p.onLock, false),
@@ -25328,13 +25166,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         { className: 'nw-dock-menu', 'data-open': open ? '1' : '0', role: 'menu', 'aria-hidden': open ? 'false' : 'true' },
         // R67b：顺序是按**名字的长短**排的，不是按重要性 —— 阶梯要从长到短，
         // 名字也要从长到短，两个方向一致才不会出现「最上面那级最长、字却最短，
-        // 中间空出一大块」。所以「AI 校对」挪下来，紧挨在「读一遍」上面。
-        // 修改建议 toggles the advice column beside the paper, so its row stays
+        // 中间空出一大块」。
+        // R118：AI 校对并入 AI建议 之后，菜单只剩四行；阶梯宽度也随之重排
+        // （见 .nw-dock-menu .nw-dock-btn 的 nth-child）。
+        // AI建议 toggles the advice column beside the paper, so its row stays
         // lit while that column is open.
         item('typeset', NW.t('一键排版'), p.onTypeset, true),
-        // R114: 沉浸模式也保留「修改建议」入口；栏和选区窗口都能并排显示。
-        item('sparkle', NW.t('修改建议'), p.onAdvice, true),
-        item('proofread', NW.t('AI 校对'), p.onProofread, true),
+        // R114: 沉浸模式也保留「AI建议」入口；栏和选区窗口都能并排显示。
+        item('sparkle', NW.t('AI建议'), p.onAdvice, true),
         item('book', NW.t('读一遍'), p.onRead, true),
         item('send', NW.t('投稿'), p.onSubmit, true),
       ),
