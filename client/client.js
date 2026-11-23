@@ -21575,6 +21575,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [readAt, setReadAt] = useState(null);
     // R129：从目录点另一本书的「读整本」时，得等那本书的章节加载完再开卷。
     const readPendingRef = useRef(null);
+    // R173：这一次开卷是不是我们替用户打开的沉浸态——关卷时要还回去，
+    // 本来就在沉浸写作里的人不该被这一下赶出沉浸。
+    const readImmersiveRef = useRef(false);
     /**
      * 灵感便签 (R10): notes for the open book, plus whether the card is up.
      * R13 turned it into a floating card anchored to the corner of the paper
@@ -23768,6 +23771,23 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       setDockOpen(false);
       setReadAt(startId == null ? null : startId);
       setReadOpen(true);
+      // R173：开卷就是进「沉浸」——书架与状态栏不渲染、坞淡下去，整块面板
+      // 只剩书。但**不**向浏览器要全屏：沉浸与全屏是两件事，这里只要前者。
+      // 记账用 readImmersiveRef：本来就在沉浸写作里的人，关卷时不该被赶出去。
+      if (!immersiveRef.current) {
+        readImmersiveRef.current = true;
+        setImmersive(true);
+      }
+    }, []);
+
+    /** R173：关卷，并把我替用户打开的那层沉浸还回去。 */
+    const closeRead = useCallback(() => {
+      setReadOpen(false);
+      setReadAt(null);
+      if (readImmersiveRef.current) {
+        readImmersiveRef.current = false;
+        setImmersive(false);
+      }
     }, []);
 
     // Escape leaves immersive mode (and the browser's own fullscreen Esc works
@@ -23815,10 +23835,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // over an empty workspace.
     useEffect(() => {
       if (!activeNovelId && readOpen) {
-        setReadOpen(false);
-        setReadAt(null);
+        closeRead();
       }
-    }, [activeNovelId, readOpen]);
+    }, [activeNovelId, readOpen, closeRead]);
 
     // R43 ②: a keyboard way into and out of immersive mode.
     //
@@ -24868,8 +24887,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // textarea never unmounted, so focusing it restores the very caret
             // they left, with the scroll position the pages covered up.
             onClose: () => {
-              setReadOpen(false);
-              setReadAt(null);
+              closeRead();
               window.requestAnimationFrame(() => {
                 const api = editorRef.current;
                 if (api && typeof api.focus === 'function') {

@@ -8,6 +8,23 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.9.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第一百七十三轮（R173）**开卷＝进沉浸，不是进全屏**：
+  - 用户原话：「打开阅读进入沉浸模式，不是全屏模式。这俩还不一样」。
+  - **两件事**：沉浸 = 插件自己的界面状态（`nw-immersive`：书架与状态栏不渲染、坞淡到
+    `.32`）；全屏 = 向浏览器要 `requestFullscreen`。R138 当时把阅读做成了「点开即全屏」
+    （`enterFullscreen()` 写在 `openRead` 里），R164 沿用；这一轮按用户口径改回来：
+    只要沉浸，不要全屏。
+  - **改法**（`90-app.js`）：`openRead` 里若当前不在沉浸，就 `setImmersive(true)` 并
+    在 `readImmersiveRef` 记账；关卷走新的 `closeRead()`——清 `readOpen` / `readAt`，
+    `readImmersiveRef` 为真时才把沉浸还回去。本来就在沉浸写作里的人，开卷关卷都不会
+    被赶出沉浸。书被删（`activeNovelId` 变空）时也走同一条 `closeRead()`。
+    `enterFullscreen()` 只剩 `enterImmersive()`（Ctrl+Shift+F）一处调用。
+  - **验收（.probe/live 探针站，真 `NW.App`）**：点目录「读整本」→ 根节点
+    `nw-root nw-immersive nw-reading`、`.nw-shelf` 不渲染、`.nw-dock` 的
+    computed opacity `0.32`、`document.fullscreenElement` 为 null、页脚 1|2；
+    点 ✕ 关卷 → 根节点回到 `nw-root`、书架重新出现、仍无全屏。先按 Ctrl+Shift+F
+    进沉浸再开卷，关卷后根节点仍是 `nw-immersive`、书架仍不渲染（不会被踢出沉浸）。
+    截图 `.probe/live/shots/r173-read.png`。
 - 第一百七十二轮（R172）**把 R168 连带回退的三处补回来：阅读页对开、目录阅读入口、标注裁决**：
   - 用户原话：「阅读页面又变成单栏了，目录里的阅读入口也不能用，批注的接受和拒绝呢？」。
   - **根因**（与 R171 同一个）：R168（b756083）把 `90-app.js`、`60-editor.js` 整份退回
