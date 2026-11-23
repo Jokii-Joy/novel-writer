@@ -15990,7 +15990,15 @@ const SEL_EMIT_MS = 120;
    视口，absolute 那层覆盖就正好铺满整屏。关闭阅读时这个类随 readOpen 一起
    撤掉，整个面板回到宿主给它分配的那一列，布局分毫不动。
    z-index 抬到 1000：宿主外壳的侧栏、工具条都在同一个视口里，书要压在最上面。 */
-.nw-root.nw-reading{position:fixed;inset:0;z-index:1000;}
+/* R174: 宿主的标题栏/菜单条压在最上面。inset:0 会把阅读页自己的顶栏（书名、
+   ✕、朗读按钮那一行）塞到它底下——于是书页「上面被宿主的菜单栏遮挡」。
+   --nw-chrome-top 由面板自己量（90-app.js 的 hostChromeTop：正常布局里 root
+   的 rect.top、父容器的 rect.top、宿主的 --dsh-frame-chrome-top，取最大），
+   阅读页从那条下面开始；量不到就回落 0，与 R173 一致。 */
+.nw-root.nw-reading{position:fixed;inset:var(--nw-chrome-top,0px) 0 0 0;z-index:1000;
+  /* 基类 .nw-root 是 height:100%。fixed 之后 100% 仍然按包含块算整屏高，
+     加上 top 那一条就会多出一截、页脚落到视口外面去——交给 inset 定高。 */
+  height:auto;}
 /* A dark room reads the other way round: the desk goes *below* the page. */
 .nw-read[data-theme="night"]{
   --nw-read-desk:color-mix(in srgb, #000 46%, var(--nw-bg));
@@ -20212,6 +20220,49 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
   // exposes no getter for the rail state, so the attribute is the only signal.
   const SIDEBAR_COLLAPSED_SELECTOR = '[data-sidebar-collapsed]';
 
+  /**
+   * R174: 宿主在视口顶上占掉的那一条（Windows 的标题栏/菜单栏、macOS 的
+   * 交通灯行）。开卷时 `.nw-root` 被提到 `position:fixed;inset:0`，会盖到
+   * 那一条上——宿主的标题栏和窗口按钮压在上面，书口连同阅读页自己的顶栏
+   * 就都被遮住了。
+   *
+   * 这里不猜宿主的类名，只量几何：正常布局里 root 的 rect.top 就是宿主留给
+   * 面板的位置；已经在读（root 已 fixed）时改量它的父容器；宿主还提供
+   * `--dsh-frame-chrome-top` 的话再取一次。三者取最大，任何一条量不到也不会
+   * 退化成 0。
+   */
+  const hostChromeTop = (el) => {
+    if (!el) return 0;
+    let own = 0;
+    let parent = 0;
+    let css = 0;
+    let fixed = false;
+    try {
+      // 已经在读的时候 root 是 fixed，它的 rect.top 就是变量值本身——拿它当
+      // 基准会把旧值锁死（宿主退出全屏后一直差那一条），这时只认父容器。
+      fixed = getComputedStyle(el).position === 'fixed';
+    } catch (err) {
+      fixed = false;
+    }
+    try {
+      own = fixed ? 0 : el.getBoundingClientRect().top || 0;
+    } catch (err) {
+      own = 0;
+    }
+    try {
+      parent = (el.parentElement && el.parentElement.getBoundingClientRect().top) || 0;
+    } catch (err) {
+      parent = 0;
+    }
+    try {
+      const n = parseFloat(getComputedStyle(el).getPropertyValue('--dsh-frame-chrome-top'));
+      if (Number.isFinite(n) && n > 0) css = n;
+    } catch (err) {
+      css = 0;
+    }
+    return Math.max(0, Math.round(Math.max(own, parent, css)));
+  };
+
   // Chrome that belongs to the App shell rather than to the theme layer: the
   // floating action dock (bottom-right, never over the text) and the immersive
   // layout (which has no top bar at all — Esc is the only way out).
@@ -23769,6 +23820,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      */
     const openRead = useCallback((startId) => {
       setDockOpen(false);
+      // R174：先把宿主顶上那一条量下来写进 CSS 变量——此刻 root 还在正常
+      // 布局里，rect.top 就是宿主给面板留的位置；等类加上再量就只剩 0 了。
+      const rootEl = rootRef.current;
+      if (rootEl) {
+        try {
+          rootEl.style.setProperty('--nw-chrome-top', hostChromeTop(rootEl) + 'px');
+        } catch (err) {
+          /* 量不到就不设，CSS 回落 0，与 R173 的表现一致 */
+        }
+      }
       setReadAt(startId == null ? null : startId);
       setReadOpen(true);
       // R173：开卷就是进「沉浸」——书架与状态栏不渲染、坞淡下去，整块面板
@@ -23838,6 +23899,25 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         closeRead();
       }
     }, [activeNovelId, readOpen, closeRead]);
+
+    // R174: 窗口缩放、宿主在普通/全屏之间切换，都会改顶上那一条的高度——
+    // 阅读期间跟着重量一次。量父容器而不是 root 自己：此刻 root 已经 fixed，
+    // 它的 rect.top 就是变量值本身，量不出新东西。
+    useEffect(() => {
+      if (!readOpen) return undefined;
+      const el = rootRef.current;
+      if (!el) return undefined;
+      const sync = () => {
+        try {
+          el.style.setProperty('--nw-chrome-top', hostChromeTop(el) + 'px');
+        } catch (err) {
+          /* ignore */
+        }
+      };
+      sync();
+      window.addEventListener('resize', sync);
+      return () => window.removeEventListener('resize', sync);
+    }, [readOpen]);
 
     // R43 ②: a keyboard way into and out of immersive mode.
     //

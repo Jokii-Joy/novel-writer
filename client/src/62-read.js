@@ -204,7 +204,15 @@
    视口，absolute 那层覆盖就正好铺满整屏。关闭阅读时这个类随 readOpen 一起
    撤掉，整个面板回到宿主给它分配的那一列，布局分毫不动。
    z-index 抬到 1000：宿主外壳的侧栏、工具条都在同一个视口里，书要压在最上面。 */
-.nw-root.nw-reading{position:fixed;inset:0;z-index:1000;}
+/* R174: 宿主的标题栏/菜单条压在最上面。inset:0 会把阅读页自己的顶栏（书名、
+   ✕、朗读按钮那一行）塞到它底下——于是书页「上面被宿主的菜单栏遮挡」。
+   --nw-chrome-top 由面板自己量（90-app.js 的 hostChromeTop：正常布局里 root
+   的 rect.top、父容器的 rect.top、宿主的 --dsh-frame-chrome-top，取最大），
+   阅读页从那条下面开始；量不到就回落 0，与 R173 一致。 */
+.nw-root.nw-reading{position:fixed;inset:var(--nw-chrome-top,0px) 0 0 0;z-index:1000;
+  /* 基类 .nw-root 是 height:100%。fixed 之后 100% 仍然按包含块算整屏高，
+     加上 top 那一条就会多出一截、页脚落到视口外面去——交给 inset 定高。 */
+  height:auto;}
 /* A dark room reads the other way round: the desk goes *below* the page. */
 .nw-read[data-theme="night"]{
   --nw-read-desk:color-mix(in srgb, #000 46%, var(--nw-bg));

@@ -8,6 +8,26 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.9.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第一百七十四轮（R174）**阅读页不再被宿主的标题栏/菜单栏压住顶**：
+  - 用户原话：「上面被宿主的菜单栏遮挡了」。
+  - **根因**：`.nw-root.nw-reading` 是 `position:fixed;inset:0`，坐标从视口顶算起；
+    宿主的标题栏（Windows 上 `html[data-windows-titlebar]` 的那一条，见
+    `dsh-client-ui-layout` 的 AppFrame：`.frame{padding-top:var(--dsh-windows-titlebar-height)}`
+    与 `.frame::before` 的拖拽条）和窗口按钮压在上面，书口连同阅读页自己的顶栏
+    （书名 / 朗读 / 翻页 / ✕）就都被遮住了。
+  - **改法**：不改宿主，只量几何。`90-app.js` 新增 `hostChromeTop(el)`：取
+    root 父容器的 `rect.top`、宿主可读的 `--dsh-frame-chrome-top`、以及（未开卷时）
+    root 自己的 `rect.top` 三者最大值；开卷前（此刻 root 还在正常布局里）写进
+    `--nw-chrome-top`，窗口 resize 时重量一次。`62-read.js` 里阅读页改成
+    `inset:var(--nw-chrome-top,0px) 0 0 0`，并把 `height` 放开成 `auto`——基类
+    `.nw-root{height:100%}` 在 fixed 之后仍按整屏算，会多出一截、把页脚顶出视口。
+    宿主没有那一条（浏览器、探针站）时变量为 0，表现与 R173 完全一致。
+  - **验收（探针站模拟宿主标题栏：`#host` 下沉 44px + 顶层 44px 固定横条）**：
+    `--nw-chrome-top:44px`、root 与 `.nw-read` 的 rect 为 44..802、阅读页顶栏
+    44..92、桌面 114..797、`hostBarCovered:false`；`--nw-chrome-top` 为 0 的
+    无宿主场景，开卷/关卷、页脚 1|2 与 R173 一致。截图
+    `.probe/live/shots/r174-chrome.png`（上图那条深色横条与「── □ ✕」是探针
+    伪造的宿主标题栏）。
 - 第一百七十三轮（R173）**开卷＝进沉浸，不是进全屏**：
   - 用户原话：「打开阅读进入沉浸模式，不是全屏模式。这俩还不一样」。
   - **两件事**：沉浸 = 插件自己的界面状态（`nw-immersive`：书架与状态栏不渲染、坞淡到
