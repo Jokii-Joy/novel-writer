@@ -809,6 +809,13 @@ const SEL_EMIT_MS = 120;
 }
 .nw-mark-view-btn:hover{background:var(--nw-btn-hover);}
 .nw-mark-view-btn[data-danger="1"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 45%, var(--nw-line-strong));}
+/* R134：这张卡上「接受」是主按钮——它是裁决里唯一样子会改正文的那一下。 */
+.nw-mark-view-btn[data-primary="1"]{
+  border-color:color-mix(in srgb, var(--nw-brand) 45%, var(--nw-line-strong));
+  background:color-mix(in srgb, var(--nw-brand) 8%, var(--nw-btn-bg));
+  color:var(--nw-brand);
+  font-weight:600;
+}
 /* R53c：写作区不再有「标记」按钮。左上角那颗铅笔被用户点名去掉了——它常驻在
    纸面上方，占着一格视觉重量，而标注是低频动作。现在入口改成**右键**：选中一段
    字，按右键才弹出这张小菜单（浏览器原生菜单被拦下），没选中就还是原生菜单，
@@ -3541,6 +3548,41 @@ const SEL_EMIT_MS = 120;
     }
 
     /** Delete a mark from the card, painting the change immediately. */
+    /**
+     * R134: 裁决一条标注——接受或拒绝。
+     *
+     * 批注：接受＝用批注写的那句话替换被标注的原文（作者在「读一遍」里写下的
+     * 就是他想让这句话变成的样子）；拒绝＝原文一个字不动。
+     * 删除线：接受＝把被划掉的几个字删掉；拒绝＝原文一个字不动。
+     * 不论选哪个，这条标注都到此为止——裁决过的线不该继续挂在纸上。
+     *
+     * 改文本走 replaceRange，其它标注的位移由 commitSave 里的 save-diff 通道
+     * 自动跟上（commitSave → onMarksShift），这边不手写位移。
+     */
+    function decideMarkOf(mark, accept) {
+      if (!mark) return;
+      const kind = String(mark.kind || 'underline');
+      const id = mark.id;
+      const ta = taRef.current;
+      if (kind !== 'underline') {
+        if (ta) {
+          const len = ta.value.length;
+          const start = clampNum(numOf(mark.start, 0), 0, len);
+          const end = clampNum(numOf(mark.end, start), start, len);
+          if (accept) {
+            if (kind === 'comment') {
+              const note = String(mark.note || '').trim();
+              // 没写字就没什么可替换的：这一条按「拒绝」处理，只把标注收掉。
+              if (note) replaceRange(start, end, note);
+            } else if (kind === 'strike' && end > start) {
+              replaceRange(start, end, '');
+            }
+          }
+        }
+      }
+      removeMarkOf(id);
+    }
+
     function removeMarkOf(id) {
       if (id == null) return;
       const rows = marksRef.current || [];
@@ -4990,12 +5032,10 @@ const SEL_EMIT_MS = 120;
     // yours and there is room to think. 删除 is here because deleting is a
     // reading-time decision — you see the line is wrong and it is gone.
     //
-    // R53g：这张卡上不再有引文，也没有「知道了」。引文是刚点的那句字，正文里就在
-    // 眼前，抄一遍只是把同一句话说了两次；「知道了」是为了关掉一张本来不该挡路的
-    // 卡而多出来的一个动作——点别处就收，卡片自己会走。批注还留着它那句话本身
-    // （那是这条批注存在的理由），下划线和删除线则只剩一个「删除」。
-    const markIsLine = markView && markView.mark
-      && String(markView.mark.kind) !== 'comment';
+    // R134：卡片从「删除」升级成裁决——批注与删除线给「接受 / 拒绝」，接受会真的
+    // 改正文（见 decideMarkOf）；下划线没有「该改成什么」的语义，仍只有一个删除。
+    const markKind = markView && markView.mark ? String(markView.mark.kind || 'underline') : '';
+    const markIsLine = markKind === 'strike' || markKind === 'underline';
     const markCard =
       markView && markView.mark
         ? h(
@@ -5012,30 +5052,47 @@ const SEL_EMIT_MS = 120;
                 if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
               },
             },
-            markIsLine
-              ? null
-              : h(
+            markKind === 'comment'
+              ? h(
                 'div',
                 {
                   className: 'nw-mark-view-note',
                   'data-empty': String(markView.mark.note || '').trim() ? '0' : '1',
                 },
                 String(markView.mark.note || '').trim() || NW.t('在「读一遍」里写这句话'),
-              ),
+              )
+              : null,
             h(
               'div',
               { className: 'nw-mark-view-acts' },
-              h('button', {
-                type: 'button',
-                className: 'nw-mark-view-btn',
-                'data-danger': '1',
-                onClick: () => {
-                  // R52: go through removeMarkOf so the line disappears in this
-                  // frame instead of waiting for the list to come back from
-                  // IndexedDB — otherwise 删除 looks like it did nothing.
-                  removeMarkOf(markView.mark.id);
-                },
-              }, NW.t('删除')),
+              markKind === 'underline'
+                ? h('button', {
+                  type: 'button',
+                  className: 'nw-mark-view-btn',
+                  'data-danger': '1',
+                  onClick: () => {
+                    // R52: go through removeMarkOf so the line disappears in this
+                    // frame instead of waiting for the list to come back from
+                    // IndexedDB — otherwise 删除 looks like it did nothing.
+                    removeMarkOf(markView.mark.id);
+                  },
+                }, NW.t('删除'))
+                : h('button', {
+                  type: 'button',
+                  className: 'nw-mark-view-btn',
+                  'data-primary': '1',
+                  title: markKind === 'comment'
+                    ? NW.t('用批注里的话替换原文')
+                    : NW.t('删掉被划掉的这几个字'),
+                  onClick: () => decideMarkOf(markView.mark, true),
+                }, NW.t('接受')),
+              markKind === 'underline'
+                ? null
+                : h('button', {
+                  type: 'button',
+                  className: 'nw-mark-view-btn',
+                  onClick: () => decideMarkOf(markView.mark, false),
+                }, NW.t('拒绝')),
             ),
           )
         : null;

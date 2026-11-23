@@ -8,6 +8,42 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.9.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第一百七十二轮（R172）**把 R168 连带回退的三处补回来：阅读页对开、目录阅读入口、标注裁决**：
+  - 用户原话：「阅读页面又变成单栏了，目录里的阅读入口也不能用，批注的接受和拒绝呢？」。
+  - **根因**（与 R171 同一个）：R168（b756083）把 `90-app.js`、`60-editor.js` 整份退回
+    R161（30ee15e）。R161 从来没有阅读接线——`git show 30ee15e:client/src/90-app.js`
+    里 `openRead` / `onReadChapter` / `nw-reading` 一个都搜不到；`git log -S"onReadChapter"
+    -- client/src/90-app.js` 只有 e355a59（R164 加）和 b756083（R168 删）两笔。于是：
+    ① 阅读页没有 `nw-reading` 类，只能在插件那一列里排版，`measure()` 的对开门槛
+    `avail>=840` 不成立，掉成单栏；② 目录行的「读这一章」/「读整本」按钮还在（R129），
+    但 `50-shelf.js` 通过 `P.onReadChapter` / `P.onReadBook` 回调，而 90-app 不传，点了
+    没反应；③ 标注卡退回 R53f 的「只有一个删除」，R134 的 `decideMarkOf` 没有了。
+  - **恢复阅读接线**（`90-app.js`）：`readAt` / `readPendingRef` 两个状态，`openRead(startId)`
+    关坞、记下起始章、开卷；root 的 className 拼上 `nw-reading`——CSS 侧
+    `.nw-root.nw-reading{position:fixed;inset:0;z-index:1000}` 本来就在 `62-read.js:207`
+    （`nw-root` 带 container-type，fixed 以它为包含块，所以必须把 root 自己提上去），
+    一直在等这个类。Shelf 补 `onReadChapter`（开到那一章）与 `onReadBook`（换书时先
+    `readPendingRef` 登记、章节到位再开卷）；坞里的「读一遍」走 `openRead(null)`；
+    ReadView 补 `startId: readAt` 与 `onReadSetting`（后者是 R131 朗读音色下拉的保存
+    通路，此前静默失效）。开卷**不**把浏览器推进全屏：`.nw-reading` 的 fixed
+    inset:0 已经铺满视口，Esc 照旧退出。
+  - **恢复标注裁决**（`60-editor.js`）：`decideMarkOf(mark, accept)` —— 批注接受＝用
+    批注写的话替换原文，删除线接受＝删掉被划掉的几个字，下划线没有「该改成什么」的
+    语义仍只给「删除」；两者都 `removeMarkOf`。卡片按 R134 重排：批注/删除线给
+    「接受」（`data-primary="1"`，主按钮样式一起补回）+「拒绝」，批注卡顶部仍显示
+    那句话（没写时显示「在「读一遍」里写这句话」）。
+  - **验收（.probe/live 探针站，真 `NW.App`）**：书架「读整本」→ root 带
+    `nw-root nw-reading`，舞台 1418×754、`--nw-read-box` 1248px、`--nw-read-col`
+    276px，页脚 1|2（截图 `r172-shelf.png`）；目录里「读这一章」点第三章 →
+    `scrollLeft 1296`（=2×648）、页脚 3|4、眉题「第四章 桥」；坞「读一遍」→ 1|2。
+    标注：删除线卡上「接受(primary)/拒绝」，接受后正文正好少 7 个字（577→570）、
+    标注消失；批注卡「接受/拒绝」，拒绝后正文 577 不变、标注消失。
+  - **踩坑**：`readPendingRef` 的换书 effect 一开始写在 `readChapters` 的 `useMemo`
+    之前，依赖数组在 render 时求值 → `Cannot access 'readChapters' before
+    initialization`，整个 App 白屏。effect 必须排在它依赖的 memo 之后。
+  - **校验**：`node --check` 两文件通过；`client/client.js` 重建 1,613,619 bytes。
+    失败项与 R171 记录的既有红一致（autolock、dialog-kinds、e2e、host、read-entry、
+    read-spread、read-tts、welcome-stats），本轮没有新增失败。
 - 第一百七十一轮（R171）**段落导航退场、AI 校对并入 AI建议（把 R168 误整份回退的两项补回来）**：
   - 用户原话：「删除的怎么又回来了，段落导航，修改建议和AI校对合并了啊。你这是搞的啥啊」。
   - **根因**：R168（b756083）为了让编辑页回到原来的样子，把 `60-editor.js` /

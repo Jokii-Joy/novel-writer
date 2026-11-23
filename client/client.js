@@ -11112,6 +11112,13 @@ const SEL_EMIT_MS = 120;
 }
 .nw-mark-view-btn:hover{background:var(--nw-btn-hover);}
 .nw-mark-view-btn[data-danger="1"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 45%, var(--nw-line-strong));}
+/* R134：这张卡上「接受」是主按钮——它是裁决里唯一样子会改正文的那一下。 */
+.nw-mark-view-btn[data-primary="1"]{
+  border-color:color-mix(in srgb, var(--nw-brand) 45%, var(--nw-line-strong));
+  background:color-mix(in srgb, var(--nw-brand) 8%, var(--nw-btn-bg));
+  color:var(--nw-brand);
+  font-weight:600;
+}
 /* R53c：写作区不再有「标记」按钮。左上角那颗铅笔被用户点名去掉了——它常驻在
    纸面上方，占着一格视觉重量，而标注是低频动作。现在入口改成**右键**：选中一段
    字，按右键才弹出这张小菜单（浏览器原生菜单被拦下），没选中就还是原生菜单，
@@ -13844,6 +13851,41 @@ const SEL_EMIT_MS = 120;
     }
 
     /** Delete a mark from the card, painting the change immediately. */
+    /**
+     * R134: 裁决一条标注——接受或拒绝。
+     *
+     * 批注：接受＝用批注写的那句话替换被标注的原文（作者在「读一遍」里写下的
+     * 就是他想让这句话变成的样子）；拒绝＝原文一个字不动。
+     * 删除线：接受＝把被划掉的几个字删掉；拒绝＝原文一个字不动。
+     * 不论选哪个，这条标注都到此为止——裁决过的线不该继续挂在纸上。
+     *
+     * 改文本走 replaceRange，其它标注的位移由 commitSave 里的 save-diff 通道
+     * 自动跟上（commitSave → onMarksShift），这边不手写位移。
+     */
+    function decideMarkOf(mark, accept) {
+      if (!mark) return;
+      const kind = String(mark.kind || 'underline');
+      const id = mark.id;
+      const ta = taRef.current;
+      if (kind !== 'underline') {
+        if (ta) {
+          const len = ta.value.length;
+          const start = clampNum(numOf(mark.start, 0), 0, len);
+          const end = clampNum(numOf(mark.end, start), start, len);
+          if (accept) {
+            if (kind === 'comment') {
+              const note = String(mark.note || '').trim();
+              // 没写字就没什么可替换的：这一条按「拒绝」处理，只把标注收掉。
+              if (note) replaceRange(start, end, note);
+            } else if (kind === 'strike' && end > start) {
+              replaceRange(start, end, '');
+            }
+          }
+        }
+      }
+      removeMarkOf(id);
+    }
+
     function removeMarkOf(id) {
       if (id == null) return;
       const rows = marksRef.current || [];
@@ -15293,12 +15335,10 @@ const SEL_EMIT_MS = 120;
     // yours and there is room to think. 删除 is here because deleting is a
     // reading-time decision — you see the line is wrong and it is gone.
     //
-    // R53g：这张卡上不再有引文，也没有「知道了」。引文是刚点的那句字，正文里就在
-    // 眼前，抄一遍只是把同一句话说了两次；「知道了」是为了关掉一张本来不该挡路的
-    // 卡而多出来的一个动作——点别处就收，卡片自己会走。批注还留着它那句话本身
-    // （那是这条批注存在的理由），下划线和删除线则只剩一个「删除」。
-    const markIsLine = markView && markView.mark
-      && String(markView.mark.kind) !== 'comment';
+    // R134：卡片从「删除」升级成裁决——批注与删除线给「接受 / 拒绝」，接受会真的
+    // 改正文（见 decideMarkOf）；下划线没有「该改成什么」的语义，仍只有一个删除。
+    const markKind = markView && markView.mark ? String(markView.mark.kind || 'underline') : '';
+    const markIsLine = markKind === 'strike' || markKind === 'underline';
     const markCard =
       markView && markView.mark
         ? h(
@@ -15315,30 +15355,47 @@ const SEL_EMIT_MS = 120;
                 if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
               },
             },
-            markIsLine
-              ? null
-              : h(
+            markKind === 'comment'
+              ? h(
                 'div',
                 {
                   className: 'nw-mark-view-note',
                   'data-empty': String(markView.mark.note || '').trim() ? '0' : '1',
                 },
                 String(markView.mark.note || '').trim() || NW.t('在「读一遍」里写这句话'),
-              ),
+              )
+              : null,
             h(
               'div',
               { className: 'nw-mark-view-acts' },
-              h('button', {
-                type: 'button',
-                className: 'nw-mark-view-btn',
-                'data-danger': '1',
-                onClick: () => {
-                  // R52: go through removeMarkOf so the line disappears in this
-                  // frame instead of waiting for the list to come back from
-                  // IndexedDB — otherwise 删除 looks like it did nothing.
-                  removeMarkOf(markView.mark.id);
-                },
-              }, NW.t('删除')),
+              markKind === 'underline'
+                ? h('button', {
+                  type: 'button',
+                  className: 'nw-mark-view-btn',
+                  'data-danger': '1',
+                  onClick: () => {
+                    // R52: go through removeMarkOf so the line disappears in this
+                    // frame instead of waiting for the list to come back from
+                    // IndexedDB — otherwise 删除 looks like it did nothing.
+                    removeMarkOf(markView.mark.id);
+                  },
+                }, NW.t('删除'))
+                : h('button', {
+                  type: 'button',
+                  className: 'nw-mark-view-btn',
+                  'data-primary': '1',
+                  title: markKind === 'comment'
+                    ? NW.t('用批注里的话替换原文')
+                    : NW.t('删掉被划掉的这几个字'),
+                  onClick: () => decideMarkOf(markView.mark, true),
+                }, NW.t('接受')),
+              markKind === 'underline'
+                ? null
+                : h('button', {
+                  type: 'button',
+                  className: 'nw-mark-view-btn',
+                  onClick: () => decideMarkOf(markView.mark, false),
+                }, NW.t('拒绝')),
             ),
           )
         : null;
@@ -21514,6 +21571,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * exactly where the writer left them when they close it.
      */
     const [readOpen, setReadOpen] = useState(false);
+    // R137：从目录点进来的那一章（「读这一章」）。null = 接着编辑器当前章。
+    const [readAt, setReadAt] = useState(null);
+    // R129：从目录点另一本书的「读整本」时，得等那本书的章节加载完再开卷。
+    const readPendingRef = useRef(null);
     /**
      * 灵感便签 (R10): notes for the open book, plus whether the card is up.
      * R13 turned it into a floating card anchored to the corner of the paper
@@ -23691,6 +23752,24 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       else enterImmersive();
     }, [enterImmersive, exitImmersive]);
 
+    /**
+     * R137: 开卷。
+     *
+     * 阅读页要的是整扇窗的宽度——两页并排、每页两栏，窄一点就掉成单栏。
+     * `.nw-root` 在容器查询里带 `container-type`，`position:fixed` 会以它
+     * 为包含块（见 62-read.js 顶部注释），所以开卷时给它挂 `nw-reading`
+     * （`.nw-root.nw-reading{position:fixed;inset:0}`），整块面板提到视口上；
+     * 关卷摘掉，写作面原样落回去。
+     *
+     * `startId` 是从目录点进来的那一章：不动编辑器的当前章，只决定翻开的
+     * 是书里的哪一页（R129）。
+     */
+    const openRead = useCallback((startId) => {
+      setDockOpen(false);
+      setReadAt(startId == null ? null : startId);
+      setReadOpen(true);
+    }, []);
+
     // Escape leaves immersive mode (and the browser's own fullscreen Esc works
     // too — listen to fullscreenchange so the two stay in sync).
     useEffect(() => {
@@ -23735,7 +23814,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // (deleted, restored snapshot), drop the overlay instead of leaving it up
     // over an empty workspace.
     useEffect(() => {
-      if (!activeNovelId && readOpen) setReadOpen(false);
+      if (!activeNovelId && readOpen) {
+        setReadOpen(false);
+        setReadAt(null);
+      }
     }, [activeNovelId, readOpen]);
 
     // R43 ②: a keyboard way into and out of immersive mode.
@@ -24046,6 +24128,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [chapters, activeNovelId],
     );
 
+    // R129：另一本书的「读整本」——章节到位后再开卷，否则会读到上一本书。
+    // 这个 effect 必须排在 readChapters 之后：依赖数组在 render 时就求值。
+    useEffect(() => {
+      const pending = readPendingRef.current;
+      if (!pending) return;
+      if (String(pending.novelId) !== String(activeNovelId)) return;
+      if (!readChapters.length) return;
+      readPendingRef.current = null;
+      const first = readChapters[0];
+      openRead(first ? first.id : null);
+    }, [activeNovelId, readChapters, openRead]);
+
     // R47: annotations of the open book. Books are the unit here because the
     // reading view shows a whole book and the editor only the open chapter —
     // one array serves both, and it stays stable across App renders so the
@@ -24350,16 +24444,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             );
           },
           // R44: 读一遍 — the same manuscript, at arm's length.
-          onRead: () => {
-            setDockOpen(false);
-            setReadOpen(true);
-          },
+          onRead: () => openRead(null),
         });
 
     return h(
       'div',
       {
-        className: 'nw-root' + (immersive ? ' nw-immersive' : ''),
+        className: 'nw-root'
+          + (immersive ? ' nw-immersive' : '')
+          // R137：开卷时整块面板提到视口上，阅读页才有整扇窗那么宽。
+          + (readOpen && activeNovelId ? ' nw-reading' : ''),
         ref: rootRef,
         'data-immersive': immersive ? '1' : undefined,
         // The shell follows the reading theme (see 98-shell-theme.js) so the
@@ -24404,6 +24498,24 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 onRename: renameNode,
                 onDelete: deleteNode,
                 onMove: moveNode,
+                // R129：目录里直接读——「读这一章」把阅读页开到那一章的那一页，
+                // 「读整本」从第一章读起。两者都不动编辑器当前章。
+                onReadChapter: (id) => {
+                  if (id == null) return;
+                  openRead(id);
+                },
+                onReadBook: (novelId) => {
+                  const target = novelId == null ? activeNovelId : novelId;
+                  if (target == null) return;
+                  if (String(target) !== String(activeNovelId)) {
+                    // 换到那本书再读：等它的章节加载完，effect 会把阅读页打开。
+                    readPendingRef.current = { novelId: target };
+                    selectNovel(target);
+                    return;
+                  }
+                  const first = readChapters[0];
+                  openRead(first ? first.id : null);
+                },
                 // R77: 章节信息（状态 / 简介 / 目标字数）。
                 onChapterInfo: (id, title) => openDialog('chapterInfo', { chapterId: id, title: title }),
                 // R77: 设定集（人物 / 地点 / 道具 / 设定），按书打开。
@@ -24735,10 +24847,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             novel: activeNovel,
             chapters: readChapters,
             currentId: chapter ? chapter.id : null,
+            // R129：目录里点的章节优先于「编辑器当前章」。
+            startId: readAt,
             // The editor buffer can be ahead of the last autosave, so the open
             // chapter is read from the live text, not from the stored row.
             currentText: getEditorText(),
             settings: themeSettings,
+            // R131：朗读引擎里的「声音」下拉要能改设置（在线音色存进 settings），
+            // 阅读页本身不持有设置，只把改动交回来。
+            onReadSetting: (patch) => setSettings((prev) => ({ ...prev, ...patch })),
             // R47: reading is also when a writer notices — so this is where an
             // annotation can be drawn. The marks are the shell's, not the view's:
             // the same array feeds the editor underneath, so a line underlined
@@ -24752,6 +24869,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // they left, with the scroll position the pages covered up.
             onClose: () => {
               setReadOpen(false);
+              setReadAt(null);
               window.requestAnimationFrame(() => {
                 const api = editorRef.current;
                 if (api && typeof api.focus === 'function') {

@@ -1496,6 +1496,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * exactly where the writer left them when they close it.
      */
     const [readOpen, setReadOpen] = useState(false);
+    // R137：从目录点进来的那一章（「读这一章」）。null = 接着编辑器当前章。
+    const [readAt, setReadAt] = useState(null);
+    // R129：从目录点另一本书的「读整本」时，得等那本书的章节加载完再开卷。
+    const readPendingRef = useRef(null);
     /**
      * 灵感便签 (R10): notes for the open book, plus whether the card is up.
      * R13 turned it into a floating card anchored to the corner of the paper
@@ -3673,6 +3677,24 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       else enterImmersive();
     }, [enterImmersive, exitImmersive]);
 
+    /**
+     * R137: 开卷。
+     *
+     * 阅读页要的是整扇窗的宽度——两页并排、每页两栏，窄一点就掉成单栏。
+     * `.nw-root` 在容器查询里带 `container-type`，`position:fixed` 会以它
+     * 为包含块（见 62-read.js 顶部注释），所以开卷时给它挂 `nw-reading`
+     * （`.nw-root.nw-reading{position:fixed;inset:0}`），整块面板提到视口上；
+     * 关卷摘掉，写作面原样落回去。
+     *
+     * `startId` 是从目录点进来的那一章：不动编辑器的当前章，只决定翻开的
+     * 是书里的哪一页（R129）。
+     */
+    const openRead = useCallback((startId) => {
+      setDockOpen(false);
+      setReadAt(startId == null ? null : startId);
+      setReadOpen(true);
+    }, []);
+
     // Escape leaves immersive mode (and the browser's own fullscreen Esc works
     // too — listen to fullscreenchange so the two stay in sync).
     useEffect(() => {
@@ -3717,7 +3739,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // (deleted, restored snapshot), drop the overlay instead of leaving it up
     // over an empty workspace.
     useEffect(() => {
-      if (!activeNovelId && readOpen) setReadOpen(false);
+      if (!activeNovelId && readOpen) {
+        setReadOpen(false);
+        setReadAt(null);
+      }
     }, [activeNovelId, readOpen]);
 
     // R43 ②: a keyboard way into and out of immersive mode.
@@ -4028,6 +4053,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       [chapters, activeNovelId],
     );
 
+    // R129：另一本书的「读整本」——章节到位后再开卷，否则会读到上一本书。
+    // 这个 effect 必须排在 readChapters 之后：依赖数组在 render 时就求值。
+    useEffect(() => {
+      const pending = readPendingRef.current;
+      if (!pending) return;
+      if (String(pending.novelId) !== String(activeNovelId)) return;
+      if (!readChapters.length) return;
+      readPendingRef.current = null;
+      const first = readChapters[0];
+      openRead(first ? first.id : null);
+    }, [activeNovelId, readChapters, openRead]);
+
     // R47: annotations of the open book. Books are the unit here because the
     // reading view shows a whole book and the editor only the open chapter —
     // one array serves both, and it stays stable across App renders so the
@@ -4332,16 +4369,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             );
           },
           // R44: 读一遍 — the same manuscript, at arm's length.
-          onRead: () => {
-            setDockOpen(false);
-            setReadOpen(true);
-          },
+          onRead: () => openRead(null),
         });
 
     return h(
       'div',
       {
-        className: 'nw-root' + (immersive ? ' nw-immersive' : ''),
+        className: 'nw-root'
+          + (immersive ? ' nw-immersive' : '')
+          // R137：开卷时整块面板提到视口上，阅读页才有整扇窗那么宽。
+          + (readOpen && activeNovelId ? ' nw-reading' : ''),
         ref: rootRef,
         'data-immersive': immersive ? '1' : undefined,
         // The shell follows the reading theme (see 98-shell-theme.js) so the
@@ -4386,6 +4423,24 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 onRename: renameNode,
                 onDelete: deleteNode,
                 onMove: moveNode,
+                // R129：目录里直接读——「读这一章」把阅读页开到那一章的那一页，
+                // 「读整本」从第一章读起。两者都不动编辑器当前章。
+                onReadChapter: (id) => {
+                  if (id == null) return;
+                  openRead(id);
+                },
+                onReadBook: (novelId) => {
+                  const target = novelId == null ? activeNovelId : novelId;
+                  if (target == null) return;
+                  if (String(target) !== String(activeNovelId)) {
+                    // 换到那本书再读：等它的章节加载完，effect 会把阅读页打开。
+                    readPendingRef.current = { novelId: target };
+                    selectNovel(target);
+                    return;
+                  }
+                  const first = readChapters[0];
+                  openRead(first ? first.id : null);
+                },
                 // R77: 章节信息（状态 / 简介 / 目标字数）。
                 onChapterInfo: (id, title) => openDialog('chapterInfo', { chapterId: id, title: title }),
                 // R77: 设定集（人物 / 地点 / 道具 / 设定），按书打开。
@@ -4717,10 +4772,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             novel: activeNovel,
             chapters: readChapters,
             currentId: chapter ? chapter.id : null,
+            // R129：目录里点的章节优先于「编辑器当前章」。
+            startId: readAt,
             // The editor buffer can be ahead of the last autosave, so the open
             // chapter is read from the live text, not from the stored row.
             currentText: getEditorText(),
             settings: themeSettings,
+            // R131：朗读引擎里的「声音」下拉要能改设置（在线音色存进 settings），
+            // 阅读页本身不持有设置，只把改动交回来。
+            onReadSetting: (patch) => setSettings((prev) => ({ ...prev, ...patch })),
             // R47: reading is also when a writer notices — so this is where an
             // annotation can be drawn. The marks are the shell's, not the view's:
             // the same array feeds the editor underneath, so a line underlined
@@ -4734,6 +4794,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // they left, with the scroll position the pages covered up.
             onClose: () => {
               setReadOpen(false);
+              setReadAt(null);
               window.requestAnimationFrame(() => {
                 const api = editorRef.current;
                 if (api && typeof api.focus === 'function') {
