@@ -11168,6 +11168,15 @@ const SEL_EMIT_MS = 120;
   }
 
   /**
+   * R203: the gap between a margin sign and the card that sign opens.
+   *
+   * Six pixels is what makes the card read as "attached to" the sign rather
+   * than floating somewhere near it: wide enough to keep the two borders
+   * apart, narrow enough that the eye joins them.
+   */
+  const MARK_CARD_GAP = 6;
+
+  /**
    * Titles the editor must not print above the text.
    *
    * Mirrors `isPlaceholderTitle()` in `lib/routes.js`: chapters created with
@@ -11859,8 +11868,9 @@ const SEL_EMIT_MS = 120;
   box-shadow:none;
 }
 /* R51：写作时点一条线，浮出这张小卡：引文、批注原文、一个删除。这里是**看**的地方，
-   所以没有输入框——批注在写作区只读，要改它回「读一遍」里改。卡片的坐标由
-   openMarkView() 按点击处算好，夹在纸面之内。 */
+   所以没有输入框——批注在写作区只读，要改它回「读一遍」里改。
+   R203：卡片有两种落点——点页边签时按**签框**算（markCardSpotAt），卡右缘离签
+   MARK_CARD_GAP，垂直以签为中心；点正文时仍按点击处算。两种都夹在纸面之内。 */
 .nw-mark-view{
   position:absolute;z-index:var(--nw-z-panel);
   width:min(200px,calc(100% - 24px));
@@ -11882,10 +11892,13 @@ const SEL_EMIT_MS = 120;
 }
 .nw-mark-view[data-compact="1"] .nw-mark-view-acts{gap:4px;}
 .nw-mark-view[data-compact="1"] .nw-mark-view-btn{flex:0 0 auto;padding:0 12px;}
-/* R194：接受 / 拒绝上下排——并排两颗按钮横着占掉半行正文，竖排只占按钮宽。 */
-.nw-mark-view-acts{display:flex;flex-direction:column;gap:4px;}
+/* R194：接受 / 拒绝上下排——并排两颗按钮横着占掉半行正文，竖排只占按钮宽。
+   R203：再往上贴右。排成列以后按钮的交叉轴是**宽度**，默认 stretch 会把两颗都
+   拉成整卡宽（实测 188px），读起来像两条通栏色块而不是「两个动作」；改成
+   flex-end，按钮回到自身文字的宽度并靠右缘，右下的空白也跟着没了。 */
+.nw-mark-view-acts{display:flex;flex-direction:column;align-items:flex-end;gap:4px;}
 .nw-mark-view-btn{
-  flex:1 1 auto;height:22px;padding:0 8px;
+  flex:0 0 auto;height:22px;padding:0 8px;
   border-radius:var(--nw-r-control);border:1px solid var(--nw-line-strong);
   background:var(--nw-btn-bg);color:var(--nw-fg);cursor:pointer;
   font-family:inherit;font-size:var(--nw-fs-tiny);white-space:nowrap;
@@ -12376,6 +12389,8 @@ const SEL_EMIT_MS = 120;
     const [markView, setMarkView] = React.useState(null);
     const markViewRef = React.useRef(null);
     markViewRef.current = markView;
+    /** R203: the card itself, so its real box can be measured after render. */
+    const markCardRef = React.useRef(null);
     // R73：「选中文字 → 修改建议」的那颗小钮。R53 之所以把选字弹条撤掉，是因为
     // 一条三按钮的横条压在正在选的字上面；这一颗只有一个按钮，落在指针松开处的
     // 右下角，选中一消失它就自己走，所以不需要任何关闭动作。
@@ -14340,14 +14355,63 @@ const SEL_EMIT_MS = 120;
     }
 
     /**
+     * R203: paper-local box of a node inside `.nw-stack`, or null.
+     *
+     * Everything the card does with coordinates is relative to the paper, so
+     * measure once, here, instead of subtracting `box.top` at each call site.
+     */
+    function markAnchorOf(node) {
+      if (!node || typeof node.getBoundingClientRect !== 'function') return null;
+      const stack = stackRef.current;
+      if (!stack) return null;
+      const box = stack.getBoundingClientRect();
+      const rect = node.getBoundingClientRect();
+      if (!rect || !rect.width || !rect.height) return null;
+      return {
+        left: rect.left - box.left,
+        top: rect.top - box.top,
+        width: rect.width,
+        height: rect.height,
+      };
+    }
+
+    /**
+     * R203: where a card that points at a margin sign belongs.
+     *
+     * The sign is 16px tall and 16px wide, and the card used to be placed from
+     * the click point (`ev.clientX/Y`) — so clicking the same sign twice could
+     * put the card up to 16px apart, and it sat 16px away instead of beside it.
+     * The sign's own box is fixed, so the card is placed from that: right edge
+     * MARK_CARD_GAP to the left of the sign, centred on the sign's height, then
+     * clamped inside the paper. Pure numbers in, pure numbers out — the caller
+     * can call it twice (estimate, then measured) and both passes agree.
+     */
+    function markCardSpotAt(anchor, cardW, cardH) {
+      const stack = stackRef.current;
+      const box = stack ? stack.getBoundingClientRect() : null;
+      const stackW = (box && box.width) || 0;
+      const stackH = (stack && stack.scrollHeight) || (box && box.height) || 0;
+      let left = anchor.left - MARK_CARD_GAP - cardW;
+      let top = anchor.top + anchor.height / 2 - cardH / 2;
+      left = clampNum(left, 8, Math.max(8, stackW - cardW - 8));
+      top = clampNum(top, 8, Math.max(8, stackH - 8));
+      return { left: Math.round(left), top: Math.round(top) };
+    }
+
+    /**
      * R53: put a read-only card next to the point that was clicked.
      *
      * It used to hang under the caret's line, which on a wide paper meant the
      * card could open a screen away from the line the writer was pointing at.
      * Now the card opens at the click: to the right of it when there is room,
      * flipped to the left when there is not, always inside the paper.
+     *
+     * R203: a click on a margin sign is not a click in the text. The sign *is*
+     * the thing the card belongs to and its box never moves, so that path
+     * anchors to the sign (see markCardSpotAt) instead of to the pixel that was
+     * hit — which is what made the card shift a little on every click.
      */
-    function openMarkView(mark, ev) {
+    function openMarkView(mark, ev, anchorEl) {
       const stack = stackRef.current;
       if (!stack || !mark) return;
       // R53f：下划线 / 删除线的卡片只剩一个「删除」按钮，实测约 84×32，比批注卡小
@@ -14359,34 +14423,42 @@ const SEL_EMIT_MS = 120;
       const box = stack.getBoundingClientRect();
       const stackW = box.width || 0;
       const vh = window.innerHeight || 768;
-      // R190: `Number(ev && ev.clientX)` is 0 for a null event (JavaScript
-      // coerces null to 0, which is finite) — the programmatic path used to
-      // pin the card at the paper's top-left corner. Only trust real numbers.
-      const evx = ev && typeof ev.clientX === 'number' ? ev.clientX : NaN;
-      const evy = ev && typeof ev.clientY === 'number' ? ev.clientY : NaN;
-      let cx = evx;
-      let cy = evy;
-      if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
-        // Keyboard / programmatic open: fall back to the mark's own first line.
-        const hl = hlRef.current;
-        const node = hl && hl.querySelector('mark[data-id="' + String(mark.id) + '"]');
-        const rects = node ? node.getClientRects() : [];
-        const r0 = rects && rects.length ? rects[0] : null;
-        cx = r0 ? r0.left + 2 : box.left + box.width / 2;
-        cy = r0 ? r0.top + r0.height / 2 : box.top + 80;
+      const anchor = markAnchorOf(anchorEl);
+      let spot = null;
+      if (anchor) {
+        // 估值只够先把卡放个大概位置；真尺寸由下面的 layout effect 量到后再算一次。
+        spot = markCardSpotAt(anchor, cardW, cardH);
+      } else {
+        // R190: `Number(ev && ev.clientX)` is 0 for a null event (JavaScript
+        // coerces null to 0, which is finite) — the programmatic path used to
+        // pin the card at the paper's top-left corner. Only trust real numbers.
+        const evx = ev && typeof ev.clientX === 'number' ? ev.clientX : NaN;
+        const evy = ev && typeof ev.clientY === 'number' ? ev.clientY : NaN;
+        let cx = evx;
+        let cy = evy;
+        if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
+          // Keyboard / programmatic open: fall back to the mark's own first line.
+          const hl = hlRef.current;
+          const node = hl && hl.querySelector('mark[data-id="' + String(mark.id) + '"]');
+          const rects = node ? node.getClientRects() : [];
+          const r0 = rects && rects.length ? rects[0] : null;
+          cx = r0 ? r0.left + 2 : box.left + box.width / 2;
+          cy = r0 ? r0.top + r0.height / 2 : box.top + 80;
+        }
+        // Paper-relative: the card lives inside `.nw-stack`, so it scrolls with
+        // the words instead of hovering over the chrome.
+        const localX = cx - box.left;
+        let left = localX + 16;
+        if (left + cardW > stackW - 8) left = localX - cardW - 16;
+        left = clampNum(left, 8, Math.max(8, stackW - cardW - 8));
+        // Prefer level with the click; when the card would run off the bottom of
+        // the window, open it above the click instead of under it.
+        let top = cy - 14;
+        if (top + cardH > vh - 8) top = cy - cardH - 10;
+        top = clampNum(top - box.top, 8, Math.max(8, (stack.scrollHeight || box.height) - 8));
+        spot = { left: Math.round(left), top: Math.round(top) };
       }
-      // Paper-relative: the card lives inside `.nw-stack`, so it scrolls with
-      // the words instead of hovering over the chrome.
-      const localX = cx - box.left;
-      let left = localX + 16;
-      if (left + cardW > stackW - 8) left = localX - cardW - 16;
-      left = clampNum(left, 8, Math.max(8, stackW - cardW - 8));
-      // Prefer level with the click; when the card would run off the bottom of
-      // the window, open it above the click instead of under it.
-      let top = cy - 14;
-      if (top + cardH > vh - 8) top = cy - cardH - 10;
-      top = clampNum(top - box.top, 8, Math.max(8, (stack.scrollHeight || box.height) - 8));
-      setMarkView({ mark: mark, left: Math.round(left), top: Math.round(top) });
+      setMarkView({ mark: mark, left: spot.left, top: spot.top, anchor: anchor });
       // Light the line the card belongs to, so the paper answers the click.
       const hl = hlRef.current;
       const nodes = hl ? hl.querySelectorAll('mark[data-id]') : [];
@@ -14411,6 +14483,28 @@ const SEL_EMIT_MS = 120;
       const signs = gutterRef.current ? gutterRef.current.querySelectorAll('.nw-mark-side[data-active]') : [];
       for (let i = 0; i < signs.length; i += 1) signs[i].removeAttribute('data-active');
     }
+
+    // R203: settle the anchored card on its real box.
+    //
+    // openMarkView can only guess the size (200×150 for a comment card), but a
+    // comment card is ~81px tall and a strike card ~32px — so the first pass is
+    // centred on an imaginary card. Once the card is in the DOM its measured
+    // size goes back through markCardSpotAt, which is a pure function of the
+    // sign's box: the second pass lands on the same numbers every time the same
+    // sign is opened, which is what makes the card stop shifting between clicks.
+    // It runs before paint, so nobody sees the guess.
+    React.useLayoutEffect(() => {
+      const cur = markView;
+      if (!cur || !cur.anchor) return;
+      const node = markCardRef.current;
+      if (!node) return;
+      const w = node.offsetWidth;
+      const hgt = node.offsetHeight;
+      if (!w || !hgt) return;
+      const spot = markCardSpotAt(cur.anchor, w, hgt);
+      if (spot.left === cur.left && spot.top === cur.top) return;
+      setMarkView({ mark: cur.mark, left: spot.left, top: spot.top, anchor: cur.anchor });
+    }, [markView]);
 
     // ------------------------------------------------- 选中 → 修改建议 (R73) --
     /**
@@ -14743,7 +14837,8 @@ const SEL_EMIT_MS = 120;
         btn.addEventListener('click', (ev) => {
           if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
           if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
-          openMarkView(markRow, ev);
+          // R203: the sign, not the pixel inside it, is the anchor.
+          openMarkView(markRow, ev, btn);
         });
         box.appendChild(btn);
       }
@@ -16086,6 +16181,7 @@ const SEL_EMIT_MS = 120;
               'data-compact': markIsLine ? '1' : '0',
               role: 'dialog',
               'aria-label': NW.t('标注'),
+              ref: markCardRef,
               style: { left: markView.left + 'px', top: markView.top + 'px' },
               onMouseDown: (ev) => {
                 // Do not let the card steal the caret from the textarea: that
@@ -16377,7 +16473,8 @@ const SEL_EMIT_MS = 120;
                 const rows = marksRef.current || [];
                 for (let i = 0; i < rows.length; i += 1) {
                   if (rows[i] && String(rows[i].id) === String(id)) {
-                    openMarkView(rows[i], ev);
+                    // R203: same anchor rule as the sign's own handler.
+                    openMarkView(rows[i], ev, sign);
                     return;
                   }
                 }

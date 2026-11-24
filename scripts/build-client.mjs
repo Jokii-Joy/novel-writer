@@ -88,6 +88,18 @@ if (highlight.status !== 0) {
   process.exit(1);
 }
 
+// R203: 「接受 / 拒绝」贴右（列容器默认 stretch，一个关键字就能把按钮拉回整卡宽），
+// 以及点页边签开卡必须**每次落在同一处**。后一条不能靠扫源码：这段把 bundle 里的
+// markAnchorOf / markCardSpotAt / openMarkView 抠出来，喂进假几何真算一遍，同一个
+// 签点两个不同的像素位置，落点必须完全一致。
+const markCard = spawnSync(process.execPath, [join(here, 'verify-mark-card.mjs'), outFile], {
+  stdio: 'inherit',
+});
+if (markCard.status !== 0) {
+  console.error('build-client: 标注小卡 regressed（按钮没贴右 / 点签开卡位置不稳）');
+  process.exit(1);
+}
+
 // R85: pasted advice becomes ordinary cards, so the parser is the only place
 // that can mis-place a highlight. It is a pure IIFE and runs in plain Node.
 const paste = spawnSync(process.execPath, [join(here, 'verify-advice-paste.mjs')], {
