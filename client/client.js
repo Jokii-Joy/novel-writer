@@ -32524,6 +32524,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [busy, setBusy] = useState(false);
     const [now, setNow] = useState(() => new Date());
     const night = p.night === true;
+    const inputRef = React.useRef(null);
+
+    // R202: after a refused attempt focus must come back to the password box,
+    // otherwise the user is left staring at the button and typing does nothing.
+    const focusInput = () => {
+      window.setTimeout(() => {
+        const el = inputRef.current;
+        if (!el) return;
+        el.focus();
+        try { el.select(); } catch (err) { /* read-only or disabled */ }
+      }, 0);
+    };
 
     // The clock is the only live piece on the lock screen. Thirty seconds is
     // enough to keep the minute honest without a render every second.
@@ -32536,6 +32548,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       if (busy) return;
       if (!password) {
         setError(NW.t('输入密码'));
+        focusInput();
         return;
       }
       setBusy(true);
@@ -32545,9 +32558,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         if (!ok) {
           setError(NW.t('密码错误'));
           setPassword('');
+          focusInput();
         }
       } catch (err) {
         setError(errText(err, '解锁失败'));
+        focusInput();
       } finally {
         setBusy(false);
       }
@@ -32597,6 +32612,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             { className: 'nw-lock-field' },
             h('label', { className: 'nw-lock-label', htmlFor: 'nw-lock-password' }, NW.t('密码')),
             h('input', {
+              ref: inputRef,
               id: 'nw-lock-password',
               className: 'nw-lock-input' + (error ? ' is-error' : ''),
               type: 'password',

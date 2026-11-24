@@ -1,5 +1,10 @@
 # 精神空间 · 开发日志与详细文档
 
+- 第二百零二轮（R202）**锁屏输错密码后焦点回到密码框**：
+  - 用户原话：「批注的接受和拒绝也改成上下排。锁屏界面密码输错，鼠标重新聚焦输入框。」随后补充：「我说的是编辑页面的批注标签」。
+  - **批注标签的接受/拒绝**：编辑页标注卡从 R194 起就是上下排（`client/src/60-editor.js:820` 的 `.nw-mark-view-acts{display:flex;flex-direction:column;gap:4px;}`，紧凑卡另有一条 `gap:4px` 覆盖，没有行向规则）。重建后的 `client/client.js` 里这两条规则都在；CDP 实测批注卡 200×81、两个按钮 188×22 上下叠放。全库唯一并排的「接受/拒绝」是 AI 建议卡的页脚（`client/src/92-advice.js:538`），不是批注卡。若界面上仍是横排，多半是窗口还挂着旧脚本——宿主按内容哈希发 `/plugins/??…&rev=…`，重建后 rev 会变，刷新一次即可。
+  - **锁屏重聚焦**：`NW.dialogs.Lock`（`client/src/95-dialogs.js:697`）原来只有 `autoFocus`，密码错误或为空后焦点留在解锁按钮上，接着打字不会进输入框。现在加了 `inputRef` 与 `focusInput()`：空密码、密码错误、解锁抛错三条失败路径都通过 `window.setTimeout(…, 0)` 把焦点收回 `#nw-lock-password` 并 `select()`，`busy` 与禁用逻辑不变。
+  - 验收：`node --check client/src/95-dialogs.js` 通过；CDP 用假 verifier 拉出锁屏，输入错误密码回车后 `.nw-lock-error` 显示「密码错误」，`document.activeElement.id` 为 `nw-lock-password`（截图 `.tmp/shots/28-lock-refocus.png`）；`verify-lock-screen` 11 passed，`verify-client-load` ok；`build-client` 重建 `client/client.js` 1,735,876 B（仍停在既有 `verify-autolock`）。
 - 第二百零一轮（R201）**去掉下划线标注**：
   - 用户原话：「删除下划线功能。」同一条消息里还问了签号的事：「删除标签，标签的数字会顺延到下一个标签合理不。」
   - **阅读页选区工具条**从「下划线 / 删除线 / 批注」收成「删除线 / 批注」：`addMark('underline')` 的唯一入口去掉，工具条注释同步改成两个动作。
