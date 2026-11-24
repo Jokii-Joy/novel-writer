@@ -823,11 +823,16 @@ const SEL_EMIT_MS = 120;
   font-family:inherit;font-size:var(--nw-fs-tiny);white-space:nowrap;
 }
 .nw-mark-view-btn:hover{background:var(--nw-btn-hover);}
-/* R176：接受/拒绝收成两个符号，批注卡不再被两个词撑宽。读屏仍靠 aria-label。 */
+/* R176：接受/拒绝曾收成两个符号；R193 用户说「只有对号和叉号太单调」，
+   改回带字的按钮（符号 + 动词），高度和圆角不变。 */
 .nw-mark-view-btn[data-glyph="1"]{
-  flex:0 0 auto;min-width:30px;padding:0 9px;
-  font-size:13px;font-weight:600;line-height:1;letter-spacing:0;
+  flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+  gap:5px;min-width:0;padding:0 11px;
+  font-size:var(--nw-fs-tiny);font-weight:600;line-height:1;letter-spacing:.02em;
+  transition:background .12s,border-color .12s,transform .12s;
 }
+.nw-mark-view-btn[data-glyph="1"]:hover{transform:translateY(-1px);}
+.nw-mark-view-btn[data-glyph="1"]:active{transform:translateY(0);}
 /* R177: verdict buttons read at a glance: accept is green, reject is red. */
 .nw-mark-view-btn[data-glyph="1"][data-primary="1"]{
   color:var(--nw-ok);
@@ -3277,8 +3282,8 @@ const SEL_EMIT_MS = 120;
       // 一大截。还按 200×150 去避让的话，卡片会在离点击处很远的地方落地，看着像
       // 点错了地方。两种尺寸分开算。
       const compact = String(mark.kind) !== 'comment';
-      const cardW = compact ? 92 : 200;
-      const cardH = compact ? 34 : 150;
+      const cardW = compact ? 168 : 200;
+      const cardH = compact ? 38 : 150;
       const box = stack.getBoundingClientRect();
       const stackW = box.width || 0;
       const vh = window.innerHeight || 768;
@@ -4934,6 +4939,21 @@ const SEL_EMIT_MS = 120;
       }
     }, [p.registerApi]);
 
+    // R193：这张卡是浮在纸上的，点到别处（书架、状态栏、正文空白）就该收起——
+    // 以前只有 Escape、翻页和再点正文会关，点到旁边它会一直挂着。
+    // 签本身不算「别处」：点另一枚签是换一条看，不是关掉不看了。
+    React.useEffect(() => {
+      if (!markView) return undefined;
+      function onDocDown(ev) {
+        const t = ev && ev.target;
+        if (t && typeof t.closest === 'function'
+          && (t.closest('.nw-mark-view') || t.closest('.nw-mark-side'))) return;
+        closeMarkView();
+      }
+      document.addEventListener('pointerdown', onDocDown, true);
+      return () => document.removeEventListener('pointerdown', onDocDown, true);
+    }, [markView]);
+
     // ---------------------------------------------------------------- render --
     const find = findRef.current;
     const matchTotal = find.matches.length;
@@ -4993,7 +5013,7 @@ const SEL_EMIT_MS = 120;
                     // IndexedDB — otherwise 删除 looks like it did nothing.
                     removeMarkOf(markView.mark.id);
                   },
-                }, 'X')
+                }, '✕ ' + NW.t('删除'))
                 : h('button', {
                   type: 'button',
                   className: 'nw-mark-view-btn',
@@ -5004,7 +5024,7 @@ const SEL_EMIT_MS = 120;
                     : NW.t('删掉被划掉的这几个字'),
                   'aria-label': NW.t('接受'),
                   onClick: () => decideMarkOf(markView.mark, true),
-                }, '√'),
+                }, '✓ ' + NW.t('接受')),
               markKind === 'underline'
                 ? null
                 : h('button', {
@@ -5014,7 +5034,7 @@ const SEL_EMIT_MS = 120;
                   title: NW.t('拒绝'),
                   'aria-label': NW.t('拒绝'),
                   onClick: () => decideMarkOf(markView.mark, false),
-                }, 'X'),
+                }, '✕ ' + NW.t('拒绝')),
             ),
           )
         : null;
