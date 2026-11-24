@@ -768,6 +768,20 @@ const SEL_EMIT_MS = 120;
 }
 .nw-mark-side:hover{transform:translateY(-1px);opacity:1;box-shadow:0 2px 7px rgba(20,14,6,.16);}
 .nw-mark-side:focus-visible{outline:2px solid var(--nw-brand);outline-offset:1px;opacity:1;}
+/* R199：默认收起——纸上只留一枚序号小签，点一下才展开整行。标注多的时候，
+   一排展开的行会把正文右缘整段盖住，收起态只占一个字的宽度。 */
+.nw-mark-side[data-open="0"]{
+  width:26px;padding:0;gap:0;justify-content:center;opacity:.9;
+}
+.nw-mark-side[data-open="0"] .nw-mark-side-badge,
+.nw-mark-side[data-open="0"] .nw-mark-side-text,
+.nw-mark-side[data-open="0"] .nw-mark-side-acts{display:none;}
+.nw-mark-side-n{
+  font:600 11px/1 var(--nw-ui-font);
+  color:var(--nw-soft);
+  font-variant-numeric:tabular-nums;
+}
+.nw-mark-side[data-open="1"] .nw-mark-side-n{display:none;}
 .nw-mark-side-badge{
   flex:0 0 auto;padding:1px 5px;border-radius:4px;
   background:color-mix(in srgb, var(--nw-fg) 8%, transparent);
@@ -1410,6 +1424,8 @@ const SEL_EMIT_MS = 120;
     const gutterRef = React.useRef(null);
     /** R195: 页边签的重画合并到一帧里，滚动时不会每个像素都重建一批 DOM。 */
     const gutterRafRef = React.useRef(0);
+    /** R199: 页边签默认收起成序号小签，点一下才展开整行；同一时间只展开一条。 */
+    const gutterOpenRef = React.useRef('');
 
     /** Right-hand blank currently reserved for the floating dock, in px. */
     const dockLaneRef = React.useRef(-1);
@@ -3702,6 +3718,10 @@ const SEL_EMIT_MS = 120;
           || String(r.kind || '') === 'comment'
           || String(r.kind || '') === 'strike'),
       );
+      // R199：展开的那条被接受/删掉、或切了章，就把展开态一起清掉。
+      if (gutterOpenRef.current && !rows.some((r) => r && String(r.id) === String(gutterOpenRef.current))) {
+        gutterOpenRef.current = '';
+      }
       if (!rows.length) {
         if (box.firstChild) clearNode(box);
         return;
@@ -3758,7 +3778,8 @@ const SEL_EMIT_MS = 120;
       const stackLeftInScroll = scRect ? stackRect.left - scRect.left : 0;
       const scrollW = sc ? (sc.clientWidth || 0) : 0;
       const marginRight = scrollW ? scrollW - stackLeftInScroll - stackW : 0;
-      const left = Math.round(Math.max(8, stackW - CHIP_W - 8));
+      // R199：收起态只占一枚序号签的宽度，展开态才是一整行。
+      const CHIP_W_CLOSED = 26;
       let last = -Infinity;
       for (let i = 0; i < placed.length; i += 1) {
         const row = placed[i];
@@ -3772,14 +3793,23 @@ const SEL_EMIT_MS = 120;
         const markLabel = (markKind === 'comment'
           ? NW.t('第') + markNo + NW.t('条批注')
           : NW.t('第') + markNo + NW.t('处') + kindName) + '：' + preview;
+        const isOpen = String(gutterOpenRef.current || '') === String(row.id);
+        const chipW = isOpen ? CHIP_W : CHIP_W_CLOSED;
+        const left = Math.round(Math.max(8, stackW - chipW - 8));
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'nw-mark-side';
         btn.setAttribute('data-id', row.id);
         btn.setAttribute('data-kind', markKind);
+        btn.setAttribute('data-open', isOpen ? '1' : '0');
+        btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
         btn.setAttribute('aria-label', markLabel);
         btn.title = '#' + markNo + ' ' + (note && quote ? note + ' — ' + quote : (note || quote));
-        // R198：标签本身就是一行标注——类型、引文和 √/X 都在页边，不用再点开。
+        // R199：收起时只露一个序号签，点开才展开成整行（类型 + 引文 + √/X）。
+        const noEl = document.createElement('span');
+        noEl.className = 'nw-mark-side-n';
+        noEl.textContent = String(markNo || '');
+        btn.appendChild(noEl);
         const badge = document.createElement('span');
         badge.className = 'nw-mark-side-badge';
         badge.textContent = kindName;
@@ -3831,10 +3861,25 @@ const SEL_EMIT_MS = 120;
           const own = hl.querySelectorAll('mark[data-id="' + row.id + '"]');
           for (let k = 0; k < own.length; k += 1) own[k].removeAttribute('data-hover');
         });
-        // R198：点整行（不是按钮）就跳到这条标注的字。
+        // R199：按下就展开（不等 click）——签在 mousedown 之后会被正文抢焦点
+        // 触发的重绘换掉，等 click 到来时元素已经不是原来那个，事件就丢了。
+        btn.addEventListener('pointerdown', (ev) => {
+          const t = ev && ev.target;
+          if (t && typeof t.closest === 'function' && t.closest('.nw-mark-side-btn')) return;
+          if (String(gutterOpenRef.current || '') === String(row.id)) return;
+          if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+          gutterOpenRef.current = String(row.id);
+          scheduleGutter();
+        });
+        // R199：收起时点一下展开；展开之后再点，才跳到这条标注的字。
         btn.addEventListener('click', (ev) => {
           const t = ev && ev.target;
-          if (t && t.tagName === 'BUTTON') return;
+          if (t && typeof t.closest === 'function' && t.closest('.nw-mark-side-btn')) return;
+          if (!isOpen) {
+            gutterOpenRef.current = String(row.id);
+            scheduleGutter();
+            return;
+          }
           focusMarkRow(markRow);
         });
         box.appendChild(btn);
@@ -5142,6 +5187,20 @@ const SEL_EMIT_MS = 120;
       document.addEventListener('pointerdown', onDocDown, true);
       return () => document.removeEventListener('pointerdown', onDocDown, true);
     }, [markView]);
+
+    // R199：页边签默认收起；点到别处（正文、书架、状态栏）就把展开的那条收回去。
+    React.useEffect(() => {
+      function onDocDown(ev) {
+        if (!gutterOpenRef.current) return;
+        const t = ev && ev.target;
+        if (t && typeof t.closest === 'function'
+          && (t.closest('.nw-mark-side') || t.closest('.nw-mark-view'))) return;
+        gutterOpenRef.current = '';
+        scheduleGutter();
+      }
+      document.addEventListener('pointerdown', onDocDown, true);
+      return () => document.removeEventListener('pointerdown', onDocDown, true);
+    }, []);
 
     // R197：面板点空白处或按 Esc 收起。
     React.useEffect(() => {
