@@ -4886,6 +4886,25 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // Hand the editor/read view a settings object whose `theme` is the resolved
     // one. Identity is stable while nothing changes, so panels do not re-render
     // on every tick.
+    // R196: 跟随系统 + 系统浅色时，主题在非深色主题里随机抽一套，每半小时换一次。
+    // 之前只有注释没实现：themeLight 从没被写过，系统浅色永远落到 claude。
+    useEffect(() => {
+      if (!autoTheme || systemDark) return undefined;
+      const pool = ['claude', 'eye', 'newspaper', 'magazine'];
+      const pickOne = (avoid) => {
+        const rest = pool.filter((v) => v !== avoid);
+        return rest[Math.floor(Math.random() * rest.length)] || pool[0];
+      };
+      const current = String(settings.themeLight || '');
+      if (!pool.includes(current)) {
+        applySettings({ themeLight: pickOne('') });
+        return undefined;
+      }
+      const timer = window.setInterval(() => {
+        applySettings({ themeLight: pickOne(current) });
+      }, 30 * 60 * 1000);
+      return () => window.clearInterval(timer);
+    }, [autoTheme, systemDark, settings.themeLight, applySettings]);
     const themeSettings = useMemo(
       () => (settings.theme === effectiveTheme ? settings : Object.assign({}, settings, { theme: effectiveTheme })),
       [settings, effectiveTheme],

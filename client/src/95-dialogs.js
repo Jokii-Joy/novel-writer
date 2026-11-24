@@ -2473,53 +2473,6 @@
                 ],
               }),
             }),
-            // R131: 朗读的自定义接口。引擎本身在阅读页那个喇叭旁边切（那里
-            // 才是「听着听着想换一个」的地方），这里放的是地址、密钥和音色——
-            // 它们不该在弹层里挤着填。
-            NW.ui.field({
-              label: NW.t('朗读接口地址'),
-              children: h('input', {
-                type: 'text',
-                className: 'nw-input',
-                placeholder: 'http://127.0.0.1:8880/v1',
-                value: String(draft.ttsApiUrl || ''),
-                onChange: (ev) => set('ttsApiUrl', ev.target.value),
-              }),
-            }),
-            h(
-              'div',
-              { className: 'nw-grid2' },
-              NW.ui.field({
-                label: NW.t('朗读接口密钥'),
-                children: h('input', {
-                  type: 'password',
-                  className: 'nw-input',
-                  placeholder: 'sk-…',
-                  value: String(draft.ttsApiKey || ''),
-                  onChange: (ev) => set('ttsApiKey', ev.target.value),
-                }),
-              }),
-              NW.ui.field({
-                label: NW.t('朗读模型'),
-                children: h('input', {
-                  type: 'text',
-                  className: 'nw-input',
-                  placeholder: 'tts-1',
-                  value: String(draft.ttsApiModel || ''),
-                  onChange: (ev) => set('ttsApiModel', ev.target.value),
-                }),
-              }),
-            ),
-            NW.ui.field({
-              label: NW.t('朗读音色'),
-              children: h('input', {
-                type: 'text',
-                className: 'nw-input',
-                placeholder: 'alloy',
-                value: String(draft.ttsApiVoice || ''),
-                onChange: (ev) => set('ttsApiVoice', ev.target.value),
-              }),
-            }),
             // R11 ④: the caret is painted by the editor itself (.nw-cursor), so its
             // thickness, colour and blink are plain settings instead of a stylesheet
             // detail the user would have to hack.
@@ -2803,6 +2756,65 @@
             null,
             modelPicker('AI 投稿模型', 'submitProvider', 'submitModel'),
             modelPicker('AI建议模型', 'adviceProvider', 'adviceModel'),
+            h(
+              'div',
+              {
+                style: {
+                  marginTop: '18px',
+                  paddingTop: '14px',
+                  borderTop: '1px solid var(--nw-panel-border)',
+                  fontWeight: 600,
+                },
+              },
+              NW.t('语音朗读'),
+            ),
+            // R131 / R196: 朗读的自定义接口。引擎本身在阅读页那个喇叭旁边切（那里
+            // 才是「听着听着想换一个」的地方），这里放的是地址、密钥和音色——
+            // 它们不该在弹层里挤着填。R196：从「外观」挪到「AI」。
+            NW.ui.field({
+              label: NW.t('朗读接口地址'),
+              children: h('input', {
+                type: 'text',
+                className: 'nw-input',
+                placeholder: 'http://127.0.0.1:8880/v1',
+                value: String(draft.ttsApiUrl || ''),
+                onChange: (ev) => set('ttsApiUrl', ev.target.value),
+              }),
+            }),
+            h(
+              'div',
+              { className: 'nw-grid2' },
+              NW.ui.field({
+                label: NW.t('朗读接口密钥'),
+                children: h('input', {
+                  type: 'password',
+                  className: 'nw-input',
+                  placeholder: 'sk-…',
+                  value: String(draft.ttsApiKey || ''),
+                  onChange: (ev) => set('ttsApiKey', ev.target.value),
+                }),
+              }),
+              NW.ui.field({
+                label: NW.t('朗读模型'),
+                children: h('input', {
+                  type: 'text',
+                  className: 'nw-input',
+                  placeholder: 'tts-1',
+                  value: String(draft.ttsApiModel || ''),
+                  onChange: (ev) => set('ttsApiModel', ev.target.value),
+                }),
+              }),
+            ),
+            NW.ui.field({
+              label: NW.t('朗读音色'),
+              children: h('input', {
+                type: 'text',
+                className: 'nw-input',
+                placeholder: 'alloy',
+                value: String(draft.ttsApiVoice || ''),
+                onChange: (ev) => set('ttsApiVoice', ev.target.value),
+              }),
+            }),
           ),
         ),
         // ------------------------------------------------------ 6 投稿 ----
