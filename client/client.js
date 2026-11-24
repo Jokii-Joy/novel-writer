@@ -11808,7 +11808,8 @@ const SEL_EMIT_MS = 120;
 .nw-mark-gutter{
   position:absolute;left:0;top:0;right:0;bottom:0;
   z-index:var(--nw-z-float);
-  overflow:hidden;pointer-events:none;
+  /* R200：签放在纸右侧的留白里，必须允许溢出，否则会被裁成看不见。 */
+  overflow:visible;pointer-events:none;
 }
 /* 一枚签 = 一条带批注的线。签上写**章内序号**（按 start 排序），同一行挂两条
    批注、两枚签上下错开之后，序号是唯一能分辨谁是谁的线索；鼠标停上去再点亮
@@ -12383,6 +12384,8 @@ const SEL_EMIT_MS = 120;
     selBtnRef.current = selBtn;
     /** 页边批注签的容器（.nw-mark-gutter），由 paintGutter() 直接填 DOM。 */
     const gutterRef = React.useRef(null);
+    /** R200: 页边签的重画合并到一帧里，避免滚动/测量时连续重建 DOM。 */
+    const gutterRafRef = React.useRef(0);
 
     /** Right-hand blank currently reserved for the floating dock, in px. */
     const dockLaneRef = React.useRef(-1);
@@ -14289,6 +14292,8 @@ const SEL_EMIT_MS = 120;
     function setMarks(list) {
       marksRef.current = Array.isArray(list) ? list.slice() : [];
       rebuildHighlights();
+      // R200：命中层在内容/区间签名没变时会提前返回，页边签不会跟着重画。
+      scheduleGutter();
     }
 
     /**
@@ -14620,6 +14625,14 @@ const SEL_EMIT_MS = 120;
      * margin cannot overlap a glyph, and it is a real button instead of a
      * zero-width anchor that had to be hit-tested through the mirror.
      */
+    function scheduleGutter() {
+      if (gutterRafRef.current) return;
+      gutterRafRef.current = window.requestAnimationFrame(() => {
+        gutterRafRef.current = 0;
+        paintGutter();
+      });
+    }
+
     function paintGutter() {
       const box = gutterRef.current;
       if (!box) return;
@@ -14645,13 +14658,14 @@ const SEL_EMIT_MS = 120;
         if (box.firstChild) clearNode(box);
         return;
       }
-      clearNode(box);
       const hl = hlRef.current;
       const stack = stackRef.current;
       if (!hl || !stack) return;
       const stackRect = stack.getBoundingClientRect();
       const stackW = stack.clientWidth || stackRect.width || 0;
-      if (stackW < 40) return;
+      // R200：阅读页盖住写作区时纸面量不到。旧顺序是先把签清空再看尺寸，于是
+      // 从阅读页回来一片空白；量不到就原样留着，等纸面重新可见时再画。
+      if (stackW < 40 || !stackRect.height) return;
       const want = {};
       for (let i = 0; i < rows.length; i += 1) want[String(rows[i].id)] = rows[i];
       // R53b：签上写序号（本章之内按 start 排），否则同一行两条批注错开一格之
@@ -14677,11 +14691,19 @@ const SEL_EMIT_MS = 120;
       }
       if (!placed.length) return;
       placed.sort((a, b) => a.y - b.y);
+      // R200：只有确认这一轮真有签要画，才清掉上一轮；上面的提前返回都不清。
+      clearNode(box);
       // Two signs on the same line would stack; push the later one down a row of
       // its own rather than letting them overlap into one indistinguishable blob.
       // R53c：错开之后不再画引线（用户说那条细线看不出来），改由「悬停/点开
       // 时句子明显变色」来指认——签上的序号说第几条，句子亮起来说哪一行。
       let last = -Infinity;
+      // R200：签放到纸的右侧留白里，不再压住正文最后的一两个字；窗口窄到
+      // 没有留白时退回纸内右缘。
+      const sc = scrollerRef.current;
+      const scRect = sc ? sc.getBoundingClientRect() : stackRect;
+      /* R200b：标注签贴稿纸的inner edge，不再放到纸外。正文左右各有
+         padding（--nw-pad-x），末字不会压到签上，所以固定收在纸右边 6px。 */
       const left = Math.round(Math.max(8, stackW - 22));
       const SIDE_H = 16;
       for (let i = 0; i < placed.length; i += 1) {
@@ -15748,6 +15770,8 @@ const SEL_EMIT_MS = 120;
       const onWheel = markManual;
       const onTouchMove = markManual;
       const onScroll = () => {
+        // R200：签挂在纸上，滚动后要跟着重排。
+        scheduleGutter();
         // R46: the fade is positioned in viewport pixels, so it has to follow
         // the scroller even when the caret did not move. This uses the cached
         // line top only — no rect, no mirror, no reflow.
@@ -16020,6 +16044,22 @@ const SEL_EMIT_MS = 120;
       document.addEventListener('pointerdown', onDocDown, true);
       return () => document.removeEventListener('pointerdown', onDocDown, true);
     }, [markView]);
+
+    // R200：阅读页是盖在写作区上的浮层，关掉时编辑器不会重新挂载；纸面重新
+    // 进入视野时补画一次页边签，否则要从书架上重开小说才看得到。
+    React.useEffect(() => {
+      const stack = stackRef.current;
+      if (!stack || typeof IntersectionObserver !== 'function') return undefined;
+      const io = new IntersectionObserver(() => scheduleGutter(), { threshold: 0.01 });
+      try {
+        io.observe(stack);
+      } catch (err) {
+        /* older engines */
+      }
+      return () => {
+        try { io.disconnect(); } catch (err) { /* ignore */ }
+      };
+    }, []);
 
     // ---------------------------------------------------------------- render --
     const find = findRef.current;
