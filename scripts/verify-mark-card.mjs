@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * R203: 标注小卡的两条约定，截图看不出来，源码扫描也看不出来。
+ * R203/R204: 标注小卡的三组约定，截图看不出来，源码扫描也看不出来。
  *
  *   node scripts/verify-mark-card.mjs [bundle]
  *
@@ -14,9 +14,10 @@
  *    用户看到的就是「每次点击，位置都有稍微的变化」。修法是把卡锚到签自己的
  *    盒子上（markCardSpotAt）。
  *
- * 第 2 条不能靠正则断言——它要真的算一遍。所以这段测试把 **bundle 里的**
- * markAnchorOf / markCardSpotAt / openMarkView 抠出来，喂进假几何里执行：
- * 同一个签、两个不同的落点，位置必须完全一致；点正文时仍按点击处落。
+ * 3. R204：卡片改成「鼠标聚焦展开、失焦收起」，批注横过来排（正文在左、按钮在
+ *    右），正文再长也不许撑高卡片。这三件事都没有返回值可断言——所以第 1 组读
+ *    CSS 规则体，第 2 组把随 bundle 出厂的距离函数喂进假几何真算一遍，第 3 组把
+ *    「收起」的调度函数喂进假时钟，验它的宽限期、去重和撤销。
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -244,6 +245,141 @@ check('卡片不会跑到纸面外（左右两条边界）', () => {
   assert(leftEdge.left >= 8, `左边界失效：left=${leftEdge.left}`);
   const topEdge = api.markCardSpotAt({ left: 500, top: 2, width: 16, height: 16 }, 200, 81);
   assert(topEdge.top >= 8, `上边界失效：top=${topEdge.top}`);
+});
+
+// ---------------------------------------------------------------------------
+// 3. R204: 横排 + 不撑高 + 「聚焦展开、失焦收起」
+// ---------------------------------------------------------------------------
+check('批注横排：正文在左、按钮列在右', () => {
+  const card = ruleBody('.nw-mark-view');
+  assert(card !== null, '找不到 .nw-mark-view 规则');
+  assert(/flex-direction:\s*row/.test(card), '卡片又变回竖排（正文会压在按钮上面）');
+  const acts = ruleBody('.nw-mark-view-acts');
+  assert(acts !== null, '找不到 .nw-mark-view-acts 规则');
+  assert(/flex:\s*0 0 auto/.test(acts), '按钮列应不参与压缩（flex:0 0 auto），否则批注一长按钮就被挤窄');
+});
+
+check('批注再长也不撑高卡片，而且没有滚动条', () => {
+  const note = ruleBody('.nw-mark-view-note');
+  assert(note !== null, '找不到 .nw-mark-view-note 规则');
+  assert(/max-height:\s*\d+px/.test(note), '正文没有高度上限：长批注会把卡片撑高');
+  assert(/overflow-y:\s*auto/.test(note), '正文不能滚（overflow-y 不是 auto）');
+  assert(/scrollbar-width:\s*none/.test(note), '没藏滚动条（scrollbar-width:none）');
+  const bar = ruleBody('.nw-mark-view-note::-webkit-scrollbar');
+  assert(bar !== null, '找不到 ::-webkit-scrollbar 规则：Chromium 上会冒出灰色长条');
+  assert(/display:\s*none/.test(bar) || /width:\s*0/.test(bar), 'webkit 滚动条没有被隐藏');
+});
+
+check('全局细滚动条规则把批注正文排除在外（否则 8px 灰条会盖回来）', () => {
+  const hits = code.match(/:not\(\.nw-mark-view-note\)/g) || [];
+  assert(hits.length >= 6, `98c-signature.js 的全局滚动条规则只排除了 ${hits.length} 处，应把 6 条（含 ::-webkit-scrollbar 各伪元素）都排除`);
+});
+
+check('页边签挂的是「进入/离开」和键盘焦点，而不只是 click', () => {
+  assert(/'pointerenter'/.test(code), '签上没有挂 pointerenter，鼠标停上去不会展开');
+  assert(/'pointerleave'/.test(code), '签上没有挂 pointerleave，移开不会收起');
+  assert(/addEventListener\('focus'/.test(code) && /addEventListener\('blur'/.test(code), '签上没有键盘焦点入口');
+  assert(/openMarkViewForSign/.test(code), '签的入口没走 openMarkViewForSign');
+});
+
+check('卡片自己认指针：从签走进卡片不能被当成「移开」', () => {
+  assert(/onPointerEnter/.test(code) && /onPointerLeave/.test(code), '卡片上没有 onPointerEnter / onPointerLeave');
+  assert(/cancelMarkClose/.test(code), '卡片没有撤销收起的入口');
+  assert(/closest\('\.nw-mark-side'\)/.test(code), '焦点从卡片回到签上时会把卡片关掉（缺 .nw-mark-side 的豁免）');
+});
+
+const CLOSE_SRC = ['cancelMarkClose', 'scheduleMarkClose'].map(sourceOf);
+const OPEN_SRC = sourceOf('openMarkViewForSign');
+if (CLOSE_SRC.some((src) => !src) || !OPEN_SRC) {
+  console.error('verify-mark-card: bundle 里找不到 cancelMarkClose / scheduleMarkClose / openMarkViewForSign');
+  process.exit(1);
+}
+
+/** A clock that only moves when the test says so. */
+function clock() {
+  const timers = [];
+  let seq = 0;
+  return {
+    window: {
+      setTimeout(fn, ms) {
+        seq += 1;
+        timers.push({ id: seq, fn, ms });
+        return seq;
+      },
+      clearTimeout(target) {
+        const at = timers.findIndex((entry) => entry.id === target);
+        if (at >= 0) timers.splice(at, 1);
+      },
+    },
+    timers,
+    fire() {
+      const due = timers.splice(0);
+      for (const entry of due) entry.fn();
+    },
+    delays() {
+      return timers.map((entry) => entry.ms);
+    },
+  };
+}
+
+const buildClose = new Function(
+  'markCloseTimerRef',
+  'closeMarkView',
+  'MARK_HOVER_GRACE',
+  'window',
+  `${CLOSE_SRC.join('\n\n')}
+  return { cancelMarkClose: cancelMarkClose, scheduleMarkClose: scheduleMarkClose };`,
+);
+
+const buildOpen = new Function(
+  'markCloseTimerRef',
+  'cancelMarkClose',
+  'markViewRef',
+  'openMarkView',
+  `${OPEN_SRC}
+  return openMarkViewForSign;`,
+);
+
+check('移开指针先等 150ms 再收起（留出跨过 6px 缝的时间）', () => {
+  const c = clock();
+  const timer = { current: 0 };
+  let closes = 0;
+  const api = buildClose(timer, () => { closes += 1; }, 150, c.window);
+  api.scheduleMarkClose();
+  assert(c.timers.length === 1, `应排一个收起定时器，实有 ${c.timers.length} 个`);
+  assert(c.delays()[0] === 150, `宽限期应为 150ms，实得 ${c.delays()[0]}ms`);
+  assert(closes === 0, '还没到时间就把卡片关了');
+  c.fire();
+  assert(closes === 1, '定时器到点后卡片没有收起');
+  assert(timer.current === 0, '收起之后没把 ref 归零，下一个定时器会误清');
+});
+
+check('指针走进卡片就撤销收起；反复移开不会攒出多个定时器', () => {
+  const c = clock();
+  const timer = { current: 0 };
+  let closes = 0;
+  const api = buildClose(timer, () => { closes += 1; }, 150, c.window);
+  api.scheduleMarkClose();
+  api.scheduleMarkClose();
+  assert(c.timers.length === 1, `重复调度应只留一个定时器，实有 ${c.timers.length} 个`);
+  api.cancelMarkClose();
+  assert(c.timers.length === 0, 'cancelMarkClose 没有清掉定时器');
+  assert(timer.current === 0, 'cancelMarkClose 没有把 ref 归零');
+  c.fire();
+  assert(closes === 0, '撤销之后卡片仍然被关掉了');
+});
+
+check('同一枚签再触发一次（悬停后紧跟 click）不会重建卡片', () => {
+  const timer = { current: 0 };
+  const ref = { current: { mark: { id: 7 }, left: 1, top: 2, anchor: {} } };
+  const opened = [];
+  const api = buildOpen(timer, () => {}, ref, (...args) => opened.push(args));
+  const sign = { id: 'sign-7' };
+  api({ id: 7, kind: 'comment' }, {}, sign);
+  assert(opened.length === 0, '卡片已经开着，却又开了一次（会在指针下闪一下）');
+  api({ id: 8, kind: 'strike' }, {}, sign);
+  assert(opened.length === 1, '换一枚签时应重新开卡');
+  assert(opened[0][2] === sign, '换签开卡时没有把签当作锚点传进去');
 });
 
 // ---------------------------------------------------------------------------

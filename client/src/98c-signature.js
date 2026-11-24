@@ -107,19 +107,24 @@
    与 .nw-read-flow 特异性相同，而本文件拼接在 62-read.js 之后，于是后写的
    那条 width:0;height:0 反而输了），所以在这里显式排除，而不是在 62-read.js
    里靠提高特异性去打架。 */
-.nw-root *:not(.nw-read-flow):not(.nw-read-copy){
+/* R204: 同理再排除批注小卡的正文。它是唯一一个「内容超出就在原地滚、且不肯
+   露出一条滚动条」的地方——这条全局规则的特异性（.nw-root + 两个 :not）
+   压得住 .nw-mark-view-note 自己的 scrollbar-width:none，而且 Chromium 121
+   起只要标准属性被写死在别的规则里，::-webkit-scrollbar 那几条就整个不生效，
+   于是灰色长条照样冒出来。 */
+.nw-root *:not(.nw-read-flow):not(.nw-read-copy):not(.nw-mark-view-note){
   scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--nw-fg) 22%, transparent) transparent;
 }
-.nw-root *:not(.nw-read-flow):not(.nw-read-copy)::-webkit-scrollbar{width:10px;height:10px;}
-.nw-root *:not(.nw-read-flow):not(.nw-read-copy)::-webkit-scrollbar-track{background:transparent;}
-.nw-root *:not(.nw-read-flow):not(.nw-read-copy)::-webkit-scrollbar-thumb{
+.nw-root *:not(.nw-read-flow):not(.nw-read-copy):not(.nw-mark-view-note)::-webkit-scrollbar{width:10px;height:10px;}
+.nw-root *:not(.nw-read-flow):not(.nw-read-copy):not(.nw-mark-view-note)::-webkit-scrollbar-track{background:transparent;}
+.nw-root *:not(.nw-read-flow):not(.nw-read-copy):not(.nw-mark-view-note)::-webkit-scrollbar-thumb{
   background:color-mix(in srgb, var(--nw-fg) 15%, transparent);
   border:3px solid transparent;border-radius:var(--nw-r-pill);background-clip:content-box;
 }
-.nw-root *:not(.nw-read-flow):not(.nw-read-copy)::-webkit-scrollbar-thumb:hover{
+.nw-root *:not(.nw-read-flow):not(.nw-read-copy):not(.nw-mark-view-note)::-webkit-scrollbar-thumb:hover{
   background:color-mix(in srgb, var(--nw-fg) 30%, transparent);background-clip:content-box;
 }
-.nw-root *:not(.nw-read-flow):not(.nw-read-copy)::-webkit-scrollbar-corner{background:transparent;}
+.nw-root *:not(.nw-read-flow):not(.nw-read-copy):not(.nw-mark-view-note)::-webkit-scrollbar-corner{background:transparent;}
 
 /* ================================================================= type === */
 /* Numbers that sit in a row and change while you watch them are tabular, so a

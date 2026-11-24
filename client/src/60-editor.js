@@ -109,6 +109,16 @@ const SEL_EMIT_MS = 120;
    * apart, narrow enough that the eye joins them.
    */
   const MARK_CARD_GAP = 6;
+  /**
+   * R204: how long a card survives the pointer leaving its sign.
+   *
+   * The card sits MARK_CARD_GAP to the left of the sign, so moving from sign to
+   * card *always* crosses a strip that belongs to neither of them; closing on
+   * `pointerleave` without a grace period would make the buttons unreachable.
+   * 150ms is long enough to cross 6px at any sane mouse speed and short enough
+   * that a pointer leaving for good still feels like it collapsed at once.
+   */
+  const MARK_HOVER_GRACE = 150;
 
   /**
    * Titles the editor must not print above the text.
@@ -804,18 +814,33 @@ const SEL_EMIT_MS = 120;
 /* R51：写作时点一条线，浮出这张小卡：引文、批注原文、一个删除。这里是**看**的地方，
    所以没有输入框——批注在写作区只读，要改它回「读一遍」里改。
    R203：卡片有两种落点——点页边签时按**签框**算（markCardSpotAt），卡右缘离签
-   MARK_CARD_GAP，垂直以签为中心；点正文时仍按点击处算。两种都夹在纸面之内。 */
+   MARK_CARD_GAP，垂直以签为中心；点正文时仍按点击处算。两种都夹在纸面之内。
+   R204：批注横过来排——正文在左、接受/拒绝在右；正文再长也不撑高卡片，超出
+   70px（约四行）就在自己的框里滚，滚动条藏掉。 */
 .nw-mark-view{
   position:absolute;z-index:var(--nw-z-panel);
-  width:min(200px,calc(100% - 24px));
-  display:flex;flex-direction:column;gap:4px;
+  width:min(272px,calc(100% - 24px));
+  display:flex;flex-direction:row;align-items:flex-start;gap:8px;
   padding:6px;border-radius:var(--nw-r-control);
   border:1px solid var(--nw-line);background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
   font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);line-height:1.45;
 }
 /* R53g：卡片上不再有引文（那句字就在正文里亮着），这条规则留着的唯一作用是
-   提醒别再把 quote 加回来；实际已无人使用，删掉。 */
-.nw-mark-view-note{color:var(--nw-fg);white-space:pre-wrap;overflow-wrap:break-word;max-height:96px;overflow-y:auto;}
+   提醒别再把 quote 加回来；实际已无人使用，删掉。
+   R204：这一段现在也兼着「可滚动但不许撑大卡片」——max-height 定死四行，
+   滚轮在这里滚的是批注本身，滚到底才轮到纸面。 */
+.nw-mark-view-note{
+  flex:1 1 auto;min-width:0;
+  color:var(--nw-fg);white-space:pre-wrap;overflow-wrap:break-word;
+  max-height:70px;overflow-y:auto;
+  scrollbar-width:none;-ms-overflow-style:none;
+}
+/* R204：藏滚动条。Chromium 走 ::-webkit-scrollbar，其他引擎走上面那条
+   scrollbar-width:none；两条都留着，免得在一种引擎上冒出灰色长条。
+   （2024-11 实测过：98c-signature.js 那条全局「每个滚动容器都配细滚动条」
+   的 .nw-root *:not(...) 特异性更高，会把它盖回去，所以那里也补了一条
+   :not(.nw-mark-view-note)。两处必须同时存在。） */
+.nw-mark-view-note::-webkit-scrollbar{width:0;height:0;display:none;}
 .nw-mark-view-note[data-empty="1"]{color:var(--nw-soft);}
 /* R53f：下划线 / 删除线点开只有「删除」，所以卡片不能再用 200px 的批注版宽度——
    一个 22px 高的按钮摊在 200px 里，右边空出一大片，看着像没加载完。收成贴着按钮
@@ -829,8 +854,9 @@ const SEL_EMIT_MS = 120;
 /* R194：接受 / 拒绝上下排——并排两颗按钮横着占掉半行正文，竖排只占按钮宽。
    R203：再往上贴右。排成列以后按钮的交叉轴是**宽度**，默认 stretch 会把两颗都
    拉成整卡宽（实测 188px），读起来像两条通栏色块而不是「两个动作」；改成
-   flex-end，按钮回到自身文字的宽度并靠右缘，右下的空白也跟着没了。 */
-.nw-mark-view-acts{display:flex;flex-direction:column;align-items:flex-end;gap:4px;}
+   flex-end，按钮回到自身文字的宽度并靠右缘，右下的空白也跟着没了。
+   R204：卡片改成横排后，这一列站在右边、不参与压缩，批注那一栏自己滚。 */
+.nw-mark-view-acts{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:4px;}
 .nw-mark-view-btn{
   flex:0 0 auto;height:22px;padding:0 8px;
   border-radius:var(--nw-r-control);border:1px solid var(--nw-line-strong);
@@ -1325,6 +1351,37 @@ const SEL_EMIT_MS = 120;
     markViewRef.current = markView;
     /** R203: the card itself, so its real box can be measured after render. */
     const markCardRef = React.useRef(null);
+    // R204：卡片从「点开」改成「鼠标聚焦展开、失焦收起」，于是「关」变成一次可以
+    // 撤回的计划：指针离开签（或卡片）先记一个 MARK_HOVER_GRACE 的定时器，指针
+    // 在这段时间里走进卡片就把定时器撤掉。定时器存在 ref 里，重渲染不丢，也攒不出
+    // 第二个——撤掉旧的一定在安排新的之前发生。
+    const markCloseTimerRef = React.useRef(0);
+
+    /** R204: cancel a pending collapse (pointer came back, or the card was re-opened). */
+    function cancelMarkClose() {
+      const timer = markCloseTimerRef.current;
+      if (!timer) return;
+      markCloseTimerRef.current = 0;
+      try {
+        window.clearTimeout(timer);
+      } catch (err) {
+        /* a timer that already fired is not an error */
+      }
+    }
+
+    /** R204: collapse the card unless the pointer comes back inside MARK_HOVER_GRACE. */
+    function scheduleMarkClose(delay) {
+      cancelMarkClose();
+      const ms = typeof delay === 'number' ? delay : MARK_HOVER_GRACE;
+      try {
+        markCloseTimerRef.current = window.setTimeout(() => {
+          markCloseTimerRef.current = 0;
+          closeMarkView();
+        }, ms);
+      } catch (err) {
+        markCloseTimerRef.current = 0;
+      }
+    }
     // R73：「选中文字 → 修改建议」的那颗小钮。R53 之所以把选字弹条撤掉，是因为
     // 一条三按钮的横条压在正在选的字上面；这一颗只有一个按钮，落在指针松开处的
     // 右下角，选中一消失它就自己走，所以不需要任何关闭动作。
@@ -3349,11 +3406,13 @@ const SEL_EMIT_MS = 120;
       const stack = stackRef.current;
       if (!stack || !mark) return;
       // R53f：下划线 / 删除线的卡片只剩一个「删除」按钮，实测约 84×32，比批注卡小
-      // 一大截。还按 200×150 去避让的话，卡片会在离点击处很远的地方落地，看着像
+      // 一大截。还按批注卡的尺寸去避让的话，卡片会在离点击处很远的地方落地，看着像
       // 点错了地方。两种尺寸分开算。
+      // R204：批注卡横过来排（正文在左、按钮在右），宽 272、高最多 70+12；这里只用
+      // 来先放个大概位置，真尺寸由 layout effect 量到后重算。
       const compact = String(mark.kind) !== 'comment';
-      const cardW = compact ? 84 : 200;
-      const cardH = compact ? 60 : 150;
+      const cardW = compact ? 84 : 272;
+      const cardH = compact ? 60 : 96;
       const box = stack.getBoundingClientRect();
       const stackW = box.width || 0;
       const vh = window.innerHeight || 768;
@@ -3409,6 +3468,21 @@ const SEL_EMIT_MS = 120;
       }
     }
 
+    /**
+     * R204: open the card for a margin sign, and do nothing if it is already open.
+     *
+     * Hover now opens the card (`pointerenter`), and the click handler still
+     * fires on the same visit — without this guard the second call would replace
+     * the state object, re-run the layout effect and hand React a new card node,
+     * which reads as a flicker right under the pointer.
+     */
+    function openMarkViewForSign(mark, ev, sign) {
+      cancelMarkClose();
+      const cur = markViewRef.current;
+      if (cur && cur.mark && mark && String(cur.mark.id) === String(mark.id)) return;
+      openMarkView(mark, ev, sign);
+    }
+
     function closeMarkView() {
       setMarkView((cur) => (cur ? null : cur));
       const hl = hlRef.current;
@@ -3439,6 +3513,10 @@ const SEL_EMIT_MS = 120;
       if (spot.left === cur.left && spot.top === cur.top) return;
       setMarkView({ mark: cur.mark, left: spot.left, top: spot.top, anchor: cur.anchor });
     }, [markView]);
+
+    // R204: a collapse timer that fires after the editor unmounts would setState
+    // on a dead component; drop it with the editor.
+    React.useEffect(() => () => cancelMarkClose(), []);
 
     // ------------------------------------------------- 选中 → 修改建议 (R73) --
     /**
@@ -3767,12 +3845,19 @@ const SEL_EMIT_MS = 120;
           for (let k = 0; k < own.length; k += 1) own[k].removeAttribute('data-hover');
         });
         // R192：签本身就是入口。删除线签和批注签同位置、同形状，只换颜色；
-        // 点一下就在签旁边开那张接受/拒绝的小卡，不必先去纸上找那一行。
+        // 在签旁边开那张接受/拒绝的小卡，不必先去纸上找那一行。
+        // R204：入口从「点」改成「聚焦」——鼠标停上来（或键盘 Tab 到签上）就展开，
+        // 移开/MARK_HOVER_GRACE 内没走进卡片就收起。click 留着：触摸屏没有悬停，
+        // 而且摄像头/触控笔的「点」比「停」更确定。
+        btn.addEventListener('pointerenter', (ev) => openMarkViewForSign(markRow, ev, btn));
+        btn.addEventListener('pointerleave', () => scheduleMarkClose());
+        btn.addEventListener('focus', (ev) => openMarkViewForSign(markRow, ev, btn));
+        btn.addEventListener('blur', () => scheduleMarkClose());
         btn.addEventListener('click', (ev) => {
           if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
           if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
           // R203: the sign, not the pixel inside it, is the anchor.
-          openMarkView(markRow, ev, btn);
+          openMarkViewForSign(markRow, ev, btn);
         });
         box.appendChild(btn);
       }
@@ -5117,6 +5202,20 @@ const SEL_EMIT_MS = 120;
               'aria-label': NW.t('标注'),
               ref: markCardRef,
               style: { left: markView.left + 'px', top: markView.top + 'px' },
+              // R204: 指针从签跨过 MARK_CARD_GAP 走进卡片时，「离开签」已经排了一个
+              // 收起；进到这里就把它撤掉。离开卡片（或卡片里的焦点跑掉）再排一次。
+              onPointerEnter: () => cancelMarkClose(),
+              onPointerLeave: () => scheduleMarkClose(),
+              onFocus: () => cancelMarkClose(),
+              onBlur: (ev) => {
+                const next = ev && ev.relatedTarget;
+                const host = ev && ev.currentTarget;
+                if (next && host && typeof host.contains === 'function' && host.contains(next)) return;
+                // R204: 焦点回到页边签上时要留下这张卡——签自己的 focus 会重新开
+                // 一次（同一个 id 是空操作），这里再排一个收起就会在 150ms 后把它关掉。
+                if (next && typeof next.closest === 'function' && next.closest('.nw-mark-side')) return;
+                scheduleMarkClose();
+              },
               onMouseDown: (ev) => {
                 // Do not let the card steal the caret from the textarea: that
                 // would fire onSelect → scheduleMeasure and move the viewport.
@@ -5408,7 +5507,9 @@ const SEL_EMIT_MS = 120;
                 for (let i = 0; i < rows.length; i += 1) {
                   if (rows[i] && String(rows[i].id) === String(id)) {
                     // R203: same anchor rule as the sign's own handler.
-                    openMarkView(rows[i], ev, sign);
+                    // R204: and the same "already open" guard — a click on a sign
+                    // whose card is already up must not rebuild it.
+                    openMarkViewForSign(rows[i], ev, sign);
                     return;
                   }
                 }
