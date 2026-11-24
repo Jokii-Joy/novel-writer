@@ -122,9 +122,10 @@ check('锁屏有一个可自动聚焦、回车解锁的密码框', () => {
 check('书房场景：书架、书脊、黄铜灯都在，且对读屏隐藏', () => {
   const { nodes } = renderLock(false);
   const classes = nodes.map((node) => String((node.props && node.props.className) || '')).join(' ');
-  for (const name of ['nw-lock-head', 'nw-lock-clock', 'nw-lock-main', 'nw-lock-title', 'nw-lock-form', 'nw-lock-go', 'nw-lock-meta', 'nw-lock-shelf', 'nw-lock-lamp', 'nw-lock-spine']) {
+  for (const name of ['nw-lock-head', 'nw-lock-clock', 'nw-lock-main', 'nw-lock-title', 'nw-lock-form', 'nw-lock-go', 'nw-lock-shelf', 'nw-lock-lamp', 'nw-lock-spine']) {
     assert.ok(classes.includes(name), `missing .${name}`);
   }
+  assert.ok(!classes.includes('nw-lock-meta'), 'the encryption meta strip is gone');
   const shelf = nodes.find((node) => String((node.props && node.props.className) || '') === 'nw-lock-shelf');
   assert.ok(shelf, 'shelf exists');
   assert.equal(shelf.props['aria-hidden'], 'true', 'the scene is decorative');
@@ -136,7 +137,7 @@ check('图标是锁屏专用线稿：书标、锁、箭头和忙碌环都不借�
     .filter((node) => typeof node.type === 'function')
     .map((node) => node.type.name);
   assert.ok(componentNames.includes('LockMark'), 'the brand draws its own book mark');
-  assert.ok(componentNames.includes('LockPadlock'), 'the meta row draws its own padlock');
+  assert.ok(!componentNames.includes('LockPadlock'), 'the meta padlock row is gone');
   const go = nodes.find(
     (node) => node.type === 'button' && String(node.props.className || '').includes('nw-lock-go'),
   );

@@ -517,6 +517,10 @@ window.__ModuleLoader__.load({
      * setting, so the two halves cannot disagree).
      */
     countPunctuation: true,
+    /* R176: hide every live word count (status bar, shelf rows, book tree head)
+       without touching goals or saved data. Writers asked for a quiet writing
+       mode that does not constantly put a number in front of them. */
+    showWordCount: true,
     /**
      * R29: one model per AI job. Each of the three is an independent
      * `provider` + `model` pair so the writer can run proofreading on a cheap
@@ -1613,14 +1617,20 @@ window.__ModuleLoader__.load({
 
   // -------------------------------- history ----------------------------------
 
-  async function saveVersion(chapterId, content) {
-    if (!chapterId) return;
+  /**
+   * Saves a version snapshot. `options.kind === 'final'` marks a deliberate
+   * 完稿 version (see NW.FolioTab / NW.FolioDrawer); everything else is the automatic
+   * browsing snapshot and keeps the old 50-entry cap. Final versions are kept
+   * until the user deletes them, so a manuscript's finished drafts never expire.
+   */
+  async function saveVersion(chapterId, content, options) {
+    if (!chapterId) return undefined;
+    const opts = options || {};
+    const kind = opts.kind === 'final' ? 'final' : '';
     const text = content == null ? '' : String(content);
+    if (kind === 'final' && !text.trim()) return undefined;
     const stored = await sealContent(text);
-    const words =
-      NW.format && typeof NW.format.wordCount === 'function'
-        ? NW.format.wordCount(text)
-        : text.replace(/\s+/g, '').length;
+    const words = countWords(text);
     const version = {
       id: uid('ver'),
       chapterId: chapterId,
@@ -1628,33 +1638,171 @@ window.__ModuleLoader__.load({
       words: words,
       createdAt: nextVersionStamp(),
     };
+    if (kind === 'final') {
+      version.kind = 'final';
+      let label = String(opts.label == null ? '' : opts.label).trim().slice(0, 40);
+      if (!label) {
+        const siblings = await readIndex('versions', 'byChapterId', chapterId);
+        let finals = 0;
+        let highest = 0;
+        for (let i = 0; i < siblings.length; i += 1) {
+          const sibling = siblings[i];
+          if (!sibling || sibling.kind !== 'final') continue;
+          finals += 1;
+          const match = /^第\s*(\d+)\s*稿$/.exec(String(sibling.label || '').trim());
+          if (match) highest = Math.max(highest, Number(match[1]) || 0);
+        }
+        // A deleted middle draft must not make the next save reuse its number.
+        label = '第' + (Math.max(finals, highest) + 1) + '稿';
+      }
+      version.label = label;
+      const note = String(opts.note == null ? '' : opts.note).trim().slice(0, 200);
+      if (note) version.note = note;
+    }
     const ok = await writeBatch([{ store: 'versions', type: 'put', value: version }]);
-    if (!ok) return;
+    if (!ok) return undefined;
 
-    // keep only the newest VERSION_LIMIT entries for this chapter
+    // Only automatic history is capped. A selected 定稿 is never pruned even if
+    // it happens to be an old auto snapshot (defensive: older builds could have
+    // set finalVersionId before `kind` existed).
+    let protectedId = '';
+    try {
+      const chapter = await readOne('chapters', chapterId);
+      if (chapter && chapter.finalVersionId) protectedId = String(chapter.finalVersionId);
+    } catch (err) {
+      /* a missing chapter must not block saving the snapshot */
+    }
     const existing = await readIndex('versions', 'byChapterId', chapterId);
-    if (existing.length > VERSION_LIMIT) {
-      existing.sort(function (a, b) {
+    const autos = existing.filter(function (row) {
+      return row && row.kind !== 'final' && row.id !== protectedId;
+    });
+    if (autos.length > VERSION_LIMIT) {
+      autos.sort(function (a, b) {
         return (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0);
       });
       const ops = [];
-      for (let i = VERSION_LIMIT; i < existing.length; i += 1) {
-        ops.push({ store: 'versions', type: 'delete', key: existing[i].id });
+      for (let i = VERSION_LIMIT; i < autos.length; i += 1) {
+        ops.push({ store: 'versions', type: 'delete', key: autos[i].id });
       }
       if (ops.length) await writeBatch(ops);
     }
     notify();
+    return Object.assign({}, version, { content: text });
   }
 
-  async function listVersions(chapterId) {
+  /**
+   * Lists a chapter's versions newest-first. `{meta:true}` skips decryption and
+   * returns empty `content`, for the version timeline which only needs labels,
+   * timestamps and word counts.
+   */
+  async function listVersions(chapterId, options) {
     if (!chapterId) return [];
+    const meta = !!(options && options.meta);
     const rows = await readIndex('versions', 'byChapterId', chapterId);
     rows.sort(function (a, b) {
       return (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0);
     });
     const out = [];
     for (let i = 0; i < rows.length; i += 1) {
+      if (meta) {
+        const row = Object.assign({}, rows[i], { content: '' });
+        const stored = Number(row.words);
+        row.words = Number.isFinite(stored) && stored >= 0 ? stored : 0;
+        out.push(row);
+        continue;
+      }
       out.push(await hydrateVersion(rows[i]));
+    }
+    return out;
+  }
+
+  /** Marks one version as the chapter's 定稿 (null clears the selection). */
+  async function setFinalVersion(chapterId, versionId) {
+    if (!chapterId) return undefined;
+    return serialise('chapter', async function () {
+      const chapter = await readOne('chapters', chapterId);
+      if (!chapter) return undefined;
+      const next = Object.assign({}, chapter);
+      if (versionId) {
+        const version = await readOne('versions', versionId);
+        if (!version || version.chapterId !== chapterId) throw new Error('该版本不属于当前章节');
+        next.finalVersionId = version.id;
+        next.finalVersionAt = now();
+      } else {
+        delete next.finalVersionId;
+        delete next.finalVersionAt;
+      }
+      next.updatedAt = now();
+      const ok = await writeBatch([{ store: 'chapters', type: 'put', value: next }]);
+      if (!ok) throw new Error('设定定稿失败');
+      if (next.novelId) await touchNovel(next.novelId);
+      notify();
+      return hydrateChapter(next);
+    });
+  }
+
+  /** Deletes one version; if it was the chapter's 定稿, that marker is cleared. */
+  async function deleteVersion(id) {
+    if (!id) return false;
+    return serialise('chapter', async function () {
+      const version = await readOne('versions', id);
+      if (!version) return false;
+      const chapter = version.chapterId ? await readOne('chapters', version.chapterId) : undefined;
+      const ops = [{ store: 'versions', type: 'delete', key: id }];
+      let nextChapter;
+      if (chapter) {
+        nextChapter = Object.assign({}, chapter);
+        if (nextChapter.finalVersionId === id) {
+          delete nextChapter.finalVersionId;
+          delete nextChapter.finalVersionAt;
+        }
+        nextChapter.updatedAt = now();
+        ops.push({ store: 'chapters', type: 'put', value: nextChapter });
+      }
+      const ok = await writeBatch(ops);
+      if (!ok) throw new Error('删除版本失败');
+      if (nextChapter && nextChapter.novelId) await touchNovel(nextChapter.novelId);
+      notify();
+      return true;
+    });
+  }
+
+  /**
+   * Chapter rows for export / submission. Chapters with a valid 定稿 version
+   * expose that version's text instead of the live buffer; chapters without
+   * one are returned unchanged. This is the ONE place both paths resolve the
+   * manuscript, so a chosen 定稿 means the same thing everywhere.
+   */
+  async function listChaptersForOutput(novelId) {
+    const rows = await listChapters(novelId);
+    const out = [];
+    for (let i = 0; i < rows.length; i += 1) {
+      const chapter = rows[i];
+      if (!chapter || !chapter.finalVersionId) {
+        out.push(chapter);
+        continue;
+      }
+      let final;
+      try {
+        final = await getVersion(chapter.finalVersionId);
+      } catch (err) {
+        final = undefined;
+      }
+      if (!final || final.chapterId !== chapter.id || final.locked) {
+        out.push(Object.assign({}, chapter, { finalMissing: true }));
+        continue;
+      }
+      const content = String(final.content == null ? '' : final.content);
+      out.push(
+        Object.assign({}, chapter, {
+          content: content,
+          wordCount: Number.isFinite(Number(final.words)) ? Number(final.words) : countWords(content),
+          finalVersionId: final.id,
+          finalLabel: final.label || '',
+          finalCreatedAt: final.createdAt || 0,
+          contentSource: 'final',
+        }),
+      );
     }
     return out;
   }
@@ -2749,6 +2897,9 @@ window.__ModuleLoader__.load({
     saveVersion: saveVersion,
     listVersions: listVersions,
     getVersion: getVersion,
+    setFinalVersion: setFinalVersion,
+    deleteVersion: deleteVersion,
+    listChaptersForOutput: listChaptersForOutput,
     listTrash: listTrash,
     restoreTrash: restoreTrash,
     emptyTrash: emptyTrash,
@@ -3645,8 +3796,11 @@ window.__ModuleLoader__.load({
 
   // ------------------------------ diff preview ------------------------------
 
-  /** Line-level LCS diff. Adjacent rows of the same type are merged. */
-  function diffPreview(a, b) {
+  /**
+   * Raw line-level LCS ops, one line per row. Shared by diffPreview (merged
+   * blocks) and diffAligned (side-by-side rows) so both comparisons always agree.
+   */
+  function diffOps(a, b) {
     // R26: a lone trailing newline is not a visible edit. typeset() always ends
     // its output with exactly one newline, so a manuscript typed without a final
     // line break produced a phantom add row (rendered as a bare plus sign) and
@@ -3722,17 +3876,178 @@ window.__ModuleLoader__.load({
     for (let i = 0; i < start; i += 1) head.push({ type: 'same', text: left[i] });
     const tail = [];
     for (let i = endL + 1; i < left.length; i += 1) tail.push({ type: 'same', text: left[i] });
+    return head.concat(ops, tail);
+  }
 
+  /** Line-level LCS diff. Adjacent rows of the same type are merged. */
+  function diffPreview(a, b) {
     const merged = [];
     const push = (row) => {
       const prev = merged[merged.length - 1];
       if (prev && prev.type === row.type) prev.text += '\n' + row.text;
       else merged.push({ type: row.type, text: row.text });
     };
-    head.forEach(push);
-    ops.forEach(push);
-    tail.forEach(push);
+    diffOps(a, b).forEach(push);
     return merged;
+  }
+
+  // --------------------------- side-by-side diff ----------------------------
+
+  /**
+   * Character-level highlight for one changed line pair. Returns segments
+   * `{t:'same'|'mark', text}` for each side. Keeps the DOM small: long lines and
+   * very different lines mark only the changed middle instead of running LCS.
+   */
+  function inlineDiff(leftText, rightText) {
+    const left = String(leftText == null ? '' : leftText);
+    const right = String(rightText == null ? '' : rightText);
+    const one = (text) => [{ t: 'same', text: text }];
+    if (left === right) return { left: one(left), right: one(right) };
+
+    // Shared prefix/suffix by code unit. Surrogate pairs can split in theory,
+    // but splitting them only affects the highlight boundary, not the text.
+    let start = 0;
+    while (start < left.length && start < right.length && left[start] === right[start]) start += 1;
+    let endL = left.length;
+    let endR = right.length;
+    while (endL > start && endR > start && left[endL - 1] === right[endR - 1]) {
+      endL -= 1;
+      endR -= 1;
+    }
+    const lMid = left.slice(start, endL);
+    const rMid = right.slice(start, endR);
+    const prefix = left.slice(0, start);
+    const suffix = left.slice(endL);
+    const leftSegs = [];
+    const rightSegs = [];
+    if (prefix) {
+      leftSegs.push({ t: 'same', text: prefix });
+      rightSegs.push({ t: 'same', text: right.slice(0, start) });
+    }
+
+    const pushMark = () => {
+      if (lMid) leftSegs.push({ t: 'mark', text: lMid });
+      if (rMid) rightSegs.push({ t: 'mark', text: rMid });
+    };
+    if (!lMid || !rMid || lMid.length * rMid.length > 120000) {
+      pushMark();
+    } else {
+      const n = lMid.length;
+      const m = rMid.length;
+      const width = m + 1;
+      const lcs = new Uint32Array((n + 1) * width);
+      for (let i = n - 1; i >= 0; i -= 1) {
+        for (let j = m - 1; j >= 0; j -= 1) {
+          const at = i * width + j;
+          if (lMid[i] === rMid[j]) lcs[at] = lcs[(i + 1) * width + (j + 1)] + 1;
+          else {
+            const down = lcs[(i + 1) * width + j];
+            const next = lcs[i * width + (j + 1)];
+            lcs[at] = down >= next ? down : next;
+          }
+        }
+      }
+      let i = 0;
+      let j = 0;
+      while (i < n && j < m) {
+        if (lMid[i] === rMid[j]) {
+          leftSegs.push({ t: 'same', text: lMid[i] });
+          rightSegs.push({ t: 'same', text: rMid[j] });
+          i += 1;
+          j += 1;
+        } else if (lcs[(i + 1) * width + j] >= lcs[i * width + (j + 1)]) {
+          leftSegs.push({ t: 'mark', text: lMid[i] });
+          i += 1;
+        } else {
+          rightSegs.push({ t: 'mark', text: rMid[j] });
+          j += 1;
+        }
+      }
+      while (i < n) {
+        leftSegs.push({ t: 'mark', text: lMid[i] });
+        i += 1;
+      }
+      while (j < m) {
+        rightSegs.push({ t: 'mark', text: rMid[j] });
+        j += 1;
+      }
+    }
+    if (suffix) {
+      leftSegs.push({ t: 'same', text: left.slice(endL) });
+      rightSegs.push({ t: 'same', text: right.slice(endR) });
+    }
+    return { left: leftSegs, right: rightSegs };
+  }
+
+  /**
+   * Aligned rows for the 并排对比 view. Each row has both sides (null on the
+   * one-sided rows), so the two columns always share a row height and a single
+   * scroll container stays in sync by construction.
+   */
+  function diffAligned(a, b) {
+    const ops = diffOps(a, b);
+    const rows = [];
+    const stats = { same: 0, changed: 0, added: 0, removed: 0, leftOnly: 0, rightOnly: 0 };
+    let leftNo = 0;
+    let rightNo = 0;
+    let i = 0;
+    while (i < ops.length) {
+      const op = ops[i];
+      if (op.type === 'same') {
+        leftNo += 1;
+        rightNo += 1;
+        rows.push({
+          type: 'same',
+          left: { no: leftNo, text: op.text },
+          right: { no: rightNo, text: op.text },
+        });
+        stats.same += 1;
+        i += 1;
+        continue;
+      }
+      // One contiguous edit block: deletions become the left side, additions
+      // the right side. Pair them in order so replacements line up.
+      const dels = [];
+      const adds = [];
+      while (i < ops.length && ops[i].type !== 'same') {
+        if (ops[i].type === 'del') dels.push(ops[i].text);
+        else adds.push(ops[i].text);
+        i += 1;
+      }
+      const pairs = Math.min(dels.length, adds.length);
+      for (let k = 0; k < pairs; k += 1) {
+        leftNo += 1;
+        rightNo += 1;
+        const segs = inlineDiff(dels[k], adds[k]);
+        rows.push({
+          type: 'changed',
+          left: { no: leftNo, text: dels[k], segs: segs.left },
+          right: { no: rightNo, text: adds[k], segs: segs.right },
+        });
+        stats.changed += 1;
+      }
+      for (let k = pairs; k < dels.length; k += 1) {
+        leftNo += 1;
+        rows.push({
+          type: 'left',
+          left: { no: leftNo, text: dels[k] },
+          right: null,
+        });
+        stats.leftOnly += 1;
+        stats.removed += 1;
+      }
+      for (let k = pairs; k < adds.length; k += 1) {
+        rightNo += 1;
+        rows.push({
+          type: 'right',
+          left: null,
+          right: { no: rightNo, text: adds[k] },
+        });
+        stats.rightOnly += 1;
+        stats.added += 1;
+      }
+    }
+    return { rows: rows, stats: stats };
   }
 
   // ------------------------------- chapter split -----------------------------
@@ -3867,6 +4182,8 @@ window.__ModuleLoader__.load({
     includePunctuation: includePunctuation,
     typeset: typeset,
     diffPreview: diffPreview,
+    diffAligned: diffAligned,
+    inlineDiff: inlineDiff,
     autoChapterSplit: autoChapterSplit,
     markdownToPlain: markdownToPlain,
     applyEdits: applyEdits,
@@ -5237,6 +5554,20 @@ window.__ModuleLoader__.load({
     return api('clipboard.write', { text: String(text == null ? '' : text) }, { timeoutMs: 15000 });
   }
 
+  // R184: the native document strip (摸鱼模式). The host owns the Electron
+  // window; these three calls are only the handshake and the commit channel.
+  function moyuOpen(payload) {
+    return api('moyu.open', payload || {}, { timeoutMs: 15000 });
+  }
+
+  function moyuPoll(since) {
+    return api('moyu.poll', { since: Number(since) || 0 }, { timeoutMs: 15000 });
+  }
+
+  function moyuClose() {
+    return api('moyu.close', {}, { timeoutMs: 15000 });
+  }
+
   NW.apiUrl = apiUrl;
   NW.api = api;
 
@@ -5265,6 +5596,12 @@ window.__ModuleLoader__.load({
     },
     clipboard: {
       write: clipboardWrite,
+    },
+    /** R184: native always-on-top document strip (Electron host only). */
+    moyu: {
+      open: moyuOpen,
+      poll: moyuPoll,
+      close: moyuClose,
     },
     /** R131: one paragraph of speech from the host (Edge online / custom API). */
     tts: {
@@ -5956,6 +6293,19 @@ window.__ModuleLoader__.load({
 
   const EMPTY = [];
 
+  // ---- brand marks ---------------------------------------------------------
+  //
+  // The DeepSeek whale, copied from the host's own /favicon.svg: a single
+  // 50×50 fill path (M / C / Z). It is drawn solid rather than stroked — at
+  // dock size a line version loses the tail notch and the eye completely.
+  // The transform maps that 50-unit artboard onto the same 2…18 optical box
+  // as the line set: width 48.8 units → 16.35, i.e. 0.335 scale, centred on
+  // the path's own bbox centre (25, 25.25).
+  const WHALE = 'M48.8354 10.0479C48.3232 9.79199 48.1025 10.2798 47.8032 10.5278C47.7007 10.6079 47.6143 10.7119 47.5273 10.8076C46.7793 11.624 45.9048 12.1597 44.7622 12.0957C43.0923 12 41.666 12.5356 40.4058 13.8398C40.1377 12.2319 39.2476 11.272 37.8926 10.6558C37.1836 10.3359 36.4668 10.0156 35.9702 9.31982C35.6235 8.82373 35.5293 8.27197 35.356 7.72754C35.2456 7.3999 35.1353 7.06396 34.7651 7.00781C34.3633 6.94385 34.2056 7.2876 34.0479 7.57568C33.418 8.75195 33.1733 10.0479 33.1973 11.3599C33.2524 14.312 34.4736 16.6641 36.8999 18.3359C37.1758 18.5278 37.2466 18.7197 37.1597 19C36.9946 19.5757 36.7974 20.1357 36.624 20.7119C36.5137 21.0801 36.3486 21.1597 35.9624 21C34.6309 20.4321 33.481 19.5918 32.4644 18.5757C30.7393 16.8721 29.1792 14.9917 27.2334 13.52C26.7764 13.1758 26.3193 12.856 25.8467 12.5518C23.8618 10.584 26.1069 8.96777 26.627 8.77588C27.1704 8.57568 26.8159 7.8877 25.0591 7.896C23.3022 7.90381 21.6953 8.50391 19.647 9.30371C19.3477 9.42383 19.0322 9.51172 18.7095 9.58398C16.8501 9.22363 14.9199 9.14355 12.9033 9.37598C9.10596 9.80762 6.07275 11.6396 3.84326 14.7681C1.16455 18.5278 0.53418 22.7998 1.30664 27.2559C2.11768 31.9521 4.46582 35.8398 8.07373 38.8799C11.8159 42.0322 16.1255 43.5762 21.041 43.2803C24.0269 43.104 27.3516 42.6963 31.1016 39.4561C32.0469 39.936 33.0396 40.1279 34.686 40.272C35.9546 40.3921 37.1758 40.208 38.1211 40.0078C39.6021 39.688 39.4995 38.2881 38.9639 38.0322C34.623 35.9678 35.5762 36.8081 34.71 36.1279C36.9155 33.4639 40.2402 30.6958 41.54 21.728C41.6426 21.0161 41.5557 20.5679 41.54 19.9917C41.5322 19.6396 41.6108 19.5039 42.0049 19.4639C43.0923 19.3359 44.1479 19.0317 45.1167 18.4878C47.9292 16.9199 49.064 14.3438 49.3315 11.2559C49.3711 10.7837 49.3237 10.2959 48.8354 10.0479ZM24.3262 37.8398C20.1196 34.4639 18.0791 33.3521 17.2358 33.3999C16.4482 33.4482 16.5898 34.3682 16.7632 34.9678C16.9443 35.5601 17.1812 35.9683 17.5117 36.4878C17.7402 36.832 17.8979 37.3442 17.2832 37.728C15.9282 38.584 13.5728 37.4399 13.4624 37.3838C10.7207 35.7358 8.42822 33.5601 6.81348 30.584C5.25342 27.7197 4.34766 24.6479 4.19775 21.3677C4.1582 20.5757 4.38672 20.2959 5.15869 20.1519C6.17529 19.96 7.22314 19.9199 8.23926 20.0718C12.5327 20.7119 16.1885 22.6719 19.2529 25.7759C21.002 27.5439 22.3252 29.6558 23.6885 31.7202C25.1377 33.9121 26.6978 36 28.6831 37.7119C29.3843 38.312 29.9434 38.7681 30.479 39.104C28.8643 39.2881 26.1699 39.3281 24.3262 37.8398ZM26.3433 24.6001C26.3433 24.248 26.6191 23.9678 26.9658 23.9678C27.0444 23.9678 27.1152 23.9839 27.1782 24.0078C27.2651 24.04 27.3438 24.0879 27.4067 24.1602C27.5171 24.272 27.5801 24.4321 27.5801 24.6001C27.5801 24.9521 27.3042 25.2319 26.9575 25.2319C26.6108 25.2319 26.3433 24.9521 26.3433 24.6001ZM32.6064 27.8799C32.2046 28.0479 31.8027 28.1919 31.4165 28.208C30.8179 28.2397 30.1641 27.9922 29.8096 27.688C29.2583 27.2158 28.8643 26.9521 28.6987 26.1279C28.6279 25.7759 28.6675 25.2319 28.7305 24.9199C28.8721 24.248 28.7144 23.8159 28.2495 23.4238C27.8716 23.104 27.3911 23.0161 26.8633 23.0161C26.666 23.0161 26.4849 22.9277 26.3511 22.856C26.1304 22.7441 25.9492 22.4639 26.1226 22.1201C26.1777 22.0078 26.4458 21.7358 26.5088 21.688C27.2256 21.272 28.0527 21.4077 28.8169 21.7197C29.5259 22.0161 30.0615 22.5601 30.834 23.3281C31.6216 24.2559 31.7632 24.5117 32.2124 25.208C32.5669 25.752 32.8901 26.312 33.1104 26.9521C33.2446 27.3521 33.0713 27.6802 32.6064 27.8799Z';
+  const SOLID = {
+    whale: { transform: 'translate(1.63 1.54) scale(0.335)', d: WHALE },
+  };
+
   /**
    * One size ladder for the whole plugin.
    *
@@ -6005,6 +6355,29 @@ window.__ModuleLoader__.load({
     const size = snapSize(options.size);
     const weight = Number(options.weight) > 0 ? Number(options.weight) : strokeFor(size);
     const label = options.title ? String(options.title) : '';
+    const solid = SOLID[name];
+    if (solid) {
+      return NW.h(
+        'svg',
+        {
+          viewBox: '0 0 20 20',
+          width: size,
+          height: size,
+          fill: 'currentColor',
+          stroke: 'none',
+          className: options.className ? options.className : undefined,
+          'aria-hidden': label ? undefined : 'true',
+          role: label ? 'img' : undefined,
+          'aria-label': label || undefined,
+          focusable: 'false',
+          style: Object.assign(
+            { display: 'block', flex: '0 0 auto', pointerEvents: 'none', overflow: 'visible' },
+            options.style || null,
+          ),
+        },
+        NW.h('path', { d: solid.d, transform: solid.transform, fillRule: 'nonzero' }),
+      );
+    }
     return NW.h(
       'svg',
       {
@@ -6033,7 +6406,7 @@ window.__ModuleLoader__.load({
   }
 
   NW.icon = icon;
-  NW.iconNames = Object.keys(PATHS);
+  NW.iconNames = Object.keys(PATHS).concat(Object.keys(SOLID));
   NW.ICON_PATHS = PATHS;
 
   NW.CSS_PARTS.push(`
@@ -6755,6 +7128,21 @@ window.__ModuleLoader__.load({
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 }
 
+/* ==================================================== 付印 marks (R175) == */
+/* The export/submit hint reuses the seal badge; the full version panel now
+   lives on the writing page (89-folio.js), not in a modal. */
+.nw-export-finalhint{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.nw-final-badge{
+  display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:999px;
+  background:var(--nw-soft);color:var(--nw-fg-soft);
+  font-size:10px;line-height:1;white-space:nowrap;
+}
+.nw-final-badge.is-final{
+  color:var(--nw-brand);
+  background:color-mix(in srgb, var(--nw-brand) 11%, transparent);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--nw-brand) 24%, transparent);
+}
+
 /* =================================================== submission (R3 new) == */
 /* Three steps: journal picker, manuscript picker, mail preview. */
 /* minmax(min(200px,100%),…) — a hard 200px floor overflows the moment the
@@ -7427,7 +7815,7 @@ window.__ModuleLoader__.load({
     const ch = p.ch;
     const api = p.api;
     const [hovered, setHovered] = React.useState(false);
-    const title = ch.title || tr('未命名章节');
+    const title = p.titleText || ch.title || tr('未命名章节');
     const classes = ['nw-shelf-row'];
     if (p.active) classes.push('is-active');
     // 菜单打开期间即使鼠标移出也保持动作条可见，否则锚点按钮会被卸载。
@@ -7497,16 +7885,18 @@ window.__ModuleLoader__.load({
             })
           : null,
         h('span', { className: 'nw-shelf-row-title' }, title),
-        Number(ch.targetWords) > 0
-          ? h(
-              'span',
-              {
-                className: 'nw-shelf-row-meta',
-                'data-done': (Number(ch.wordCount) || 0) >= Number(ch.targetWords) ? '1' : '0',
-              },
-              fmtWords(ch.wordCount || 0) + '/' + fmtWords(ch.targetWords),
-            )
-          : h('span', { className: 'nw-shelf-row-meta' }, fmtWords(ch.wordCount || 0)),
+        !p.showWords
+          ? null
+          : Number(ch.targetWords) > 0
+            ? h(
+                'span',
+                {
+                  className: 'nw-shelf-row-meta',
+                  'data-done': (Number(ch.wordCount) || 0) >= Number(ch.targetWords) ? '1' : '0',
+                },
+                fmtWords(ch.wordCount || 0) + '/' + fmtWords(ch.targetWords),
+              )
+            : h('span', { className: 'nw-shelf-row-meta' }, fmtWords(ch.wordCount || 0)),
         showActions
           ? h(
               'span',
@@ -7520,7 +7910,30 @@ window.__ModuleLoader__.load({
               makeIconBtn(icon('pencil'), tr('重命名'), () => api.rename(ch)),
               // 删除留在「⋯」里：它本来就在菜单里，行上少一枚按钮，标题就能多
               // 露出几个字（260px 宽的目录里这一段很值钱）。
-              makeIconBtn(icon('more', 15), tr('更多操作'), (ev) => api.openMenu(ev, 'chapter', ch)),
+              // R179: the «⋯» panel follows the pointer. Entering the 26px
+              // anchor opens it; moving into the panel keeps it alive; leaving
+              // both closes after a short grace period. Click still opens it for
+              // touch/keyboard, where hover never fires.
+              h(
+                'span',
+                {
+                  className: 'nw-more-anchor',
+                  onMouseEnter: (ev) => api.scheduleMenuOpen(ev.currentTarget, 'chapter', ch),
+                  onMouseLeave: () => {
+                    api.cancelMenuOpen();
+                    api.scheduleMenuClose();
+                  },
+                  onFocus: (ev) => api.openMenuAt(ev.currentTarget, 'chapter', ch),
+                  onBlur: (ev) => {
+                    if (ev.currentTarget.contains(ev.relatedTarget)) return;
+                    api.scheduleMenuClose();
+                  },
+                },
+                makeIconBtn(icon('more', 15), tr('更多操作'), (ev) => {
+                  ev.stopPropagation();
+                  api.openMenuAt(ev.currentTarget.parentElement || ev.currentTarget, 'chapter', ch);
+                }),
+              ),
             )
           : null,
       ),
@@ -7564,12 +7977,15 @@ window.__ModuleLoader__.load({
   // ---------------------------------------------------------------- Shelf ---
   NW.Shelf = function Shelf(props) {
     const P = props || {};
+    const showWords = !(P.settings && P.settings.showWordCount === false);
 
     const [rawQuery, setRawQuery] = React.useState('');
     const [term, setTerm] = React.useState('');
     const [collapsedIds, setCollapsedIds] = React.useState(() => new Set());
     // 行内「更多操作」菜单：{kind:'novel'|'chapter', id, entity, x, y} 或 null。
     const [menu, setMenu] = React.useState(null);
+    // R177: low-frequency shelf actions live behind one «更多» menu per bar.
+    const [toolMenu, setToolMenu] = React.useState(null);
     // R31 ④: the bookcase sheet. Closed by default — the sidebar is for the
     // book you are writing, not for browsing the library.
     const [libraryOpen, setLibraryOpen] = React.useState(false);
@@ -7583,6 +7999,14 @@ window.__ModuleLoader__.load({
     // 打字只会改当前章，其余行直接命中缓存，ShelfRow 的 memo 也不会被新对象打穿。
     const detailCacheRef = React.useRef(new Map());
     const menuRef = React.useRef(null);
+    const toolMenuRef = React.useRef(null);
+    // R179: row/book «⋯» menus open on hover/focus. The pointer has to cross a
+    // small gap between the 26px anchor and the floating panel, so closing is
+    // delayed; entering the menu cancels the pending close.
+    const menuCloseTimerRef = React.useRef(null);
+    // R183: hovering across a row should not fling menus open; a short opening
+    // delay keeps the shelf quiet while the pointer travels to 重命名/删除.
+    const menuOpenTimerRef = React.useRef(null);
     const sentTermRef = React.useRef('');
     const apiRef = React.useRef({});
 
@@ -7610,6 +8034,20 @@ window.__ModuleLoader__.load({
       }, SEARCH_DEBOUNCE_MS);
       return () => clearTimeout(timer);
     }, [rawQuery]);
+
+    React.useEffect(
+      () => () => {
+        if (menuCloseTimerRef.current) {
+          clearTimeout(menuCloseTimerRef.current);
+          menuCloseTimerRef.current = null;
+        }
+        if (menuOpenTimerRef.current) {
+          clearTimeout(menuOpenTimerRef.current);
+          menuOpenTimerRef.current = null;
+        }
+      },
+      [],
+    );
 
     React.useEffect(() => {
       if (sentTermRef.current === term) return;
@@ -7639,6 +8077,27 @@ window.__ModuleLoader__.load({
         document.removeEventListener('mousedown', onPointerDown, true);
       };
     }, [menu]);
+
+    // R177: the «更多» popover closes on Escape or a click outside it.
+    React.useEffect(() => {
+      if (!toolMenu) return undefined;
+      const onKeyDown = (ev) => {
+        if (ev.key !== 'Escape' && ev.key !== 'Esc') return;
+        ev.stopPropagation();
+        setToolMenu(null);
+      };
+      const onPointerDown = (ev) => {
+        const node = toolMenuRef.current;
+        if (node && ev.target && node.contains(ev.target)) return;
+        setToolMenu(null);
+      };
+      document.addEventListener('keydown', onKeyDown, true);
+      document.addEventListener('mousedown', onPointerDown, true);
+      return () => {
+        document.removeEventListener('keydown', onKeyDown, true);
+        document.removeEventListener('mousedown', onPointerDown, true);
+      };
+    }, [toolMenu]);
 
     // 一次遍历构建 children map + 每部小说字数/章节数汇总；依赖 props.chapters 引用。
     const index = React.useMemo(() => {
@@ -7828,10 +8287,10 @@ window.__ModuleLoader__.load({
     // 菜单锚点用触发按钮的矩形定位：菜单贴着「⋯」按钮右缘下方弹出。
     // 菜单是侧栏内的绝对定位元素（.nw-shelf 的 overflow:hidden 会裁切），
     // 所以坐标要换算成侧栏内坐标，并按侧栏尺寸夹取；下方放不下时向上翻。
-    api.openMenu = (ev, kind, entity) => {
+    const openMenuAt = (anchor, kind, entity) => {
       if (!entity || entity.id == null) return;
       const hostRect = rectOf(shelfRef.current);
-      const rect = ev && ev.currentTarget ? rectOf(ev.currentTarget) : null;
+      const rect = anchor ? rectOf(anchor) : null;
       const menuW = 184;
       const menuH = 136;
       let x = 8;
@@ -7848,14 +8307,53 @@ window.__ModuleLoader__.load({
         x = Math.max(8, Math.min(x, maxX));
         if (maxY > 0) y = Math.max(8, Math.min(y, Math.max(8, maxY - menuH - 8)));
       }
-      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
-      setMenu((prev) =>
-        prev && sameId(prev.id, entity.id) && prev.kind === kind
-          ? null
-          : { kind, id: entity.id, entity, x, y },
-      );
+      cancelMenuOpen();
+      cancelMenuClose();
+      setMenu({ kind, id: entity.id, entity, x, y });
     };
-    api.closeMenu = () => setMenu(null);
+    const cancelMenuOpen = () => {
+      if (menuOpenTimerRef.current) {
+        clearTimeout(menuOpenTimerRef.current);
+        menuOpenTimerRef.current = null;
+      }
+    };
+    const cancelMenuClose = () => {
+      if (menuCloseTimerRef.current) {
+        clearTimeout(menuCloseTimerRef.current);
+        menuCloseTimerRef.current = null;
+      }
+    };
+    const scheduleMenuOpen = (anchor, kind, entity) => {
+      cancelMenuOpen();
+      cancelMenuClose();
+      menuOpenTimerRef.current = setTimeout(() => {
+        menuOpenTimerRef.current = null;
+        openMenuAt(anchor, kind, entity);
+      }, 120);
+    };
+    const scheduleMenuClose = () => {
+      cancelMenuClose();
+      // Long enough to cross the gap between the 26px anchor and the floating
+      // panel even at a slow pointer speed; short enough to feel like it closes.
+      menuCloseTimerRef.current = setTimeout(() => {
+        menuCloseTimerRef.current = null;
+        setMenu(null);
+      }, 260);
+    };
+    api.openMenuAt = openMenuAt;
+    api.openMenu = (ev, kind, entity) => {
+      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+      openMenuAt(ev && ev.currentTarget, kind, entity);
+    };
+    api.cancelMenuClose = cancelMenuClose;
+    api.cancelMenuOpen = cancelMenuOpen;
+    api.scheduleMenuOpen = scheduleMenuOpen;
+    api.scheduleMenuClose = scheduleMenuClose;
+    api.closeMenu = () => {
+      cancelMenuOpen();
+      cancelMenuClose();
+      setMenu(null);
+    };
     api.dragStart = (ev, ch) => {
       dragIdRef.current = ch.id;
       try {
@@ -8041,6 +8539,12 @@ window.__ModuleLoader__.load({
     const buildTreeRows = (novelId) => {
       const out = [];
       const seen = new Set();
+      // R182: a newly created book's first chapter is named after the book.
+      // Once a second chapter exists the row no longer has the single-book
+      // 「正文」 override, which made the first chapter look like a duplicate of
+      // the book title. Apply the same override in the full tree as well.
+      const novelTitle =
+        (novels.find((n) => n && sameId(n.id, novelId)) || {}).title || '';
       const walk = (parentId, depth) => {
         const bucket = index.byParent.get(bucketKey(novelId, parentId));
         if (!bucket) return;
@@ -8061,7 +8565,9 @@ window.__ModuleLoader__.load({
               collapsed,
               active: isActive,
               detail: makeDetail(ch),
+              titleText: novelTitle && ch.title === novelTitle ? tr('正文') : null,
               menuOpen: !!(menu && menu.kind === 'chapter' && sameId(menu.id, ch.id)),
+              showWords,
               api,
             }),
           );
@@ -8103,6 +8609,7 @@ window.__ModuleLoader__.load({
               active: isActive,
               detail: makeDetail(ch),
               menuOpen: !!(menu && menu.kind === 'chapter' && sameId(menu.id, ch.id)),
+              showWords,
               api,
             }),
           );
@@ -8148,16 +8655,43 @@ window.__ModuleLoader__.load({
       setTerm('');
     };
 
+    // R178: the book card only showed the novel row's updatedAt, which says
+    // when the book row last changed — not when the book was first and last
+    // written. Derive both from the chapters when they are available.
+    const novelTimes = (n) => {
+      const nid = String(n.id);
+      let firstAt = 0;
+      let lastAt = Number(n.updatedAt) || 0;
+      const rows = index.byNovel.get(nid) || EMPTY;
+      for (let i = 0; i < rows.length; i += 1) {
+        const ch = rows[i];
+        if (!ch) continue;
+        const created = Number(ch.createdAt) || 0;
+        const t = Number(ch.firstEditAt) || created;
+        if (t && (!firstAt || t < firstAt)) firstAt = t;
+        const u = Number(ch.updatedAt) || 0;
+        if (u > lastAt) lastAt = u;
+      }
+      if (!firstAt) firstAt = Number(n.createdAt) || 0;
+      return { firstAt: firstAt, lastAt: lastAt };
+    };
+
     const novelCard = (n) => {
       const nid = String(n.id);
       const isActive = sameId(activeNovelId, n.id);
       const meta = [];
-      if (n.updatedAt) meta.push(fmtDate(n.updatedAt));
-      if (index.novelWords.has(nid)) meta.push(fmtWords(index.novelWords.get(nid)) + ' ' + tr('字'));
+      const times = novelTimes(n);
+      if (times.firstAt) meta.push(tr('首次 {0}', fmtMoment(times.firstAt, false)));
+      if (times.lastAt) meta.push(tr('最后 {0}', fmtMoment(times.lastAt, false)));
+      if (showWords && index.novelWords.has(nid)) meta.push(fmtWords(index.novelWords.get(nid)) + ' ' + tr('字'));
       const count = index.novelChapterCount.get(nid);
-      if (count != null) meta.push(tr('{0} 章', count));
+      if (count != null && count !== 1) meta.push(tr('{0} 章', count));
+      // R182: clicking a book opens the reader, so the separate 「读整本」
+      // button is redundant. A one-chapter book still shows its compact row,
+      // but the card itself always means "read this book".
       const open = () => {
-        if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
+        if (typeof P.onReadBook === 'function') P.onReadBook(n.id);
+        else if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
       };
       return h(
         'div',
@@ -8189,9 +8723,15 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'nw-row-actions', onClick: (ev) => ev.stopPropagation() },
-          // R129：书行上也能直接「读整本」（从第一章读起）。
-          makeIconBtn(icon('openbook'), tr('读整本'), () => {
-            if (typeof P.onReadBook === 'function') P.onReadBook(n.id);
+          // R182: 新建章节 belongs to the book, not to a chapter's nested
+          // menu. Keep the + outside the «⋯» so adding the next chapter is one
+          // click from the book card; 「新建子章节」 has been removed.
+          makeIconBtn(icon('plus'), tr('新建章节'), () => {
+            if (typeof P.onCreateChapterForNovel === 'function') {
+              P.onCreateChapterForNovel(n.id);
+            } else if (typeof P.onCreateChapter === 'function') {
+              P.onCreateChapter(null);
+            }
           }),
           makeIconBtn(icon('pencil'), tr('重命名'), () => {
             if (typeof P.onRename === 'function') P.onRename('novel', n.id, n.title || '');
@@ -8199,7 +8739,26 @@ window.__ModuleLoader__.load({
           makeIconBtn(icon('trash'), tr('删除'), () => {
             if (typeof P.onDelete === 'function') P.onDelete('novel', n.id);
           }),
-          makeIconBtn(icon('more', 15), tr('更多操作'), (ev) => api.openMenu(ev, 'novel', n)),
+          h(
+            'span',
+            {
+              className: 'nw-more-anchor',
+              onMouseEnter: (ev) => api.scheduleMenuOpen(ev.currentTarget, 'novel', n),
+              onMouseLeave: () => {
+                api.cancelMenuOpen();
+                api.scheduleMenuClose();
+              },
+              onFocus: (ev) => api.openMenuAt(ev.currentTarget, 'novel', n),
+              onBlur: (ev) => {
+                if (ev.currentTarget.contains(ev.relatedTarget)) return;
+                api.scheduleMenuClose();
+              },
+            },
+            makeIconBtn(icon('more', 15), tr('更多操作'), (ev) => {
+              ev.stopPropagation();
+              api.openMenuAt(ev.currentTarget.parentElement || ev.currentTarget, 'novel', n);
+            }),
+          ),
         ),
       );
     };
@@ -8207,7 +8766,7 @@ window.__ModuleLoader__.load({
     const treeHead = (n, count, wordTotal) => {
       const bits = [tr('章节')];
       if (count != null) bits.push(tr('{0} 章', count));
-      if (wordTotal != null) bits.push(fmtWords(wordTotal) + ' ' + tr('字'));
+      if (showWords && wordTotal != null) bits.push(fmtWords(wordTotal) + ' ' + tr('字'));
       return h('div', { key: 'treehead-' + String(n.id), className: 'nw-shelf-treehead' }, bits.join(' · '));
     };
 
@@ -8248,7 +8807,6 @@ window.__ModuleLoader__.load({
         'div',
         { key: 'empty-shelf', className: 'nw-shelf-empty' },
         makeEmpty(tr('还没有小说')),
-        h('p', { className: 'nw-shelf-empty-hint' }, tr('新建第一部小说，把灵感变成故事。')),
         makeBtn({
           kind: 'primary',
           title: tr('新建小说'),
@@ -8264,7 +8822,6 @@ window.__ModuleLoader__.load({
           'div',
           { key: 'empty-search', className: 'nw-shelf-empty' },
           makeEmpty(tr('没有匹配的章节')),
-          h('p', { className: 'nw-shelf-empty-hint' }, tr('试试更短的关键词，标题和正文都会匹配。')),
         );
       } else {
         body = h(
@@ -8311,21 +8868,48 @@ window.__ModuleLoader__.load({
 
       if (active) {
         const nid = String(active.id);
+        const count = index.novelChapterCount.get(nid);
+        const only = count === 1 ? (index.byNovel.get(nid) || [])[0] || null : null;
         parts.push(novelCard(active));
-        parts.push(treeHead(active, index.novelChapterCount.get(nid), index.novelWords.get(nid)));
-        const rows = buildTreeRows(active.id);
-        if (rows.length === 0) {
+        // R176: a book with exactly one chapter is a short story, not a
+        // hierarchy. Keep the chapter row itself — writers still expect to see
+        // and rename the chapter in the directory — but drop the 「章节 · 1 章」
+        // heading and the tree indentation that would make one row look nested.
+        if (only) {
           parts.push(
-            h('div', { key: 'emptytree-' + nid, className: 'nw-shelf-hint' }, tr('这部小说还没有章节，点页脚的 新建章节 开始。')),
+            h(
+              'div',
+              { key: 'singletree-' + nid, role: 'tree', 'aria-label': tr('章节'), className: 'nw-shelf-tree nw-shelf-tree-single' },
+              h(ShelfRow, {
+                key: String(only.id),
+                ch: only,
+                depth: 0,
+                hasKids: false,
+                collapsed: false,
+                active: sameId(activeChapterId, only.id),
+                detail: makeDetail(only),
+                titleText: only.title === active.title ? tr('正文') : null,
+                menuOpen: !!(menu && menu.kind === 'chapter' && sameId(menu.id, only.id)),
+                showWords,
+                api,
+              }),
+            ),
           );
         } else {
-          parts.push(
-            h('div', { key: 'tree-' + nid, role: 'tree', 'aria-label': tr('章节'), className: 'nw-shelf-tree' }, rows),
-          );
+          parts.push(treeHead(active, count, index.novelWords.get(nid)));
+          const rows = buildTreeRows(active.id);
+          if (rows.length === 0) {
+            parts.push(
+              h('div', { key: 'emptytree-' + nid, className: 'nw-shelf-hint' }, tr('这部小说还没有章节。')),
+            );
+          } else {
+            parts.push(
+              h('div', { key: 'tree-' + nid, role: 'tree', 'aria-label': tr('章节'), className: 'nw-shelf-tree' }, rows),
+            );
+          }
+          parts.push(rootDropEnd(active));
         }
-        parts.push(rootDropEnd(active));
       } else {
-        parts.push(h('div', { key: 'noactive', className: 'nw-shelf-hint' }, tr('从书架里选一部小说开始写作。')));
       }
 
       // R31 ④: 「书架」 — the counter where the other books wait. It renders
@@ -8364,13 +8948,15 @@ window.__ModuleLoader__.load({
                 title: n.title || tr('无标题'),
                 onClick: () => {
                   setLibraryOpen(false);
-                  if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
+                  if (typeof P.onReadBook === 'function') P.onReadBook(n.id);
+                  else if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
                 },
                 onKeyDown: (ev) => {
                   if (ev.key !== 'Enter' && ev.key !== ' ') return;
                   ev.preventDefault();
                   setLibraryOpen(false);
-                  if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
+                  if (typeof P.onReadBook === 'function') P.onReadBook(n.id);
+                  else if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
                 },
               },
               h('span', { className: 'nw-shelf-cover', 'aria-hidden': 'true' }),
@@ -8381,12 +8967,18 @@ window.__ModuleLoader__.load({
                 h(
                   'span',
                   { className: 'nw-shelf-book-meta' },
-                  [
-                    n.updatedAt ? fmtDate(n.updatedAt) : '',
-                    index.novelWords.has(String(n.id)) ? fmtWords(index.novelWords.get(String(n.id))) + ' ' + tr('字') : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' · '),
+                  (() => {
+                    const times = novelTimes(n);
+                    return [
+                      times.firstAt ? tr('首次 {0}', fmtMoment(times.firstAt, false)) : '',
+                      times.lastAt ? tr('最后 {0}', fmtMoment(times.lastAt, false)) : '',
+                      showWords && index.novelWords.has(String(n.id))
+                        ? fmtWords(index.novelWords.get(String(n.id))) + ' ' + tr('字')
+                        : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' · ');
+                  })(),
                 ),
               ),
             ),
@@ -8395,9 +8987,7 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { key: 'bookcase', id: 'nw-shelf-bookcase', className: 'nw-shelf-bookcase', role: 'group', 'aria-label': tr('书架') },
-            rows.length > 0
-              ? rows
-              : h('div', { className: 'nw-shelf-hint' }, tr('书架里只有这一本。')),
+            rows.length > 0 ? rows : null,
             h(
               'button',
               {
@@ -8457,11 +9047,36 @@ window.__ModuleLoader__.load({
         h('span', { className: 'nw-shelf-menu-label' }, label),
       );
 
+    const toolItem = (name, label, onClick, danger) =>
+      h(
+        'button',
+        {
+          key: name,
+          type: 'button',
+          className: 'nw-shelf-toolitem' + (danger ? ' is-danger' : ''),
+          role: 'menuitem',
+          onClick: (ev) => {
+            ev.stopPropagation();
+            setToolMenu(null);
+            onClick();
+          },
+        },
+        icon(name, 15),
+        h('span', null, label),
+      );
+
     const renderMenu = () => {
       if (!menu) return null;
       const entity = menu.entity || {};
       const title =
         entity.title || (menu.kind === 'novel' ? tr('无标题') : tr('未命名章节'));
+      // R183: 「新建子章节」 only returns for a node that already acts as a
+      // volume (has children). A flat chapter keeps the simplified menu; an
+      // existing nested structure can still grow.
+      const childCount =
+        menu.kind === 'chapter' && menu.id != null
+          ? (index.byParent.get(bucketKey(entity.novelId, menu.id)) || []).length
+          : 0;
       return h(
         'div',
         {
@@ -8471,8 +9086,20 @@ window.__ModuleLoader__.load({
           'aria-label': title,
           style: { left: menu.x + 'px', top: menu.y + 'px' },
           onClick: (ev) => ev.stopPropagation(),
+          onMouseEnter: () => {
+            api.cancelMenuOpen();
+            api.cancelMenuClose();
+          },
+          onMouseLeave: () => api.scheduleMenuClose(),
+          onFocus: () => api.cancelMenuClose(),
+          onBlur: (ev) => {
+            if (ev.currentTarget.contains(ev.relatedTarget)) return;
+            api.scheduleMenuClose();
+          },
         },
-        // R129：阅读放在菜单第一项——「读一章」是目录里最常按的那个动作。
+        // R182: the book card itself opens the reader, so its «⋯» no longer
+        // carries a separate 「读整本」 item. A chapter can still be opened
+        // directly from its own menu.
         menu.kind === 'chapter'
           ? menuItem(
               'openbook',
@@ -8483,21 +9110,19 @@ window.__ModuleLoader__.load({
               },
               false,
             )
-          : menuItem(
-              'openbook',
-              tr('读整本'),
-              () => {
-                if (typeof P.onReadBook === 'function') P.onReadBook(menu.id);
-                else toast(tr('阅读入口尚未接入'));
-              },
-              false,
-            ),
-        menu.kind === 'chapter'
+          : null,
+        // R183: a volume keeps its door. Flat chapters do not show this item;
+        // adding one is still the book card's + (or the foot bar).
+        childCount > 0
           ? menuItem(
-              'child',
+              'plus',
               tr('新建子章节'),
               () => {
-                if (typeof P.onCreateChapter === 'function') P.onCreateChapter(menu.id);
+                if (typeof P.onCreateSubchapter === 'function') {
+                  P.onCreateSubchapter(menu.id, entity.novelId);
+                } else if (typeof P.onCreateChapter === 'function') {
+                  P.onCreateChapter(menu.id);
+                }
               },
               false,
             )
@@ -8578,18 +9203,71 @@ window.__ModuleLoader__.load({
             makeIconBtn(icon('home', 15), tr('创作台首页'), () => {
               if (typeof P.onHome === 'function') P.onHome();
             }),
-            makeIconBtn(icon('immersive', 15), tr('沉浸模式'), () => {
-              if (typeof P.onImmersive === 'function') P.onImmersive();
-            }),
-            makeIconBtn(icon('panel', 15), tr('收起/展开宿主侧栏'), () => {
-              if (typeof P.onToggleHostSidebar === 'function') P.onToggleHostSidebar();
-            }),
-            makeIconBtn(icon('lock', 15), tr('锁定'), () => {
-              if (typeof P.onLock === 'function') P.onLock();
-            }),
+            // R176: one quiet switch for every live count. It lives in the shelf
+            // header so it is reachable from both the directory and the writing
+            // page; the label and pressed state explain which way it is set.
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-shelf-iconbtn nw-shelf-wordtoggle',
+                'data-off': showWords ? '0' : '1',
+                title: showWords ? tr('隐藏字数') : tr('显示字数'),
+                'aria-label': showWords ? tr('隐藏字数') : tr('显示字数'),
+                'aria-pressed': showWords ? 'true' : 'false',
+                onClick: () => {
+                  if (typeof P.onToggleWordCount === 'function') P.onToggleWordCount(!showWords);
+                },
+              },
+              icon('eye', 15),
+            ),
             // R14 ④: 设置 left the top strip — it already sits in the footer,
             // and two doors to the same dialog only made the header look busy.
             makeIconBtn(icon('chevleft', 15), tr('收起侧栏'), collapseShelf),
+            h(
+              'div',
+              {
+                className: 'nw-shelf-toolwrap',
+                onMouseEnter: () => setToolMenu('top'),
+                onMouseLeave: () => setToolMenu((cur) => (cur === 'top' ? null : cur)),
+                onFocus: () => setToolMenu('top'),
+                onBlur: (ev) => {
+                  if (ev.currentTarget.contains(ev.relatedTarget)) return;
+                  setToolMenu((cur) => (cur === 'top' ? null : cur));
+                },
+              },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'nw-shelf-iconbtn',
+                  title: tr('更多操作'),
+                  'aria-label': tr('更多操作'),
+                  'aria-haspopup': 'menu',
+                  'aria-expanded': toolMenu === 'top' ? 'true' : 'false',
+                  onClick: (ev) => {
+                    ev.stopPropagation();
+                    setToolMenu('top');
+                  },
+                },
+                icon('more', 15),
+              ),
+              toolMenu === 'top'
+                ? h(
+                    'div',
+                    { ref: toolMenuRef, className: 'nw-shelf-toolmenu is-top', role: 'menu', 'aria-label': tr('更多操作') },
+                    toolItem('immersive', tr('沉浸模式'), () => {
+                      if (typeof P.onImmersive === 'function') P.onImmersive();
+                    }),
+                    toolItem('panel', tr('收起/展开宿主侧栏'), () => {
+                      if (typeof P.onToggleHostSidebar === 'function') P.onToggleHostSidebar();
+                    }),
+                    toolItem('lock', tr('锁定'), () => {
+                      if (typeof P.onLock === 'function') P.onLock();
+                    }),
+                  )
+                : null,
+            ),
           ),
         ),
         h(
@@ -8624,21 +9302,53 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'nw-shelf-footbar', role: 'toolbar', 'aria-label': tr('目录操作') },
-          makeIconBtn(icon('book', 18), tr('新建小说'), () => {
-            if (typeof P.onCreateNovel === 'function') P.onCreateNovel();
-          }),
           makeIconBtn(icon('plus', 18), tr('新建章节'), () => {
             if (typeof P.onCreateChapter === 'function') P.onCreateChapter(null);
           }),
-          // R129: 从这一本书的第一页读起（目录里逐章读的另一半）。
-          makeIconBtn(icon('openbook', 18), tr('读整本'), () => {
-            if (typeof P.onReadBook === 'function') P.onReadBook();
-          }),
-          makeIconBtn(icon('upload', 18), tr('导入小说'), importNovel),
-          makeIconBtn(icon('trash', 18), tr('回收站'), openTrash),
+          makeIconBtn(icon('whale', 18), tr('摸鱼模式'), () => callOrHint(P.onMoyu, tr('摸鱼模式尚未接入'))),
           makeIconBtn(icon('gear', 18), tr('设置'), () => {
             if (typeof P.onOpenSettings === 'function') P.onOpenSettings();
           }),
+          h(
+            'div',
+            {
+              className: 'nw-shelf-toolwrap',
+              onMouseEnter: () => setToolMenu('foot'),
+              onMouseLeave: () => setToolMenu((cur) => (cur === 'foot' ? null : cur)),
+              onFocus: () => setToolMenu('foot'),
+              onBlur: (ev) => {
+                if (ev.currentTarget.contains(ev.relatedTarget)) return;
+                setToolMenu((cur) => (cur === 'foot' ? null : cur));
+              },
+            },
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-shelf-iconbtn',
+                title: tr('更多操作'),
+                'aria-label': tr('更多操作'),
+                'aria-haspopup': 'menu',
+                'aria-expanded': toolMenu === 'foot' ? 'true' : 'false',
+                onClick: (ev) => {
+                  ev.stopPropagation();
+                  setToolMenu('foot');
+                },
+              },
+              icon('more', 18),
+            ),
+            toolMenu === 'foot'
+              ? h(
+                  'div',
+                  { ref: toolMenuRef, className: 'nw-shelf-toolmenu is-foot', role: 'menu', 'aria-label': tr('更多操作') },
+                  toolItem('book', tr('新建小说'), () => {
+                    if (typeof P.onCreateNovel === 'function') P.onCreateNovel();
+                  }),
+                  toolItem('upload', tr('导入小说'), importNovel),
+                  toolItem('trash', tr('回收站'), openTrash),
+                )
+              : null,
+          ),
         ),
       ),
     );
@@ -8749,6 +9459,25 @@ window.__ModuleLoader__.load({
 /* Six 32px buttons do not fit next to the label at the 220px minimum width, so
    the action cluster tightens to 24px targets and the label yields first. */
 .nw-shelf-topacts{display:flex;align-items:center;gap:1px;flex:0 0 auto;min-width:0;}
+/* R177: one compact «更多» menu instead of three low-frequency icons. */
+.nw-shelf-toolwrap{position:relative;display:inline-flex;flex:0 0 auto;}
+.nw-shelf-toolmenu{
+  position:absolute;right:0;z-index:calc(var(--nw-z-panel,20) + 2);
+  min-width:174px;padding:4px;
+  border:1px solid var(--nw-line-strong);border-radius:10px;
+  background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
+  animation:nw-fade-up .12s var(--nw-ease,ease) both;
+}
+.nw-shelf-toolmenu.is-top{top:calc(100% + 6px);}
+.nw-shelf-toolmenu.is-foot{bottom:calc(100% + 6px);}
+.nw-shelf-toolitem{
+  display:flex;align-items:center;gap:8px;width:100%;padding:7px 9px;
+  border:0;border-radius:7px;background:transparent;color:var(--nw-fg);
+  font:inherit;font-size:12px;line-height:1.3;text-align:left;cursor:pointer;
+}
+.nw-shelf-toolitem:hover,.nw-shelf-toolitem:focus-visible{background:var(--nw-sunken);outline:none;}
+.nw-shelf-toolitem.is-danger{color:var(--nw-danger);}
+.nw-shelf-toolitem svg{flex:0 0 auto;opacity:.8;}
 .nw-shelf-topacts .nw-btn[data-kind="icon"],
 .nw-shelf-topacts .nw-shelf-iconbtn{
   width:24px;height:24px;border-radius:var(--nw-r-control);
@@ -8760,6 +9489,21 @@ window.__ModuleLoader__.load({
 .nw-shelf-topbar .nw-shelf-iconbtn:hover{
   background:var(--nw-surface-2);color:var(--nw-fg);
   transform:none;box-shadow:none;
+}
+.nw-shelf-wordtoggle{position:relative;}
+.nw-shelf-wordtoggle[data-off="1"]{opacity:.55;}
+.nw-shelf-wordtoggle[data-off="1"]:hover{opacity:.8;}
+/* 关闭字数时给眼睛加一道斜杠：单靠变淡，看起来只是「按钮不可用」，
+   而不是「字数被藏起来了」。 */
+.nw-shelf-wordtoggle[data-off="1"]::after{
+  content:"";
+  position:absolute;
+  left:50%;top:50%;
+  width:15px;height:1px;
+  border-radius:1px;
+  background:currentColor;
+  transform:translate(-50%,-50%) rotate(-45deg);
+  pointer-events:none;
 }
 
 /* ---------------------------------------------------------- 搜索框 ---- */
@@ -8889,6 +9633,7 @@ window.__ModuleLoader__.load({
 }
 
 /* ------------------------------------------------------ 章节树 ---- */
+.nw-shelf-tree-single{padding-top:2px;}
 .nw-shelf-tree{padding:2px 0;}
 .nw-shelf-treehead{
   display:flex;align-items:center;gap:var(--nw-sp-2);
@@ -9036,6 +9781,10 @@ window.__ModuleLoader__.load({
 .nw-shelf .nw-row-actions .nw-shelf-iconbtn:hover{
   background:var(--nw-surface-2);color:var(--nw-fg);
 }
+/* R179: hover bridge for the row/book «⋯» panel. Inline-flex keeps the 26px
+   hit target inside the 26px action bar; the wrapper only exists to catch
+   pointer/focus transitions around the icon. */
+.nw-more-anchor{display:inline-flex;align-items:center;flex:0 0 auto;}
 .nw-shelf-novel .nw-row-actions{
   top:var(--nw-sp-1);right:var(--nw-sp-1);transform:none;
   opacity:0;pointer-events:none;
@@ -9494,6 +10243,7 @@ window.__ModuleLoader__.load({
 
   function Welcome(props) {
     const p = props || {};
+    const showWords = p.showWordCount !== false;
     const novels = Array.isArray(p.novels) ? p.novels.filter(Boolean) : [];
     const chapters = Array.isArray(p.chapters) ? p.chapters : [];
     const submissions = Array.isArray(p.submissions) ? p.submissions : [];
@@ -9565,8 +10315,8 @@ window.__ModuleLoader__.load({
           'p',
           { className: 'nw-welcome-lead' },
           novels.length === 0
-            ? '还没有小说。新建一部，或者把已有的 txt / md / docx / epub 导入进来。'
-            : `共 ${novels.length} 部作品、${stats.count} 个章节、${fmtWords(stats.total)} 字。`,
+            ? ''
+            : `共 ${novels.length} 部作品、${stats.count} 个章节${showWords ? `、${fmtWords(stats.total)} 字` : ''}。`,
           // R108: the build the browser actually loaded. When a fix "does not
           // take", the first question is whether the page is still running the
           // previous bundle — this answers it without opening devtools.
@@ -9607,7 +10357,7 @@ window.__ModuleLoader__.load({
     const novelCard = card(
       '正在创作',
       rollups.length === 0
-        ? emptyLine('新建一部小说后，这里会列出最近在写的作品。')
+        ? emptyLine('还没有小说。')
         : NW.h(
             'div',
             null,
@@ -9653,7 +10403,13 @@ window.__ModuleLoader__.load({
                       NW.h(
                         'span',
                         { className: 'nw-welcome-novelmeta' },
-                        `${row.chapters} 章 · ${fmtWords(row.words)} 字 · ${shortDate(row.touched)}`,
+                        [
+                          `${row.chapters} 章`,
+                          showWords ? `${fmtWords(row.words)} 字` : '',
+                          shortDate(row.touched),
+                        ]
+                          .filter(Boolean)
+                          .join(' · '),
                       ),
                     ),
                     NW.h('span', { className: 'nw-welcome-novelgo', 'aria-hidden': 'true' }, NW.icon('chevright', { size: 14 })),
@@ -9667,11 +10423,15 @@ window.__ModuleLoader__.load({
     );
 
     // ---- 创作统计 ---------------------------------------------------------
-    const statCells = [
-      { k: '全书', v: fmtWords(stats.total) + ' 字' },
-      { k: '本书', v: fmtWords(stats.novel) + ' 字' },
-      { k: '近 7 天', v: fmtWords(stats.weekWords) + ' 字' },
-    ];
+    // R183: hiding counts must not hide the daily goal. Keep the card and the
+    // ring, drop only the three number cells (and the numbers in today's text).
+    const statCells = showWords
+      ? [
+          { k: '全书', v: fmtWords(stats.total) + ' 字' },
+          { k: '本书', v: fmtWords(stats.novel) + ' 字' },
+          { k: '近 7 天', v: fmtWords(stats.weekWords) + ' 字' },
+        ]
+      : [];
     // R100: 今天 shows progress toward the daily goal instead of a bare number.
     // The ring is the whole cell: clicking it asks for a new goal, which is how
     // the number stays honest — a goal you cannot change is a rule, not a goal.
@@ -9686,7 +10446,6 @@ window.__ModuleLoader__.load({
         type: 'button',
         className: 'nw-welcome-stat nw-welcome-statgoal',
         'data-done': goalRatio >= 1 ? '1' : '0',
-        title: dailyGoal > 0 ? `今日目标 ${dailyGoal} 字 · 点击修改` : '点击设置每日字数目标',
         onClick: () => typeof p.onSetDailyGoal === 'function' && p.onSetDailyGoal(),
       },
       NW.h('dt', null, '今天'),
@@ -9712,15 +10471,23 @@ window.__ModuleLoader__.load({
         NW.h(
           'span',
           { className: 'nw-goal-text' },
-          dailyGoal > 0 ? `${fmtWords(todayWords)} / ${fmtWords(dailyGoal)} 字` : `${fmtWords(todayWords)} 字`,
+          showWords
+            ? dailyGoal > 0
+              ? `${fmtWords(todayWords)} / ${fmtWords(dailyGoal)} 字`
+              : `${fmtWords(todayWords)} 字`
+            : dailyGoal > 0
+              ? goalRatio >= 1
+                ? '已达成'
+                : '进行中'
+              : '设置目标',
         ),
       ),
     );
     const statsCard = card(
-      '创作统计',
+      showWords ? '创作统计' : '今日目标',
       NW.h(
         'dl',
-        { className: 'nw-welcome-stats' },
+        { className: 'nw-welcome-stats' + (showWords ? '' : ' is-goalonly') },
         statCells.map((cell) =>
           NW.h(
             'div',
@@ -9739,11 +10506,7 @@ window.__ModuleLoader__.load({
     const subsCard = card(
       '投稿记录',
       submissions.length === 0
-        ? emptyLine(
-            journalCount > 0
-              ? `期刊库已收录 ${journalCount} 家，选中一个章节即可开始投稿。`
-              : '还没有投稿记录。完成一次投稿后，这里会显示期刊、日期与状态。',
-          )
+        ? emptyLine('还没有投稿记录。')
         : NW.h(
             'div',
             null,
@@ -9854,7 +10617,7 @@ window.__ModuleLoader__.load({
       inboxBody = NW.h(
         'div',
         null,
-        NW.h('p', { className: 'nw-welcome-empty' }, '收件箱已关闭。打开之后，编辑部的回信会出现在这里。'),
+        NW.h('p', { className: 'nw-welcome-empty' }, '收件箱已关闭。'),
         NW.h(
           'div',
           { className: 'nw-inline', style: { marginTop: '8px' } },
@@ -9876,7 +10639,7 @@ window.__ModuleLoader__.load({
         NW.h(
           'p',
           { className: 'nw-welcome-empty' },
-          '还没有配置收件邮箱。填一次 IMAP 服务器与授权码，编辑部回信就会出现在这里。',
+          '还没有配置收件邮箱。',
         ),
         NW.h(
           'div',
@@ -9893,7 +10656,7 @@ window.__ModuleLoader__.load({
         ),
       );
     } else if (inboxMessages.length === 0) {
-      inboxBody = emptyLine('收件箱是空的。投稿之后，编辑部的回复会出现在这里。');
+      inboxBody = emptyLine('收件箱是空的。');
     } else {
       // R16 ⑤: newest first (the host already sorts by UID descending), three
       // rows, and a per-row delete button.
@@ -10129,6 +10892,7 @@ window.__ModuleLoader__.load({
    dropped alone onto a second row and the block looked broken. Four cells want
    a deliberate 2x2, not whatever the width happens to allow. */
 .nw-welcome-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--nw-sp-2);margin:0;}
+.nw-welcome-stats.is-goalonly{grid-template-columns:minmax(0,1fr);}
 .nw-welcome-stat{
   padding:var(--nw-sp-2) var(--nw-sp-3);border-radius:var(--nw-r-control);
   background:var(--nw-sunken);
@@ -10868,8 +11632,12 @@ const SEL_EMIT_MS = 120;
    affordances below therefore use box-shadow (no layout cost), never borders
    or padding. */
 .nw-chaptertitle{
+  position:relative;
   display:block;
-  padding:0 calc(var(--nw-pad-x) + var(--nw-gutter-x,0px));
+  /* R176：标题的上下留白必须对称。旧版把分隔线做成 ::after 的普通块，线占了
+     下半截高度，字就贴在这一行的上沿；现在线绝对定位，不参与行盒，标题在
+     自己的那条横带里真正上下居中。 */
+  padding:calc(var(--nw-line) * 0.18em) calc(var(--nw-pad-x) + var(--nw-gutter-x,0px));
   margin:0 0 calc(var(--nw-line) * 0.9em);
   font-family:var(--nw-font);
   font-size:calc(var(--nw-size) * 1.22);
@@ -10895,11 +11663,13 @@ const SEL_EMIT_MS = 120;
 }
 .nw-chaptertitle::after{
   content:'';
-  display:block;
+  position:absolute;left:50%;
+  bottom:calc(var(--nw-line) * 0.05em);
   width:36px;height:1px;
-  margin:calc(var(--nw-line) * 0.55em) auto 0;
+  margin:0;transform:translateX(-50%);
   background:var(--nw-rule);
   opacity:.8;
+  pointer-events:none;
 }
 .nw-surface[data-immersive="1"] .nw-chaptertitle::after{opacity:.55;}
 
@@ -11111,6 +11881,22 @@ const SEL_EMIT_MS = 120;
   font-family:inherit;font-size:var(--nw-fs-tiny);white-space:nowrap;
 }
 .nw-mark-view-btn:hover{background:var(--nw-btn-hover);}
+/* R176：接受/拒绝收成两个符号，批注卡不再被两个词撑宽。读屏仍靠 aria-label。 */
+.nw-mark-view-btn[data-glyph="1"]{
+  flex:0 0 auto;min-width:30px;padding:0 9px;
+  font-size:13px;font-weight:600;line-height:1;letter-spacing:0;
+}
+/* R177: verdict buttons read at a glance: accept is green, reject is red. */
+.nw-mark-view-btn[data-glyph="1"][data-primary="1"]{
+  color:var(--nw-ok);
+  border-color:color-mix(in srgb,var(--nw-ok) 45%,var(--nw-line-strong));
+  background:color-mix(in srgb,var(--nw-ok) 8%,var(--nw-btn-bg));
+}
+.nw-mark-view-btn[data-glyph="1"]:not([data-primary]):not([data-danger]){
+  color:var(--nw-danger);
+  border-color:color-mix(in srgb,var(--nw-danger) 35%,var(--nw-line-strong));
+  background:color-mix(in srgb,var(--nw-danger) 5%,var(--nw-btn-bg));
+}
 .nw-mark-view-btn[data-danger="1"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 45%, var(--nw-line-strong));}
 /* R134：这张卡上「接受」是主按钮——它是裁决里唯一样子会改正文的那一下。 */
 .nw-mark-view-btn[data-primary="1"]{
@@ -13927,8 +14713,13 @@ const SEL_EMIT_MS = 120;
         for (let i = 0; i < stale0.length; i += 1) stale0[i].removeAttribute('data-hover');
       }
       // R53e：签只属于有字的批注——空批注不再在页边留一枚什么都不指的签。
+      // R176：批注/删除线即使还没写字也保留签。用户先在正文里划线、再回头
+      // 写意见是常见顺序；签消失会让人以为批注没存上。下划线只有删除动作，
+      // 仍然不占页边。
       const rows = (marksRef.current || []).filter(
-        (r) => r && String(r.note || '').trim(),
+        (r) => r && (String(r.note || '').trim()
+          || String(r.kind || '') === 'comment'
+          || String(r.kind || '') === 'strike'),
       );
       // The common case is "no notes in this chapter": leave the (empty) layer
       // alone instead of rewriting it on every measured frame while typing.
@@ -14660,6 +15451,26 @@ const SEL_EMIT_MS = 120;
           const ta = taRef.current;
           if (ta) ta.focus();
         },
+        /** R183: focus the manuscript heading and select it for replacement. */
+        focusTitle() {
+          const el = titleRef.current;
+          if (!el) return;
+          try {
+            el.focus({ preventScroll: false });
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            const sel = window.getSelection();
+            if (!sel) return;
+            sel.removeAllRanges();
+            sel.addRange(range);
+          } catch (err) {
+            try {
+              el.focus();
+            } catch (err2) {
+              /* ignore */
+            }
+          }
+        },
         /** R117: the phone bar hides the corner capsule, so 段落 needs a door. */
         openParaNav() {
           openParaNav();
@@ -15373,29 +16184,37 @@ const SEL_EMIT_MS = 120;
                   type: 'button',
                   className: 'nw-mark-view-btn',
                   'data-danger': '1',
+                  'data-glyph': '1',
+                  title: NW.t('删除'),
+                  'aria-label': NW.t('删除'),
                   onClick: () => {
                     // R52: go through removeMarkOf so the line disappears in this
                     // frame instead of waiting for the list to come back from
                     // IndexedDB — otherwise 删除 looks like it did nothing.
                     removeMarkOf(markView.mark.id);
                   },
-                }, NW.t('删除'))
+                }, 'X')
                 : h('button', {
                   type: 'button',
                   className: 'nw-mark-view-btn',
                   'data-primary': '1',
+                  'data-glyph': '1',
                   title: markKind === 'comment'
                     ? NW.t('用批注里的话替换原文')
                     : NW.t('删掉被划掉的这几个字'),
+                  'aria-label': NW.t('接受'),
                   onClick: () => decideMarkOf(markView.mark, true),
-                }, NW.t('接受')),
+                }, '√'),
               markKind === 'underline'
                 ? null
                 : h('button', {
                   type: 'button',
                   className: 'nw-mark-view-btn',
+                  'data-glyph': '1',
+                  title: NW.t('拒绝'),
+                  'aria-label': NW.t('拒绝'),
                   onClick: () => decideMarkOf(markView.mark, false),
-                }, NW.t('拒绝')),
+                }, 'X'),
             ),
           )
         : null;
@@ -15657,16 +16476,7 @@ const SEL_EMIT_MS = 120;
           'div',
           { className: 'nw-empty' },
           h('div', { className: 'nw-empty-glyph' }, '\u270E'),
-          h('div', { className: 'nw-empty-main' }, NW.t('从左侧选择或新建一个章节开始写作')),
-          h(
-            'div',
-            { className: 'nw-empty-sub' },
-            NW.t('Ctrl+F 查找 · Ctrl+S 保存 · Tab 缩进'),
-            h('br'),
-            // R77 (B5): 两个「看不见的入口」写在空状态里——它们是这一轮之前
-            // 最容易没人发现的功能。
-            NW.t('选中文字：右键标注，或点浮出的「修改建议」'),
-          ),
+          h('div', { className: 'nw-empty-main' }, NW.t('未选择章节。')),
         );
 
     // R73: one small button under the selection, not a toolbar. `onMouseDown`
@@ -15679,7 +16489,6 @@ const SEL_EMIT_MS = 120;
             type: 'button',
             className: 'nw-selbtn',
             style: { left: selBtn.x + 'px', top: selBtn.y + 'px' },
-            title: NW.t('给选中的文字提修改建议'),
             'aria-label': NW.t('修改建议'),
             onMouseDown: (ev) => {
               if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
@@ -15939,7 +16748,11 @@ const SEL_EMIT_MS = 120;
      paper a hair instead of painting a white sheet into a dark room. */
   --nw-read-serif:"Songti SC","Noto Serif SC","Source Han Serif SC","Source Han Serif CN",STSong,SimSun,Georgia,"Times New Roman",serif;
   --nw-read-desk:color-mix(in srgb, var(--nw-fg) 11%, var(--nw-bg));
-  --nw-read-paper:color-mix(in srgb, var(--nw-fg) 1.5%, var(--nw-bg));
+  /* R176: the reading sheet is the same sheet the writer types on. The old
+     paper was --nw-bg mixed with 1.5% ink, which read as a slightly dirty
+     version of the theme swatch; --nw-panel is the editor's actual page
+     fill, so switching 写作 → 读一遍 no longer changes the paper colour. */
+  --nw-read-paper:var(--nw-panel);
   --nw-read-edge:color-mix(in srgb, var(--nw-fg) 10%, transparent);
   --nw-read-rule:color-mix(in srgb, var(--nw-fg) 22%, transparent);
   --nw-read-rule-soft:color-mix(in srgb, var(--nw-fg) 12%, transparent);
@@ -15995,14 +16808,13 @@ const SEL_EMIT_MS = 120;
    --nw-chrome-top 由面板自己量（90-app.js 的 hostChromeTop：正常布局里 root
    的 rect.top、父容器的 rect.top、宿主的 --dsh-frame-chrome-top，取最大），
    阅读页从那条下面开始；量不到就回落 0，与 R173 一致。 */
-.nw-root.nw-reading{position:fixed;inset:var(--nw-chrome-top,0px) 0 0 0;z-index:1000;
+.nw-root.nw-reading{position:fixed;inset:max(var(--nw-chrome-top,0px),var(--dsh-frame-top-clearance,0px),var(--dsh-windows-titlebar-height,0px)) 0 0 0;z-index:1000;
   /* 基类 .nw-root 是 height:100%。fixed 之后 100% 仍然按包含块算整屏高，
      加上 top 那一条就会多出一截、页脚落到视口外面去——交给 inset 定高。 */
   height:auto;}
 /* A dark room reads the other way round: the desk goes *below* the page. */
 .nw-read[data-theme="night"]{
   --nw-read-desk:color-mix(in srgb, #000 46%, var(--nw-bg));
-  --nw-read-paper:color-mix(in srgb, var(--nw-fg) 2.5%, var(--nw-bg));
   --nw-read-flip:color-mix(in srgb, var(--nw-fg) 7%, var(--nw-read-paper));
 }
 /* R144：夜里没有窗光，纸边不能变成发光包边。纸垛与两侧书口共用这四个
@@ -16931,7 +17743,7 @@ const SEL_EMIT_MS = 120;
   position:absolute;inset:0;z-index:2;
   pointer-events:none;overflow:hidden;
 }
-.nw-mark-side{
+.nw-read .nw-mark-side{
   position:absolute;box-sizing:border-box;
   min-width:17px;height:17px;padding:0 3px;
   display:flex;align-items:center;justify-content:center;
@@ -16945,12 +17757,12 @@ const SEL_EMIT_MS = 120;
   box-shadow:0 1px 0 color-mix(in srgb, var(--nw-fg) 6%, transparent);
   transition:border-color .12s var(--nw-ease, ease), background-color .12s var(--nw-ease, ease);
 }
-.nw-mark-side:hover{border-color:var(--nw-mark-comment, var(--nw-brand));}
-.nw-mark-side[data-active="1"]{
+.nw-read .nw-mark-side:hover{border-color:var(--nw-mark-comment, var(--nw-brand));}
+.nw-read .nw-mark-side[data-active="1"]{
   background:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 24%, var(--nw-read-paper));
   border-color:var(--nw-mark-comment, var(--nw-brand));
 }
-.nw-mark-side:focus-visible{outline:2px solid var(--nw-brand);outline-offset:1px;}
+.nw-read .nw-mark-side:focus-visible{outline:2px solid var(--nw-brand);outline-offset:1px;}
 /* 鼠标停在签上、或点开一条批注时，那句话亮起来。 */
 .nw-mark[data-hover="1"]{
   background-color:color-mix(in srgb, var(--nw-brand) 20%, transparent);
@@ -17094,6 +17906,10 @@ const SEL_EMIT_MS = 120;
     // R129：开场停在哪一章。目录里的「读这一章」传这一章的 id，「读整本」传第一章；
     // 都不传时沿用编辑器当前章（dock 上的「读一遍」）。
     const startId = p.startId == null ? currentId : String(p.startId);
+    const startPage =
+      p.startPage == null || !Number.isFinite(Number(p.startPage))
+        ? null
+        : Math.max(0, Math.round(Number(p.startPage)));
     const currentText = typeof p.currentText === 'string' ? p.currentText : null;
     // 这两个数组每次渲染都会被重建，而「翻页」恰好就是一次渲染。正文的 useMemo
     // 靠它们的**引用**判断要不要把整本书重新拆段——不缓存的话，按一下方向键
@@ -17761,11 +18577,11 @@ const SEL_EMIT_MS = 120;
     // 在中间自己停住；分段还顺便给了「念到哪段亮哪段」「念到下一页自动翻页」。
     // 在线引擎的声音：Edge 读声那几个中文自然音，写死一份，免得每次拉列表。
     const EDGE_VOICES = [
-      ['zh-CN-XiaoxiaoNeural', '晓晓 · 女声（最像真人）'],
+      ['zh-CN-XiaoxiaoNeural', '晓晓 · 女声'],
       ['zh-CN-XiaoyiNeural', '晓伊 · 女声'],
       ['zh-CN-YunxiNeural', '云希 · 男声'],
-      ['zh-CN-YunjianNeural', '云健 · 男声（讲故事）'],
-      ['zh-CN-YunyangNeural', '云扬 · 男声（播报）'],
+      ['zh-CN-YunjianNeural', '云健 · 男声'],
+      ['zh-CN-YunyangNeural', '云扬 · 男声'],
       ['zh-CN-YunxiaNeural', '云夏 · 少年'],
       ['zh-CN-liaoning-XiaobeiNeural', '晓北 · 东北腔'],
       ['zh-CN-shaanxi-XiaoniNeural', '晓妮 · 陕西腔'],
@@ -18860,10 +19676,18 @@ const SEL_EMIT_MS = 120;
 
       if (!jumpedRef.current) {
         jumpedRef.current = true;
-        const mark = marksRef.current[startId];
-        let start = 0;
-        if (mark && typeof mark.offsetLeft === 'number' && step > 0) {
-          start = Math.round(mark.offsetLeft / step);
+        // R183: startId is a chapter id. Look it up in the measured starts
+        // first — a placeholder title has no heading element in marksRef, so
+        // the old heading-based jump opened at page one for 新章节.
+        const chapterStart = starts.find((entry) => entry.id === startId);
+        let start = chapterStart ? chapterStart.page : 0;
+        if (startPage != null) {
+          start = startPage;
+        } else if (!chapterStart) {
+          const mark = marksRef.current[startId];
+          if (mark && typeof mark.offsetLeft === 'number' && step > 0) {
+            start = Math.round(mark.offsetLeft / step);
+          }
         }
         start = Math.max(0, Math.min(start, fit));
         start = snap(start);
@@ -18901,7 +19725,7 @@ const SEL_EMIT_MS = 120;
       }
       // lineHeight 不进 `--nw-read-col` 的算法，但它决定一栏能装多少行：
       // 行高变了 scrollWidth 就变，不重算 total 会把页码停在旧的总页数上。
-    }, [fontSize, lineHeight, readColumns, currentId, startId, chapters, abortTurn]);
+    }, [fontSize, lineHeight, readColumns, currentId, startId, startPage, chapters, abortTurn]);
 
     React.useLayoutEffect(() => {
       measure();
@@ -19248,6 +20072,10 @@ const SEL_EMIT_MS = 120;
         const index = base + offset;
         const key = String(row.id);
         const own = byChapter[key] || [];
+        // A one-chapter book already carries its title on the cover. Repeating
+        // the same words as a chapter heading reads like a duplicated page.
+        const redundantHeading =
+          chapters.length === 1 && novelTitle && String(row.title) === novelTitle;
         return h(
           'section',
           {
@@ -19262,10 +20090,10 @@ const SEL_EMIT_MS = 120;
             }
             : undefined,
           },
-          isPlaceholderTitle(row.title)
+          isPlaceholderTitle(row.title) || redundantHeading
             ? null
             : [
-              // 标题本身已经写了「第 X 章」就不再重复一遍，换三个点当眉标。
+              // 单章书的书名就是章名：整块标题都不重复，封面已经写过一次。
               h(
                 'div',
                 { className: 'nw-read-kicker', key: 'kicker' },
@@ -19304,7 +20132,7 @@ const SEL_EMIT_MS = 120;
           })(),
         );
       });
-    }, [currentId, currentText, marks]);
+    }, [chapters.length, currentId, currentText, marks, novelTitle]);
 
     const body = React.useMemo(() => {
       if (!chapters.length) {
@@ -19332,6 +20160,42 @@ const SEL_EMIT_MS = 120;
       }
       return Math.max(0, idx - 2);
     }, [chapters, layout.starts, page]);
+
+    // R183: which chapter is under the reader's current page. This is the
+    // same start table the mirror uses; the App persists it per book so
+    // re-opening the book can resume here instead of page one.
+    const chapterAtPage = React.useMemo(() => {
+      const starts = layout.starts || [];
+      let at = null;
+      for (let i = 0; i < starts.length; i += 1) {
+        if (starts[i].page <= page) at = starts[i];
+        else break;
+      }
+      return at ? String(at.id) : '';
+    }, [layout.starts, page]);
+    const onChapterChangeRef = React.useRef(p.onChapterChange);
+    React.useEffect(() => {
+      onChapterChangeRef.current = p.onChapterChange;
+    }, [p.onChapterChange]);
+    React.useEffect(() => {
+      if (!chapterAtPage) return;
+      if (typeof onChapterChangeRef.current === 'function') {
+        onChapterChangeRef.current(chapterAtPage);
+      }
+    }, [chapterAtPage]);
+
+    // R183: remember the page too, not just the chapter. A long chapter that
+    // spans several spreads would otherwise always reopen at its first page.
+    const onPageChangeRef = React.useRef(p.onPageChange);
+    React.useEffect(() => {
+      onPageChangeRef.current = p.onPageChange;
+    }, [p.onPageChange]);
+    React.useEffect(() => {
+      if (!jumpedRef.current) return;
+      if (typeof onPageChangeRef.current === 'function') {
+        onPageChangeRef.current(pageRef.current);
+      }
+    }, [page]);
 
     // 窗口只在读者走出去时才换：换一次就要重排那几章，不能每翻一页都重排。
     const [mirrorFrom, setMirrorFrom] = React.useState(0);
@@ -19540,8 +20404,12 @@ const SEL_EMIT_MS = 120;
     const backFolio = turnPagesRef.current.live ? folioAt(turnPagesRef.current.to) : stageFolio;
     // 单栏时整页就是那张纸，没有「另一半」：纸一抬起来它就是新页了。
     const shownFolio = halfFolio || stageFolio;
-    const runningChapter = spread ? leftFolio.chapter : shownFolio.chapter;
-    const runningRightChapter = spread ? rightFolio.rightChapter : shownFolio.rightChapter;
+    // R183：单章书的章名就是书名。封面和天头左侧已经印过书名，右侧再印一次
+    // 同一个名字会像把一页装订了两遍；天头只留“《书名》”。
+    const singleNamedChapter =
+      chapters.length === 1 && novelTitle && String(chapters[0].title) === String(novelTitle);
+    const runningChapter = singleNamedChapter ? '' : spread ? leftFolio.chapter : shownFolio.chapter;
+    const runningRightChapter = singleNamedChapter ? '' : spread ? rightFolio.rightChapter : shownFolio.rightChapter;
     // 页码按「书上印的那一页」算：对开是 n+1 / n+2，单栏就是 n+1。
     const pageLeft = spread ? leftFolio.left : shownFolio.left;
     const pageRight = spread ? rightFolio.right : shownFolio.right;
@@ -19657,7 +20525,6 @@ const SEL_EMIT_MS = 120;
           className: 'nw-mark-pop-note',
           value: noteDraft,
           rows: 1,
-          placeholder: NW.t('这条批注写给自己看'),
           'aria-label': NW.t('批注'),
           autoFocus: true,
           // R53g：没有保存键。打字即存（700ms 合并一次），收起时补最后一次。
@@ -19697,13 +20564,6 @@ const SEL_EMIT_MS = 120;
         // R53e：文字只属于批注。这句话在这里被写成批注，就等于它从「一条下划线」
         // 变成「一条批注」——同一句话不可能同时是两样东西。所以窗里说清楚这件事，
         // 而不是让作者以为自己在一条下划线上贴了一张便签。本来已经是批注的不必说。
-        String(editing.mark.kind) === 'comment'
-          ? null
-          : h(
-            'div',
-            { className: 'nw-mark-pop-hint' },
-            NW.t('写下字，这句话就是一条批注'),
-          ),
       )
       : null;
 
@@ -19724,7 +20584,6 @@ const SEL_EMIT_MS = 120;
           className: 'nw-mark-pop-note',
           value: composerNote,
           rows: 1,
-          placeholder: NW.t('这条批注写给自己看'),
           'aria-label': NW.t('批注'),
           autoFocus: true,
           onChange: (ev) => {
@@ -19763,6 +20622,9 @@ const SEL_EMIT_MS = 120;
       grow(composerRef.current);
     }, [noteDraft, composerNote, editing, composer]);
 
+    if (typeof window !== 'undefined') {
+
+    }
     return h(
       'div',
       {
@@ -19790,7 +20652,7 @@ const SEL_EMIT_MS = 120;
               'data-on': speaking ? '1' : '0',
               'aria-pressed': speaking ? 'true' : 'false',
               'aria-label': speaking ? NW.t('停止朗读') : NW.t('念给我听'),
-              title: speaking ? NW.t('停止朗读') + '（再点一下）' : NW.t('念给我听'),
+              title: speaking ? NW.t('停止朗读') : NW.t('念给我听'),
               onClick: startSpeakHere,
             },
             NW.icon(speaking ? 'volumeoff' : 'volume', { size: 16 }),
@@ -19853,18 +20715,7 @@ const SEL_EMIT_MS = 120;
                   ),
                 ),
                 speakEngine === 'api' || speakEngine === 'baidu'
-                  ? h(
-                      'div',
-                      { className: 'nw-read-speakmenu-row' },
-                      h('span', { className: 'nw-read-speakmenu-label' }, NW.t('声音')),
-                      h(
-                        'span',
-                        { className: 'nw-read-speakmenu-note' },
-                        speakEngine === 'baidu'
-                          ? NW.t('百度只有这一个女声')
-                          : String(p.settings.ttsApiVoice || 'alloy') + ' · ' + NW.t('在设置里改'),
-                      ),
-                    )
+                  ? null
                   : h(
                       'div',
                       { className: 'nw-read-speakmenu-row' },
@@ -19899,19 +20750,6 @@ const SEL_EMIT_MS = 120;
                 speakError
                   ? h('div', { className: 'nw-read-speakmenu-note nw-read-speakmenu-error' }, speakError)
                   : null,
-                h(
-                  'div',
-                  { className: 'nw-read-speakmenu-note' },
-                  speakEngine === 'edge'
-                    ? NW.t('微软的在线自然音，免费、不用密钥，但这一段正文会联网发给微软。有些网络会被它拒掉（403），那就换百度或自定义 API。')
-                    : speakEngine === 'baidu'
-                      ? NW.t('百度的免费朗读，不用密钥，国内连得通；音色只有一个女声，比系统语音清楚但不带感情。这一段正文会联网发给百度。')
-                      : speakEngine === 'api'
-                      ? NW.t('任何 OpenAI /v1/audio/speech 兼容的接口都可以：地址、密钥、模型在 设置 → 阅读 里填。本地跑的 GPT-SoVITS、CosyVoice、Kokoro 也走这条。')
-                      : speakVoices.length
-                        ? NW.t('本机自带的声音，离线可用，正文不出本机。')
-                        : NW.t('这台机器没有报出中文声音，朗读可能用英文音色念中文。'),
-                ),
               )
             : null,
         ),
@@ -19920,8 +20758,8 @@ const SEL_EMIT_MS = 120;
           {
             type: 'button',
             className: 'nw-read-bar-close',
-            'aria-label': NW.t('回到写作') + '（Esc）',
-            title: NW.t('回到写作') + '（Esc）',
+            'aria-label': NW.t('回到写作'),
+            title: NW.t('回到写作'),
             onClick: close,
           },
           NW.icon('x', { size: 16 }),
@@ -20047,22 +20885,8 @@ const SEL_EMIT_MS = 120;
                 h('span', { className: 'nw-read-foot-name' }, footRightName),
                 h('span', { className: 'nw-read-count' }, pageRight == null ? '' : String(pageRight)),
               ),
-              h(
-                'span',
-                { className: 'nw-read-hint', key: 'hint', 'data-fade': hintOn ? '0' : '1' },
-                '← → 翻页 · 选字可以标注 · Esc 回到写作',
-              ),
             ]
             : [
-              h(
-                'div',
-                { className: 'nw-read-foot-slot', key: 'left', 'data-side': 'left' },
-                h(
-                  'span',
-                  { className: 'nw-read-hint', 'data-fade': hintOn ? '0' : '1' },
-                  '← → 翻页 · 选字可以标注 · Esc 回到写作',
-                ),
-              ),
               h(
                 'div',
                 { className: 'nw-read-foot-slot', key: 'right', 'data-side': 'right' },
@@ -20078,6 +20902,1441 @@ const SEL_EMIT_MS = 120;
       ),
     );
   };
+})();
+
+/* ==== 89-folio.js ==== */
+;(() => {
+  'use strict';
+
+  // =========================================================== 完稿版本 ======
+  //
+  // R175: 完稿版本 lives on the page, not in a manager dialog.
+  //
+  // The first attempt put two buttons in the status bar and opened a 1120px
+  // modal that listed versions, previewed them and compared them. It worked,
+  // but it read as a database tool: the writer had to leave the sentence to
+  // "manage" something. This file is the second shape the writer chose:
+  //
+  //   · a narrow folio tab clipped to the top-right corner of the paper. It
+  //     says 「稿 3」 all day; hovering it reveals 「完稿」, one click seals the
+  //     live buffer. The count opens a drawer, not a modal.
+  //   · the drawer is a paper-coloured slip that slides over the right margin.
+  //     It lists this chapter's finals, lets one be pinned as 付印稿 (the version
+  //     exports and submissions read), and opens an archived version in place.
+  //   · reading an archived version covers the editor with a read-only sheet;
+  //     the editor itself never unmounts, so closing the sheet restores the
+  //     caret and the scroll position exactly.
+  //   · selecting two versions opens the proofing desk: one scroll container,
+  //     two aligned pages, margin notes for each run of changes. No twin
+  //     scrollers to synchronise, no red/green blocks that turn prose into a
+  //     CI diff.
+  //
+  // All state lives in the App shell (90-app.js). This file is deliberately
+  // presentational: it owns no copy of the chapter, and every mutation goes back
+  // through the shell so the editor, the status line and the export path keep
+  // reading one truth.
+
+  const { useState, useEffect, useMemo, useRef } = React;
+
+  function numOf(value, fallback) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  function clampNum(n, min, max) {
+    return Math.min(max, Math.max(min, n));
+  }
+
+  function wordsOf(text) {
+    const s = typeof text === 'string' ? text : '';
+    try {
+      if (NW.format && typeof NW.format.wordCount === 'function') {
+        const n = NW.format.wordCount(s);
+        if (Number.isFinite(n)) return n;
+      }
+    } catch (err) {
+      /* fall through to the cheap estimate */
+    }
+    return s.replace(/\s+/g, '').length;
+  }
+
+  function wordsText(n) {
+    const v = numOf(n, 0);
+    return NW.fmtWords ? NW.fmtWords(v) : String(v);
+  }
+
+  function dateText(ts) {
+    if (!ts) return '';
+    try {
+      return NW.fmtDate ? NW.fmtDate(ts) : new Date(ts).toLocaleString();
+    } catch (err) {
+      return '';
+    }
+  }
+
+  // rows arrive newest first. The label is written at save time, so the only
+  // fallback needed is for old rows created before labels existed.
+  function labelOf(row, index, total) {
+    const stored = row && row.label ? String(row.label) : '';
+    if (stored) return stored;
+    return '第' + Math.max(1, total - index) + '稿';
+  }
+
+  function seal(extraClass, title) {
+    return NW.h(
+      'span',
+      {
+        className: 'nw-folio-seal' + (extraClass ? ' ' + extraClass : ''),
+        'aria-label': '付印稿',
+      },
+      '定',
+    );
+  }
+
+  function icon(name, size) {
+    return NW.icon ? NW.icon(name, { size: size || 14 }) : null;
+  }
+
+  // --------------------------------------------------------------- folio tab --
+  //
+  // The tab is a single control with two hit areas. The capture half is hidden
+  // behind `max-width:0` until hover/focus, so at rest the paper corner only
+  // says "稿 3" — a bookmark, not another toolbar. On a phone there is no hover,
+  // so both halves stay open.
+  NW.FolioTab = function FolioTab(props) {
+    const p = props || {};
+    const count = Math.max(0, numOf(p.count, 0));
+    const finalLabel = p.finalLabel == null ? '' : String(p.finalLabel);
+    return NW.h(
+      'div',
+      { className: 'nw-folio' + (p.finalId ? ' has-final' : '') },
+      NW.h(
+        'button',
+        {
+          type: 'button',
+          className: 'nw-folio-capture',
+          'aria-label': '完稿',
+          disabled: !!p.busy,
+          onClick: p.onCapture,
+        },
+        icon('check', 13),
+        NW.h('span', null, '完稿'),
+      ),
+      NW.h(
+        'button',
+        {
+          type: 'button',
+          className: 'nw-folio-open',
+          title: p.finalId
+            ? '当前付印稿' + (finalLabel ? '：' + finalLabel : '') + '；导出和投稿使用这一版'
+            : '查看本章的完稿版本',
+          'aria-label': p.finalId
+            ? '查看完稿版本，共 ' + count + ' 稿，当前付印稿' + (finalLabel ? ' ' + finalLabel : '')
+            : '查看完稿版本，共 ' + count + ' 稿',
+          onClick: p.onOpen,
+        },
+        p.finalId
+          ? NW.h(
+              'span',
+              { className: 'nw-folio-final' },
+              seal('is-mini'),
+              NW.h('span', { className: 'nw-folio-final-k' }, '付印稿'),
+              finalLabel ? NW.h('strong', null, finalLabel) : null,
+            )
+          : NW.h(
+              'span',
+              { className: 'nw-folio-count' },
+              NW.h('span', { className: 'nw-folio-k' }, '稿'),
+              NW.h('strong', null, String(count)),
+            ),
+      ),
+    );
+  };
+
+  // ------------------------------------------------------------ folio drawer --
+  NW.FolioDrawer = function FolioDrawer(props) {
+    const p = props || {};
+    const rows = Array.isArray(p.rows) ? p.rows : [];
+    const finalId = p.finalId == null ? null : String(p.finalId);
+    const [checked, setChecked] = useState([]);
+    const [note, setNote] = useState('');
+    const [saveAsFinal, setSaveAsFinal] = useState(!finalId);
+    const [saving, setSaving] = useState(false);
+    const [saveError, setSaveError] = useState('');
+
+    const rowId = (row) => (row && row.id != null ? String(row.id) : '');
+
+    useEffect(() => {
+      setChecked((prev) =>
+        prev.filter((id) => rows.some((row) => rowId(row) === String(id))).slice(0, 2),
+      );
+    }, [rows]);
+
+    useEffect(() => {
+      setSaveAsFinal(!finalId);
+    }, [finalId]);
+
+    useEffect(() => {
+      setChecked([]);
+      setNote('');
+      setSaving(false);
+    }, [p.chapterId]);
+
+    if (!p.open) return null;
+
+    const finalRow = rows.filter((row) => rowId(row) === finalId)[0] || null;
+    const toggle = (id) => {
+      const key = String(id);
+      setChecked((prev) => {
+        if (prev.indexOf(key) >= 0) return prev.filter((x) => x !== key);
+        if (prev.length >= 2) return prev;
+        return prev.concat(key);
+      });
+    };
+
+    const capture = async () => {
+      if (saving) return;
+      setSaving(true);
+      setSaveError('');
+      try {
+        await p.onCapture({ note: String(note || '').trim(), setFinal: !!saveAsFinal });
+        setNote('');
+      } catch (err) {
+        setSaveError((err && err.message) || '保存失败，请再试一次');
+      } finally {
+        setSaving(false);
+      }
+    };
+
+    const item = (row, index) => {
+      const id = rowId(row);
+      const isFinal = !!finalId && id === finalId;
+      const isChecked = checked.indexOf(id) >= 0;
+      const label = labelOf(row, index, rows.length);
+      return NW.h(
+        'article',
+        { key: id || String(index), className: 'nw-folio-item' + (isFinal ? ' is-final' : '') + (isChecked ? ' is-checked' : '') },
+        NW.h(
+          'label',
+          { className: 'nw-folio-check' },
+          NW.h('input', {
+            type: 'checkbox',
+            checked: isChecked,
+            onChange: () => toggle(id),
+            'aria-label': '选择' + label,
+          }),
+        ),
+        NW.h(
+          'div',
+          { className: 'nw-folio-item-body' },
+          NW.h(
+            'button',
+            { type: 'button', className: 'nw-folio-item-main', onClick: () => p.onPreview(row) },
+            NW.h(
+              'span',
+              { className: 'nw-folio-item-top' },
+              NW.h('strong', null, label),
+              isFinal ? seal('is-word') : null,
+              index === 0 ? NW.h('span', { className: 'nw-folio-badge' }, '最新') : null,
+            ),
+            NW.h(
+              'span',
+              { className: 'nw-folio-meta' },
+              dateText(row.createdAt) + (row.words != null ? ' · ' + wordsText(row.words) + ' 字' : ''),
+            ),
+            row.note
+              ? NW.h('span', { className: 'nw-folio-note' }, String(row.note))
+              : null,
+          ),
+          NW.h(
+            'div',
+            { className: 'nw-folio-acts' },
+            isFinal
+              ? NW.h('span', { className: 'nw-folio-current' }, '付印稿')
+              : NW.h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'nw-folio-act',
+                    onClick: () => p.onSetFinal(row),
+                  },
+                  '定为付印',
+                ),
+            NW.h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-folio-act',
+                onClick: () => p.onCompare([id, '__live__']),
+              },
+              '对比当前',
+            ),
+            NW.h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-folio-act',
+                onClick: () => p.onRestore(row),
+              },
+              '恢复',
+            ),
+            NW.h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-folio-act is-danger',
+                onClick: () => p.onDelete(row),
+              },
+              '删除',
+            ),
+          ),
+        ),
+      );
+    };
+
+    return [
+      NW.h('button', {
+        key: 'scrim',
+        type: 'button',
+        className: 'nw-folio-scrim',
+        tabIndex: -1,
+        'aria-label': '收起完稿面板',
+        onClick: p.onClose,
+      }),
+      NW.h(
+        'aside',
+        {
+          key: 'drawer',
+          className: 'nw-folio-drawer',
+          role: 'dialog',
+          'aria-modal': 'false',
+          'aria-label': '完稿版本',
+        },
+        NW.h(
+          'header',
+          { className: 'nw-folio-head' },
+          NW.h(
+            'div',
+            { className: 'nw-folio-headtext' },
+            NW.h('span', { className: 'nw-folio-kicker' }, '本章完稿'),
+            NW.h('h3', null, p.chapterTitle || '当前章节'),
+          ),
+          NW.h(
+            'button',
+            { type: 'button', className: 'nw-folio-close', onClick: p.onClose, 'aria-label': '关闭' },
+            icon('x', 16),
+          ),
+        ),
+        NW.h(
+          'div',
+          { className: 'nw-folio-summary' },
+          NW.h('span', null, rows.length ? '共 ' + rows.length + ' 稿' : '还没有完稿'),
+          finalRow
+            ? NW.h(
+                'span',
+                { className: 'nw-folio-finalnow' },
+                seal('is-word'),
+                '付印：' + labelOf(finalRow, rows.indexOf(finalRow), rows.length),
+              )
+            : NW.h('span', { className: 'nw-folio-muted' }, '尚未指定付印稿'),
+        ),
+        NW.h(
+          'div',
+          { className: 'nw-folio-savecard' },
+          NW.h('label', { className: 'nw-folio-savelabel', htmlFor: 'nw-folio-note' }, '这一稿改了什么？'),
+          NW.h('input', {
+            id: 'nw-folio-note',
+            className: 'nw-folio-noteinput',
+            value: note,
+            maxLength: 200,
+            onChange: (e) => setNote(e.target.value),
+            onKeyDown: (e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                capture();
+              }
+            },
+          }),
+          NW.h(
+            'div',
+            { className: 'nw-folio-saverow' },
+            NW.h(
+              'label',
+              { className: 'nw-folio-asfinal' },
+              NW.h('input', {
+                type: 'checkbox',
+                checked: saveAsFinal,
+                onChange: (e) => setSaveAsFinal(e.target.checked),
+              }),
+              NW.h('span', null, '同时设为付印稿'),
+            ),
+            NW.h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-folio-primary',
+                disabled: saving || !!p.busy,
+                onClick: capture,
+              },
+              saving ? '保存中…' : '完稿',
+            ),
+          ),
+          saveError ? NW.h('p', { className: 'nw-folio-saveerror', role: 'alert' }, saveError) : null,
+        ),
+        NW.h(
+          'div',
+          { className: 'nw-folio-list', role: 'list' },
+          rows.length
+            ? rows.map(item)
+            : NW.h(
+                'div',
+                { className: 'nw-folio-empty' },
+                NW.h('p', null, '还没有完稿版本。'),
+              ),
+        ),
+        NW.h(
+          'footer',
+          { className: 'nw-folio-foot' },
+          NW.h(
+            'span',
+            { className: 'nw-folio-footnote' },
+            checked.length === 2 ? '已选两稿' : '勾选两稿，并排校样',
+          ),
+          NW.h(
+            'button',
+            {
+              type: 'button',
+              className: 'nw-folio-primary',
+              disabled: checked.length !== 2,
+              onClick: () => p.onCompare(checked.slice()),
+            },
+            '并排校样',
+          ),
+        ),
+      ),
+    ];
+  };
+
+  // ----------------------------------------------------------- folio preview --
+  //
+  // An archived version is read *in place*. The editor stays mounted underneath
+  // this sheet, so 「回到正文」 returns to the exact sentence and scroll offset
+  // the writer left — no chapter reload, no caret at the top.
+  NW.FolioPreview = function FolioPreview(props) {
+    const p = props || {};
+    const row = p.row || null;
+
+    useEffect(() => {
+      if (!row) return undefined;
+      const onKey = (e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          p.onClose();
+        }
+      };
+      window.addEventListener('keydown', onKey);
+      return () => window.removeEventListener('keydown', onKey);
+    }, [row, p.onClose]);
+
+    if (!row) return null;
+
+    const settings = p.settings || {};
+    const size = clampNum(numOf(settings.fontSize, 20), 11, 42);
+    const line = clampNum(numOf(settings.lineHeight, 2), 1.1, 3.4);
+    const width = clampNum(numOf(settings.pageWidth, 760), 360, 1400);
+    const isFinal = p.finalId != null && String(p.finalId) === String(row.id);
+    const label = row.label || '完稿';
+
+    return NW.h(
+      'section',
+      { className: 'nw-folio-read', role: 'dialog', 'aria-modal': 'true', 'aria-label': '完稿预览' },
+      NW.h(
+        'header',
+        { className: 'nw-folio-readbar' },
+        NW.h(
+          'button',
+          { type: 'button', className: 'nw-folio-back', onClick: p.onClose, autoFocus: true },
+          icon('chevleft', 14),
+          NW.h('span', null, '回到正文'),
+        ),
+        NW.h(
+          'div',
+          { className: 'nw-folio-readmeta' },
+          NW.h('strong', null, '正在看 ' + label),
+          NW.h('span', null, dateText(row.createdAt) + ' · ' + wordsText(row.words) + ' 字'),
+          isFinal ? seal('is-word') : null,
+        ),
+        NW.h(
+          'div',
+          { className: 'nw-folio-readacts' },
+          isFinal
+            ? NW.h('span', { className: 'nw-folio-current' }, '付印稿')
+            : NW.h(
+                'button',
+                { type: 'button', className: 'nw-folio-act', onClick: () => p.onSetFinal(row) },
+                '定为付印稿',
+              ),
+          NW.h(
+            'button',
+            { type: 'button', className: 'nw-folio-act', onClick: () => p.onCompare([row.id, '__live__']) },
+            '对比当前',
+          ),
+          NW.h(
+            'button',
+            { type: 'button', className: 'nw-folio-act', onClick: () => p.onRestore(row) },
+            '恢复此稿',
+          ),
+        ),
+      ),
+      NW.h(
+        'div',
+        { className: 'nw-folio-readscroll' },
+        NW.h(
+          'article',
+          { className: 'nw-folio-readpaper', style: { maxWidth: width + 'px' } },
+          NW.h('h2', { className: 'nw-folio-readtitle' }, p.chapterTitle || ''),
+          NW.h(
+            'div',
+            {
+              className: 'nw-folio-readtext',
+              style: {
+                fontSize: size + 'px',
+                lineHeight: String(line),
+                fontFamily: settings.fontFamily ? String(settings.fontFamily) : undefined,
+              },
+            },
+            String(row.content || ''),
+          ),
+        ),
+      ),
+    );
+  };
+
+  // ------------------------------------------------------------ proof desk ---
+  //
+  // One scroll container owns both pages. That is the whole sync-scroll design:
+  // each row is a grid with the left page and the right page in the same box, so
+  // line N of the left manuscript and line N of the right one share a baseline
+  // by construction. There are no two scrollers to chase, no `scrollTop` echo,
+  // and no drift after images or long paragraphs reflow.
+  NW.ProofDesk = function ProofDesk(props) {
+    const p = props || {};
+    const versions = Array.isArray(p.versions) ? p.versions : [];
+    const [leftId, setLeftId] = useState(p.pair ? p.pair.left : '__live__');
+    const [rightId, setRightId] = useState(p.pair ? p.pair.right : '__live__');
+    const [left, setLeft] = useState(null);
+    const [right, setRight] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState('');
+    const scrollRef = useRef(null);
+
+    useEffect(() => {
+      if (!p.pair) return;
+      setLeftId(p.pair.left);
+      setRightId(p.pair.right);
+    }, [p.pair && p.pair.left, p.pair && p.pair.right]);
+
+    useEffect(() => {
+      const onKey = (e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          p.onClose();
+        }
+      };
+      window.addEventListener('keydown', onKey);
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => {
+        window.removeEventListener('keydown', onKey);
+        document.body.style.overflow = prev;
+      };
+    }, [p.onClose]);
+
+    const metaFor = (id) => versions.filter((row) => row && String(row.id) === String(id))[0] || null;
+
+    useEffect(() => {
+      let alive = true;
+      setLoading(true);
+      setError('');
+      const load = async (id) => {
+        if (String(id) === '__live__') {
+          const text = String(p.liveText || '');
+          return { id: '__live__', label: '当前正文', content: text, words: wordsOf(text), live: true };
+        }
+        const meta = metaFor(id);
+        if (!meta) throw new Error('这一版已经不存在');
+        const full = await NW.db.getVersion(id);
+        if (!full) throw new Error('这一版已经不存在');
+        return Object.assign({}, meta, full, { label: meta.label || full.label || '完稿' });
+      };
+      Promise.all([load(leftId), load(rightId)])
+        .then((pair) => {
+          if (!alive) return;
+          setLeft(pair[0]);
+          setRight(pair[1]);
+        })
+        .catch((err) => {
+          if (alive) setError(err && err.message ? err.message : '读取完稿失败');
+        })
+        .then(() => {
+          if (alive) setLoading(false);
+        });
+      return () => {
+        alive = false;
+      };
+    }, [leftId, rightId, p.liveText, versions]);
+
+    const stats = useMemo(() => {
+      if (!left || !right || !NW.format || typeof NW.format.diffAligned !== 'function') {
+        return { rows: [], stats: { added: 0, removed: 0, changed: 0 } };
+      }
+      try {
+        return NW.format.diffAligned(String(left.content || ''), String(right.content || ''));
+      } catch (err) {
+        return { rows: [], stats: { added: 0, removed: 0, changed: 0 } };
+      }
+    }, [left, right]);
+
+    const notes = useMemo(() => {
+      const rows = stats.rows || [];
+      const out = [];
+      let block = null;
+      rows.forEach((row, index) => {
+        if (!row || row.type === 'same') {
+          block = null;
+          return;
+        }
+        if (!block) {
+          block = { start: index, end: index, text: '', add: 0, del: 0, changed: 0 };
+          out.push(block);
+        }
+        block.end = index;
+        if (row.type === 'changed') {
+          block.changed += 1;
+          block.add += row.right ? String(row.right.text || '').length : 0;
+          block.del += row.left ? String(row.left.text || '').length : 0;
+        } else if (row.type === 'right') {
+          block.add += row.right ? String(row.right.text || '').length : 0;
+        } else if (row.type === 'left') {
+          block.del += row.left ? String(row.left.text || '').length : 0;
+        }
+        if (!block.text) {
+          const sample = (row.right && row.right.text) || (row.left && row.left.text) || '';
+          block.text = String(sample).trim().slice(0, 36) || '空行';
+        }
+      });
+      return out;
+    }, [stats]);
+
+    const options = useMemo(() => {
+      const list = versions
+        .slice()
+        .reverse()
+        .map((row, index, all) => ({
+          id: String(row.id),
+          label: labelOf(row, all.length - 1 - index, all.length),
+          words: row.words,
+          createdAt: row.createdAt,
+        }));
+      list.push({ id: '__live__', label: '当前正文', words: wordsOf(p.liveText), createdAt: 0 });
+      return list;
+    }, [versions, p.liveText]);
+
+    const labelOfId = (id) => {
+      const found = options.filter((opt) => opt.id === String(id))[0];
+      if (found) return found.label;
+      const loaded = (left && String(left.id) === String(id) && left) || (right && String(right.id) === String(id) && right);
+      return (loaded && loaded.label) || '版本';
+    };
+
+    const setSide = (side, id) => {
+      if (side === 'left') {
+        if (String(id) === String(rightId)) return;
+        setLeftId(id);
+      } else {
+        if (String(id) === String(leftId)) return;
+        setRightId(id);
+      }
+    };
+
+    const swap = () => {
+      const a = leftId;
+      setLeftId(rightId);
+      setRightId(a);
+    };
+
+    const jump = (index) => {
+      const scroller = scrollRef.current;
+      if (!scroller) return;
+      const target = scroller.querySelector('[data-row="' + String(index) + '"]');
+      if (target && target.scrollIntoView) {
+        target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+    };
+
+    const restore = (row) => {
+      if (!row || row.live) return;
+      p.onRestore(row);
+    };
+
+    const pageHead = (side, row) => {
+      const id = side === 'left' ? leftId : rightId;
+      const isLive = String(id) === '__live__';
+      const isFinal = !isLive && p.finalId != null && String(p.finalId) === String(id);
+      if (!row && !isLive) {
+        return NW.h(
+          'div',
+          { className: 'nw-proof-pagehead' },
+          NW.h(
+            'div',
+            { className: 'nw-proof-pageheadtext' },
+            NW.h('strong', null, labelOfId(id)),
+            NW.h('span', null, '载入中…'),
+          ),
+        );
+      }
+      return NW.h(
+        'div',
+        { className: 'nw-proof-pagehead' },
+        NW.h(
+          'div',
+          { className: 'nw-proof-pageheadtext' },
+          NW.h('strong', null, labelOfId(id)),
+          NW.h(
+            'span',
+            null,
+            isLive
+              ? wordsText(wordsOf(p.liveText)) + ' 字'
+              : dateText(row && row.createdAt) + ' · ' + wordsText(row && row.words) + ' 字',
+          ),
+        ),
+        NW.h(
+          'div',
+          { className: 'nw-proof-pageacts' },
+          isLive
+            ? NW.h('span', { className: 'nw-proof-livebadge' }, '当前草稿')
+            : isFinal
+              ? seal('is-word')
+              : NW.h(
+                  'button',
+                  { type: 'button', className: 'nw-proof-smallbtn', onClick: () => p.onSetFinal(row) },
+                  '定为付印',
+                ),
+          isLive
+            ? null
+            : NW.h(
+                'button',
+                { type: 'button', className: 'nw-proof-smallbtn', onClick: () => restore(row) },
+                '恢复此稿',
+              ),
+        ),
+      );
+    };
+
+    const renderSegs = (side) => {
+      if (!side) return null;
+      if (Array.isArray(side.segs) && side.segs.length) {
+        return side.segs.map((seg, index) =>
+          seg.t === 'mark'
+            ? NW.h('mark', { key: index, className: 'nw-proof-mark' }, String(seg.text || ''))
+            : NW.h('span', { key: index }, String(seg.text || '')),
+        );
+      }
+      return String(side.text || '');
+    };
+
+    const page = (side) =>
+      NW.h(
+        'div',
+        { className: 'nw-proof-page' + (side ? '' : ' is-empty') },
+        NW.h('span', { className: 'nw-proof-no' }, side ? String(side.no) : ''),
+        NW.h('span', { className: 'nw-proof-line' }, side ? renderSegs(side) : ''),
+      );
+
+    const rowEl = (row, index) =>
+      NW.h(
+        'div',
+        { key: index, className: 'nw-proof-row is-' + row.type, 'data-row': index },
+        page(row.left),
+        page(row.right),
+      );
+
+    return NW.h(
+      'section',
+      { className: 'nw-proof', role: 'dialog', 'aria-modal': 'true', 'aria-label': '并排校样' },
+      NW.h(
+        'header',
+        { className: 'nw-proof-head' },
+        NW.h(
+          'button',
+          { type: 'button', className: 'nw-proof-back', onClick: p.onClose },
+          icon('chevleft', 14),
+          NW.h('span', null, '回到写作'),
+        ),
+        NW.h(
+          'div',
+          { className: 'nw-proof-title' },
+          NW.h('span', null, '并排校样'),
+          NW.h('strong', null, p.chapterTitle || '当前章节'),
+        ),
+        NW.h(
+          'div',
+          { className: 'nw-proof-selects' },
+          NW.h(
+            'select',
+            {
+              className: 'nw-proof-select',
+              value: leftId,
+              'aria-label': '左页版本',
+              onChange: (e) => setSide('left', e.target.value),
+            },
+            options.map((opt) =>
+              NW.h('option', { key: opt.id, value: opt.id, disabled: opt.id === rightId }, opt.label),
+            ),
+          ),
+          NW.h(
+            'button',
+            { type: 'button', className: 'nw-proof-swap', onClick: swap, title: '交换左右', 'aria-label': '交换左右' },
+            '⇄',
+          ),
+          NW.h(
+            'select',
+            {
+              className: 'nw-proof-select',
+              value: rightId,
+              'aria-label': '右页版本',
+              onChange: (e) => setSide('right', e.target.value),
+            },
+            options.map((opt) =>
+              NW.h('option', { key: opt.id, value: opt.id, disabled: opt.id === leftId }, opt.label),
+            ),
+          ),
+        ),
+        NW.h(
+          'div',
+          { className: 'nw-proof-stats' },
+          NW.h('span', { className: 'nw-proof-add' }, '+' + wordsText(stats.stats.added)),
+          NW.h('span', { className: 'nw-proof-del' }, '−' + wordsText(stats.stats.removed)),
+          NW.h('span', { className: 'nw-proof-chg' }, '改 ' + wordsText(stats.stats.changed)),
+          NW.h('em', null, String(stats.rows.length) + ' 行'),
+        ),
+        NW.h(
+          'button',
+          { type: 'button', className: 'nw-proof-close', onClick: p.onClose, 'aria-label': '退出校样' },
+          icon('x', 16),
+        ),
+      ),
+      NW.h(
+        'div',
+        { className: 'nw-proof-body' },
+        NW.h(
+          'aside',
+          { className: 'nw-proof-rail', 'aria-label': '本章版本' },
+          NW.h('div', { className: 'nw-proof-railhead' }, '本章 · ' + versions.length + ' 稿'),
+          NW.h(
+            'div',
+            { className: 'nw-proof-folios' },
+            versions.map((row, index) =>
+              NW.h(
+                'button',
+                {
+                  key: String(row.id),
+                  type: 'button',
+                  className:
+                    'nw-proof-folio'
+                    + (String(leftId) === String(row.id) ? ' is-left' : '')
+                    + (String(rightId) === String(row.id) ? ' is-right' : ''),
+                  onClick: (e) => setSide(e.shiftKey ? 'right' : 'left', String(row.id)),
+                },
+                NW.h('span', { className: 'nw-proof-folio-no' }, labelOf(row, index, versions.length)),
+                NW.h(
+                  'span',
+                  { className: 'nw-proof-folio-meta' },
+                  dateText(row.createdAt) + ' · ' + wordsText(row.words) + ' 字',
+                ),
+                p.finalId != null && String(p.finalId) === String(row.id) ? seal('is-mini') : null,
+              ),
+            ),
+            NW.h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-proof-folio nw-proof-foliolive' + (String(leftId) === '__live__' || String(rightId) === '__live__' ? ' is-left' : ''),
+                onClick: (e) => setSide(e.shiftKey ? 'right' : 'left', '__live__'),
+              },
+              NW.h('span', { className: 'nw-proof-folio-no' }, '当前正文'),
+              NW.h('span', { className: 'nw-proof-folio-meta' }, '编辑器里的这一稿'),
+            ),
+          ),
+        ),
+        NW.h(
+          'main',
+          { className: 'nw-proof-stage' },
+          NW.h(
+            'div',
+            { className: 'nw-proof-pageheads' },
+            pageHead('left', left),
+            pageHead('right', right),
+          ),
+          NW.h(
+            'div',
+            { className: 'nw-proof-scroll', ref: scrollRef },
+            loading
+              ? NW.h('div', { className: 'nw-proof-state' }, NW.ui.spinner('正在铺开校样…'))
+              : error
+                ? NW.h('div', { className: 'nw-proof-state is-error' }, error)
+                : !left || !right
+                  ? null
+                  : NW.h(
+                      'div',
+                      { className: 'nw-proof-grid' },
+                      stats.rows.slice(0, 4000).map(rowEl),
+                    ),
+            !loading && !error && stats.rows.length > 4000
+              ? NW.h('div', { className: 'nw-proof-truncated' }, '内容较长，只显示前 4000 行差异。')
+              : null,
+          ),
+        ),
+        NW.h(
+          'aside',
+          { className: 'nw-proof-notes', 'aria-label': '校样批注' },
+          NW.h('div', { className: 'nw-proof-noteshead' }, '校样批注'),
+          notes.length
+            ? NW.h(
+                'div',
+                { className: 'nw-proof-notelist' },
+                notes.map((note) =>
+                  NW.h(
+                    'button',
+                    {
+                      key: note.start,
+                      type: 'button',
+                      className: 'nw-proof-note',
+                      onClick: () => jump(note.start),
+                      title: note.text,
+                    },
+                    NW.h('span', { className: 'nw-proof-noteno' }, '第 ' + (note.start + 1) + ' 行'),
+                    NW.h('span', { className: 'nw-proof-notetext' }, note.text),
+                    NW.h(
+                      'span',
+                      { className: 'nw-proof-notecount' },
+                      (note.add ? '+' + wordsText(note.add) + ' ' : '') + (note.del ? '−' + wordsText(note.del) : ''),
+                    ),
+                  ),
+                ),
+              )
+            : NW.h('p', { className: 'nw-proof-notesempty' }, '两页一致，没有要圈出的改动。'),
+          NW.h(
+            'div',
+            { className: 'nw-proof-notesfoot' },
+            notes.length ? notes.length + ' 处改动' : '对照阅读',
+          ),
+        ),
+      ),
+    );
+  };
+
+  NW.CSS_PARTS.push(`
+/* ======================================================== 完稿版本 ======== */
+/* The folio tab is clipped to the top-right corner of the paper. At rest it is
+   just a bookmark («稿 3»); hover/focus unfolds the one-click capture half. */
+.nw-folio{
+  position:absolute;top:14px;
+  /* R177: keep the bookmark anchored to the paper's top-right corner. The old
+     formula jumped between "outside the measure" and 12px as the pane resized,
+     which made it look like it was drifting; one stable offset reads as a
+     bookmark instead of a floating tool. */
+  right:12px;
+  z-index:var(--nw-z-float,10);
+  display:flex;align-items:center;gap:2px;
+  font-family:var(--nw-ui-font,inherit);font-size:11px;
+  user-select:none;
+  transition:opacity .12s ease,transform .12s ease,visibility .12s;
+}
+/* 查找替换的浮条占着同一角。它一出现，稿签就让位——findbar 是临时的
+   操作面板，不该同时和一枚常驻按钮抢注意力。 */
+.nw-bench:has(.nw-findbar) .nw-folio{
+  opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-3px);
+}
+.nw-folio-capture{
+  display:inline-flex;align-items:center;gap:4px;height:27px;
+  max-width:84px;opacity:1;overflow:hidden;padding:0 9px;
+  border:1px solid color-mix(in srgb,var(--nw-brand) 18%,transparent);
+  border-radius:13px;background:color-mix(in srgb,var(--nw-brand) 4%,transparent);color:var(--nw-brand);
+  font:inherit;font-size:11.5px;cursor:pointer;white-space:nowrap;
+  transition:max-width .18s var(--nw-ease,ease),opacity .16s ease,padding .18s ease,
+    background .16s ease,border-color .16s ease;
+}
+.nw-folio:hover .nw-folio-capture,.nw-folio:focus-within .nw-folio-capture{
+  border-color:color-mix(in srgb,var(--nw-brand) 28%,transparent);
+  background:color-mix(in srgb,var(--nw-brand) 7%,transparent);
+}
+.nw-folio-capture:hover{background:color-mix(in srgb,var(--nw-brand) 13%,transparent);}
+.nw-folio-capture:disabled{opacity:.45;cursor:default;}
+.nw-folio-open{
+  display:inline-flex;align-items:center;gap:4px;height:27px;padding:0 9px;
+  font-size:11.5px;
+  border:1px solid var(--nw-line-soft);border-radius:13.5px;
+  background:color-mix(in srgb,var(--nw-panel) 82%,transparent);
+  color:var(--nw-fg-soft);font:inherit;cursor:pointer;
+  box-shadow:var(--nw-shadow-1);
+  transition:border-color .16s ease,color .16s ease,background .16s ease;
+}
+.nw-folio-open:hover,.nw-folio-open:focus-visible{
+  border-color:color-mix(in srgb,var(--nw-brand) 30%,var(--nw-line-soft));
+  color:var(--nw-fg);
+}
+.nw-folio-k{letter-spacing:.08em;opacity:.75;}
+.nw-folio-open strong{font-weight:600;font-variant-numeric:tabular-nums;color:var(--nw-fg);}
+.nw-folio.has-final .nw-folio-open{
+  border-color:color-mix(in srgb,var(--nw-brand) 34%,var(--nw-line-soft));
+  background:color-mix(in srgb,var(--nw-brand) 8%,var(--nw-panel));
+  color:var(--nw-brand);
+}
+.nw-folio.has-final .nw-folio-open:hover,.nw-folio.has-final .nw-folio-open:focus-visible{
+  border-color:color-mix(in srgb,var(--nw-brand) 52%,var(--nw-line-soft));
+  background:color-mix(in srgb,var(--nw-brand) 12%,var(--nw-panel));
+  color:var(--nw-brand);
+}
+.nw-folio-final{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;}
+.nw-folio-final-k{letter-spacing:.03em;font-weight:600;}
+.nw-folio-final strong{color:color-mix(in srgb,var(--nw-brand) 82%,var(--nw-fg));}
+.nw-folio-seal{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:18px;height:18px;border:1.4px solid color-mix(in srgb,var(--nw-brand) 72%,#8f2f23);
+  border-radius:3px;color:color-mix(in srgb,var(--nw-brand) 72%,#8f2f23);
+  font-family:Georgia,"Songti SC",serif;font-size:10px;line-height:1;
+  transform:rotate(-5deg);flex:0 0 auto;
+}
+.nw-folio-seal.is-mini{width:15px;height:15px;font-size:8px;border-width:1.1px;}
+.nw-folio-seal.is-word{width:20px;height:20px;font-size:11px;margin:0 2px;}
+
+.nw-main.has-folio .nw-bench{
+  /* The drawer is a slip of paper laid beside the manuscript, not a pane of
+     glass on top of it. Reserve its width so no line of prose ends up under
+     the drawer; the page re-centres in the narrower column while it is open. */
+  padding-right:376px;
+  transition:padding-right .24s var(--nw-ease,ease);
+}
+@container nw (max-width:980px){
+  /* Too narrow to give the drawer its own lane: let it cover the paper instead
+     of squeezing the measure below a readable width. */
+  .nw-main.has-folio .nw-bench{padding-right:0;transition:none;}
+}
+.nw-folio-scrim{
+  position:absolute;inset:0;z-index:var(--nw-z-panel,20);
+  display:block;margin:0;padding:0;border:0;
+  background:color-mix(in srgb,var(--nw-fg) 8%,transparent);
+  cursor:default;
+  animation:nw-folio-fade .2s ease;
+}
+.nw-folio-drawer{
+  position:absolute;top:0;right:0;bottom:0;z-index:calc(var(--nw-z-panel,20) + 1);
+  display:flex;flex-direction:column;width:376px;max-width:94%;min-height:0;
+  background:
+    linear-gradient(180deg,color-mix(in srgb,var(--nw-brand) 4%,transparent),transparent 200px),
+    color-mix(in srgb,var(--nw-panel) 94%,var(--nw-brand));
+  border-left:1px solid color-mix(in srgb,var(--nw-fg) 12%,var(--nw-line-soft));
+  box-shadow:-30px 0 70px color-mix(in srgb,var(--nw-fg) 17%,transparent),
+             -1px 0 0 color-mix(in srgb,var(--nw-fg) 6%,transparent);
+  animation:nw-folio-in .24s var(--nw-ease,ease);
+}
+.nw-folio-head{
+  display:flex;align-items:flex-start;gap:10px;
+  padding:18px 16px 10px;
+}
+.nw-folio-headtext{min-width:0;flex:1 1 auto;}
+.nw-folio-kicker{
+  display:block;font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--nw-fg-soft);margin-bottom:3px;
+}
+.nw-folio-head h3{
+  margin:0;font-size:17px;font-weight:500;line-height:1.35;color:var(--nw-fg);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.nw-folio-close{
+  display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;
+  flex:0 0 auto;border:1px solid transparent;border-radius:8px;
+  background:transparent;color:var(--nw-fg-soft);cursor:pointer;
+}
+.nw-folio-close:hover{background:var(--nw-sunken);color:var(--nw-fg);}
+.nw-folio-summary{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:0 16px 12px;font-size:11px;color:var(--nw-fg-soft);
+}
+.nw-folio-finalnow{display:inline-flex;align-items:center;gap:4px;color:var(--nw-fg);}
+.nw-folio-muted{opacity:.72;}
+
+.nw-folio-savecard{
+  margin:0 14px 10px;padding:11px 12px 10px;
+  border:1px dashed color-mix(in srgb,var(--nw-brand) 28%,var(--nw-line-soft));
+  border-radius:11px;
+  background:color-mix(in srgb,var(--nw-brand) 3.5%,var(--nw-bg));
+}
+.nw-folio-savelabel{display:block;font-size:11px;color:var(--nw-fg-soft);margin-bottom:6px;}
+.nw-folio-noteinput{
+  width:100%;box-sizing:border-box;height:29px;padding:0 9px;
+  border:1px solid var(--nw-line-soft);border-radius:7px;
+  background:var(--nw-bg);color:var(--nw-fg);font:inherit;font-size:12px;outline:none;
+}
+.nw-folio-noteinput::placeholder{color:var(--nw-fg-soft);opacity:.6;}
+.nw-folio-noteinput:focus{border-color:color-mix(in srgb,var(--nw-brand) 45%,var(--nw-line-soft));box-shadow:var(--nw-ring-soft);}
+.nw-folio-saverow{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px;}
+.nw-folio-asfinal{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--nw-fg-soft);cursor:pointer;}
+.nw-folio-asfinal input{accent-color:var(--nw-brand);margin:0;}
+.nw-folio-primary{
+  display:inline-flex;align-items:center;justify-content:center;height:28px;padding:0 13px;
+  border:1px solid color-mix(in srgb,var(--nw-brand) 55%,transparent);border-radius:14px;
+  background:var(--nw-brand);color:var(--nw-on-brand);
+  font:inherit;font-size:11.5px;font-weight:500;cursor:pointer;
+  transition:filter .16s ease,opacity .16s ease;
+}
+.nw-folio-primary:hover{filter:brightness(1.05);}
+.nw-folio-primary:disabled{opacity:.42;cursor:default;filter:none;}
+.nw-folio-saveerror{margin:7px 0 0;font-size:10.5px;line-height:1.5;color:var(--nw-danger,#b4483f);}
+.nw-folio-hint{margin:7px 0 0;font-size:10px;line-height:1.5;color:var(--nw-fg-soft);opacity:.75;}
+
+.nw-folio-list{flex:1 1 auto;min-height:0;overflow:auto;padding:2px 10px 12px;}
+.nw-folio-item{
+  display:grid;grid-template-columns:17px minmax(0,1fr);gap:7px;
+  padding:10px 6px;border-bottom:1px solid var(--nw-line-soft);
+  border-radius:7px;
+}
+.nw-folio-item.is-final{background:color-mix(in srgb,var(--nw-brand) 4%,transparent);}
+.nw-folio-item.is-checked{background:color-mix(in srgb,var(--nw-brand) 8%,transparent);}
+.nw-folio-check{display:flex;align-items:flex-start;justify-content:center;padding-top:3px;}
+.nw-folio-check input{accent-color:var(--nw-brand);margin:0;cursor:pointer;}
+.nw-folio-item-body{display:flex;flex-direction:column;gap:5px;min-width:0;}
+.nw-folio-item-main{
+  display:flex;flex-direction:column;gap:3px;min-width:0;
+  padding:0;border:0;background:transparent;color:inherit;
+  font:inherit;text-align:left;cursor:pointer;
+}
+.nw-folio-item-top{display:flex;align-items:center;gap:5px;flex-wrap:wrap;}
+.nw-folio-item-top strong{font-size:13px;font-weight:600;color:var(--nw-fg);}
+.nw-folio-badge{
+  font-size:8.5px;letter-spacing:.06em;padding:1px 5px;border-radius:7px;
+  color:var(--nw-fg-soft);background:var(--nw-sunken);
+}
+.nw-folio-meta{font-size:11px;color:var(--nw-fg-soft);font-variant-numeric:tabular-nums;}
+.nw-folio-note{
+  font-size:12px;line-height:1.45;color:var(--nw-fg);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.nw-folio-acts{display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding-left:1px;}
+.nw-folio-act{
+  padding:0;border:0;background:transparent;
+  color:color-mix(in srgb,var(--nw-fg) 68%,var(--nw-fg-soft));
+  font:inherit;font-size:11px;cursor:pointer;
+}
+.nw-folio-act:hover{color:var(--nw-brand);}
+.nw-folio-act.is-danger:hover{color:var(--nw-danger);}
+.nw-folio-current{font-size:10.5px;color:var(--nw-brand);}
+.nw-folio-empty{padding:28px 14px;text-align:center;color:var(--nw-fg-soft);}
+.nw-folio-empty p{margin:0 0 7px;font-size:12px;line-height:1.6;}
+.nw-folio-empty p:last-child{font-size:11px;opacity:.7;}
+.nw-folio-foot{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));
+  border-top:1px solid var(--nw-line-soft);background:var(--nw-panel);
+}
+.nw-folio-footnote{font-size:10.5px;color:var(--nw-fg-soft);}
+
+/* Read-only archive sheet: covers the paper, not the shell. The editor stays
+   mounted underneath so closing it restores caret + scroll without a reload. */
+.nw-folio-read{
+  position:absolute;inset:0;z-index:calc(var(--nw-z-panel,20) + 4);
+  display:flex;flex-direction:column;min-height:0;
+  background:var(--nw-bg);
+  animation:nw-folio-fade .18s ease;
+}
+.nw-folio-readbar{
+  display:flex;align-items:center;gap:12px;min-height:44px;padding:0 16px;
+  border-bottom:1px solid var(--nw-line-soft);
+  background:color-mix(in srgb,var(--nw-panel) 88%,var(--nw-bg));
+  flex-wrap:wrap;
+}
+.nw-folio-back{
+  display:inline-flex;align-items:center;gap:3px;height:28px;padding:0 7px;
+  border:1px solid transparent;border-radius:7px;
+  background:transparent;color:var(--nw-fg-soft);font:inherit;font-size:11.5px;cursor:pointer;
+}
+.nw-folio-back:hover{background:var(--nw-sunken);color:var(--nw-fg);}
+.nw-folio-readmeta{display:flex;align-items:center;gap:7px;min-width:0;font-size:11px;color:var(--nw-fg-soft);}
+.nw-folio-readmeta strong{font-size:12px;font-weight:600;color:var(--nw-fg);white-space:nowrap;}
+.nw-folio-readmeta span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.nw-folio-readacts{display:flex;align-items:center;gap:11px;margin-left:auto;flex-wrap:wrap;}
+.nw-folio-readscroll{flex:1 1 auto;min-height:0;overflow:auto;}
+.nw-folio-readpaper{margin:0 auto;padding:42px 30px 90px;box-sizing:border-box;}
+.nw-folio-readtitle{
+  margin:0 0 24px;font-size:1.25em;font-weight:600;line-height:1.5;color:var(--nw-fg);
+}
+.nw-folio-readtext{
+  white-space:pre-wrap;overflow-wrap:anywhere;
+  color:var(--nw-fg);text-align:justify;text-align-last:left;
+}
+
+/* ========================================================== 校样台 ======= */
+.nw-proof{
+  position:fixed;inset:0;z-index:calc(var(--nw-z-modal,40) + 4);
+  display:flex;flex-direction:column;min-height:0;overflow:hidden;
+  color:#ece3d5;
+  background-color:#221c16;
+  background-image:
+    radial-gradient(120% 80% at 15% 0%,rgba(210,168,112,.10),transparent 55%),
+    radial-gradient(120% 90% at 88% 100%,rgba(126,84,58,.10),transparent 60%),
+    linear-gradient(180deg,#241d16,#1c1711);
+  animation:nw-folio-fade .18s ease;
+}
+.nw-proof-head{
+  display:flex;align-items:center;gap:14px;min-height:52px;padding:8px 16px;
+  border-bottom:1px solid rgba(236,227,213,.13);
+  background:rgba(0,0,0,.12);
+  flex:0 0 auto;
+}
+.nw-proof-back{
+  display:inline-flex;align-items:center;gap:3px;height:29px;padding:0 8px;
+  border:1px solid transparent;border-radius:7px;
+  background:transparent;color:#d9cdbb;font:inherit;font-size:12px;cursor:pointer;
+}
+.nw-proof-back:hover{background:rgba(255,255,255,.07);color:#fff8ec;}
+.nw-proof-title{display:flex;flex-direction:column;min-width:0;line-height:1.25;}
+.nw-proof-title span{font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;color:rgba(236,227,213,.55);}
+.nw-proof-title strong{font-size:14.5px;font-weight:500;color:#f4eadb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;}
+.nw-proof-selects{display:flex;align-items:center;gap:6px;margin-left:auto;}
+.nw-proof-select{
+  height:28px;max-width:150px;padding:0 7px;
+  border:1px solid rgba(236,227,213,.2);border-radius:7px;
+  background:rgba(255,255,255,.055);color:#efe5d5;font:inherit;font-size:11px;outline:none;
+}
+.nw-proof-select:focus{border-color:rgba(230,190,125,.65);}
+.nw-proof-select option{background:#2a2119;color:#f0e5d4;}
+.nw-proof-swap{
+  width:26px;height:26px;border:1px solid rgba(236,227,213,.18);border-radius:50%;
+  background:transparent;color:#d9cdbb;font:inherit;font-size:14px;line-height:1;cursor:pointer;
+}
+.nw-proof-swap:hover{background:rgba(255,255,255,.07);color:#fff8ec;}
+.nw-proof-stats{display:flex;align-items:center;gap:8px;font-size:11px;font-variant-numeric:tabular-nums;}
+.nw-proof-stats span{padding:2px 6px;border-radius:8px;background:rgba(255,255,255,.055);}
+.nw-proof-add{color:#a9c3a1;}
+.nw-proof-del{color:#d9a08e;}
+.nw-proof-chg{color:#e0bd7d;}
+.nw-proof-stats em{font-style:normal;color:rgba(236,227,213,.5);font-size:10px;}
+.nw-proof-close{
+  width:28px;height:28px;margin-left:2px;border:1px solid transparent;border-radius:7px;
+  background:transparent;color:rgba(236,227,213,.7);cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;
+}
+.nw-proof-close:hover{background:rgba(255,255,255,.07);color:#fff8ec;}
+
+.nw-proof-body{display:grid;grid-template-columns:180px minmax(0,1fr) 246px;flex:1 1 auto;min-height:0;}
+.nw-proof-rail{
+  min-height:0;overflow:auto;padding:14px 10px;
+  border-right:1px solid rgba(236,227,213,.1);
+  background:rgba(0,0,0,.08);
+}
+.nw-proof-railhead{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:rgba(236,227,213,.5);padding:0 6px 8px;}
+.nw-proof-railhint{margin:0 6px 10px;font-size:9.5px;line-height:1.5;color:rgba(236,227,213,.42);}
+.nw-proof-folios{display:flex;flex-direction:column;gap:3px;}
+.nw-proof-folio{
+  display:flex;flex-direction:column;gap:2px;width:100%;padding:7px 8px;
+  border:1px solid transparent;border-radius:8px;
+  background:transparent;color:#e9dfcf;font:inherit;text-align:left;cursor:pointer;
+}
+.nw-proof-folio:hover{background:rgba(255,255,255,.055);}
+.nw-proof-folio.is-left{border-color:rgba(230,190,125,.42);background:rgba(230,190,125,.08);}
+.nw-proof-folio.is-right{border-color:rgba(151,186,156,.4);}
+.nw-proof-folio-no{font-size:11.5px;font-weight:500;}
+.nw-proof-folio-meta{font-size:9.5px;color:rgba(236,227,213,.48);font-variant-numeric:tabular-nums;}
+.nw-proof-folio .nw-folio-seal{position:absolute;display:inline-flex;}
+.nw-proof-foliolive{margin-top:8px;border-top:1px solid rgba(236,227,213,.1);border-radius:0 0 8px 8px;}
+
+.nw-proof-stage{display:flex;flex-direction:column;min-width:0;min-height:0;background:rgba(0,0,0,.04);}
+.nw-proof-pageheads{
+  display:grid;grid-template-columns:1fr 1fr;flex:0 0 auto;
+  border-bottom:1px solid rgba(236,227,213,.12);
+  background:rgba(255,255,255,.025);
+}
+.nw-proof-pagehead{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:8px 12px;min-width:0;border-right:1px solid rgba(236,227,213,.09);
+}
+.nw-proof-pagehead:last-child{border-right:0;}
+.nw-proof-pageheadtext{display:flex;flex-direction:column;line-height:1.3;min-width:0;}
+.nw-proof-pageheadtext strong{font-size:12.5px;font-weight:600;color:#f0e5d4;white-space:nowrap;}
+.nw-proof-pageheadtext span{font-size:9.5px;color:rgba(236,227,213,.48);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.nw-proof-pageacts{display:flex;align-items:center;gap:8px;flex:0 0 auto;}
+.nw-proof-smallbtn{
+  border:1px solid rgba(236,227,213,.18);border-radius:6px;padding:3px 7px;
+  background:transparent;color:rgba(236,227,213,.78);font:inherit;font-size:10.5px;cursor:pointer;
+}
+.nw-proof-smallbtn:hover{border-color:rgba(230,190,125,.5);color:#f4e8d5;}
+.nw-proof-livebadge{font-size:9.5px;color:rgba(236,227,213,.45);}
+
+.nw-proof-scroll{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;background:#e4d8c6;}
+.nw-proof-grid{
+  position:relative;min-height:100%;min-width:560px;box-sizing:border-box;
+  padding-bottom:56px;background:#f3eadb;color:#2d251e;
+}
+.nw-proof-grid::after{
+  content:'';position:absolute;top:0;bottom:0;left:calc(50% - 9px);width:18px;
+  background:linear-gradient(90deg,transparent,rgba(75,58,40,.07) 38%,rgba(75,58,40,.15) 50%,rgba(75,58,40,.07) 62%,transparent);
+  pointer-events:none;
+}
+.nw-proof-row{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid rgba(75,58,40,.08);}
+.nw-proof-page{
+  display:grid;grid-template-columns:32px minmax(0,1fr);gap:8px;
+  padding:1px 10px 1px 0;min-height:1.8em;
+  /* Both pages reserve the gutter stroke so identical prose wraps on the
+     same character. Only the first page paints it. */
+  border-right:1px solid transparent;
+}
+.nw-proof-page:first-child{border-right-color:rgba(75,58,40,.1);}
+.nw-proof-no{
+  padding-top:.18em;text-align:right;font-size:9.5px;color:rgba(65,48,32,.38);
+  font-variant-numeric:tabular-nums;user-select:none;
+}
+.nw-proof-line{
+  white-space:pre-wrap;overflow-wrap:anywhere;
+  font-family:Georgia,"Songti SC","SimSun",serif;font-size:14.5px;line-height:1.8;
+}
+.nw-proof-row.is-changed .nw-proof-page{background:rgba(201,154,58,.16);}
+.nw-proof-row.is-left .nw-proof-page:first-child{background:rgba(168,73,53,.13);}
+.nw-proof-row.is-left .nw-proof-page:last-child{background:rgba(75,58,40,.035);}
+.nw-proof-row.is-right .nw-proof-page:last-child{background:rgba(79,125,85,.14);}
+.nw-proof-row.is-right .nw-proof-page:first-child{background:rgba(75,58,40,.035);}
+.nw-proof-page.is-empty{background:rgba(75,58,40,.025);}
+.nw-proof-mark{
+  background:rgba(201,154,58,.42);color:inherit;border-radius:2px;
+  box-shadow:0 1px 0 rgba(160,116,44,.55) inset;padding:0 1px;
+}
+.nw-proof-state{padding:36px;text-align:center;color:rgba(236,227,213,.72);font-size:12px;}
+.nw-proof-state.is-error{color:#e5b3a4;}
+.nw-proof-truncated{padding:12px 16px;font-size:10px;color:rgba(236,227,213,.55);text-align:center;}
+
+.nw-proof-notes{
+  min-height:0;overflow:auto;padding:14px 11px;
+  border-left:1px solid rgba(236,227,213,.1);
+  background:rgba(0,0,0,.08);
+}
+.nw-proof-noteshead{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:rgba(236,227,213,.5);margin-bottom:9px;}
+.nw-proof-notelist{display:flex;flex-direction:column;gap:4px;}
+.nw-proof-note{
+  display:flex;flex-direction:column;gap:2px;width:100%;padding:7px 8px;
+  border:1px solid transparent;border-left:2px solid rgba(230,190,125,.45);
+  background:rgba(255,255,255,.025);color:#e6dac8;font:inherit;text-align:left;cursor:pointer;
+}
+.nw-proof-note:hover{background:rgba(255,255,255,.06);border-left-color:#e6be7d;}
+.nw-proof-noteno{font-size:9px;color:rgba(236,227,213,.42);}
+.nw-proof-notetext{font-size:10.5px;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.nw-proof-notecount{font-size:9px;color:rgba(230,190,125,.68);}
+.nw-proof-notesempty{font-size:10.5px;line-height:1.6;color:rgba(236,227,213,.45);}
+.nw-proof-notesfoot{margin-top:14px;padding-top:10px;border-top:1px solid rgba(236,227,213,.09);font-size:9.5px;color:rgba(236,227,213,.38);}
+
+@keyframes nw-folio-in{from{opacity:0;transform:translateX(18px);}to{opacity:1;transform:none;}}
+@keyframes nw-folio-up{from{opacity:0;transform:translateY(18px);}to{opacity:1;transform:none;}}
+@keyframes nw-folio-fade{from{opacity:0;}to{opacity:1;}}
+
+@media (max-width:980px){
+  .nw-proof-body{grid-template-columns:150px minmax(0,1fr) 210px;}
+  .nw-proof-select{max-width:118px;}
+  .nw-proof-title strong{max-width:150px;}
+}
+@media (max-width:760px){
+  .nw-proof-head{flex-wrap:wrap;gap:8px;padding:8px 10px;}
+  .nw-proof-selects{order:4;width:100%;margin-left:0;}
+  .nw-proof-select{flex:1 1 auto;max-width:none;}
+  .nw-proof-body{grid-template-columns:minmax(0,1fr);}
+  .nw-proof-rail,.nw-proof-notes{display:none;}
+  .nw-proof-pageheads{display:none;}
+  .nw-proof-grid{min-width:640px;}
+  .nw-proof-stats{gap:5px;font-size:10px;}
+  .nw-folio{top:8px;right:8px;}
+  .nw-folio-capture{max-width:84px;opacity:1;padding:0 8px;border-color:color-mix(in srgb,var(--nw-brand) 24%,transparent);}
+  .nw-folio-capture span{display:inline;}
+  .nw-folio-scrim{position:fixed;}
+  .nw-folio-drawer{
+    position:fixed;top:auto;left:0;right:0;bottom:0;width:auto;max-width:none;
+    max-height:82vh;max-height:82dvh;
+    border-left:0;border-top:1px solid var(--nw-line-soft);border-radius:15px 15px 0 0;
+    animation-name:nw-folio-up;
+  }
+  .nw-folio-head{padding-top:15px;}
+  .nw-folio-readpaper{padding:30px 18px 70px;max-width:none !important;}
+  .nw-folio-readbar{min-height:42px;padding:6px 10px;}
+  .nw-folio-readmeta{flex:1 1 100%;order:2;}
+  .nw-folio-readacts{margin-left:0;order:3;width:100%;gap:14px;}
+}
+/* R177: the proof desk is a view of the manuscript, so it must wear the same
+   palette as the editor. Every surface below is derived from the live theme
+   tokens; the old fixed brown desk is gone. */
+.nw-proof{
+  color:var(--nw-fg);
+  background-color:var(--nw-bg);
+  background-image:none;
+}
+.nw-proof-head{background:var(--nw-panel);border-bottom-color:var(--nw-rule);}
+.nw-proof-back,.nw-proof-close{color:var(--nw-fg-soft);}
+.nw-proof-back:hover,.nw-proof-close:hover{background:var(--nw-sunken);color:var(--nw-fg);}
+.nw-proof-title span{color:var(--nw-fg-soft);}
+.nw-proof-title strong{color:var(--nw-fg);}
+.nw-proof-select{
+  border-color:var(--nw-line-strong);background:var(--nw-bg);color:var(--nw-fg);
+}
+.nw-proof-select:focus{border-color:var(--nw-brand);}
+.nw-proof-select option{background:var(--nw-panel);color:var(--nw-fg);}
+.nw-proof-swap{border-color:var(--nw-line-strong);color:var(--nw-fg-soft);}
+.nw-proof-swap:hover{background:var(--nw-sunken);color:var(--nw-fg);}
+.nw-proof-stats span{background:var(--nw-sunken);}
+.nw-proof-stats em{color:var(--nw-fg-soft);}
+.nw-proof-body{background:var(--nw-bg);}
+.nw-proof-rail,.nw-proof-notes{
+  border-color:var(--nw-rule);background:color-mix(in srgb,var(--nw-bg) 88%,var(--nw-fg));
+}
+.nw-proof-railhead,.nw-proof-noteshead{color:var(--nw-fg-soft);}
+.nw-proof-railhint,.nw-proof-notesfoot{color:var(--nw-fg-soft);}
+.nw-proof-folio{color:var(--nw-fg);}
+.nw-proof-folio:hover{background:var(--nw-sunken);}
+.nw-proof-folio.is-left{border-color:color-mix(in srgb,var(--nw-brand) 48%,transparent);background:color-mix(in srgb,var(--nw-brand) 7%,transparent);}
+.nw-proof-folio.is-right{border-color:color-mix(in srgb,var(--nw-ok) 45%,transparent);}
+.nw-proof-folio-meta{color:var(--nw-fg-soft);}
+.nw-proof-foliolive{border-top-color:var(--nw-rule);}
+.nw-proof-stage{background:var(--nw-bg);}
+.nw-proof-pageheads{border-bottom-color:var(--nw-rule);background:var(--nw-panel);}
+.nw-proof-pagehead{border-right-color:var(--nw-rule);}
+.nw-proof-pageheadtext strong{color:var(--nw-fg);}
+.nw-proof-pageheadtext span{color:var(--nw-fg-soft);}
+.nw-proof-smallbtn{border-color:var(--nw-line-strong);color:var(--nw-fg-soft);}
+.nw-proof-smallbtn:hover{border-color:var(--nw-brand);color:var(--nw-fg);}
+.nw-proof-livebadge{color:var(--nw-fg-soft);}
+.nw-proof-scroll{background:var(--nw-bg);}
+.nw-proof-grid{background:color-mix(in srgb,var(--nw-panel) 95%,var(--nw-fg) 5%);color:var(--nw-fg);box-shadow:0 0 0 1px var(--nw-rule),0 20px 50px color-mix(in srgb,var(--nw-fg) 8%,transparent);}
+.nw-proof-grid::after{
+  background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--nw-fg) 5%,transparent) 38%,color-mix(in srgb,var(--nw-fg) 11%,transparent) 50%,color-mix(in srgb,var(--nw-fg) 5%,transparent) 62%,transparent);
+}
+.nw-proof-row{border-bottom-color:var(--nw-rule);}
+.nw-proof-page:first-child{border-right-color:var(--nw-rule);}
+.nw-proof-no{color:var(--nw-fg-soft);}
+.nw-proof-row.is-changed .nw-proof-page{background:color-mix(in srgb,var(--nw-brand) 12%,transparent);}
+.nw-proof-row.is-left .nw-proof-page:first-child{background:color-mix(in srgb,var(--nw-danger) 12%,transparent);}
+.nw-proof-row.is-right .nw-proof-page:last-child{background:color-mix(in srgb,var(--nw-ok) 12%,transparent);}
+.nw-proof-page.is-empty{background:color-mix(in srgb,var(--nw-fg) 2.5%,transparent);}
+.nw-proof-mark{background:color-mix(in srgb,var(--nw-brand) 28%,transparent);box-shadow:none;}
+.nw-proof-state{color:var(--nw-fg-soft);}
+.nw-proof-state.is-error{color:var(--nw-danger);}
+.nw-proof-truncated{color:var(--nw-fg-soft);}
+.nw-proof-note{background:var(--nw-panel);color:var(--nw-fg);border-left-color:color-mix(in srgb,var(--nw-brand) 40%,transparent);}
+.nw-proof-note:hover{background:var(--nw-sunken);border-left-color:var(--nw-brand);}
+.nw-proof-noteno,.nw-proof-notesempty{color:var(--nw-fg-soft);}
+.nw-proof-notecount{color:var(--nw-brand);}
+.nw-proof-notesfoot{border-top-color:var(--nw-rule);}
+
+@media (prefers-reduced-motion:reduce){
+  .nw-folio-drawer,.nw-folio-read,.nw-proof{animation:none;}
+  .nw-folio-capture{transition:none;}
+}
+`);
+
 })();
 
 /* ==== 90-app.js ==== */
@@ -20255,8 +22514,21 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       parent = 0;
     }
     try {
-      const n = parseFloat(getComputedStyle(el).getPropertyValue('--dsh-frame-chrome-top'));
-      if (Number.isFinite(n) && n > 0) css = n;
+      // R178: the host has moved its top chrome between several variables
+      // (title bar, overlay toolbar, frame clearance). Read them all instead
+      // of trusting one name; any value the host stopped publishing would
+      // otherwise read as 0 and the fixed reading layer would slide back
+      // under the menu bar.
+      const cs = getComputedStyle(el);
+      const names = [
+        '--dsh-frame-chrome-top',
+        '--dsh-frame-top-clearance',
+        '--dsh-windows-titlebar-height',
+      ];
+      for (let i = 0; i < names.length; i += 1) {
+        const n = parseFloat(cs.getPropertyValue(names[i]));
+        if (Number.isFinite(n) && n > css) css = n;
+      }
     } catch (err) {
       css = 0;
     }
@@ -20948,7 +23220,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(2){animation-delay:.03s;}
 .nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(3){animation-delay:.06s;}
 .nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(4){animation-delay:.09s;}
-.nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(5){animation-delay:.12s;}
 
 /* 一行就是一个按钮：矩形盒子应答指针，形状由 ::before 画。
    盒子无圆角、无边框、无背景、无子元素应答指针——浏览器只有一个盒子要测。
@@ -21330,6 +23601,59 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     return msg || fallback || '操作失败';
   }
 
+  // R183: remember where a book was last read. One small map in
+  // localStorage is enough: losing it only means the next open starts at the
+  // first chapter again, and it never blocks the reader.
+  const READ_POS_KEY = 'nw-read-last-v1';
+  const READ_PAGE_KEY = 'nw-read-page-v1';
+  function readLastChapterOf(novelId) {
+    if (novelId == null) return null;
+    try {
+      const raw = window.localStorage.getItem(READ_POS_KEY);
+      if (!raw) return null;
+      const map = JSON.parse(raw);
+      return map && map[String(novelId)] != null ? map[String(novelId)] : null;
+    } catch (err) {
+      return null;
+    }
+  }
+  function rememberReadChapter(novelId, chapterId) {
+    if (novelId == null || chapterId == null) return;
+    try {
+      const raw = window.localStorage.getItem(READ_POS_KEY);
+      const map = raw ? JSON.parse(raw) : {};
+      if (!map || typeof map !== 'object') return;
+      map[String(novelId)] = String(chapterId);
+      window.localStorage.setItem(READ_POS_KEY, JSON.stringify(map));
+    } catch (err) {
+      /* storage may be unavailable; reading still works */
+    }
+  }
+  function readLastPageOf(novelId) {
+    if (novelId == null) return null;
+    try {
+      const raw = window.localStorage.getItem(READ_PAGE_KEY);
+      if (!raw) return null;
+      const map = JSON.parse(raw);
+      const page = map && map[String(novelId)];
+      return page == null || !Number.isFinite(Number(page)) ? null : Number(page);
+    } catch (err) {
+      return null;
+    }
+  }
+  function rememberReadPage(novelId, page) {
+    if (novelId == null || !Number.isFinite(Number(page))) return;
+    try {
+      const raw = window.localStorage.getItem(READ_PAGE_KEY);
+      const map = raw ? JSON.parse(raw) : {};
+      if (!map || typeof map !== 'object') return;
+      map[String(novelId)] = Math.max(0, Math.round(Number(page)));
+      window.localStorage.setItem(READ_PAGE_KEY, JSON.stringify(map));
+    } catch (err) {
+      /* storage may be unavailable; reading still works */
+    }
+  }
+
   // ------------------------------------------------------------ sidebar icon ---
   NW.SidebarIcon = function SidebarIcon(props) {
     const size = Number((props && props.size) || 16) || 16;
@@ -21450,6 +23774,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [activeNovelId, setActiveNovelId] = useState(null);
     const [activeChapterId, setActiveChapterId] = useState(null);
     const [chapter, setChapter] = useState(null);
+    // 完稿版本：the timeline is metadata-only (no decrypted bodies) and drives
+    // the folio tab count. The drawer and the proofing desk read the same list.
+    const [finalRows, setFinalRows] = useState([]);
+    // R175: 完稿 lives on the paper now. `folioOpen` owns the right-hand slip,
+    // `folioPreview` holds one decrypted version while it is open in place, and
+    // `proofPair` holds the two ids the proofing desk is comparing (`__live__`
+    // means the editor's current buffer).
+    const [folioOpen, setFolioOpen] = useState(false);
+    const [folioPreview, setFolioPreview] = useState(null);
+    const [proofPair, setProofPair] = useState(null);
     const [saveState, setSaveState] = useState('saved');
     const [savedAt, setSavedAt] = useState(0);
     /**
@@ -21624,6 +23958,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [readOpen, setReadOpen] = useState(false);
     // R137：从目录点进来的那一章（「读这一章」）。null = 接着编辑器当前章。
     const [readAt, setReadAt] = useState(null);
+    const [readPageAt, setReadPageAt] = useState(null);
     // R129：从目录点另一本书的「读整本」时，得等那本书的章节加载完再开卷。
     const readPendingRef = useRef(null);
     // R173：这一次开卷是不是我们替用户打开的沉浸态——关卷时要还回去，
@@ -21669,6 +24004,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // R102: the last chapter write, kept so flushEditor() can wait for a save
     // whose editor has already unmounted (the 首页 → 继续写 race).
     const pendingSaveRef = useRef(null);
+    // R184: native document strip. `armed` stays true while the Electron window
+    // is open; `revision` is the last poll result the client has applied.
+    const moyuRef = useRef({ armed: false, revision: 0, chapterId: null, novelId: null });
+    // R187: the browser fallback strip (Document Picture-in-Picture).
+    const pipRef = useRef(null);
     const rootRef = useRef(null);
     /**
      * R117: whether the studio is in phone layout. The CSS breakpoint alone is
@@ -22868,6 +25208,223 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         .catch(() => {});
     }, []);
 
+    // R184: apply a committed draft from the native document strip. The window
+    // may have been opened for a different chapter; never overwrite the current
+    // editor with the wrong book's text. If the chapter is no longer on screen,
+    // save the draft back to its original row and let the shelf refresh.
+    const applyMoyuDraft = useCallback(
+      async (state) => {
+        if (!state || state.chapterId == null) return;
+        const targetId = state.chapterId;
+        const text = String(state.text == null ? '' : state.text);
+        const current = chapterRef.current;
+        if (current && String(current.id) === String(targetId)) {
+          const live =
+            editorRef.current && typeof editorRef.current.getContent === 'function'
+              ? String(editorRef.current.getContent())
+              : String(current.content == null ? '' : current.content);
+          if (text !== live && editorRef.current && typeof editorRef.current.setContent === 'function') {
+            editorRef.current.setContent(text);
+          }
+          await saveChapter(text, targetId);
+          return;
+        }
+        await saveChapter(text, targetId);
+        pushToast('摸鱼窗口的草稿已写回原章节', 'ok');
+      },
+      [saveChapter, pushToast],
+    );
+
+    const pollMoyu = useCallback(async () => {
+      if (!moyuRef.current.armed) return;
+      let state;
+      try {
+        state = await NW.io.moyu.poll(moyuRef.current.revision);
+      } catch (err) {
+        return;
+      }
+      if (!state || state.session === false) return;
+      const revision = Number(state.revision) || 0;
+      if (revision <= moyuRef.current.revision) return;
+      moyuRef.current.revision = revision;
+      if (!state.closed) return;
+      moyuRef.current.armed = false;
+      await applyMoyuDraft(state);
+    }, [applyMoyuDraft]);
+
+    // R187: the native strip needs an Electron main process, and the packaged
+    // DSH host runs as a Node-mode child, so `require('electron')` is not the
+    // window API there either. Document Picture-in-Picture gives the same
+    // always-on-top strip in Chromium; closing it writes the draft back through
+    // the normal save path.
+    const openMoyuPip = useCallback(
+      async ({ text, chapterId, title }) => {
+        const pip = typeof window === 'undefined' ? null : window.documentPictureInPicture;
+        if (!pip || typeof pip.requestWindow !== 'function') return false;
+        let win;
+        try {
+          win = await pip.requestWindow({ width: 900, height: 188 });
+        } catch (err) {
+          return false;
+        }
+        const doc = win.document;
+        doc.title = title || '摸鱼';
+        doc.body.textContent = '';
+        const style = doc.createElement('style');
+        style.textContent = [
+          'html,body{margin:0;height:100%;overflow:hidden;background:#17171a;color:#e6e2da}',
+          'body{font-family:"Noto Serif SC","Songti SC",serif}',
+          'textarea{box-sizing:border-box;width:100%;height:100%;padding:14px 46px 14px 22px;border:0;outline:0;resize:none;background:transparent;color:inherit;font:inherit;font-size:17px;line-height:1.9}',
+          'button{position:fixed;top:8px;right:10px;width:26px;height:26px;border:0;border-radius:6px;background:transparent;color:inherit;font-size:18px;line-height:1;cursor:pointer;opacity:.5}',
+          'button:hover{opacity:1;background:rgba(255,255,255,.08)}',
+        ].join('');
+        const area = doc.createElement('textarea');
+        area.value = text;
+        area.spellcheck = false;
+        area.setAttribute('aria-label', title || '摸鱼');
+        const close = doc.createElement('button');
+        close.type = 'button';
+        close.textContent = '×';
+        close.title = '收起';
+        close.setAttribute('aria-label', '收起');
+        close.addEventListener('click', () => win.close());
+        doc.body.append(style, area, close);
+        doc.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape') win.close();
+        });
+        let committed = false;
+        win.addEventListener('pagehide', () => {
+          if (committed) return;
+          committed = true;
+          if (pipRef.current === win) pipRef.current = null;
+          const next = area.value;
+          if (next === text) return;
+          applyMoyuDraft({ chapterId, text: next }).catch(() => {});
+        });
+        pipRef.current = win;
+        area.focus();
+        return true;
+      },
+      [applyMoyuDraft],
+    );
+
+    const openMoyu = useCallback(async () => {
+      const current = chapterRef.current;
+      if (!current) {
+        pushToast('先打开一章，再开始摸鱼', 'warn');
+        return;
+      }
+      if (moyuRef.current.armed && String(moyuRef.current.chapterId) === String(current.id)) {
+        pushToast('摸鱼窗口已经开着', 'warn');
+        return;
+      }
+      if (pipRef.current) {
+        pushToast('摸鱼窗口已经开着', 'warn');
+        return;
+      }
+      if (moyuRef.current.armed) {
+        // The writer switched chapters while the strip was open. Commit the
+        // old draft to its own chapter first, then open the new one.
+        try {
+          await NW.io.moyu.close();
+          await pollMoyu();
+        } catch (err) {
+          moyuRef.current.armed = false;
+        }
+      }
+      await flushEditor();
+      const text =
+        editorRef.current && typeof editorRef.current.getContent === 'function'
+          ? String(editorRef.current.getContent())
+          : String(current.content == null ? '' : current.content);
+      try {
+        const result = await NW.io.moyu.open({
+          text,
+          chapterId: current.id,
+          novelId: current.novelId,
+          title: current.title,
+        });
+        if (result && result.ok !== false) {
+          moyuRef.current = {
+            armed: true,
+            revision: 0,
+            chapterId: current.id,
+            novelId: current.novelId,
+          };
+          return;
+        }
+        // R187: no Electron main process here — fall back to the in-browser
+        // always-on-top strip instead of leaving the feature dead.
+        if (await openMoyuPip({ text, chapterId: current.id, title: current.title })) return;
+        if (result && result.reason === 'electron-unavailable') {
+          pushToast('摸鱼模式需要 Chrome / Edge 浏览器（画中画窗口）', 'warn');
+        } else {
+          pushToast('摸鱼窗口没有打开', 'error');
+        }
+      } catch (err) {
+        if (await openMoyuPip({ text, chapterId: current.id, title: current.title })) return;
+        pushToast(errText(err, '摸鱼模式打开失败'), 'error');
+      }
+    }, [flushEditor, openMoyuPip, pollMoyu, pushToast]);
+
+    // If the writer moves to another chapter while the strip is open, close
+    // and commit it immediately. The draft is written back to its original
+    // chapter, never into the chapter that just came on screen.
+    useEffect(() => {
+      if (pipRef.current) {
+        try {
+          pipRef.current.close();
+        } catch (err) {
+          pipRef.current = null;
+        }
+        return undefined;
+      }
+      const session = moyuRef.current;
+      if (!session.armed || session.chapterId == null) return undefined;
+      if (String(session.chapterId) === String(activeChapterId)) return undefined;
+      let cancelled = false;
+      (async () => {
+        try {
+          await NW.io.moyu.close();
+          if (!cancelled) await pollMoyu();
+        } catch (err) {
+          session.armed = false;
+        }
+      })();
+      return () => { cancelled = true; };
+    }, [activeChapterId, pollMoyu]);
+
+    useEffect(() => () => {
+      if (pipRef.current) {
+        try {
+          pipRef.current.close();
+        } catch (err) {
+          /* the window may already be gone */
+        }
+        pipRef.current = null;
+      }
+    }, []);
+
+    useEffect(() => {
+      if (typeof window === 'undefined' || typeof document === 'undefined') return undefined;
+      const tick = () => {
+        if (!moyuRef.current.armed) return;
+        pollMoyu().catch(() => {});
+      };
+      const timer = window.setInterval(tick, 1100);
+      const onFocus = () => tick();
+      const onVisible = () => {
+        if (document.visibilityState === 'visible') tick();
+      };
+      window.addEventListener('focus', onFocus);
+      document.addEventListener('visibilitychange', onVisible);
+      return () => {
+        window.clearInterval(timer);
+        window.removeEventListener('focus', onFocus);
+        document.removeEventListener('visibilitychange', onVisible);
+      };
+    }, [pollMoyu]);
+
     /**
      * Saves the current chapter as a version. Returns whether a snapshot was
      * actually written. Normal chapter switches are throttled to one per minute
@@ -22957,6 +25514,29 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       }
     }, []);
 
+    // R183: a freshly created chapter should be ready to name. The editor is
+    // remounted for the new key, so wait for its API, then focus the heading
+    // with the existing title selected — typing replaces the placeholder.
+    const focusChapterTitleSoon = useCallback(() => {
+      let tries = 0;
+      const run = () => {
+        const api = editorRef.current;
+        if (api && typeof api.focusTitle === 'function') {
+          api.focusTitle();
+          return;
+        }
+        tries += 1;
+        if (tries < 10 && typeof window.requestAnimationFrame === 'function') {
+          window.requestAnimationFrame(run);
+        }
+      };
+      if (typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(run);
+      } else {
+        run();
+      }
+    }, []);
+
     const selectNovel = useCallback(
       async (id) => {
         setActiveNovelId(id == null ? null : id);
@@ -23015,6 +25595,225 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       setChapters(list);
       return list;
     }, []);
+
+    /**
+     * 完稿 versions of the open chapter, metadata only. The editor is
+     * uncontrolled, so this is also the only place the shell keeps the count
+     * shown in the status bar; the dialog refreshes it through the same helper.
+     */
+    const refreshFinalRows = useCallback(async (chapterId) => {
+      const id = chapterId != null ? chapterId : chapterRef.current && chapterRef.current.id;
+      if (id == null) {
+        setFinalRows([]);
+        return [];
+      }
+      try {
+        const list = await NW.db.listVersions(id, { meta: true });
+        const finals = (Array.isArray(list) ? list : []).filter((row) => row && row.kind === 'final');
+        if (aliveRef.current) setFinalRows(finals);
+        return finals;
+      } catch (err) {
+        if (aliveRef.current) setFinalRows([]);
+        return [];
+      }
+    }, []);
+
+    useEffect(() => {
+      refreshFinalRows();
+    }, [activeChapterId, refreshFinalRows]);
+
+    /**
+     * 「完稿」: seal the live buffer as a version. It does *not* silently move
+     * the 付印稿 unless this is the chapter's first final, or the writer ticked
+     * 「同时设为付印稿」 in the drawer. The first shape made every capture the
+     * new final, which meant a quick save could change what an export would
+     * produce without the writer saying so.
+     */
+    const saveFinalVersion = useCallback(
+      async (meta) => {
+        const current = chapterRef.current;
+        if (!current || current.id == null) {
+          pushToast('先打开一章再保存完稿', 'warn');
+          return null;
+        }
+        const text = (() => {
+          const api = editorRef.current;
+          try {
+            if (api && typeof api.getContent === 'function') return String(api.getContent() || '');
+          } catch (err) {
+            /* fall through to the stored row */
+          }
+          return String(current.content || '');
+        })();
+        if (!String(text).trim()) {
+          pushToast('本章还没有正文，无法保存完稿', 'warn');
+          return null;
+        }
+        const hadFinal = !!current.finalVersionId;
+        const setFinal = meta && typeof meta.setFinal === 'boolean' ? meta.setFinal : !hadFinal;
+        const options = { kind: 'final' };
+        if (meta && meta.note) options.note = String(meta.note).slice(0, 200);
+        const version = await NW.db.saveVersion(current.id, text, options);
+        if (!version) throw new Error('完稿保存失败');
+        if (setFinal) {
+          await NW.db.setFinalVersion(current.id, version.id);
+          setChapter((prev) =>
+            prev && String(prev.id) === String(current.id)
+              ? Object.assign({}, prev, { finalVersionId: version.id, finalVersionAt: Date.now() })
+              : prev,
+          );
+          patchChapterInList(current.id, { finalVersionId: version.id });
+        }
+        await refreshFinalRows(current.id);
+        const words = version.words != null ? version.words : NW.format.wordCount(text);
+        const suffix = setFinal ? ' · 已设为付印稿' : hadFinal ? ' · 付印稿未变' : ' · 尚未设置付印稿';
+        pushToast('已保存' + (version.label || '完稿') + ' · ' + NW.fmtWords(words) + ' 字' + suffix, 'ok', {
+          label: '查看',
+          onClick: () => setFolioOpen(true),
+        });
+        return version;
+      },
+      [patchChapterInList, pushToast, refreshFinalRows],
+    );
+
+    const openFolio = useCallback(() => {
+      const current = chapterRef.current;
+      if (!current || current.id == null) {
+        pushToast('先打开一章再管理完稿', 'warn');
+        return;
+      }
+      setFolioOpen(true);
+    }, [pushToast]);
+
+    const closeFolio = useCallback(() => setFolioOpen(false), []);
+
+    /** Read one archived version in place. The body is decrypted only now. */
+    const openFolioPreview = useCallback(
+      async (row) => {
+        if (!row || row.id == null) return;
+        try {
+          const full = await NW.db.getVersion(row.id);
+          if (!full) throw new Error('这一版已经不存在');
+          setFolioPreview(Object.assign({}, row, full));
+          setFolioOpen(false);
+        } catch (err) {
+          pushToast(errText(err, '读取完稿失败'), 'error');
+        }
+      },
+      [pushToast],
+    );
+
+    const setFolioFinal = useCallback(
+      async (row) => {
+        const current = chapterRef.current;
+        if (!current || current.id == null || !row || row.id == null) return;
+        try {
+          await NW.db.setFinalVersion(current.id, row.id);
+          setChapter((prev) =>
+            prev && String(prev.id) === String(current.id)
+              ? Object.assign({}, prev, { finalVersionId: row.id, finalVersionAt: Date.now() })
+              : prev,
+          );
+          patchChapterInList(current.id, { finalVersionId: row.id });
+          await refreshFinalRows(current.id);
+          pushToast('已设为付印稿 · ' + (row.label || '完稿'), 'ok');
+        } catch (err) {
+          pushToast(errText(err, '设置付印稿失败'), 'error');
+        }
+      },
+      [patchChapterInList, pushToast, refreshFinalRows],
+    );
+
+    /**
+     * Put an archived version back into the editor. The live buffer is sealed
+     * first, so restoring is itself undoable through the normal history.
+     */
+    const restoreFolioVersion = useCallback(
+      async (row) => {
+        const current = chapterRef.current;
+        if (!current || current.id == null || !row || row.id == null) return;
+        try {
+          const ok = await NW.ui.confirm(
+            '编辑器里的当前正文会先自动留作历史版本，再把「' + (row.label || '这一稿') + '」放回正文。',
+            { title: '恢复这版完稿？', okText: '恢复' },
+          );
+          if (!ok) return;
+          await snapshotVersion(true);
+          // The drawer only holds metadata (`content: ''`), so always ask the
+          // store for the sealed body instead of trusting the row's shape.
+          const full = await NW.db.getVersion(row.id);
+          if (!full || typeof full.content !== 'string') throw new Error('这一版已经不存在');
+          const api = editorRef.current;
+          if (!api || typeof api.setContent !== 'function') throw new Error('编辑器还没有准备好');
+          api.setContent(full.content);
+          setFolioPreview(null);
+          setProofPair(null);
+          setFolioOpen(false);
+          pushToast('已把' + (row.label || '这一稿') + '放回正文', 'ok');
+        } catch (err) {
+          pushToast(errText(err, '恢复完稿失败'), 'error');
+        }
+      },
+      [pushToast, snapshotVersion],
+    );
+
+    const deleteFolioVersion = useCallback(
+      async (row) => {
+        const current = chapterRef.current;
+        if (!current || current.id == null || !row || row.id == null) return;
+        try {
+          const ok = await NW.ui.confirm(
+            '删除后无法恢复；若删的是付印稿，付印标记会一并清除，当前正文不受影响。',
+            { title: '删除这版完稿？', okText: '删除', danger: true },
+          );
+          if (!ok) return;
+          await NW.db.deleteVersion(row.id);
+          if (folioPreview && String(folioPreview.id) === String(row.id)) setFolioPreview(null);
+          if (proofPair && (String(proofPair.left) === String(row.id) || String(proofPair.right) === String(row.id))) {
+            setProofPair(null);
+          }
+          const wasFinal = String(current.finalVersionId || '') === String(row.id);
+          if (wasFinal) {
+            setChapter((prev) =>
+              prev && String(prev.finalVersionId) === String(row.id)
+                ? Object.assign({}, prev, { finalVersionId: null, finalVersionAt: null })
+                : prev,
+            );
+            patchChapterInList(current.id, { finalVersionId: null });
+          }
+          await refreshFinalRows(current.id);
+          pushToast('已删除 ' + (row.label || '这一稿'), 'ok');
+        } catch (err) {
+          pushToast(errText(err, '删除完稿失败'), 'error');
+        }
+      },
+      [folioPreview, patchChapterInList, proofPair, pushToast, refreshFinalRows],
+    );
+
+    const openProof = useCallback(
+      (pair) => {
+        const left = Array.isArray(pair) ? pair[0] : pair && pair.left;
+        const right = Array.isArray(pair) ? pair[1] : pair && pair.right;
+        const a = left == null ? '' : String(left);
+        const b = right == null ? '' : String(right);
+        if (!a || !b || a === b) {
+          pushToast('请选择两个不同的版本', 'warn');
+          return;
+        }
+        setProofPair({ left: a, right: b });
+        setFolioOpen(false);
+        setFolioPreview(null);
+      },
+      [pushToast],
+    );
+
+    const closeProof = useCallback(() => setProofPair(null), []);
+
+    useEffect(() => {
+      setFolioOpen(false);
+      setFolioPreview(null);
+      setProofPair(null);
+    }, [activeChapterId]);
 
     const refreshNovels = useCallback(async () => {
       const list = await NW.db.listNovels();
@@ -23340,18 +26139,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       return () => window.clearInterval(timer);
     }, [ready, locked, pullSync]);
 
-    const createNovel = useCallback(async () => {
-      try {
-        const title = await NW.ui.prompt({
-          title: NW.t('新建小说'),
-          label: '小说标题',
-          value: '',
-          placeholder: '未命名小说',
-        });
-        if (title == null) return;
-        const novel = await NW.db.createNovel({ title: String(title).trim() || '未命名小说' });
+    const createNovel = useCallback(() => {
+      setDialog({ kind: 'NewNovel' });
+    }, []);
+
+    const createNovelSubmit = useCallback(
+      async (input) => {
+        const bookTitle = String((input && input.title) || '').trim() || '未命名小说';
+        const novel = await NW.db.createNovel({ title: bookTitle });
         await refreshNovels();
-        const created = await NW.db.createChapter(novel.id, { title: NW.t('新章节') });
+        // R182: creating a book no longer asks for a first-chapter title. The
+        // book gets a single chapter named after itself, so the writer can start
+        // typing immediately; more chapters are added from the book card.
+        const created = await NW.db.createChapter(novel.id, { title: bookTitle });
         await refreshChapters();
         if (!aliveRef.current) return;
         setActiveNovelId(novel.id);
@@ -23362,14 +26162,21 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         // the click did nothing.
         setView('write');
         pushToast('小说已创建', 'ok');
-      } catch (err) {
-        pushToast(errText(err, '新建小说失败'), 'error');
-      }
-    }, [refreshNovels, refreshChapters, pushToast]);
+      },
+      [refreshNovels, refreshChapters, pushToast],
+    );
 
     const createChapter = useCallback(
-      async (parentId) => {
-        const novelId = activeNovelId != null ? activeNovelId : chapter && chapter.novelId;
+      async (parentId, novelIdArg) => {
+        // R182: the book card's + creates a chapter for that book directly,
+        // even when it is not the active one. The old signature only knew the
+        // active novel, which made a per-book action impossible.
+        const novelId =
+          novelIdArg != null
+            ? novelIdArg
+            : activeNovelId != null
+              ? activeNovelId
+              : chapter && chapter.novelId;
         if (novelId == null) {
           pushToast('请先新建或选择一部小说', 'error');
           return;
@@ -23378,23 +26185,37 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           flushEditor();
           // R22: number the default title. Every chapter used to be called
           // 新章节, so a book of ten chapters showed ten identical rows.
-          const siblings = (Array.isArray(chapters) ? chapters : []).filter(
-            (row) => row && String(row.novelId) === String(novelId) && row.parentId == null,
+          // R183: number from the largest existing 「新章节 N」 rather than
+          // the sibling count. Deleting 2 of 3 chapters used to hand the next
+          // one a title already in the book (3), which made two rows collide.
+          const bookRows = (Array.isArray(chapters) ? chapters : []).filter(
+            (row) => row && String(row.novelId) === String(novelId),
           );
-          const title = NW.t('新章节') + (siblings.length > 0 ? ' ' + (siblings.length + 1) : '');
+          let highest = 0;
+          for (let i = 0; i < bookRows.length; i += 1) {
+            const match = /^新章节(?:\s*(\d+))?$/.exec(String(bookRows[i].title || '').trim());
+            if (!match) continue;
+            const n = match[1] ? Number(match[1]) : 1;
+            if (n > highest) highest = n;
+          }
+          const title = NW.t('新章节') + (highest > 0 ? ' ' + (highest + 1) : '');
           const created = await NW.db.createChapter(novelId, { parentId: parentId == null ? null : parentId, title: title });
           await refreshChapters();
           if (!aliveRef.current) return;
+          setActiveNovelId(novelId);
           setActiveChapterId(created.id);
           setChapter(created);
           setSaveState('saved');
           // R22: a new chapter is meant to be written in, so open the editor.
           setView('write');
+          // R183: land in the title so the placeholder can be replaced in one
+          // gesture, instead of asking the writer to aim at the heading.
+          focusChapterTitleSoon();
         } catch (err) {
           pushToast(errText(err, '新建章节失败'), 'error');
         }
       },
-      [activeNovelId, chapter, chapters, flushEditor, refreshChapters, pushToast],
+      [activeNovelId, chapter, chapters, flushEditor, focusChapterTitleSoon, refreshChapters, pushToast],
     );
 
     const renameNode = useCallback(
@@ -23457,6 +26278,37 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     const deleteNode = useCallback(
       async (kind, id) => {
+        const before = Array.isArray(chapters) ? chapters : [];
+        const gone = before.find((row) => row && String(row.id) === String(id)) || null;
+        // R183: a book with no chapters is a dead end — the card opens an empty
+        // reader and there is no chapter row left to click. Keep the last one.
+        if (kind === 'chapter' && gone) {
+          // deleteChapter removes the whole subtree, so count descendants too:
+          // deleting a volume whose children are the rest of the book would
+          // otherwise slip past a simple row count.
+          const doomedIds = new Set([String(id)]);
+          let grew = true;
+          while (grew) {
+            grew = false;
+            for (let i = 0; i < before.length; i += 1) {
+              const row = before[i];
+              if (!row || row.parentId == null) continue;
+              if (!doomedIds.has(String(row.parentId))) continue;
+              const key = String(row.id);
+              if (!doomedIds.has(key)) {
+                doomedIds.add(key);
+                grew = true;
+              }
+            }
+          }
+          const remaining = before.filter(
+            (row) => row && String(row.novelId) === String(gone.novelId) && !doomedIds.has(String(row.id)),
+          );
+          if (remaining.length === 0) {
+            pushToast('每本书至少保留一章；先新建一章，再删除这一章。', 'warn');
+            return;
+          }
+        }
         const ok = await NW.ui.confirm(
           kind === 'novel' ? '删除这部小说及其全部章节？删除后可在回收站恢复。' : '删除这个章节？删除后可在回收站恢复。',
           { danger: true, title: NW.t('确认删除') },
@@ -23467,8 +26319,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           flushEditor();
           // R22: remember where the doomed chapter sat before the delete, so the
           // cursor can fall through to its neighbour instead of the library head.
-          const before = Array.isArray(chapters) ? chapters : [];
-          const gone = before.find((row) => row && String(row.id) === String(id)) || null;
           const novelOf = (gone && gone.novelId) || activeNovelId;
           // The index has to be counted inside the doomed chapter's own book.
           // `chapters` holds every book, so an index taken from it pointed at a
@@ -23818,7 +26668,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * `startId` 是从目录点进来的那一章：不动编辑器的当前章，只决定翻开的
      * 是书里的哪一页（R129）。
      */
-    const openRead = useCallback((startId) => {
+    const openRead = useCallback((startId, startPage) => {
       setDockOpen(false);
       // R174：先把宿主顶上那一条量下来写进 CSS 变量——此刻 root 还在正常
       // 布局里，rect.top 就是宿主给面板留的位置；等类加上再量就只剩 0 了。
@@ -23831,6 +26681,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         }
       }
       setReadAt(startId == null ? null : startId);
+      setReadPageAt(startPage == null ? null : startPage);
       setReadOpen(true);
       // R173：开卷就是进「沉浸」——书架与状态栏不渲染、坞淡下去，整块面板
       // 只剩书。但**不**向浏览器要全屏：沉浸与全屏是两件事，这里只要前者。
@@ -23845,6 +26696,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const closeRead = useCallback(() => {
       setReadOpen(false);
       setReadAt(null);
+      setReadPageAt(null);
       if (readImmersiveRef.current) {
         readImmersiveRef.current = false;
         setImmersive(false);
@@ -24057,7 +26909,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // by a second; exporting without this produced files missing the last
           // sentence the author typed.
           await flushEditor();
-          const rows = await NW.db.listChapters(activeNovelId);
+          // 定稿 wins: the row carries the chosen version's text when one is
+          // selected, and the live buffer only for chapters without one.
+          const rows = await NW.db.listChaptersForOutput(activeNovelId);
           let chapters = (rows || [])
             .filter((row) => row && row.id)
             .map((row, index) => ({
@@ -24112,7 +26966,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           await flushEditor();
           const payloads = [];
           for (const novel of books) {
-            const rows = await NW.db.listChapters(novel.id);
+            const rows = await NW.db.listChaptersForOutput(novel.id);
             payloads.push({
               title: novel.title || '未命名小说',
               author: opts.includeMeta === false ? '' : novel.author || '',
@@ -24233,11 +27087,24 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       const pending = readPendingRef.current;
       if (!pending) return;
       if (String(pending.novelId) !== String(activeNovelId)) return;
-      if (!readChapters.length) return;
+      if (!readChapters.length) {
+        readPendingRef.current = null;
+        pushToast('这本书还没有章节，先新建一章。', 'warn');
+        return;
+      }
       readPendingRef.current = null;
-      const first = readChapters[0];
-      openRead(first ? first.id : null);
-    }, [activeNovelId, readChapters, openRead]);
+      // R183: reopening a book lands on the chapter where it was left, not
+      // always at page one.
+      const remembered = readLastChapterOf(pending.novelId);
+      const first =
+        readChapters.find((row) => row && String(row.id) === String(remembered)) ||
+        readChapters[0];
+      const rememberedPage =
+        remembered && first && String(first.id) === String(remembered)
+          ? readLastPageOf(pending.novelId)
+          : null;
+      openRead(first ? first.id : null, rememberedPage);
+    }, [activeNovelId, readChapters, openRead, pushToast]);
 
     // R47: annotations of the open book. Books are the unit here because the
     // reading view shows a whole book and the editor only the open chapter —
@@ -24323,7 +27190,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const editDailyGoal = useCallback(async () => {
       const answer = await NW.ui.prompt({
         title: '每日字数目标',
-        label: '每天想写多少字？（0 关闭目标环）',
+        label: '每天想写多少字？',
         value: String(dailyGoal || 0),
       });
       if (answer == null) return;
@@ -24546,6 +27413,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           onRead: () => openRead(null),
         });
 
+    // R181: the paper's folio tab names the pinned version, not just a tiny
+    // seal. The list rows are the only place the label exists, so resolve it
+    // once here and hand it to the presentational tab.
+    const finalRow = chapter && chapter.finalVersionId != null
+      ? finalRows.find((row) => row && String(row.id) === String(chapter.finalVersionId))
+      : null;
+
     return h(
       'div',
       {
@@ -24594,6 +27468,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 onSelectChapter: selectChapter,
                 onCreateNovel: createNovel,
                 onCreateChapter: createChapter,
+                onCreateChapterForNovel: (novelId) => createChapter(null, novelId),
+                onCreateSubchapter: (parentId, novelId) => createChapter(parentId, novelId),
+                onToggleWordCount: (next) => applySettings({ showWordCount: next !== false }),
+                onMoyu: openMoyu,
                 onRename: renameNode,
                 onDelete: deleteNode,
                 onMove: moveNode,
@@ -24601,6 +27479,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 // 「读整本」从第一章读起。两者都不动编辑器当前章。
                 onReadChapter: (id) => {
                   if (id == null) return;
+                  rememberReadChapter(activeNovelId, id);
                   openRead(id);
                 },
                 onReadBook: (novelId) => {
@@ -24612,8 +27491,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     selectNovel(target);
                     return;
                   }
-                  const first = readChapters[0];
-                  openRead(first ? first.id : null);
+                  if (readChapters.length === 0) {
+                    pushToast('这本书还没有章节，先新建一章。', 'warn');
+                    return;
+                  }
+                  const remembered = readLastChapterOf(target);
+                  const start =
+                    readChapters.find((row) => row && String(row.id) === String(remembered)) ||
+                    readChapters[0];
+                  const rememberedPage =
+                    remembered && start && String(start.id) === String(remembered)
+                      ? readLastPageOf(target)
+                      : null;
+                  if (start) openRead(start.id, rememberedPage);
                 },
                 // R77: 章节信息（状态 / 简介 / 目标字数）。
                 onChapterInfo: (id, title) => openDialog('chapterInfo', { chapterId: id, title: title }),
@@ -24639,7 +27529,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           : null,
         h(
           'div',
-          { className: 'nw-main' },
+          { className: 'nw-main' + (folioOpen ? ' has-folio' : '') },
           // R6 fix: the only 收起 button lives in the shelf header, so hiding the
           // shelf used to remove every in-panel route back (dock needs two clicks
           // and reads as a writing tool, not a layout control). This handle stays
@@ -24676,6 +27566,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 // from updatedAt; countPunctuation is part of the recount key.
                 dailyStats: dailyStats,
                 countPunctuation: settings.countPunctuation !== false,
+                // R177: home honours the same word-count switch as the shelf
+                // and status bar — turning counts off must quiet every screen,
+                // not only the directory.
+                showWordCount: settings.showWordCount !== false,
                 // R100: 今天 becomes a goal ring, and 「只写 100 字」 starts a
                 // sitting-sized target on the chapter the writer is resuming.
                 dailyGoal: dailyGoal,
@@ -24868,6 +27762,32 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       onToggle: () => setNotesOpen((v) => !v),
                       onSave: saveNotes,
                     }),
+                    // R180: the folio tab (and its in-place preview) belongs to
+                    // the paper, not to the whole bench. As a bench sibling its
+                    // `right:12px` landed on top of the advice column whenever
+                    // 「AI建议」 was open.
+                    h(NW.FolioTab, {
+                      count: finalRows.length,
+                      finalId: chapter.finalVersionId,
+                      finalLabel: finalRow ? finalRow.label : '',
+                      busy: busy,
+                      onCapture: () => {
+                        saveFinalVersion().catch((err) => pushToast(errText(err, '保存完稿失败'), 'error'));
+                      },
+                      onOpen: openFolio,
+                    }),
+                    folioPreview
+                      ? h(NW.FolioPreview, {
+                          row: folioPreview,
+                          chapterTitle: chapter.title,
+                          finalId: chapter.finalVersionId,
+                          settings: themeSettings,
+                          onClose: () => setFolioPreview(null),
+                          onSetFinal: setFolioFinal,
+                          onCompare: openProof,
+                          onRestore: restoreFolioVersion,
+                        })
+                      : null,
                   ),
                   adviceOpen
                     ? h(NW.Advice, {
@@ -24933,6 +27853,23 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               ? null
               : dock
             : null,
+          (view === 'write' || immersive) && folioOpen && chapter
+            ? h(NW.FolioDrawer, {
+                open: true,
+                chapterId: String(chapter.id),
+                chapterTitle: chapter.title,
+                rows: finalRows,
+                finalId: chapter.finalVersionId,
+                busy: busy,
+                onClose: closeFolio,
+                onCapture: saveFinalVersion,
+                onPreview: openFolioPreview,
+                onSetFinal: setFolioFinal,
+                onCompare: openProof,
+                onRestore: restoreFolioVersion,
+                onDelete: deleteFolioVersion,
+              })
+            : null,
         ),
       ),
       // R44: 读一遍 — the book laid out as pages, covering the whole panel.
@@ -24948,6 +27885,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             currentId: chapter ? chapter.id : null,
             // R129：目录里点的章节优先于「编辑器当前章」。
             startId: readAt,
+            startPage: readPageAt,
+            onPageChange: (page) => rememberReadPage(activeNovelId, page),
             // The editor buffer can be ahead of the last autosave, so the open
             // chapter is read from the live text, not from the stored row.
             currentText: getEditorText(),
@@ -24955,6 +27894,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // R131：朗读引擎里的「声音」下拉要能改设置（在线音色存进 settings），
             // 阅读页本身不持有设置，只把改动交回来。
             onReadSetting: (patch) => setSettings((prev) => ({ ...prev, ...patch })),
+            // R183: remember the chapter under the current page, so closing the
+            // reader and re-opening the book resumes where the writer stopped.
+            onChapterChange: (chapterId) => rememberReadChapter(activeNovelId, chapterId),
             // R47: reading is also when a writer notices — so this is where an
             // annotation can be drawn. The marks are the shell's, not the view's:
             // the same array feeds the editor underneath, so a line underlined
@@ -24981,6 +27923,20 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             },
           })
         : null,
+      // 校样台：把两个版本并成一张双页校样。它是覆盖层，编辑器仍挂在下面，
+      // 关闭后光标、滚动和未保存的正文都还在原处。
+      proofPair && chapter
+        ? h(NW.ProofDesk, {
+            chapterTitle: chapter.title,
+            versions: finalRows,
+            finalId: chapter.finalVersionId,
+            liveText: getEditorText(),
+            pair: proofPair,
+            onClose: closeProof,
+            onSetFinal: setFolioFinal,
+            onRestore: restoreFolioVersion,
+          })
+        : null,
       // Immersive is a pure canvas: no toolbar, no shelf, no status bar. The only
       // exit is Esc (registered below), so nothing steals vertical space.
       immersive
@@ -24988,7 +27944,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         : h(NW.StatusBar, {
             saveState: saveDot,
             saveText: statusText + (savedAt ? ' · ' + NW.fmtDate(savedAt) : ''),
-            middle: h(
+            middle: settings.showWordCount === false ? null : h(
               'span',
               { className: 'nw-status-mid', style: { display: 'inline-flex', gap: '14px', alignItems: 'center' } },
               h('span', null, '本章 ' + NW.fmtWords(chapterWords) + ' 字'),
@@ -25019,10 +27975,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             capabilities: caps,
             editorApi: editorRef,
             onClose: () => setDialog(null),
+            onCreateNovel: createNovelSubmit,
             getText: getEditorText,
             onSettings: applySettings,
             onToast: pushToast,
             onExport: exportNow,
+            onSaveFinal: saveFinalVersion,
+            onRefreshFinals: refreshFinalRows,
             onSelectChapter: selectChapter,
             onRefreshData: async () => {
               await refreshNovels();
@@ -26714,7 +29673,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           ev.preventDefault();
           if (typeof p.onReveal === 'function') p.onReveal(item);
         },
-        title: NW.t('点击定位到正文'),
       },
       revised
         ? h(
@@ -26798,7 +29756,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     type: 'button',
                     className: 'nw-adv-mini',
                     disabled: busy,
-                    title: NW.t('拿这一版当起点，再要一版不同的'),
                     onClick: (ev) => {
                       ev.stopPropagation();
                       p.onRegenerate(item);
@@ -26944,7 +29901,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     setActiveId(String(row.id));
                     if (typeof p.onReveal === 'function') p.onReveal(row);
                   },
-                  title: row.found ? NW.t('点击定位到正文') : NW.t('原文已改动，定位可能不准'),
                 },
                 // The order badge only carries information when this region was
                 // revised more than once; a single record needs no ①.
@@ -26967,7 +29923,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       {
                         type: 'button',
                         className: 'nw-acc-undo',
-                        title: NW.t('撤销接受，把这条放回建议列表'),
                         'aria-label': NW.t('撤销接受'),
                         onClick: (ev) => {
                           ev.stopPropagation();
@@ -27834,7 +30789,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             'data-on': on ? '1' : '0',
             'aria-pressed': on ? 'true' : 'false',
             disabled: busy,
-            title: on ? NW.t('再点一次取消') : NW.t('加上这个角度（可多选）'),
             onClick: () => {
               const next = on
                 ? focus.filter((value) => value !== opt.value)
@@ -27847,16 +30801,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           opt.label,
         );
       }),
-      // R74: says out loud that the chips are optional *and* multi-select — the
-      // writer asked for both, and eleven unlit pills read as "nothing works".
-      // R75: and it says what to do next, now that pressing a pill does not run.
-      h(
-        'span',
-        { className: 'nw-advice-focus-hint' },
-        focus.length
-          ? NW.t('已选 {0} 个角度 · 再点一次取消，选好后点下方按钮', focus.length)
-          : NW.t('角度可多选、也可以不选 · 不选就按下面的要求来'),
-      ),
+      // R185: 只保留选中数量这一条状态反馈，角度说明小字已删除。
+      focus.length
+        ? h(
+            'span',
+            { className: 'nw-advice-focus-hint' },
+            NW.t('已选 {0} 个角度', focus.length),
+          )
+        : null,
     );
 
     // Free-text instruction. Enter submits (Shift+Enter inserts a newline) so the
@@ -27867,7 +30819,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       h('textarea', {
         value: note,
         rows: 2,
-        placeholder: NW.t('补充要求，例如：只看结尾三段 / 别动对话 / 主角口吻再冷一点'),
+        placeholder: NW.t('补充要求'),
         'aria-label': NW.t('补充要求'),
         onChange: (ev) => setNote(ev.target.value),
         onKeyDown: (ev) => {
@@ -27880,7 +30832,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       h(
         'div',
         { className: 'nw-advice-notebar' },
-        h('span', { className: 'nw-advice-notehint' }, NW.t('Enter 按这个要求重来')),
         h('span', { style: { flex: '1 1 auto' } }),
         h(
           'button',
@@ -27922,7 +30873,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             { className: 'nw-advice-paste-head' },
             h('span', { className: 'nw-advice-paste-icon', 'aria-hidden': 'true' }, NW.icon('sparkle', { size: 14 })),
             h('strong', { className: 'nw-advice-paste-title' }, NW.t('粘贴其他 AI 的建议')),
-            h('span', { className: 'nw-advice-paste-tag' }, NW.t('与模型建议同一套卡片')),
             h(
               'button',
               {
@@ -27941,17 +30891,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           ),
           h(
             'div',
-            { className: 'nw-advice-paste-help' },
-            NW.t('把另一个 AI 写好的建议贴进来。点「复制全文与全部问题」会把本章全文和已有建议一起复制，直接发给对方；原文要和这一章一字不差，卡片才能定位和高亮。'),
-          ),
-          h(
-            'div',
             { className: 'nw-advice-paste-fmtbox' },
             h(
               'div',
               { className: 'nw-advice-paste-fmtlabel' },
               h('span', null, NW.t('格式说明')),
-              h('span', { className: 'nw-advice-paste-fmtnote' }, NW.t('可直接整段复制给 AI')),
             ),
             h('pre', { className: 'nw-advice-paste-fmt' }, NW.advicePaste ? NW.advicePaste.TEMPLATE : ''),
           ),
@@ -27964,14 +30908,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               onClick: copyFullPrompt,
               children: NW.t('复制全文与全部问题'),
             }),
-            h('span', { className: 'nw-advice-paste-tip' }, NW.t('也可以直接贴 JSON 数组')),
           ),
           h('textarea', {
             className: 'nw-advice-paste-input',
             value: pasteText,
             rows: 6,
             spellCheck: false,
-            placeholder: NW.t('原文：……\n问题：……\n建议：……'),
             'aria-label': NW.t('粘贴其他 AI 的建议'),
             onChange: (ev) => {
               setPasteText(ev.target.value);
@@ -27992,9 +30934,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               { className: 'nw-advice-paste-count' },
               pasteText
                 ? NW.t('已输入 {0} 字', String(pasteText).length)
-                : NW.t('支持标签格式或 JSON 数组'),
+                : '',
             ),
-            h('span', { className: 'nw-advice-paste-actions-hint' }, NW.t('Ctrl+Enter 导入')),
           ),
           pasteError ? h('div', { className: 'nw-advice-paste-error', role: 'alert' }, pasteError) : null,
           h(
@@ -28030,7 +30971,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         { className: 'nw-suggest-empty' },
         NW.ui.spinner(),
         h('span', null, NW.t('正在读这一章…')),
-        h('span', { style: { fontSize: '12px', opacity: '.7' } }, NW.t('模型要通读全文，通常十几秒。')),
       );
     } else if (error) {
       body = h(
@@ -28044,12 +30984,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         'div',
         { className: 'nw-suggest-empty' },
         NW.icon('sparkle', { size: 24 }),
-        h('span', null, NW.t('让模型通读这一章，指出最值得改的地方。')),
-        h(
-          'span',
-          { style: { fontSize: '12px', opacity: '.7' } },
-          NW.t('接受会移到下面的「已接收」，拒绝的直接丢掉；点一条会把原文滚到那一段。'),
-        ),
         busy
           ? h(
               'span',
@@ -28079,11 +31013,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           'span',
           null,
           NW.t(drained ? '这些建议都处理完了。' : '这一章没有被标出的明显问题。'),
-        ),
-        h(
-          'span',
-          { style: { fontSize: '12px', opacity: '.7' } },
-          NW.t(drained ? '重新审读可以再找一轮，或者回去接着写。' : '换个重点再看看，或写下去。'),
         ),
         // R93: 重新审读 must be here whether the list was drained or the model
         // found nothing — a writer staring at "没有问题" still needs a way to
@@ -28120,7 +31049,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           ? h(
               'div',
               { className: 'nw-advice-notehint' },
-              NW.t('「原文已改动，定位不到」：那段文字已经不在这一章里了。'),
+              NW.t('{0} 条定位不到', items.filter((item) => Number(item.start) < 0).length),
             )
           : null,
         busy
@@ -28217,7 +31146,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       onDoubleClick: () => {
         if (typeof p.onResize === 'function') p.onResize(null);
       },
-      title: NW.t('拖拽调整建议栏宽度（双击回到自动）'),
     });
 
     return h(
@@ -28788,7 +31716,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         { className: 'nw-selwin-empty' },
         NW.ui.spinner(),
         h('span', null, NW.t('正在读选中的这段… {0}s', elapsed)),
-        h('span', { style: { fontSize: '12px', opacity: '.7' } }, NW.t('只改这一段，前后文只用来保证接得上。')),
         thinkBox,
       );
     } else if (error && !hasCards) {
@@ -28810,7 +31737,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         'div',
         { className: 'nw-selwin-empty' },
         NW.icon('success', { size: 24 }),
-        h('span', null, NW.t('这段放着就行，模型没找到值得改的地方。')),
         NW.ui.btn({ onClick: () => run({ force: true }), children: NW.t('再读一次') }),
       );
     } else {
@@ -29186,6 +32112,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     { id: 'writing', label: '写作', icon: 'typewriter' },
     { id: 'export', label: '导出与文件', icon: 'download' },
     { id: 'privacy', label: '隐私与锁定', icon: 'lock' },
+    { id: 'ai', label: 'AI', icon: 'sparkle' },
     { id: 'submit', label: '投稿', icon: 'mail' },
     { id: 'keys', label: '快捷键', icon: 'keyboard' },
   ];
@@ -29353,11 +32280,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       'div',
       { className: 'nw-field' },
       NW.React.createElement('label', null, '按体裁 / 篇幅分列的收稿邮箱'),
-      NW.React.createElement(
-        'span',
-        { className: 'nw-hint' },
-        '这家刊有几个收稿邮箱就登记几行。体裁和字数都不填 = 任何稿件都能投这个地址。',
-      ),
       list.length === 0
         ? NW.React.createElement('div', { className: 'nw-dim', style: { padding: '6px 0' } }, '还没有分列邮箱。')
         : NW.React.createElement(
@@ -29678,7 +32600,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         h('div', { className: 'nw-lock-eyebrow' }, night ? 'NIGHT STUDY · ' + NW.t('私密书房') : 'PRIVATE STUDY · ' + NW.t('私密书房')),
         h('h2', { className: 'nw-lock-title' }, NW.t('书房已上锁')),
         h('div', { className: 'nw-lock-rule', 'aria-hidden': 'true' }),
-        h('p', { className: 'nw-lock-hint' }, NW.t('输入密码，继续昨晚那一页。')),
         h(
           'div',
           { className: 'nw-lock-form' },
@@ -29692,9 +32613,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               type: 'password',
               value: password,
               autoFocus: true,
-              placeholder: NW.t('请输入密码'),
               'aria-label': NW.t('密码'),
-              'aria-describedby': 'nw-lock-keys',
               disabled: busy,
               onChange: (ev) => setPassword(ev.target.value),
               onKeyDown: (ev) => {
@@ -29718,12 +32637,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           ),
         ),
         error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
-        h(
-          'div',
-          { className: 'nw-lock-keys', id: 'nw-lock-keys' },
-          h('kbd', null, 'Enter'),
-          ' ' + NW.t('解锁') + ' · ' + NW.t('密码只保存在本机'),
-        ),
         p.onClose
           ? h(
               'button',
@@ -29731,12 +32644,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               NW.t('取消'),
             )
           : null,
-      ),
-      h(
-        'div',
-        { className: 'nw-lock-meta' },
-        h('span', { className: 'nw-lock-meta-item' }, h(LockPadlock), NW.t('本地加密 · AES-256-GCM')),
-        h('span', { className: 'nw-lock-meta-item' }, NW.t('内容不上传')),
       ),
       h(
         'div',
@@ -29824,7 +32731,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       h(
         'div',
         null,
-        h('p', { className: 'nw-hint-block' }, '设置后，锁定时正文以 AES-256-GCM 加密保存；关闭 DSH 再打开也需要密码才能解锁。'),
         NW.ui.field({ label: NW.t('密码'), children: NW.ui.input({ type: 'password', value: pw1, onChange: setPw1, autoFocus: true }) }),
         NW.ui.field({ label: '确认密码', children: NW.ui.input({ type: 'password', value: pw2, onChange: setPw2 }) }),
         error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
@@ -29895,6 +32801,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const hasChapter = !!(defaultTarget.kind === 'chapter' && defaultTarget.id);
     const target = hasChapter ? defaultTarget : { kind: 'novel', id: String(novel.id || ''), title: novelTitle };
     const [scope, setScope] = useState(target.kind === 'chapter' ? 'chapter' : 'novel');
+    const [finalHint, setFinalHint] = useState('');
 
     const APPEND_LIMIT = 8000;
     const trimmedAppend = String(appendText || '').replace(/\r\n|\r/g, '\n');
@@ -29915,6 +32822,45 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       scope === 'chapter'
         ? '将导出《' + novelTitle + '》的「' + chapterLabel + '」。'
         : '将导出《' + novelTitle + '》的全部章节。';
+
+    // Tell the writer which body will actually leave the app: a chapter with a
+    // 定稿 exports that version, not the unsaved buffer behind the modal.
+    useEffect(() => {
+      let alive = true;
+      const load = async () => {
+        if (!NW.db) return;
+        if (scope === 'chapter' && hasChapter) {
+          const fresh = await NW.db.getChapter(target.id).catch(() => null);
+          if (!fresh || fresh.finalVersionId == null) {
+            if (alive) setFinalHint('本章未设付印稿。');
+            return;
+          }
+          let label = '';
+          try {
+            const list = await NW.db.listVersions(target.id, { meta: true });
+            const picked = (list || []).filter((row) => String(row.id) === String(fresh.finalVersionId))[0];
+            if (picked && picked.label) label = String(picked.label);
+          } catch (err) {
+            /* the label is a nicety; the export still uses the version */
+          }
+          if (alive) setFinalHint('本章使用付印稿' + (label ? '「' + label + '」' : '') + '。');
+          return;
+        }
+        const rows = await NW.db.listChapters(novel.id);
+        const count = (rows || []).filter((row) => row && row.finalVersionId != null).length;
+        if (alive) {
+          setFinalHint(count
+            ? count + ' 章设有付印稿。'
+            : '未设置付印稿。');
+        }
+      };
+      load().catch(() => {
+        if (alive) setFinalHint('');
+      });
+      return () => {
+        alive = false;
+      };
+    }, [scope, hasChapter, target.id, novel.id]);
 
     const run = async () => {
       setBusy(true);
@@ -30009,8 +32955,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         h(
           'div',
           { className: 'nw-row' },
-          h('span', null, '不分章节（短篇连续排版）'),
-          NW.ui.toggle({ checked: continuous, onChange: setContinuous, label: '不分章节（短篇连续排版）' }),
+          h('span', null, '不分章节'),
+          NW.ui.toggle({ checked: continuous, onChange: setContinuous, label: '不分章节' }),
         ),
         h(
           'div',
@@ -30043,7 +32989,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               NW.ui.textarea({
                 value: appendText,
                 rows: 4,
-                placeholder: '例如：作者署名、联系方式、未完待续说明。这段文字会追加在正文最后。',
                 onChange: (v) => setAppendText(v),
                 ariaLabel: '文末追加内容',
               }),
@@ -30054,9 +32999,15 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               ),
             )
           : null,
-        format === 'pdf' ? h('p', { className: 'nw-hint-block' }, 'PDF 通过 docx 渲染生成，需要本机 PDF 引擎可用。') : null,
-        format === 'txt' && appendOn ? h('p', { className: 'nw-hint-block' }, '纯文本导出的文末追加依赖 Host 支持；若未生效请改用 docx。') : null,
         h('p', { className: 'nw-hint-block' }, headline),
+        finalHint
+          ? h(
+              'p',
+              { className: 'nw-hint-block nw-export-finalhint' },
+              h('span', { className: 'nw-final-badge is-final' }, '付印稿'),
+              h('span', null, finalHint),
+            )
+          : null,
         error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
       ),
       h(
@@ -30070,6 +33021,79 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     );
   };
 
+
+  // ============================================================ New novel ====
+  /**
+   * R176: create the book and its first chapter in one calm step.
+   *
+   * The old prompt only asked for a book title and then created a second thing
+   * called 「新章节」 that the writer had to rename immediately. For a short
+   * story that is a chapter tree with one leaf — pure ceremony. Asking for the
+   * first chapter here (optional, falling back to the book title) means the
+   * writer lands in a page that already says what the piece is called, and the
+   * shelf can hide a tree that only holds one row.
+   */
+  NW.dialogs.NewNovel = function NewNovel(props) {
+    const p = props || {};
+    const [title, setTitle] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+
+    const submit = async () => {
+      if (busy) return;
+      setBusy(true);
+      setError('');
+      try {
+        await p.onCreateNovel({
+          title: String(title || '').trim(),
+        });
+        if (typeof p.onClose === 'function') p.onClose();
+      } catch (err) {
+        setBusy(false);
+        setError(errText(err, '新建小说失败'));
+      }
+    };
+
+    const onEnter = (ev) => {
+      if (ev.key === 'Enter' && !ev.isComposing) {
+        ev.preventDefault();
+        submit();
+      }
+    };
+
+    return modal(
+      NW.t('新建小说'),
+      h(
+        'div',
+        { className: 'nw-newnovel' },
+        NW.ui.field({
+          label: '小说标题',
+          children: NW.ui.input({
+            value: title,
+            autoFocus: true,
+            placeholder: '未命名小说',
+            onChange: setTitle,
+            onKeyDown: onEnter,
+            ariaLabel: '小说标题',
+          }),
+        }),
+        error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
+      ),
+      h(
+        'div',
+        { style: { display: 'flex', gap: '8px' } },
+        NW.ui.btn({ onClick: p.onClose, children: NW.t('取消') }),
+        NW.ui.btn({
+          kind: 'primary',
+          onClick: submit,
+          disabled: busy,
+          children: busy ? '创建中…' : '创建并开始写',
+        }),
+      ),
+      '440px',
+      p.onClose,
+    );
+  };
 
   // ============================================================= Typeset ====
   NW.dialogs.Typeset = function Typeset(props) {
@@ -30120,7 +33144,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       h(
         'div',
         null,
-        h('p', { className: 'nw-hint-block' }, '预览模式：原文不会被覆盖，确认后才会写入。'),
         h(
           'div',
           { className: 'nw-inline', style: { justifyContent: 'space-between', marginBottom: '8px' } },
@@ -30280,7 +33303,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const folder = String((picked && picked.dir) || '');
         if (!folder) return null;
         await persist({ dir: folder, mirror: true, encrypt: encrypt });
-        setHint('已选择保存位置：之后每次修改都会自动覆盖这个文件夹里的文件。');
+        setHint('已选择保存位置。');
         return picked;
       });
 
@@ -30328,7 +33351,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     body.push(
       NW.ui.field({
         label: '保存文件夹',
-        hint: '小说会以 Word 文档写进这个目录（加密时是 .docx.nwe），每次修改自动覆盖，不需要手动另存。',
         children: h(
           'div',
           { className: 'nw-inline', style: { gap: '6px' } },
@@ -30341,7 +33363,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           NW.ui.btn({
             onClick: chooseDir,
             disabled: !!busy,
-            title: '用系统对话框选择文件夹',
             children: NW.t('选择…'),
           }),
           NW.ui.btn({
@@ -30395,15 +33416,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       ),
     );
 
-    body.push(
-      h(
-        'p',
-        { className: 'nw-hint-block' },
-        encrypt
-          ? '加密后文件扩展名是 .docx.nwe，用其它编辑器打不开；密钥只保存在本机，换台电脑要先恢复密码。'
-          : '当前是明文存储，文件夹里的 .docx 可以直接用 Word 打开。',
-      ),
-    );
 
     body.push(
       h(
@@ -30736,10 +33748,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * An empty value means "follow the harness default", which is the shipped
      * state; that is why every pair starts as `null` rather than a guessed id.
      */
-    const modelPicker = (label, provKey, modKey, hint) =>
+    const modelPicker = (label, provKey, modKey) =>
       NW.ui.field({
         label: label,
-        hint: hint,
         children: NW.ui.select({
           value: draft[provKey] && draft[modKey] ? draft[provKey] + '\u0000' + draft[modKey] : '',
           onChange: (value) => {
@@ -30880,7 +33891,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             hasPassword: data ? data.hasPassword !== false : prev.hasPassword,
             password: '',
             error: '',
-            hint: '邮箱设置已保存。可以点「测试连接」确认服务器可达。',
+            hint: '邮箱设置已保存。',
           }),
         );
         notify('投稿邮箱已保存', 'ok');
@@ -31039,7 +34050,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             hasPassword: data ? data.hasPassword !== false : prev.hasPassword,
             password: '',
             error: '',
-            hint: data && data.configured ? '收件设置已保存。可以点「测试连接」确认能读到收件箱。' : '',
+            hint: data && data.configured ? '收件设置已保存。' : '',
           }),
         );
         notify('收件设置已保存', 'ok');
@@ -31140,17 +34151,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // R16 ⑥: a 4th `hint` argument now renders as a real note under the row —
     // before it only reached the tooltip, and the 标点 switch needs to explain
     // what it changes.
-    const rowToggle = (label, checked, onChange, hint) =>
+    const rowToggle = (label, checked, onChange) =>
       h(
         'div',
         { className: 'nw-row' },
-        h(
-          'span',
-          { className: 'nw-rowlabel' },
-          h('span', null, label),
-          hint ? h('span', { className: 'nw-dim nw-rowhint' }, hint) : null,
-        ),
-        NW.ui.toggle({ checked: !!checked, onChange: onChange, label: label, title: hint || label }),
+        h('span', { className: 'nw-rowlabel' }, h('span', null, label)),
+        NW.ui.toggle({ checked: !!checked, onChange: onChange, label: label }),
       );
 
     return modal(
@@ -31205,7 +34211,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // 换一套。浅色随机不再是单独开关：跟随系统本身就是「交给环境」的意思。
             NW.ui.field({
               label: NW.t('跟随系统深浅色'),
-              hint: NW.t('系统切到浅色时，从浅色、护眼、报纸、杂志里随机一套，之后每半小时自动换一套；深色时用下面选的那套。'),
               children: NW.ui.toggle({
                 checked: draft.themeAuto === true,
                 label: NW.t('跟随系统'),
@@ -31215,7 +34220,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             draft.themeAuto
               ? NW.ui.field({
                   label: NW.t('系统为深色时用'),
-                  hint: NW.t('浅色一侧不再指定：每次进入浅色都会换一套，免得每天打开都是同一个白天。'),
                   children: NW.ui.select({
                     value: draft.themeDark || 'night',
                     onChange: (value) => set('themeDark', value),
@@ -31227,7 +34231,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // night room can be pinned for writers who liked that version.
             NW.ui.field({
               label: NW.t('锁屏外观'),
-              hint: NW.t('跟随主题：白天是书房、夜里是夜灯。始终深色：锁屏固定夜灯。'),
               children: NW.ui.seg({
                 value: draft.lockDark === true ? 'dark' : 'theme',
                 ariaLabel: NW.t('锁屏外观'),
@@ -31242,7 +34245,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // 字体画，挑的时候就能看见长什么样；下面还给一行正文范例。
             NW.ui.field({
               label: NW.t('字体'),
-              hint: NW.t('点一下换一种笔迹。楷体、仿宋、书宋都在这台机器上；装过方正书宋或霞鹜文楷的会优先用你装的。'),
               children: [
                 h(
                   'div',
@@ -31295,7 +34297,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // 一栏像纸书，两栏像期刊。放得太隐蔽也没用，它就在字号行距旁边。
             NW.ui.field({
               label: NW.t('每页栏数'),
-              hint: NW.t('双栏把一页正文排成两栏（期刊那种），一行二十来字更好读；面板太窄会自动回到一栏。'),
               children: NW.ui.seg({
                 ariaLabel: NW.t('每页栏数'),
                 value: Number(draft.readColumns) >= 2 ? '2' : '1',
@@ -31311,7 +34312,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // 它们不该在弹层里挤着填。
             NW.ui.field({
               label: NW.t('朗读接口地址'),
-              hint: NW.t('任何 OpenAI /v1/audio/speech 兼容的接口：填到 /v1 也行，填完整的 …/audio/speech 也行。留空则不用「自定义」引擎。'),
               children: h('input', {
                 type: 'text',
                 className: 'nw-input',
@@ -31325,7 +34325,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               { className: 'nw-grid2' },
               NW.ui.field({
                 label: NW.t('朗读接口密钥'),
-                hint: NW.t('本地服务通常留空。'),
                 children: h('input', {
                   type: 'password',
                   className: 'nw-input',
@@ -31347,7 +34346,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             ),
             NW.ui.field({
               label: NW.t('朗读音色'),
-              hint: NW.t('接口那边的音色名：alloy / nova / 或本地模型自己的名字。'),
               children: h('input', {
                 type: 'text',
                 className: 'nw-input',
@@ -31368,7 +34366,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               }),
               NW.ui.field({
                 label: NW.t('光标颜色'),
-                hint: NW.t('留空表示跟随主题。'),
                 children: h(
                   'div',
                   { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
@@ -31400,12 +34397,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             ),
             rowToggle('光标闪烁', draft.caretBlink !== false, (v) => set('caretBlink', v)),
             rowToggle('打字机模式', draft.typewriter, (v) => set('typewriter', v)),
-            rowToggle('沉浸模式（隐藏所有面板；Esc 退出，Ctrl+Shift+F 或 Ctrl+Alt+F 切换）', draft.immersive, (v) => set('immersive', v)),
+            rowToggle('沉浸模式', draft.immersive, (v) => set('immersive', v)),
             rowToggle(
               '只照亮光标所在的那一段',
               draft.focusDim !== false,
               (v) => set('focusDim', v),
-              NW.t('其余段落淡去，仍在原处；光标离开编辑区时全部恢复，鼠标一滚就回来。沉浸与非沉浸都生效。'),
             ),
           ),
         ),
@@ -31419,7 +34415,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               '统计字数包含标点符号',
               draft.countPunctuation !== false,
               (v) => set('countPunctuation', v),
-              '关闭后，状态栏、书籍总字数和投稿预览里的字数都会扣掉标点。默认包含，与常见中文写作软件一致。',
+            ),
+            rowToggle(
+              '显示字数',
+              draft.showWordCount !== false,
+              (v) => set('showWordCount', v),
             ),
             NW.ui.field({
               label: '自动保存间隔（毫秒）',
@@ -31437,9 +34437,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 style: { maxWidth: '140px' },
               }),
             }),
+            // R176: export formatting belongs to 导出与文件, not 写作. Keeping
+            // the signature, meta toggle and cover control in the writing tab
+            // made it read as three unrelated writing switches.
+          ),
+        ),
+        // -------------------------------------------------- 3 导出与文件 ----
+        section(
+          '导出与文件',
+          h(
+            'div',
+            null,
             NW.ui.field({
               label: '文末追加内容',
-              hint: '导出时追加在正文最后，例如署名、联系方式或「未完待续」。',
               children: NW.ui.textarea({
                 rows: 3,
                 value: String(draft.exportSignature || ''),
@@ -31456,25 +34466,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               h('span', null, '封面图片'),
               NW.ui.btn({ onClick: () => openSibling(p, 'export', {}), children: '在导出面板中选择…' }),
             ),
-            // R29: two AI jobs, two models. Each defaults to the harness model;
-            // the writer picks a strong one for the editorial advice if they
-            // want. 「跟随默认模型」 is the shipped state, not a placeholder — an
-            // unset pair really does fall through to the harness selection on
-            // the Host side.
-            // R118: the 「AI 校对模型 / 要求」 pair is gone — that angle now runs
-            // inside AI建议 (the `words` focus), so there is nothing to tune
-            // separately. The old settings keys stay in DEFAULT_SETTINGS for
-            // migrating libraries, they are simply no longer rendered here.
-            modelPicker('AI 投稿模型', 'submitProvider', 'submitModel', '生成投稿邮件正文与按期刊要求排版时使用。'),
-            modelPicker('AI建议模型', 'adviceProvider', 'adviceModel', '通读全章给出AI建议，建议用能力更强的模型。'),
-          ),
-        ),
-        // -------------------------------------------------- 3 导出与文件 ----
-        section(
-          '导出与文件',
-          h(
-            'div',
-            null,
             NW.ui.field({
               label: '默认导出格式',
               children: NW.ui.select({
@@ -31493,7 +34484,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               h(
                 'span',
                 { className: 'nw-inline', style: { gap: '6px' } },
-                h('span', { className: 'nw-dim' }, NW.t('每部作品一个文件，打成一个 zip')),
                 NW.ui.btn({
                   onClick: () => {
                     if (typeof p.onExportAll !== 'function') return;
@@ -31587,7 +34577,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       type: 'password',
                       value: pwState.oldValue,
                       onChange: (v) => setPwState((prev) => Object.assign({}, prev, { oldValue: v, error: '' })),
-                      placeholder: '修改密码前需要验证当前密码',
                     }),
                   }),
                   NW.ui.field({
@@ -31600,7 +34589,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     }),
                   }),
                   NW.ui.field({
-                    label: '清除密码（输入当前密码）',
+                    label: '清除密码',
                     children: NW.ui.input({
                       type: 'password',
                       value: pwState.value,
@@ -31630,11 +34619,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 ),
             pwState.error ? h('div', { className: 'nw-lock-error', role: 'alert' }, pwState.error) : null,
             h(
-              'p',
-              { className: 'nw-hint-block' },
-              '密码只在本机用 PBKDF2-SHA256 派生的密钥校验，正文用 AES-256-GCM 加密；忘记密码将无法恢复正文。',
-            ),
-            h(
               'div',
               { className: 'nw-row' },
               h('span', null, '立即锁定'),
@@ -31642,25 +34626,30 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             ),
           ),
         ),
-        // ------------------------------------------------------ 5 投稿 ----
+        // --------------------------------------------------------- 5 AI ----
+        // R183: two models, two different jobs. They no longer live in 投稿
+        // (advice has nothing to do with sending mail); the tab sits between
+        // privacy and submission so both are still one click from where used.
+        section(
+          'AI',
+          h(
+            'div',
+            null,
+            modelPicker('AI 投稿模型', 'submitProvider', 'submitModel'),
+            modelPicker('AI建议模型', 'adviceProvider', 'adviceModel'),
+          ),
+        ),
+        // ------------------------------------------------------ 6 投稿 ----
         section(
           '投稿',
           h(
             'div',
             null,
-            h(
-              'p',
-              { className: 'nw-hint-block' },
-              smtp.configured
-                ? '已配置投稿邮箱' + (smtp.user ? '（' + smtp.user + '）' : '') + '。'
-                : '还没有配置投稿邮箱。填好下面的服务器信息后，投稿助手就能直接发信。',
-            ),
             // One-click provider presets: typing smtp.qq.com + 465 + SSL by hand
             // was the single most common source of "连接已关闭".
             presets.length > 0
               ? NW.ui.field({
                   label: '快速填写',
-                  hint: '选择你的邮箱服务商，主机与端口会自动填好；密码处仍需填「授权码 / 客户端专用密码」。',
                   children: h(
                     'div',
                     { className: 'nw-preset-wrap' },
@@ -31719,7 +34708,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     checked: !!smtp.secure,
                     onChange: (v) => setSmtp((prev) => Object.assign({}, prev, { secure: v })),
                     label: '使用 SSL',
-                    title: '465 端口通常用 SSL；587 端口通常关闭此项改用 STARTTLS。',
                   }),
                 ),
               }),
@@ -31734,7 +34722,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             }),
             NW.ui.field({
               label: '密码 / 授权码',
-              hint: '多数邮箱需要用「授权码」，不是网页登录密码。留空表示沿用已保存的密码。',
               children: NW.ui.input({
                 type: 'password',
                 value: smtp.password,
@@ -31746,13 +34733,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               '允许跳过证书校验（不推荐）',
               smtp.allowInsecureTls === true,
               (v) => setSmtp((prev) => Object.assign({}, prev, { allowInsecureTls: !!v })),
-              'R80 起默认拒绝：证书错误可能意味着中间人正在截取授权码。只有确认是公司代理 / 杀毒软件时才打开。',
             ),
             rowToggle(
               '允许明文登录（不推荐）',
               smtp.allowPlaintextAuth === true,
               (v) => setSmtp((prev) => Object.assign({}, prev, { allowPlaintextAuth: !!v })),
-              '服务器不提供 STARTTLS 时默认中止发送；只有可信的内网中继才需要打开。',
             ),
             h(
               'div',
@@ -31761,26 +34746,14 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               NW.ui.btn({ onClick: testSmtp, disabled: !!smtp.busy || !smtp.configured, children: NW.t('测试连接') }),
             ),
             smtp.busy ? h('div', { className: 'nw-inline', style: { marginTop: '8px' } }, NW.ui.spinner(smtp.busy)) : null,
-            smtp.error
-              ? h('div', { className: 'nw-lock-error', role: 'alert' }, smtp.error)
-              : smtp.hint
-                ? h('p', { className: 'nw-hint-block' }, smtp.hint)
-                : null,
+            smtp.error ? h('div', { className: 'nw-lock-error', role: 'alert' }, smtp.error) : null,
             // ---- 收件箱（IMAP）----
             // 投稿是「发信」，编辑部的回信要「收信」，两者是同一套账号；把收件
             // 摆在同一节里，作者才不用去猜「我该填哪个服务器」。
             h('hr', { className: 'nw-rule' }),
-            h(
-              'p',
-              { className: 'nw-hint-block' },
-              imap.configured
-                ? '收件箱已配置' + (imap.user ? '（' + imap.user + '）' : '') + '，首页会显示编辑部的最新回信。'
-                : '配好收信服务器后，首页会显示编辑部的最新回信和未读数；不配置也能正常投稿，只是回信要自己去网页邮箱看。',
-            ),
             imapPresets.length > 0
               ? NW.ui.field({
                   label: '快速填写',
-                  hint: '选服务商会自动填好 IMAP 主机与端口；密码同样要填授权码。',
                   children: h(
                     'div',
                     { className: 'nw-preset-wrap' },
@@ -31816,7 +34789,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               '启用收件箱',
               imap.enabled,
               (v) => setImap((prev) => Object.assign({}, prev, { enabled: !!v })),
-              '关闭后首页不再读取收件箱，设置仍保留。',
             ),
             rowToggle(
               '沿用发信账号',
@@ -31829,13 +34801,12 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     user: v ? '' : prev.user,
                   }),
                 ),
-              '打开时自动用上面 SMTP 的邮箱地址与授权码收信，只需在服务器名与 SMTP 对不上时手动填。',
             ),
             NW.ui.field({
               label: 'IMAP 主机',
               children: NW.ui.input({
                 value: imap.host,
-                placeholder: imap.useSmtp ? '留空则自动用 SMTP 主机推导（smtp.qq.com → imap.qq.com）' : '例如 imap.qq.com',
+                placeholder: '例如 imap.qq.com',
                 onChange: (v) => setImap((prev) => Object.assign({}, prev, { host: v, error: '', hint: '' })),
               }),
             }),
@@ -31860,23 +34831,20 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     checked: !!imap.secure,
                     onChange: (v) => setImap((prev) => Object.assign({}, prev, { secure: v })),
                     label: '使用 SSL',
-                    title: '993 端口用 SSL；143 端口关闭此项改用 STARTTLS。',
                   }),
                 ),
               }),
             ),
             NW.ui.field({
               label: '收件账号',
-              hint: imap.useSmtp ? '留空则用 SMTP 用户名收信。' : '',
               children: NW.ui.input({
                 value: imap.user,
-                placeholder: imap.useSmtp ? '留空则沿用发信邮箱' : '例如 you@qq.com',
+                placeholder: '例如 you@qq.com',
                 onChange: (v) => setImap((prev) => Object.assign({}, prev, { user: v, error: '', hint: '' })),
               }),
             }),
             NW.ui.field({
               label: '密码 / 授权码',
-              hint: '留空表示沿用已保存的密码（SMTP 那份也能用）。',
               children: NW.ui.input({
                 type: 'password',
                 value: imap.password,
@@ -31888,13 +34856,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               '允许跳过证书校验（不推荐）',
               imap.allowInsecureTls === true,
               (v) => setImap((prev) => Object.assign({}, prev, { allowInsecureTls: !!v })),
-              'R80 起默认拒绝：证书错误可能意味着中间人正在截取授权码。',
             ),
             rowToggle(
               '允许明文登录（不推荐）',
               imap.allowPlaintextAuth === true,
               (v) => setImap((prev) => Object.assign({}, prev, { allowPlaintextAuth: !!v })),
-              '服务器不提供 STARTTLS 时默认中止登录；只有可信的内网中继才需要打开。',
             ),
             h(
               'div',
@@ -31907,11 +34873,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               }),
             ),
             imap.busy ? h('div', { className: 'nw-inline', style: { marginTop: '8px' } }, NW.ui.spinner(imap.busy)) : null,
-            imap.error
-              ? h('div', { className: 'nw-lock-error', role: 'alert' }, imap.error)
-              : imap.hint
-                ? h('p', { className: 'nw-hint-block' }, imap.hint)
-                : null,
+            imap.error ? h('div', { className: 'nw-lock-error', role: 'alert' }, imap.error) : null,
             h(
               'div',
               { className: 'nw-row' },
@@ -31955,11 +34917,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 h('span', { className: 'nw-dim' }, journalCount == null ? '' : journalCount + ' 家'),
                 NW.ui.btn({ onClick: openJournals, children: '打开投稿助手…' }),
               ),
-            ),
-            h(
-              'p',
-              { className: 'nw-hint-block' },
-              '期刊的邮箱与投稿要求以官方最新征稿启事为准，可在投稿助手的「期刊管理」里核对后保存。',
             ),
           ),
           { ref: submitSectionRef },
@@ -32235,24 +35192,50 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     // ---------------------------------------------------------- manuscript ---
     /**
-     * Read the chosen scope into `{title, content}` rows. Live editor text wins
-     * for the current chapter, everything else comes from IndexedDB so a stale
-     * sidebar row cannot submit an old draft.
+     * Read the chosen scope into `{title, content}` rows. A chapter whose 定稿
+     * is set submits that version, not the draft behind the editor; everything
+     * else reads IndexedDB so a stale sidebar row cannot submit an old draft.
      */
+    const finalContentOf = async (row) => {
+      if (!row || !NW.db) return '';
+      let meta = row;
+      try {
+        const fresh = await NW.db.getChapter(row.id);
+        if (fresh) meta = fresh;
+      } catch (err) {
+        /* keep the row we were given */
+      }
+      if (!meta.finalVersionId) return '';
+      try {
+        const version = await NW.db.getVersion(meta.finalVersionId);
+        if (version && String(version.chapterId) === String(row.id) && version.locked !== true) {
+          return String(version.content || '');
+        }
+      } catch (err) {
+        /* fall back to the live/stored body */
+      }
+      return '';
+    };
+
     const collectWork = async () => {
       const out = [];
       if (!novelId) return out;
       if (scope === 'chapter') {
         if (!currentChapter) return out;
-        let text = typeof p.getText === 'function' ? String(p.getText() || '') : '';
-        if (!text) text = textOfChapter(currentChapter);
-        out.push({ title: String(currentChapter.title || '第 1 章'), content: text });
+        const finalText = await finalContentOf(currentChapter);
+        let text = finalText;
+        if (!text) {
+          text = typeof p.getText === 'function' ? String(p.getText() || '') : '';
+          if (!text) text = textOfChapter(currentChapter);
+        }
+        out.push({ title: String(currentChapter.title || '第 1 章'), content: text, final: !!finalText });
         return out;
       }
       const rows = scope === 'custom' ? chapters.filter((row) => pickedIds.indexOf(String(row.id)) >= 0) : chapters;
       for (let i = 0; i < rows.length; i += 1) {
         const row = rows[i];
-        let content = textOfChapter(row);
+        const finalText = await finalContentOf(row);
+        let content = finalText || textOfChapter(row);
         if (!content && NW.db && typeof NW.db.getChapter === 'function') {
           try {
             const full = await NW.db.getChapter(row.id);
@@ -32261,7 +35244,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             content = textOfChapter(row);
           }
         }
-        out.push({ title: String(row.title || '第 ' + (i + 1) + ' 章'), content: content });
+        out.push({ title: String(row.title || '第 ' + (i + 1) + ' 章'), content: content, final: !!finalText });
       }
       return out;
     };
@@ -32607,10 +35590,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           .filter((key) => matchedVariant.genres[key])
           .map((key) => EMAIL_GENRE_LABELS[key] || key);
         if (genres.length) bits.push(genres.join('/'));
-        return '按本稿篇幅匹配到这家刊的这一条收稿邮箱' + (bits.length ? '：' + bits.join(' · ') : '') + '。';
+        return '匹配收稿邮箱' + (bits.length ? '：' + bits.join(' · ') : '') + '。';
       }
       if (emailInfo && emailInfo.matched === 'default' && Array.isArray(emailInfo.variants) && emailInfo.variants.length) {
-        return '这家刊分设了多个收稿邮箱，但当前篇幅没有单独对应的那一条，填的是通用邮箱，可核对后手动改。';
+        return '当前篇幅没有单独的收稿邮箱，填的是通用邮箱。';
       }
       return '';
     })();
@@ -32756,7 +35739,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       stepBody.push(h('h4', null, '选择要投稿的小说'));
 
       if (novelList.length === 0) {
-        stepBody.push(h('div', { className: 'nw-dim' }, '书架上还没有小说，请先回到写作页新建一部。'));
       }
 
       if (novelList.length > 0) {
@@ -32794,6 +35776,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             h('dd', null, chapters.length + ' 章'),
             h('dt', null, '字数'),
             h('dd', null, workBusy ? '统计中…' : workCount + ' 字'),
+            h('dt', null, '付印稿'),
+            h(
+              'dd',
+              null,
+              workBusy
+                ? '统计中…'
+                : (() => {
+                    const finals = (workRows || []).filter((row) => row.final).length;
+                    if (!finals) return '未设置（按当前正文投稿）';
+                    return scope === 'chapter' ? '本章使用付印稿' : finals + ' 章使用付印稿';
+                  })(),
+            ),
             h('dt', null, NW.t('体裁')),
             h('dd', null, genreLabelOf(genre || recommendedGenre)),
           ),
@@ -32864,10 +35858,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       stepBody.push(
         NW.ui.field({
           label: NW.t('体裁'),
-          hint:
-            '按字数自动推荐：' +
-            genreLabelOf(recommendedGenre) +
-            '；期刊的收稿邮箱会按体裁与篇幅匹配，可手动改选。',
           children: h('div', { className: 'nw-genre-seg nw-seg' }, genreButtons),
         }),
       );
@@ -32942,7 +35932,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // R16 ⑩: 期刊水平等级 — the badge the author weighs first.
           NW.ui.field({
             label: NW.t('期刊等级'),
-            hint: '国家级 / 省级 / 市级只是常见的投稿难度参考，具体以期刊官方说明为准。',
             children: NW.ui.select({
               value: editTier,
               ariaLabel: NW.t('期刊等级'),
@@ -32957,7 +35946,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           }),
           NW.ui.field({
             label: '默认收稿邮箱',
-            hint: '不带分类条件的通用邮箱；下面登记了分体裁邮箱的，投稿时优先用那一行。',
             children: NW.ui.input({
               value: editEmail,
               placeholder: '编辑部收稿邮箱',
@@ -32996,7 +35984,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             NW.ui.btn({ onClick: () => setManage(false), disabled: !!manageBusy, children: '取消' }),
           ),
           manageBusy ? h('div', { className: 'nw-inline', style: { marginTop: '8px' } }, NW.ui.spinner(manageBusy)) : null,
-          h('p', { className: 'nw-hint-block' }, '信息会保存在本机，用于下次投稿；请以期刊官方最新征稿启事为准。'),
         );
       } else if (selected) {
         const requirementRows = (Array.isArray(selected.requirements) ? selected.requirements : []).map((line, index) =>
@@ -33061,7 +36048,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           ),
         );
       } else {
-        detailBody = h('div', { className: 'nw-dim' }, '在左侧选择一家期刊，这里会显示它的投稿要求、邮箱与字数范围。');
+        detailBody = null;
       }
 
       const journalButtons = filtered.map((entry) =>
@@ -33132,11 +36119,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         stepBody.push(
           h('p', { className: 'nw-hint-block' }, '收件人：' + String(sent.to || '') + '　·　发送时间：' + NW.fmtDate(sent.at)),
         );
-        stepBody.push(
-          historyRows.length > 0
-            ? h('div', { className: 'nw-version-list' }, historyRows)
-            : h('p', { className: 'nw-hint-block' }, '历史投稿记录会保存在本机，最多 50 条。'),
-        );
+        if (historyRows.length > 0) {
+          stepBody.push(h('div', { className: 'nw-version-list' }, historyRows));
+        }
         if (sendError) stepBody.push(h('div', { className: 'nw-lock-error', role: 'alert' }, sendError));
       } else if (preparing || (!prepared && !prepareError)) {
         // R32 ①: nothing of the letter is shown until the letter exists. A
@@ -33175,11 +36160,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               ),
             ),
             h('div', { className: 'nw-prep-bar', 'aria-hidden': 'true' }, h('i', null)),
-            h(
-              'div',
-              { className: 'nw-prep-hint' },
-              '模型正在通读全文并比对这家刊的征稿要求，通常十几秒。完成后直接进入预览，届时每个字段都能改。',
-            ),
           ),
         );
       } else if (prepareError) {
@@ -33251,7 +36231,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             }),
             NW.ui.field({
               label: '收件人',
-              hint: [toWhy, emailNote || '可以直接改成编辑部的其他邮箱。'].filter(Boolean).join(' '),
+              hint: [toWhy, emailNote].filter(Boolean).join(' '),
               children: toBox,
             }),
           ),
@@ -33261,8 +36241,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           '共 ' +
           body.length +
           ' 字符' +
-          (prepared && prepared.pasteInBody ? ' · 已包含稿件全文（按该刊要求粘贴在正文里）' : ' · 只含投稿信，小说全文走附件') +
-          '。可以直接修改，发出的就是这里的文字。';
+          (prepared && prepared.pasteInBody ? ' · 正文含稿件全文' : ' · 正文只含投稿信');
 
         stepBody.push(
           NW.ui.field({
@@ -33335,7 +36314,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             (prepared.attachmentNaming && prepared.attachmentNaming.sentence
               ? '，命名：' + prepared.attachmentNaming.sentence
               : '')
-          : '附件格式与数量已按征稿要求生成，可改名或增删。';
+          : '';
         stepBody.push(
           h(
             'div',
@@ -33350,7 +36329,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               NW.ui.btn({ onClick: addAttachmentFiles, disabled: !!attachBusy, children: attachBusy || '添加本地文件…' }),
               attachBoxes.length ? NW.ui.btn({ onClick: () => setAttachRows([]), children: '清空附件' }) : null,
             ),
-            h('span', { className: 'nw-hint' }, attachRule),
+            attachRule ? h('span', { className: 'nw-hint' }, attachRule) : null,
           ),
         );
 
@@ -33459,20 +36438,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             h(
               'div',
               { className: 'nw-lock-error', role: 'alert' },
-              '这家期刊以纸质邮寄为主，直接发邮件可能不被受理。建议改为本地导出后邮寄，或先电话 / 邮件确认收稿方式。',
+              '这家期刊以纸质邮寄为主，直接发邮件可能不被受理。',
             ),
           );
         }
         if (smtp.configured && smtp.user) {
           stepBody.push(h('p', { className: 'nw-hint-block' }, '将从 ' + smtp.user + ' 发出。'));
         }
-        stepBody.push(
-          h(
-            'p',
-            { className: 'nw-hint-block' },
-            '主题、正文、收件人、附件都可以直接改，确认无误后点右下角「确认投稿」。发送后会写入本机的投稿记录，可在「投稿管理」里标记处理状态。',
-          ),
-        );
 
       }
     }
@@ -33635,6 +36607,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // 正文逐行摊开，先看清改了什么再决定要不要恢复。
     const [compare, setCompare] = useState(null);
 
+    // 完稿 versions live in their own panel; keep this history list to the
+    // automatic snapshots so the same save does not appear twice.
+    const autoRowsOf = (list) => (Array.isArray(list) ? list : []).filter((row) => row && row.kind !== 'final');
+
     useEffect(() => {
       let alive = true;
       if (!chapterId) {
@@ -33644,7 +36620,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       NW.db
         .listVersions(chapterId)
         .then((list) => {
-          if (alive) setRows(list || []);
+          if (alive) setRows(autoRowsOf(list));
         })
         .catch((err) => {
           if (alive) setError(errText(err, '读取版本失败'));
@@ -33660,7 +36636,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         let saved = true;
         if (typeof p.onSnapshotVersion === 'function') saved = await p.onSnapshotVersion(true);
         const list = await NW.db.listVersions(chapterId);
-        setRows(list || []);
+        setRows(autoRowsOf(list));
         if (typeof p.onToast === 'function') {
           if (saved === false) p.onToast('当前章节没有可保存的正文，未创建快照', 'warn');
           else p.onToast('已创建版本快照', 'ok');
@@ -33693,7 +36669,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     const body = [];
     if (rows == null) body.push(NW.ui.spinner('读取版本…'));
-    else if (rows.length === 0) body.push(NW.ui.empty('还没有历史版本。每次切换章节或手动快照都会记录。'));
+    else if (rows.length === 0) body.push(NW.ui.empty('还没有历史版本。'));
     else {
       body.push(
         h(
@@ -33767,7 +36743,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                   ),
                 ),
             diffRows.length > LIMIT
-              ? h('div', { className: 'nw-dim', style: { padding: '8px 10px' } }, '只显示了前 ' + LIMIT + ' 行；整章太长，恢复前建议直接预览。')
+              ? h('div', { className: 'nw-dim', style: { padding: '8px 10px' } }, '只显示了前 ' + LIMIT + ' 行。')
               : null,
           ),
         ),
@@ -33800,6 +36776,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     );
   };
 
+  // =============================================================== Final ====
   // ================================================================ Lore ====
   /**
    * R77: 设定集 —— 人物 / 地点 / 道具 / 随手设定，按书存。
@@ -33921,7 +36898,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       rows == null
         ? NW.ui.spinner('读取…')
         : filtered.length === 0
-          ? h('div', { className: 'nw-dim', style: { padding: '14px 6px' } }, query ? '没有匹配的设定' : '还没有设定。新建一个人物或地点。')
+          ? h('div', { className: 'nw-dim', style: { padding: '14px 6px' } }, query ? '没有匹配的设定' : '还没有设定。')
           : h(
               'div',
               { className: 'nw-lore-items', role: 'list' },
@@ -33991,8 +36968,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           'div',
           { className: 'nw-lore-empty' },
           NW.icon('book', { size: 26 }),
-          h('span', null, '左边选一张卡，或者新建一张。'),
-          h('span', { className: 'nw-dim' }, '设定只给自己看，不进正文、不进导出。'),
         );
 
     return modal(
@@ -34501,7 +37476,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     const body = [];
     if (rows == null) body.push(h('div', { className: 'nw-inline' }, NW.ui.spinner('读取投稿记录…')));
-    else if (list.length === 0) body.push(NW.ui.empty('还没有投稿记录。在「投稿助手」里发出第一封投稿后，这里会显示状态。'));
+    else if (list.length === 0) body.push(NW.ui.empty('还没有投稿记录。'));
     else {
       body.push(
         h(
@@ -34561,7 +37536,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                   needsLink(row)
                     ? h(
                         'span',
-                        { className: 'nw-submit-line-link', title: '这条记录还没跟着某本书，选一本就能显示它的现名' },
+                        { className: 'nw-submit-line-link' },
                         NW.ui.select({
                           value: '',
                           onChange: (value) => {
@@ -34793,7 +37768,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         const lines = [];
         lines.push((dryRun ? '预演：' : '已导入：') + updated + ' 家期刊，新增 ' + added + ' 个分体裁邮箱。');
         if (unmatched.length) {
-          lines.push('清单里没有这些刊（可先用「编辑」手动改别名）：' + unmatched.map((row) => row.journal).join('、'));
+          lines.push('清单里没有这些刊：' + unmatched.map((row) => row.journal).join('、'));
         }
         if (skipped.length) {
           lines.push('忽略了 ' + skipped.length + ' 行：' + skipped.slice(0, 3).map((row) => '第 ' + row.line + ' 行 ' + row.reason).join('；'));
@@ -34849,7 +37824,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         { className: 'nw-hint-block' },
         rows == null
           ? '正在读取…'
-          : '共 ' + list.length + ' 家，其中 ' + withEmail + ' 家已收录投稿邮箱。' + '邮箱与要求以期刊官方最新征稿启事为准，投稿前请再核对一次。',
+          : '共 ' + list.length + ' 家，其中 ' + withEmail + ' 家已收录投稿邮箱。',
       ),
     );
 
@@ -34859,11 +37834,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           'div',
           { className: 'nw-journal-edit' },
           h('h4', null, '批量导入投稿邮箱'),
-          h(
-            'p',
-            { className: 'nw-hint-block' },
-            '从期刊官网的征稿启事里把邮箱复制成一行一家，格式：期刊名 | 邮箱 | 体裁 | 字数 | 备注。后三列可留空（留空就是这家刊的通用邮箱）；填了体裁或字数就会记成「短篇/中篇/长篇各用不同邮箱」的分列邮箱。',
-          ),
           NW.ui.textarea({
             rows: 7,
             value: importText,
@@ -34955,7 +37925,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           creating
             ? NW.ui.field({
                 label: '期刊名称',
-                hint: '会显示在期刊库和投稿向导里；内部 id 由名称自动生成。',
                 children: NW.ui.input({
                   value: form.name,
                   placeholder: '例如：青年作家',
@@ -34965,7 +37934,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             : null,
           NW.ui.field({
             label: '默认收稿邮箱',
-            hint: '不带任何分类条件的通用邮箱。下面按体裁 / 篇幅单独登记了的，投稿时会优先用那一行。',
             children: NW.ui.input({ value: form.email, placeholder: '编辑部收稿邮箱', onChange: (v) => setForm(Object.assign({}, form, { email: v })) }),
           }),
           NW.ui.field({

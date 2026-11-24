@@ -90,12 +90,9 @@ has(speak, /speakRef\.current\.audio \|\| \(typeof Audio === 'function'/, '复�
 has(speak, /if \(cfgRef\.current\.engine !== 'system'\)/, '系统语音与在线引擎分流', '朗读段');
 notes.push('引擎：系统（本机、不联网）/ 微软 / 百度 / 自定义（后三者走宿主路由）');
 
-// 界面必须自己把「正文会离开本机」说出来，不能只在 README 里写。
-has(reader, /这一段正文会联网发给微软/, '微软引擎的联网说明', '62-read.js');
-has(reader, /这一段正文会联网发给百度/, '百度引擎的联网说明', '62-read.js');
-has(reader, /设置 → 阅读/, '自定义接口的设置位置提示', '62-read.js');
-has(reader, /403/, '微软 403 的可读提示', '62-read.js');
-notes.push('说明：联网引擎在界面上写明正文会外发，403 给出可执行的下一步');
+// 阅读页不再附带引擎说明小字（产品要求：删除页面内的解释性文字）。
+hasNot(reader, /这一段正文会联网发给/, '引擎联网说明已撤下', '62-read.js');
+notes.push('说明：联网/403 提示文字已按需求删除，界面只保留引擎名与错误信息');
 
 // 宿主那一层：引擎实现、路由方法、密钥不进日志。
 const host = readFileSync(join(here, '..', 'lib', 'tts.js'), 'utf8');

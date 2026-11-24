@@ -16,12 +16,11 @@
  * the carrier is ever replaced. Verified against a live `dsh web` process.
  */
 import { registerRoutes } from './lib/routes.js';
-import * as lanServer from './lib/lansync-server.js';
 
 export const name = 'novel-writer';
 // Kept in step with package.json by hand: `ping` reports this, and a stale value
 // makes it impossible to tell which build the running host actually loaded.
-export const version = '1.6.39';
+export const version = '1.9.0';
 
 /** Diagnostic surface read by `selftest` so a broken mount is visible. */
 const state = { registered: false, error: null, mountedAt: 0 };
@@ -46,39 +45,8 @@ export function apply(ctx, config) {
       }
       state.mountedAt = Date.now();
 
-      // Bring the phone-facing listener up with the plugin.
-      //
-      // This is a *second* socket on purpose. `webServer` binds 127.0.0.1, so a
-      // phone on the same Wi-Fi can never reach the plugin's own HTTP prefix —
-      // measured directly: the browser gets 200 from `pair.start`, the phone's
-      // SYN to the same port from a LAN address is dropped. The LAN listener
-      // exposes only four verbs, and every one of them except `ping` is gated by
-      // a pairing token or an HMAC secret, so being reachable is not the same as
-      // being open.
-      //
-      // Failure is never fatal: a port collision or a firewall just means sync is
-      // unavailable, and the settings page reports it from `lan.status()`.
-      lanServer
-        // R72: the context rides along so `ai/proofread` can reach the host's
-        // LLM service. Without it the listener still runs — the phone just sees
-        // `ai:false` and keeps the 校对 button disabled.
-        .start({ ctx: hostCtx })
-        .then((result) => {
-          if (result && result.ok === false) {
-            console.warn('[novel-writer] 局域网同步端口不可用:', result.message);
-          }
-        })
-        .catch((error) => {
-          console.warn('[novel-writer] 局域网同步启动失败:', error && error.message ? error.message : error);
-        });
-
       return () => {
         state.registered = false;
-        try {
-          lanServer.stop();
-        } catch (error) {
-          console.error('[novel-writer] failed to stop the LAN listener:', error);
-        }
         try {
           dispose();
         } catch (error) {

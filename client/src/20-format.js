@@ -396,8 +396,11 @@
 
   // ------------------------------ diff preview ------------------------------
 
-  /** Line-level LCS diff. Adjacent rows of the same type are merged. */
-  function diffPreview(a, b) {
+  /**
+   * Raw line-level LCS ops, one line per row. Shared by diffPreview (merged
+   * blocks) and diffAligned (side-by-side rows) so both comparisons always agree.
+   */
+  function diffOps(a, b) {
     // R26: a lone trailing newline is not a visible edit. typeset() always ends
     // its output with exactly one newline, so a manuscript typed without a final
     // line break produced a phantom add row (rendered as a bare plus sign) and
@@ -473,17 +476,178 @@
     for (let i = 0; i < start; i += 1) head.push({ type: 'same', text: left[i] });
     const tail = [];
     for (let i = endL + 1; i < left.length; i += 1) tail.push({ type: 'same', text: left[i] });
+    return head.concat(ops, tail);
+  }
 
+  /** Line-level LCS diff. Adjacent rows of the same type are merged. */
+  function diffPreview(a, b) {
     const merged = [];
     const push = (row) => {
       const prev = merged[merged.length - 1];
       if (prev && prev.type === row.type) prev.text += '\n' + row.text;
       else merged.push({ type: row.type, text: row.text });
     };
-    head.forEach(push);
-    ops.forEach(push);
-    tail.forEach(push);
+    diffOps(a, b).forEach(push);
     return merged;
+  }
+
+  // --------------------------- side-by-side diff ----------------------------
+
+  /**
+   * Character-level highlight for one changed line pair. Returns segments
+   * `{t:'same'|'mark', text}` for each side. Keeps the DOM small: long lines and
+   * very different lines mark only the changed middle instead of running LCS.
+   */
+  function inlineDiff(leftText, rightText) {
+    const left = String(leftText == null ? '' : leftText);
+    const right = String(rightText == null ? '' : rightText);
+    const one = (text) => [{ t: 'same', text: text }];
+    if (left === right) return { left: one(left), right: one(right) };
+
+    // Shared prefix/suffix by code unit. Surrogate pairs can split in theory,
+    // but splitting them only affects the highlight boundary, not the text.
+    let start = 0;
+    while (start < left.length && start < right.length && left[start] === right[start]) start += 1;
+    let endL = left.length;
+    let endR = right.length;
+    while (endL > start && endR > start && left[endL - 1] === right[endR - 1]) {
+      endL -= 1;
+      endR -= 1;
+    }
+    const lMid = left.slice(start, endL);
+    const rMid = right.slice(start, endR);
+    const prefix = left.slice(0, start);
+    const suffix = left.slice(endL);
+    const leftSegs = [];
+    const rightSegs = [];
+    if (prefix) {
+      leftSegs.push({ t: 'same', text: prefix });
+      rightSegs.push({ t: 'same', text: right.slice(0, start) });
+    }
+
+    const pushMark = () => {
+      if (lMid) leftSegs.push({ t: 'mark', text: lMid });
+      if (rMid) rightSegs.push({ t: 'mark', text: rMid });
+    };
+    if (!lMid || !rMid || lMid.length * rMid.length > 120000) {
+      pushMark();
+    } else {
+      const n = lMid.length;
+      const m = rMid.length;
+      const width = m + 1;
+      const lcs = new Uint32Array((n + 1) * width);
+      for (let i = n - 1; i >= 0; i -= 1) {
+        for (let j = m - 1; j >= 0; j -= 1) {
+          const at = i * width + j;
+          if (lMid[i] === rMid[j]) lcs[at] = lcs[(i + 1) * width + (j + 1)] + 1;
+          else {
+            const down = lcs[(i + 1) * width + j];
+            const next = lcs[i * width + (j + 1)];
+            lcs[at] = down >= next ? down : next;
+          }
+        }
+      }
+      let i = 0;
+      let j = 0;
+      while (i < n && j < m) {
+        if (lMid[i] === rMid[j]) {
+          leftSegs.push({ t: 'same', text: lMid[i] });
+          rightSegs.push({ t: 'same', text: rMid[j] });
+          i += 1;
+          j += 1;
+        } else if (lcs[(i + 1) * width + j] >= lcs[i * width + (j + 1)]) {
+          leftSegs.push({ t: 'mark', text: lMid[i] });
+          i += 1;
+        } else {
+          rightSegs.push({ t: 'mark', text: rMid[j] });
+          j += 1;
+        }
+      }
+      while (i < n) {
+        leftSegs.push({ t: 'mark', text: lMid[i] });
+        i += 1;
+      }
+      while (j < m) {
+        rightSegs.push({ t: 'mark', text: rMid[j] });
+        j += 1;
+      }
+    }
+    if (suffix) {
+      leftSegs.push({ t: 'same', text: left.slice(endL) });
+      rightSegs.push({ t: 'same', text: right.slice(endR) });
+    }
+    return { left: leftSegs, right: rightSegs };
+  }
+
+  /**
+   * Aligned rows for the 并排对比 view. Each row has both sides (null on the
+   * one-sided rows), so the two columns always share a row height and a single
+   * scroll container stays in sync by construction.
+   */
+  function diffAligned(a, b) {
+    const ops = diffOps(a, b);
+    const rows = [];
+    const stats = { same: 0, changed: 0, added: 0, removed: 0, leftOnly: 0, rightOnly: 0 };
+    let leftNo = 0;
+    let rightNo = 0;
+    let i = 0;
+    while (i < ops.length) {
+      const op = ops[i];
+      if (op.type === 'same') {
+        leftNo += 1;
+        rightNo += 1;
+        rows.push({
+          type: 'same',
+          left: { no: leftNo, text: op.text },
+          right: { no: rightNo, text: op.text },
+        });
+        stats.same += 1;
+        i += 1;
+        continue;
+      }
+      // One contiguous edit block: deletions become the left side, additions
+      // the right side. Pair them in order so replacements line up.
+      const dels = [];
+      const adds = [];
+      while (i < ops.length && ops[i].type !== 'same') {
+        if (ops[i].type === 'del') dels.push(ops[i].text);
+        else adds.push(ops[i].text);
+        i += 1;
+      }
+      const pairs = Math.min(dels.length, adds.length);
+      for (let k = 0; k < pairs; k += 1) {
+        leftNo += 1;
+        rightNo += 1;
+        const segs = inlineDiff(dels[k], adds[k]);
+        rows.push({
+          type: 'changed',
+          left: { no: leftNo, text: dels[k], segs: segs.left },
+          right: { no: rightNo, text: adds[k], segs: segs.right },
+        });
+        stats.changed += 1;
+      }
+      for (let k = pairs; k < dels.length; k += 1) {
+        leftNo += 1;
+        rows.push({
+          type: 'left',
+          left: { no: leftNo, text: dels[k] },
+          right: null,
+        });
+        stats.leftOnly += 1;
+        stats.removed += 1;
+      }
+      for (let k = pairs; k < adds.length; k += 1) {
+        rightNo += 1;
+        rows.push({
+          type: 'right',
+          left: null,
+          right: { no: rightNo, text: adds[k] },
+        });
+        stats.rightOnly += 1;
+        stats.added += 1;
+      }
+    }
+    return { rows: rows, stats: stats };
   }
 
   // ------------------------------- chapter split -----------------------------
@@ -618,6 +782,8 @@
     includePunctuation: includePunctuation,
     typeset: typeset,
     diffPreview: diffPreview,
+    diffAligned: diffAligned,
+    inlineDiff: inlineDiff,
     autoChapterSplit: autoChapterSplit,
     markdownToPlain: markdownToPlain,
     applyEdits: applyEdits,

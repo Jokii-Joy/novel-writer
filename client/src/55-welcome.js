@@ -271,6 +271,7 @@
 
   function Welcome(props) {
     const p = props || {};
+    const showWords = p.showWordCount !== false;
     const novels = Array.isArray(p.novels) ? p.novels.filter(Boolean) : [];
     const chapters = Array.isArray(p.chapters) ? p.chapters : [];
     const submissions = Array.isArray(p.submissions) ? p.submissions : [];
@@ -342,8 +343,8 @@
           'p',
           { className: 'nw-welcome-lead' },
           novels.length === 0
-            ? '还没有小说。新建一部，或者把已有的 txt / md / docx / epub 导入进来。'
-            : `共 ${novels.length} 部作品、${stats.count} 个章节、${fmtWords(stats.total)} 字。`,
+            ? ''
+            : `共 ${novels.length} 部作品、${stats.count} 个章节${showWords ? `、${fmtWords(stats.total)} 字` : ''}。`,
           // R108: the build the browser actually loaded. When a fix "does not
           // take", the first question is whether the page is still running the
           // previous bundle — this answers it without opening devtools.
@@ -384,7 +385,7 @@
     const novelCard = card(
       '正在创作',
       rollups.length === 0
-        ? emptyLine('新建一部小说后，这里会列出最近在写的作品。')
+        ? emptyLine('还没有小说。')
         : NW.h(
             'div',
             null,
@@ -430,7 +431,13 @@
                       NW.h(
                         'span',
                         { className: 'nw-welcome-novelmeta' },
-                        `${row.chapters} 章 · ${fmtWords(row.words)} 字 · ${shortDate(row.touched)}`,
+                        [
+                          `${row.chapters} 章`,
+                          showWords ? `${fmtWords(row.words)} 字` : '',
+                          shortDate(row.touched),
+                        ]
+                          .filter(Boolean)
+                          .join(' · '),
                       ),
                     ),
                     NW.h('span', { className: 'nw-welcome-novelgo', 'aria-hidden': 'true' }, NW.icon('chevright', { size: 14 })),
@@ -444,11 +451,15 @@
     );
 
     // ---- 创作统计 ---------------------------------------------------------
-    const statCells = [
-      { k: '全书', v: fmtWords(stats.total) + ' 字' },
-      { k: '本书', v: fmtWords(stats.novel) + ' 字' },
-      { k: '近 7 天', v: fmtWords(stats.weekWords) + ' 字' },
-    ];
+    // R183: hiding counts must not hide the daily goal. Keep the card and the
+    // ring, drop only the three number cells (and the numbers in today's text).
+    const statCells = showWords
+      ? [
+          { k: '全书', v: fmtWords(stats.total) + ' 字' },
+          { k: '本书', v: fmtWords(stats.novel) + ' 字' },
+          { k: '近 7 天', v: fmtWords(stats.weekWords) + ' 字' },
+        ]
+      : [];
     // R100: 今天 shows progress toward the daily goal instead of a bare number.
     // The ring is the whole cell: clicking it asks for a new goal, which is how
     // the number stays honest — a goal you cannot change is a rule, not a goal.
@@ -463,7 +474,6 @@
         type: 'button',
         className: 'nw-welcome-stat nw-welcome-statgoal',
         'data-done': goalRatio >= 1 ? '1' : '0',
-        title: dailyGoal > 0 ? `今日目标 ${dailyGoal} 字 · 点击修改` : '点击设置每日字数目标',
         onClick: () => typeof p.onSetDailyGoal === 'function' && p.onSetDailyGoal(),
       },
       NW.h('dt', null, '今天'),
@@ -489,15 +499,23 @@
         NW.h(
           'span',
           { className: 'nw-goal-text' },
-          dailyGoal > 0 ? `${fmtWords(todayWords)} / ${fmtWords(dailyGoal)} 字` : `${fmtWords(todayWords)} 字`,
+          showWords
+            ? dailyGoal > 0
+              ? `${fmtWords(todayWords)} / ${fmtWords(dailyGoal)} 字`
+              : `${fmtWords(todayWords)} 字`
+            : dailyGoal > 0
+              ? goalRatio >= 1
+                ? '已达成'
+                : '进行中'
+              : '设置目标',
         ),
       ),
     );
     const statsCard = card(
-      '创作统计',
+      showWords ? '创作统计' : '今日目标',
       NW.h(
         'dl',
-        { className: 'nw-welcome-stats' },
+        { className: 'nw-welcome-stats' + (showWords ? '' : ' is-goalonly') },
         statCells.map((cell) =>
           NW.h(
             'div',
@@ -516,11 +534,7 @@
     const subsCard = card(
       '投稿记录',
       submissions.length === 0
-        ? emptyLine(
-            journalCount > 0
-              ? `期刊库已收录 ${journalCount} 家，选中一个章节即可开始投稿。`
-              : '还没有投稿记录。完成一次投稿后，这里会显示期刊、日期与状态。',
-          )
+        ? emptyLine('还没有投稿记录。')
         : NW.h(
             'div',
             null,
@@ -631,7 +645,7 @@
       inboxBody = NW.h(
         'div',
         null,
-        NW.h('p', { className: 'nw-welcome-empty' }, '收件箱已关闭。打开之后，编辑部的回信会出现在这里。'),
+        NW.h('p', { className: 'nw-welcome-empty' }, '收件箱已关闭。'),
         NW.h(
           'div',
           { className: 'nw-inline', style: { marginTop: '8px' } },
@@ -653,7 +667,7 @@
         NW.h(
           'p',
           { className: 'nw-welcome-empty' },
-          '还没有配置收件邮箱。填一次 IMAP 服务器与授权码，编辑部回信就会出现在这里。',
+          '还没有配置收件邮箱。',
         ),
         NW.h(
           'div',
@@ -670,7 +684,7 @@
         ),
       );
     } else if (inboxMessages.length === 0) {
-      inboxBody = emptyLine('收件箱是空的。投稿之后，编辑部的回复会出现在这里。');
+      inboxBody = emptyLine('收件箱是空的。');
     } else {
       // R16 ⑤: newest first (the host already sorts by UID descending), three
       // rows, and a per-row delete button.
@@ -906,6 +920,7 @@
    dropped alone onto a second row and the block looked broken. Four cells want
    a deliberate 2x2, not whatever the width happens to allow. */
 .nw-welcome-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--nw-sp-2);margin:0;}
+.nw-welcome-stats.is-goalonly{grid-template-columns:minmax(0,1fr);}
 .nw-welcome-stat{
   padding:var(--nw-sp-2) var(--nw-sp-3);border-radius:var(--nw-r-control);
   background:var(--nw-sunken);

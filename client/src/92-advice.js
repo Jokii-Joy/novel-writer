@@ -417,7 +417,6 @@
           ev.preventDefault();
           if (typeof p.onReveal === 'function') p.onReveal(item);
         },
-        title: NW.t('点击定位到正文'),
       },
       revised
         ? h(
@@ -501,7 +500,6 @@
                     type: 'button',
                     className: 'nw-adv-mini',
                     disabled: busy,
-                    title: NW.t('拿这一版当起点，再要一版不同的'),
                     onClick: (ev) => {
                       ev.stopPropagation();
                       p.onRegenerate(item);
@@ -647,7 +645,6 @@
                     setActiveId(String(row.id));
                     if (typeof p.onReveal === 'function') p.onReveal(row);
                   },
-                  title: row.found ? NW.t('点击定位到正文') : NW.t('原文已改动，定位可能不准'),
                 },
                 // The order badge only carries information when this region was
                 // revised more than once; a single record needs no ①.
@@ -670,7 +667,6 @@
                       {
                         type: 'button',
                         className: 'nw-acc-undo',
-                        title: NW.t('撤销接受，把这条放回建议列表'),
                         'aria-label': NW.t('撤销接受'),
                         onClick: (ev) => {
                           ev.stopPropagation();
@@ -1537,7 +1533,6 @@
             'data-on': on ? '1' : '0',
             'aria-pressed': on ? 'true' : 'false',
             disabled: busy,
-            title: on ? NW.t('再点一次取消') : NW.t('加上这个角度（可多选）'),
             onClick: () => {
               const next = on
                 ? focus.filter((value) => value !== opt.value)
@@ -1550,16 +1545,14 @@
           opt.label,
         );
       }),
-      // R74: says out loud that the chips are optional *and* multi-select — the
-      // writer asked for both, and eleven unlit pills read as "nothing works".
-      // R75: and it says what to do next, now that pressing a pill does not run.
-      h(
-        'span',
-        { className: 'nw-advice-focus-hint' },
-        focus.length
-          ? NW.t('已选 {0} 个角度 · 再点一次取消，选好后点下方按钮', focus.length)
-          : NW.t('角度可多选、也可以不选 · 不选就按下面的要求来'),
-      ),
+      // R185: 只保留选中数量这一条状态反馈，角度说明小字已删除。
+      focus.length
+        ? h(
+            'span',
+            { className: 'nw-advice-focus-hint' },
+            NW.t('已选 {0} 个角度', focus.length),
+          )
+        : null,
     );
 
     // Free-text instruction. Enter submits (Shift+Enter inserts a newline) so the
@@ -1570,7 +1563,7 @@
       h('textarea', {
         value: note,
         rows: 2,
-        placeholder: NW.t('补充要求，例如：只看结尾三段 / 别动对话 / 主角口吻再冷一点'),
+        placeholder: NW.t('补充要求'),
         'aria-label': NW.t('补充要求'),
         onChange: (ev) => setNote(ev.target.value),
         onKeyDown: (ev) => {
@@ -1583,7 +1576,6 @@
       h(
         'div',
         { className: 'nw-advice-notebar' },
-        h('span', { className: 'nw-advice-notehint' }, NW.t('Enter 按这个要求重来')),
         h('span', { style: { flex: '1 1 auto' } }),
         h(
           'button',
@@ -1625,7 +1617,6 @@
             { className: 'nw-advice-paste-head' },
             h('span', { className: 'nw-advice-paste-icon', 'aria-hidden': 'true' }, NW.icon('sparkle', { size: 14 })),
             h('strong', { className: 'nw-advice-paste-title' }, NW.t('粘贴其他 AI 的建议')),
-            h('span', { className: 'nw-advice-paste-tag' }, NW.t('与模型建议同一套卡片')),
             h(
               'button',
               {
@@ -1644,17 +1635,11 @@
           ),
           h(
             'div',
-            { className: 'nw-advice-paste-help' },
-            NW.t('把另一个 AI 写好的建议贴进来。点「复制全文与全部问题」会把本章全文和已有建议一起复制，直接发给对方；原文要和这一章一字不差，卡片才能定位和高亮。'),
-          ),
-          h(
-            'div',
             { className: 'nw-advice-paste-fmtbox' },
             h(
               'div',
               { className: 'nw-advice-paste-fmtlabel' },
               h('span', null, NW.t('格式说明')),
-              h('span', { className: 'nw-advice-paste-fmtnote' }, NW.t('可直接整段复制给 AI')),
             ),
             h('pre', { className: 'nw-advice-paste-fmt' }, NW.advicePaste ? NW.advicePaste.TEMPLATE : ''),
           ),
@@ -1667,14 +1652,12 @@
               onClick: copyFullPrompt,
               children: NW.t('复制全文与全部问题'),
             }),
-            h('span', { className: 'nw-advice-paste-tip' }, NW.t('也可以直接贴 JSON 数组')),
           ),
           h('textarea', {
             className: 'nw-advice-paste-input',
             value: pasteText,
             rows: 6,
             spellCheck: false,
-            placeholder: NW.t('原文：……\n问题：……\n建议：……'),
             'aria-label': NW.t('粘贴其他 AI 的建议'),
             onChange: (ev) => {
               setPasteText(ev.target.value);
@@ -1695,9 +1678,8 @@
               { className: 'nw-advice-paste-count' },
               pasteText
                 ? NW.t('已输入 {0} 字', String(pasteText).length)
-                : NW.t('支持标签格式或 JSON 数组'),
+                : '',
             ),
-            h('span', { className: 'nw-advice-paste-actions-hint' }, NW.t('Ctrl+Enter 导入')),
           ),
           pasteError ? h('div', { className: 'nw-advice-paste-error', role: 'alert' }, pasteError) : null,
           h(
@@ -1733,7 +1715,6 @@
         { className: 'nw-suggest-empty' },
         NW.ui.spinner(),
         h('span', null, NW.t('正在读这一章…')),
-        h('span', { style: { fontSize: '12px', opacity: '.7' } }, NW.t('模型要通读全文，通常十几秒。')),
       );
     } else if (error) {
       body = h(
@@ -1747,12 +1728,6 @@
         'div',
         { className: 'nw-suggest-empty' },
         NW.icon('sparkle', { size: 24 }),
-        h('span', null, NW.t('让模型通读这一章，指出最值得改的地方。')),
-        h(
-          'span',
-          { style: { fontSize: '12px', opacity: '.7' } },
-          NW.t('接受会移到下面的「已接收」，拒绝的直接丢掉；点一条会把原文滚到那一段。'),
-        ),
         busy
           ? h(
               'span',
@@ -1782,11 +1757,6 @@
           'span',
           null,
           NW.t(drained ? '这些建议都处理完了。' : '这一章没有被标出的明显问题。'),
-        ),
-        h(
-          'span',
-          { style: { fontSize: '12px', opacity: '.7' } },
-          NW.t(drained ? '重新审读可以再找一轮，或者回去接着写。' : '换个重点再看看，或写下去。'),
         ),
         // R93: 重新审读 must be here whether the list was drained or the model
         // found nothing — a writer staring at "没有问题" still needs a way to
@@ -1823,7 +1793,7 @@
           ? h(
               'div',
               { className: 'nw-advice-notehint' },
-              NW.t('「原文已改动，定位不到」：那段文字已经不在这一章里了。'),
+              NW.t('{0} 条定位不到', items.filter((item) => Number(item.start) < 0).length),
             )
           : null,
         busy
@@ -1920,7 +1890,6 @@
       onDoubleClick: () => {
         if (typeof p.onResize === 'function') p.onResize(null);
       },
-      title: NW.t('拖拽调整建议栏宽度（双击回到自动）'),
     });
 
     return h(
@@ -2491,7 +2460,6 @@
         { className: 'nw-selwin-empty' },
         NW.ui.spinner(),
         h('span', null, NW.t('正在读选中的这段… {0}s', elapsed)),
-        h('span', { style: { fontSize: '12px', opacity: '.7' } }, NW.t('只改这一段，前后文只用来保证接得上。')),
         thinkBox,
       );
     } else if (error && !hasCards) {
@@ -2513,7 +2481,6 @@
         'div',
         { className: 'nw-selwin-empty' },
         NW.icon('success', { size: 24 }),
-        h('span', null, NW.t('这段放着就行，模型没找到值得改的地方。')),
         NW.ui.btn({ onClick: () => run({ force: true }), children: NW.t('再读一次') }),
       );
     } else {

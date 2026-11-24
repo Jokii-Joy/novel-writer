@@ -1,5 +1,10 @@
 # 精神空间 · 开发日志与详细文档
 
+- 第一百八十八轮（R188）**README 重写，仓库整理**：
+  - 根目录 README 从 242 行的设计长文改成面向使用者的项目主页：徽章、一句话定位、功能分组（写作 / 改稿 / 成书 / 投稿 / 数据）、六张截图、安装三步、开发与目录说明；设计细节继续留在本开发日志里。
+  - `.gitignore` 补上 `.probe/`、`.ref/`、`.shots/` 三个本地草稿目录和 `client/head-client.js`（早先无头构建留下的孤儿产物，实际入口只有 `client/client.js`）。
+
+
 > 本文件是从 README 拆出来的完整版：逐轮改造记录、验收数字、架构树、已知限制、
 > GitHub 自动上传配置，都在这里。面向使用者的简要说明见仓库根目录的 [README.md](../README.md)。
 
@@ -8,6 +13,92 @@
 
 - 包名：`@local/novel-writer` ｜ 版本：1.9.0 ｜ 入口：`index.js`（Host）+ `client/client.js`（浏览器）
 - 依赖：**零运行时第三方依赖**（Host 只用 Node 内置模块，Client 只用宿主提供的 `react` 与主题 token）
+- 第一百八十七轮（R187）**摸鱼模式在桌面版也能用（PowerShell 稿纸条）**：
+  - 用户原话：「我点击摸鱼模式说需要DSH桌面版原生窗口啥意思。怎么使用啊」——查证发现原生文档条依赖 `require('electron').BrowserWindow` / `ipcMain`（`lib/moyu.js`），而打包后的 DSH 桌面版用 `ELECTRON_RUN_AS_NODE: "1"` 把插件宿主起成 Node 模式子进程（`desktopNodeEnvironment`，`resources/app.asar/lib/main.js` 的 `HostProcess.start`），宿主里拿不到窗口 API；网页版（`dsh web`）同理。因此该提示在两种运行方式下都会出现。
+  - **降级实现**：`client/src/90-app.js` 的 `openMoyu` 在 `NW.io.moyu.open` 返回失败或抛错时调用新增的 `openMoyuPip`，用 Document Picture-in-Picture 打开 900×188 的置顶小窗（深色正文编辑区，无边框装饰）；`Esc` 或 `×` 收起时把改动交给 `applyMoyuDraft` 写回原章；切章、组件卸载时自动关闭。原生窗口可用时仍优先走原生。
+  - **提示语**：两条通道都不可用时改为 toast「摸鱼模式需要 Chrome / Edge 浏览器（画中画窗口）」；仍在窗口开着时重复点击会提示「摸鱼窗口已经开着」。
+  - **第二轮：桌面版仍然不行**（用户原话：「他又说需要chrome浏览器，我现在用的是DSH桌面版啊」）——DSH 桌面版的渲染层没有 `documentPictureInPicture`，网页画中画降级同样打不开；打包应用也不允许 `window.open`（`setWindowOpenHandler` 一律 deny）。
+  - **Windows 原生降级**：新增 `lib/moyu.ps1`（PowerShell 5.1 + WPF），无边框置顶的白色稿纸条：**640×97.5 DIP（仿宋三号 21.33px，恰好三行）**、水平居中、贴近屏幕底部，右侧 8 DIP 细滚动条（无箭头、6 DIP 圆角滑块），Esc 或 × 收起，标题伪装成「文档1 - Word」。用户先要「两三行、仿宋三号」（900×188 / 微软雅黑 15.5 → 仿宋三号），再要「不要大于 A4 宽、要居中」（794 DIP），最后说「再窄一点，并且滚动条太粗了」（794 → 640 DIP，默认滚动条换成 8 DIP 细条）；截图核对：1920×1200 / 150% 缩放下实际 960×146 物理像素，左右留白各 480px。
+  - **宿主接线**：`lib/moyu.js` 在拿不到 Electron 窗口 API 时，若 Windows 存在 `powershell.exe` 与 `moyu.ps1`，`open()` 改走 `openPowershell()`——临时目录放 in/out 文本，spawn `powershell.exe -NoProfile -STA -File moyu.ps1`，窗口内 700ms 定时落盘，关闭或进程退出时读回草稿并 `commitSession`；`close()`/`dispose()` 负责结束子进程，`available()`/`poll()` 同步识别 PowerShell 会话。
+  - 验收：`moyu.ps1 -SelfTest` 输出正确（UTF-8 BOM + CRLF、XAML `xmlns:x`、`XmlNodeReader` 三处坑已修）；`node --check lib/moyu.js` 通过；Node 端到端 smoke：`open()` 返回 `{ok:true,powershell:true}`，轮询 `revision:1 / open:true`，`close()` 后 `revision:2 / closed:true` 且草稿完整回传。`client/client.js` 重建为 1,734,831 B（含鲸鱼图标）。
+  - 注意：宿主侧 `lib/moyu.js` 改动需重启 DSH 桌面版才生效；`lib/moyu.ps1` 每次打开都重新 spawn，改样式不必重启；「Alt+反引号」全局热键仍只有 Electron 路径支持。
+  - **目录底栏的图标**：摸鱼按钮由月亮换成 DeepSeek 的小鲸鱼——直接取宿主自带的 `/favicon.svg`（50×50 单路径），`42-icons.js` 新增 solid 图标分支（`fill=currentColor`、`fill-rule=nonzero`，按 0.335 缩放塞进与线稿一致的 2…18 光学框），按钮尺寸仍是 18px。
+- 第一百八十六轮（R186）**删掉界面里的解释性散文**：
+  - 用户原话：「怎么还是不懂解释性文字？比如建AI建议面板里面就有很多，而且还有锁屏界面也有。」——口径从「小字说明」扩大为：凡向用户解释「为什么 / 怎么用 / 会怎样」的散文句都删，标题、按钮、标签、placeholder、统计、状态、报错、期刊数据保留。
+  - **AI 建议面板**（`92-advice.js`）：删掉粘贴面板的整段说明、「可直接整段复制给 AI」「也可以直接贴 JSON 数组」「与模型建议同一套卡片」、读章进度副标题「模型要通读全文，通常十几秒。」、首次空态的描述与接受/拒绝解释、读完后「重新审读可以再找一轮…」、选段窗「只改这一段，前后文只用来保证接得上。」、空结果「这段放着就行…」、角度 / 卡片 / 拖拽 tooltip；保留「{0} 条定位不到」计数、所有按钮与错误提示。
+  - **锁屏**（`95-dialogs.js`）：删掉「密码只保存在本机」「本地加密 · AES-256-GCM」「内容不上传」整条 meta 与密码 placeholder，并移除「Enter 解锁」提示行。
+  - **设置与弹窗**：SMTP / IMAP 保存提示收短，IMAP 主机与收件账号 placeholder 去掉「留空则…」推导说明，删除「修改密码前需要验证当前密码」placeholder、文末追加示例说明、备份 / 版本 / 差异 / 设定 / 投稿记录空态的长句、附件与征稿提示里的补充说明、纸质投稿建议与重复邮箱说明，以及导出、排版、确认弹窗里的解释句；React 替身渲染设置七类与 12 个弹窗后残留 hint 节点为 0（仅剩「将导出…」「还没有选择保存文件夹」「正在读取…」等状态行）。
+  - **各页**：首页空态与今日目标 tooltip；编辑页空态改为「未选择章节。」并去掉「给选中的文字提修改建议」tooltip；阅读页删掉空的页脚 hint 槽、音色括号注与定位提示，并去掉朗读 / 回到写作 tooltip 里的「（再点一下）」「（Esc）」与批注输入的「这条批注写给自己看」placeholder；完稿页删掉封存按钮与完稿输入的 tooltip、「可选，一句话就够」。
+  - **导出与投稿弹窗**：导出说明收短为「本章未设付印稿。」「N 章设有付印稿。」；投稿向导的收件人说明改为「匹配收稿邮箱：…」，正文统计去掉「（按该刊要求粘贴在正文里）」。
+  - **验证脚本**：`verify-advice-ui.mjs` 改为断言「格式说明」保留、旁注与大段说明撤下；`verify-lock-screen.mjs` 改为断言 `nw-lock-meta` 与 `LockPadlock` 已移除；`verify-read-tts.mjs` 断言联网说明文字已撤下。
+  - **行尾修正**：本轮曾用 CRLF 重写 `client/src/*.js`，导致 `verify-shelf-detail` 与 `verify-read-tts` 的多行断言误报；已把这些文件统一回 LF，之后 shelf-detail 24 项全过，read-tts 只剩脏工作区既有的 `lib/routes.js` 两项。
+  - 验收：`node --check` 通过；`node scripts/build-client.mjs` 重建 `client.js`（1,726,371 B）；`verify-client-load`、smoke、`verify-lock-screen`（11）、`verify-advice-ui`、`verify-shelf-detail`（24）、`verify-advice-paste`（33）、`verify-restore`（16）、`verify-crypto-recovery`（18）、`verify-dock-hit`、`verify-advice-immersive`、`verify-highlight-style` 全过。脏工作区既有失败（`verify-autolock` 的 lockSettingsRef、`verify-read-entry`、`verify-read-spread`、`verify-welcome-stats`、`verify-dialog-kinds` 缺 Pair、`verify-host` 的 TTS 路由、`verify-docs` 因沙箱 spawn EPERM）与本轮无关，未越权修改。
+- 第一百八十五轮（R185）**删除页面内的小字说明**：
+  - 用户原话：「精神空间插件：删除所有页面内附带的解释性文字。」随后收敛范围：「我让你删的是小字说明」。
+  - **口径**：只删界面里的小字说明——字段 `hint`、`nw-hint-block` 说明段、`nw-rowhint`、空态/页脚的指导语、TTS 引擎与 403 说明、锁屏提示等；标题、按钮、标签、placeholder、统计、状态、报错、数据（期刊要求、投稿记录、版本说明）全部保留。
+  - **设置面板**：`95-dialogs.js` 删掉所有静态 `hint` 与说明段（保存文件夹、主题、深色跟随、字体、双栏、TTS 接口与语速、导出署名、体裁、难度、期刊编辑、导入格式、AES 备份、PBKDF2、AI/投稿/IMAP 分类说明、期刊免责声明、投稿确认、历史记录留存说明等）；`rowToggle` 不再接收第 4 个 hint 参数，`modelPicker` 去掉 hint；SMTP/IMAP 只在出错时显示错误行。
+  - **标签内括号说明**：「沉浸模式（隐藏所有面板…）」→「沉浸模式」，「不分章节（短篇连续排版）」→「不分章节」，「清除密码（输入当前密码）」→「清除密码」。
+  - **各页**：首页空态与投稿/收件箱说明句缩短；书架去掉空书架标语与空搜索提示；编辑页删掉 `.nw-empty-sub` 快捷键与选中文字说明；阅读页删掉页脚「← → 翻页…」、音色括号注、TTS 引擎说明段与按语；完稿页删掉左右页点击说明与校样空态；建议浮层删掉角度、Enter、Ctrl+Enter 小字。
+  - **验证脚本**：`verify-read-tts.mjs` 改为断言联网说明文字已撤下，`verify-advice-ui.mjs:477` 改为断言角度小字不再出现。
+  - 验收：`node --check` 改动文件；bundle 重建；`verify-client-load`、`smoke-app-render`、`verify-advice-ui` 通过；用 React 替身把 `95-dialogs.js` 的 12 个弹窗与设置页全部分类各渲染一遍，无异常、无残留 hint 节点。脏工作区里既有的 `verify-autolock`（`lockSettingsRef`）与 `verify-read-entry` 失败与本次删除无关，未越权修改。
+- 第一百八十四轮（R184）**摸鱼模式：原生 Word 风格文档条**：
+  - 用户原话：「做C吧，搞一个摸鱼模式按钮。我自己会打开一个word伪装。」「这个输入区是要和编辑区内容同步的哈。做好截图我看看。」
+  - **原生浮窗**：Host 新增 `lib/moyu.js`、`lib/moyu-preload.cjs`、`lib/moyu.html`。Electron 主进程里创建一个 900×188 的无边框、置顶、跳过任务栏的白色文档条，贴在当前屏幕工作区底部；拖动顶条可移动，`Alt+\`` 收起，`×` / `Esc` / `Ctrl+S` 也可收起并提交。
+  - **看起来像 Word**：白底、等线/微软雅黑 15.5px、1.9 行高，没有插件边框和标题栏；顶条只有 hover 时才显示收起提示。用户自己开 Word 放在后面即可叠成正文。
+  - **与编辑区双向同步**：打开时把当前章正文送进浮窗；浮窗输入实时回传草稿，收起/关闭时提交 revision；客户端每 1.1 秒轮询，收到 closed 后把正文写回原章。若期间切了章，先关闭浮窗并把草稿写回它打开时那一章，绝不覆盖新章。
+  - **不可用时降级**：纯 `dsh web` Node 进程没有 BrowserWindow，`moyu.open` 返回 `electron-unavailable`，客户端 toast「摸鱼模式需要 DSH 桌面版（原生窗口）」。
+  - **入口**：目录底栏新建章节旁新增月亮图标「摸鱼模式」。
+  - 验收：`node --check`；bundle 重建；smoke 通过；用 Electron 31.7.7 独立 harness 实测原生窗口创建、置顶/无边框、截图、draft→hide→poll 返回提交正文；纯 Node 路由返回 electron-unavailable。桌面截图见交付说明。
+- 第一百八十三轮（R183）**九项阅读与操作手感修整**：
+  - 用户原话：「1，4，6，8，9 ，10，11，13，14」——从上一轮列出的 16 条优化里选了这九项。
+  - **新建章节不重号**：`90-app.js` 的 `createChapter` 改为扫描同书已有「新章节 N」，取最大 N+1；删掉中间章后再建不再撞名。
+  - **最后一章保护**：`deleteNode` 先算出待删节点及全部后代，若删完这本书会一章不剩，直接 toast「每本书至少保留一章；先新建一章，再删除这一章。」，不再弹确认框。
+  - **卷节点可再建子章**：`50-shelf.js` 的「⋯」菜单按 `index.byParent` 判断节点是否有子级，只有卷节点显示「新建子章节」，走 `onCreateSubchapter`；普通章节不再显示。
+  - **记住上次阅读位置**：按书保存最后阅读章与页码到 `nw-read-last-v1` / `nw-read-page-v1`；点书卡、点「读这一章」、阅读中翻页都会更新，重新打开回到上次那一页。
+  - **单章阅读不重复标题**：单章书且章名等于书名时，正文里的章节标题、天头右侧的章名、页脚章名都不再重复印一遍，只保留封面与「《书名》」。
+  - **新章标题进入编辑态**：编辑器 API 新增 `focusTitle()`，`90-app.js` 用 rAF 等 API 就绪后聚焦并全选章节标题。
+  - **悬停菜单加延迟与桥接**：书卡/章节行「⋯」改为 120ms 后展开，移出 260ms 后收起；鼠标从锚点移进菜单的途中不会闪断，点击仍保留给触屏。
+  - **字数关闭保留今日目标**：`55-welcome.js` 关闭字数后不再把整张统计卡拿掉，只隐藏具体数字，「今日目标」环与「进行中 / 已达成 / 设置目标」保留。
+  - **AI 设置独立分类**：`95-dialogs.js` 的设置新增「AI」tab，AI 投稿模型与 AI 建议模型从「投稿」移入；投稿页只留期刊、邮箱与发送相关设置。
+  - 验收：`node --check`；bundle 重建；smoke、`test-folio.mjs`、`test-db.mjs`、`test-export-hint.mjs`、`test-shelf-r178.mjs`、`test-r183.mjs`、`test-settings-r183.mjs` 通过；真实 GUI 验证编号、最后一章拦截、标题聚焦、悬停延迟、页码记忆、单章标题去重。
+- 第一百八十二轮（R182）**书籍卡直接开读、新建章节回到书籍层**：
+  - 用户原话：「新建子章节去掉，在书籍那里增加新建章节，并把按钮放在外面，而不是更多按钮里。新建小说时，去掉输入章节选项。点击这本书籍默认进入阅读页面，不用阅读按钮了。」
+  - **新建小说只问书名**：`95-dialogs.js` 的 `NW.dialogs.NewNovel` 删掉「第一章标题」输入与 `chapterTitle` 字段，只提交书名；`90-app.js` 的 `createNovelSubmit` 自动创建第一章，章名与书名相同，仍直接进入写作页。
+  - **书籍卡直接阅读**：`50-shelf.js` 的 `novelCard` 点击动作改为 `onReadBook(n.id)`，书库下拉里的书籍行也改为开卷；单章书卡不再直接跳编辑器，仍保留一行紧凑章节供改名/定位。
+  - **新建章节移到书籍卡**：书卡动作条把「读整本」换成 `plus`「新建章节」，放在「⋯」外面；`createChapter(parentId, novelIdArg)` 支持为任意一本书创建章节，`90-app.js` 新增 `onCreateChapterForNovel`。章节行菜单里的「新建子章节」删除。
+  - **去掉阅读按钮**：书籍菜单里的「读整本」和目录底栏的「读整本」删除；底栏现在是「新建章节 / 设置 / 更多」。章节菜单保留「读这一章」，Dock 的「读一遍」作为沉浸写作里的快捷入口保留。
+  - **同名显示**：新书首章名为书名；单章或树内章节名与书名相同时，目录行显示「正文」，避免书卡与章节行两个同名并排。
+  - 验收：`node --check`；bundle 重建；smoke、`test-folio.mjs`、`test-db.mjs`、`test-shelf-r178.mjs` 通过；真实 GUI 验证新建小说只有书名输入、书卡点击直接进阅读页、书卡「+」新建章节后直接进入写作、底栏不再有阅读按钮。
+- 第一百八十一轮（R181）**编辑页直接标出付印稿版本**：
+  - 用户原话：「定稿的版本要在编辑页有明显的标识」。
+  - 原来稿签只在「稿 N」后加一枚很小的「定」印，扫一眼很难确认当前导出/投稿会用哪一版。现在只要本章已有付印稿，稿签直接显示「定 · 付印稿 · 第N稿」，并用品牌色描边和浅底把它从普通稿签里区分出来；没有付印稿时仍显示「稿 N」。
+  - 版本名从 `finalRows` 解析后传入 `NW.FolioTab`；切换付印稿时稿签标签同步更新。title/aria 也补成「当前付印稿：第N稿；导出和投稿使用这一版」。
+  - 验收：`node --check`；bundle 重建；真实 GUI 连存两稿，稿签在付印第1稿时显示「第1稿」、切到第2稿后变「第2稿」；打开「AI建议」后与建议栏仍保持 12px 间距，无重叠。
+- 第一百八十轮（R180）**完稿稿签移进纸面，避免与「AI建议」栏重叠**：
+  - 用户原话：「编辑页面右上角的按钮，与“AI建议”面板重叠。」
+  - **归位**：`90-app.js` 把 `NW.FolioTab` 与 `NW.FolioPreview` 从 `.nw-bench` 的直接子级移入 `.nw-bench-paper`。此前它相对整个写作台定位，`right:12px` 正好压在展开的「AI建议」栏上；移进纸面后只相对纸页区域定位。
+  - 验收：`node --check`；bundle 重建；smoke、`test-folio.mjs` 通过；真实 GUI 打开「AI建议」后测得稿签 `x=736..841`、建议栏 `x=853..1413`，无重叠；Ctrl+F 打开查找栏时稿签仍按 `.nw-bench:has(.nw-findbar)` 隐藏。
+- 第一百七十九轮（R179）**书籍卡与章节行的「⋯」菜单改为悬停展开**：
+  - 用户原话：「书籍和章节的更多按钮没改」——上一轮改的是目录顶/底栏的「更多」，不是书卡与章节行动作条里的「⋯」。
+  - **悬停锚点**：`50-shelf.js` 给书卡与章节行的「⋯」外包 `.nw-more-anchor`，`mouseenter`/`focus` 打开菜单，`mouseleave`/`blur` 调度 180ms 后关闭；鼠标移入菜单会取消关闭，移出再重新计时，点击仍保留给触屏与键盘。
+  - **定位与关闭复用**：`openMenuAt(anchor, kind, entity)` 统一按锚点与侧栏边界定位；外部点击、Esc、选择菜单项仍走原关闭路径。
+  - 验收：`node --check`；bundle 重建；`test-shelf-r178.mjs` 扩展书卡/章节行 hover、移入菜单保持、移出关闭，输出 `SHELF R178/R179 TEST PASSED`；smoke、`test-folio.mjs`、`test-db.mjs` 全过；临时 GUI 实测书卡与章节行悬停开、移入菜单保持、移出 180ms 收、点击仍开。
+- 第一百七十八轮（R178）**阅读页让开宿主菜单栏、书籍时间与悬停菜单**：
+  - 用户原话：「阅读页面又被宿主菜单栏遮住了。书籍没有首次和末次编辑时间。一些多项选项的按钮改成鼠标聚焦就展开，移走就收起，不用点击。」
+  - **阅读页顶部避让**：`90-app.js` 的 `hostChromeTop()` 同时读取 `--dsh-frame-chrome-top`、`--dsh-frame-top-clearance`、`--dsh-windows-titlebar-height`，与 root 自身/父容器 `rect.top` 取最大值；不再读多 20px 的 `--dsh-frame-overlay-top`。`62-read.js` 的 `.nw-root.nw-reading` 用 `inset:max(这三个值) 0 0 0`，模拟宿主 44px 标题栏时 root 与阅读页顶栏都从 44px 开始。
+  - **书籍首次/末次编辑时间**：`50-shelf.js` 新增 `novelTimes()`，首次取各章 `firstEditAt` 最小值、末次取书籍与各章 `updatedAt` 最大值；小说卡与书库列表都显示「首次 … · 最后 …」。
+  - **更多菜单悬停展开**：顶栏/底栏 `.nw-shelf-toolwrap` 在 `mouseenter`/`focus` 打开，`mouseleave`/`blur` 收起；点击仍保留给触屏，外部点击与 Esc 关闭不变。
+  - 验收：`node --check`；bundle 重建；smoke、`verify-shelf-detail.mjs` 24 passed、`test-shelf-r178.mjs`（`SHELF R178 TEST PASSED`）、`test-folio.mjs`、`test-db.mjs` 全过；临时 GUI 里模拟宿主 44px 顶部后阅读页 `rootTop=44px`，书卡显示首次/最后，更多菜单悬停打开、移出关闭。
+- 第一百七十七轮（R177）**目录与写作页的七处手感修整**：
+  - 用户原话：「关闭打开显示字数按钮没有控制首页的……查看稿件版本的页面主题与设置主题保持一致。」
+  - **首页字数开关接通**：`55-welcome.js` 的 `Welcome` 接收 `showWordCount`；关闭时头部总字数、「正在创作」卡字数、整张「创作统计」卡一起收起，`90-app.js` 传入 `settings.showWordCount !== false`。
+  - **单章书目录恢复一行章节**：`50-shelf.js` 不再用 `only` 跳过整棵树，只去掉 treeHead 与缩进；单章名与书名相同时行名显示「正文」；新建弹窗 hint 改为「目录里只保留这一行」。
+  - **目录按钮精简**：顶栏由 6 枚减为首页／字数／收起侧栏／更多，底栏由 6 枚减为新建章节／读整本／设置／更多；沉浸、宿主侧栏、锁定、新建小说、导入、回收站收进「更多」菜单，菜单支持外部点击与 Esc 关闭。
+  - **批注页边签恢复**：根因是 `62-read.js` 的 `.nw-mark-side` 未加 `.nw-read` 作用域，后加载的阅读页规则用 `--nw-read-paper` 覆盖编辑器签的背景，计算值退化成透明；改为 `.nw-read .nw-mark-side` 后签恢复实心。批注卡的接受 `√` 用绿色、拒绝 `X` 用红色。
+  - **章节标题垂直居中**：`::after` 分隔线改为绝对定位、不再参与行盒，标题上下 padding 对称，文字在横带中居中。
+  - **稿签位置稳定**：`right:12px` 固定在纸面右上，不再使用随窗口宽度变化的 `calc`；查找栏出现时整枚稿签仍隐藏。
+  - **稿件版本页跟随主题**：`89-folio.js` 的抽屉/校样台改用 `--nw-*` token 派生，浅色与夜读主题和设置一致；校样纸加细线与柔和阴影。
+  - 验收：`node --check` 通过 9 个源文件；bundle 重建；smoke、`test-folio.mjs`、`test-db.mjs`、`test-export-hint.mjs` 全过；真机验证首页开关、单章目录、两组「更多」菜单、批注签、`√`/`X` 与校样台浅/夜主题。
 - 第一百七十四轮（R174）**阅读页不再被宿主的标题栏/菜单栏压住顶**：
   - 用户原话：「上面被宿主的菜单栏遮挡了」。
   - **根因**：`.nw-root.nw-reading` 是 `position:fixed;inset:0`，坐标从视口顶算起；

@@ -565,8 +565,12 @@ const SEL_EMIT_MS = 120;
    affordances below therefore use box-shadow (no layout cost), never borders
    or padding. */
 .nw-chaptertitle{
+  position:relative;
   display:block;
-  padding:0 calc(var(--nw-pad-x) + var(--nw-gutter-x,0px));
+  /* R176：标题的上下留白必须对称。旧版把分隔线做成 ::after 的普通块，线占了
+     下半截高度，字就贴在这一行的上沿；现在线绝对定位，不参与行盒，标题在
+     自己的那条横带里真正上下居中。 */
+  padding:calc(var(--nw-line) * 0.18em) calc(var(--nw-pad-x) + var(--nw-gutter-x,0px));
   margin:0 0 calc(var(--nw-line) * 0.9em);
   font-family:var(--nw-font);
   font-size:calc(var(--nw-size) * 1.22);
@@ -592,11 +596,13 @@ const SEL_EMIT_MS = 120;
 }
 .nw-chaptertitle::after{
   content:'';
-  display:block;
+  position:absolute;left:50%;
+  bottom:calc(var(--nw-line) * 0.05em);
   width:36px;height:1px;
-  margin:calc(var(--nw-line) * 0.55em) auto 0;
+  margin:0;transform:translateX(-50%);
   background:var(--nw-rule);
   opacity:.8;
+  pointer-events:none;
 }
 .nw-surface[data-immersive="1"] .nw-chaptertitle::after{opacity:.55;}
 
@@ -808,6 +814,22 @@ const SEL_EMIT_MS = 120;
   font-family:inherit;font-size:var(--nw-fs-tiny);white-space:nowrap;
 }
 .nw-mark-view-btn:hover{background:var(--nw-btn-hover);}
+/* R176：接受/拒绝收成两个符号，批注卡不再被两个词撑宽。读屏仍靠 aria-label。 */
+.nw-mark-view-btn[data-glyph="1"]{
+  flex:0 0 auto;min-width:30px;padding:0 9px;
+  font-size:13px;font-weight:600;line-height:1;letter-spacing:0;
+}
+/* R177: verdict buttons read at a glance: accept is green, reject is red. */
+.nw-mark-view-btn[data-glyph="1"][data-primary="1"]{
+  color:var(--nw-ok);
+  border-color:color-mix(in srgb,var(--nw-ok) 45%,var(--nw-line-strong));
+  background:color-mix(in srgb,var(--nw-ok) 8%,var(--nw-btn-bg));
+}
+.nw-mark-view-btn[data-glyph="1"]:not([data-primary]):not([data-danger]){
+  color:var(--nw-danger);
+  border-color:color-mix(in srgb,var(--nw-danger) 35%,var(--nw-line-strong));
+  background:color-mix(in srgb,var(--nw-danger) 5%,var(--nw-btn-bg));
+}
 .nw-mark-view-btn[data-danger="1"]{color:var(--nw-danger);border-color:color-mix(in srgb, var(--nw-danger) 45%, var(--nw-line-strong));}
 /* R134：这张卡上「接受」是主按钮——它是裁决里唯一样子会改正文的那一下。 */
 .nw-mark-view-btn[data-primary="1"]{
@@ -3624,8 +3646,13 @@ const SEL_EMIT_MS = 120;
         for (let i = 0; i < stale0.length; i += 1) stale0[i].removeAttribute('data-hover');
       }
       // R53e：签只属于有字的批注——空批注不再在页边留一枚什么都不指的签。
+      // R176：批注/删除线即使还没写字也保留签。用户先在正文里划线、再回头
+      // 写意见是常见顺序；签消失会让人以为批注没存上。下划线只有删除动作，
+      // 仍然不占页边。
       const rows = (marksRef.current || []).filter(
-        (r) => r && String(r.note || '').trim(),
+        (r) => r && (String(r.note || '').trim()
+          || String(r.kind || '') === 'comment'
+          || String(r.kind || '') === 'strike'),
       );
       // The common case is "no notes in this chapter": leave the (empty) layer
       // alone instead of rewriting it on every measured frame while typing.
@@ -4357,6 +4384,26 @@ const SEL_EMIT_MS = 120;
           const ta = taRef.current;
           if (ta) ta.focus();
         },
+        /** R183: focus the manuscript heading and select it for replacement. */
+        focusTitle() {
+          const el = titleRef.current;
+          if (!el) return;
+          try {
+            el.focus({ preventScroll: false });
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            const sel = window.getSelection();
+            if (!sel) return;
+            sel.removeAllRanges();
+            sel.addRange(range);
+          } catch (err) {
+            try {
+              el.focus();
+            } catch (err2) {
+              /* ignore */
+            }
+          }
+        },
         /** R117: the phone bar hides the corner capsule, so 段落 needs a door. */
         openParaNav() {
           openParaNav();
@@ -5070,29 +5117,37 @@ const SEL_EMIT_MS = 120;
                   type: 'button',
                   className: 'nw-mark-view-btn',
                   'data-danger': '1',
+                  'data-glyph': '1',
+                  title: NW.t('删除'),
+                  'aria-label': NW.t('删除'),
                   onClick: () => {
                     // R52: go through removeMarkOf so the line disappears in this
                     // frame instead of waiting for the list to come back from
                     // IndexedDB — otherwise 删除 looks like it did nothing.
                     removeMarkOf(markView.mark.id);
                   },
-                }, NW.t('删除'))
+                }, 'X')
                 : h('button', {
                   type: 'button',
                   className: 'nw-mark-view-btn',
                   'data-primary': '1',
+                  'data-glyph': '1',
                   title: markKind === 'comment'
                     ? NW.t('用批注里的话替换原文')
                     : NW.t('删掉被划掉的这几个字'),
+                  'aria-label': NW.t('接受'),
                   onClick: () => decideMarkOf(markView.mark, true),
-                }, NW.t('接受')),
+                }, '√'),
               markKind === 'underline'
                 ? null
                 : h('button', {
                   type: 'button',
                   className: 'nw-mark-view-btn',
+                  'data-glyph': '1',
+                  title: NW.t('拒绝'),
+                  'aria-label': NW.t('拒绝'),
                   onClick: () => decideMarkOf(markView.mark, false),
-                }, NW.t('拒绝')),
+                }, 'X'),
             ),
           )
         : null;
@@ -5354,16 +5409,7 @@ const SEL_EMIT_MS = 120;
           'div',
           { className: 'nw-empty' },
           h('div', { className: 'nw-empty-glyph' }, '\u270E'),
-          h('div', { className: 'nw-empty-main' }, NW.t('从左侧选择或新建一个章节开始写作')),
-          h(
-            'div',
-            { className: 'nw-empty-sub' },
-            NW.t('Ctrl+F 查找 · Ctrl+S 保存 · Tab 缩进'),
-            h('br'),
-            // R77 (B5): 两个「看不见的入口」写在空状态里——它们是这一轮之前
-            // 最容易没人发现的功能。
-            NW.t('选中文字：右键标注，或点浮出的「修改建议」'),
-          ),
+          h('div', { className: 'nw-empty-main' }, NW.t('未选择章节。')),
         );
 
     // R73: one small button under the selection, not a toolbar. `onMouseDown`
@@ -5376,7 +5422,6 @@ const SEL_EMIT_MS = 120;
             type: 'button',
             className: 'nw-selbtn',
             style: { left: selBtn.x + 'px', top: selBtn.y + 'px' },
-            title: NW.t('给选中的文字提修改建议'),
             'aria-label': NW.t('修改建议'),
             onMouseDown: (ev) => {
               if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();

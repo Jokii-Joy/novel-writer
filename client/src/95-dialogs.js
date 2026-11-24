@@ -278,6 +278,7 @@
     { id: 'writing', label: '写作', icon: 'typewriter' },
     { id: 'export', label: '导出与文件', icon: 'download' },
     { id: 'privacy', label: '隐私与锁定', icon: 'lock' },
+    { id: 'ai', label: 'AI', icon: 'sparkle' },
     { id: 'submit', label: '投稿', icon: 'mail' },
     { id: 'keys', label: '快捷键', icon: 'keyboard' },
   ];
@@ -445,11 +446,6 @@
       'div',
       { className: 'nw-field' },
       NW.React.createElement('label', null, '按体裁 / 篇幅分列的收稿邮箱'),
-      NW.React.createElement(
-        'span',
-        { className: 'nw-hint' },
-        '这家刊有几个收稿邮箱就登记几行。体裁和字数都不填 = 任何稿件都能投这个地址。',
-      ),
       list.length === 0
         ? NW.React.createElement('div', { className: 'nw-dim', style: { padding: '6px 0' } }, '还没有分列邮箱。')
         : NW.React.createElement(
@@ -770,7 +766,6 @@
         h('div', { className: 'nw-lock-eyebrow' }, night ? 'NIGHT STUDY · ' + NW.t('私密书房') : 'PRIVATE STUDY · ' + NW.t('私密书房')),
         h('h2', { className: 'nw-lock-title' }, NW.t('书房已上锁')),
         h('div', { className: 'nw-lock-rule', 'aria-hidden': 'true' }),
-        h('p', { className: 'nw-lock-hint' }, NW.t('输入密码，继续昨晚那一页。')),
         h(
           'div',
           { className: 'nw-lock-form' },
@@ -784,9 +779,7 @@
               type: 'password',
               value: password,
               autoFocus: true,
-              placeholder: NW.t('请输入密码'),
               'aria-label': NW.t('密码'),
-              'aria-describedby': 'nw-lock-keys',
               disabled: busy,
               onChange: (ev) => setPassword(ev.target.value),
               onKeyDown: (ev) => {
@@ -810,12 +803,6 @@
           ),
         ),
         error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
-        h(
-          'div',
-          { className: 'nw-lock-keys', id: 'nw-lock-keys' },
-          h('kbd', null, 'Enter'),
-          ' ' + NW.t('解锁') + ' · ' + NW.t('密码只保存在本机'),
-        ),
         p.onClose
           ? h(
               'button',
@@ -823,12 +810,6 @@
               NW.t('取消'),
             )
           : null,
-      ),
-      h(
-        'div',
-        { className: 'nw-lock-meta' },
-        h('span', { className: 'nw-lock-meta-item' }, h(LockPadlock), NW.t('本地加密 · AES-256-GCM')),
-        h('span', { className: 'nw-lock-meta-item' }, NW.t('内容不上传')),
       ),
       h(
         'div',
@@ -916,7 +897,6 @@
       h(
         'div',
         null,
-        h('p', { className: 'nw-hint-block' }, '设置后，锁定时正文以 AES-256-GCM 加密保存；关闭 DSH 再打开也需要密码才能解锁。'),
         NW.ui.field({ label: NW.t('密码'), children: NW.ui.input({ type: 'password', value: pw1, onChange: setPw1, autoFocus: true }) }),
         NW.ui.field({ label: '确认密码', children: NW.ui.input({ type: 'password', value: pw2, onChange: setPw2 }) }),
         error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
@@ -987,6 +967,7 @@
     const hasChapter = !!(defaultTarget.kind === 'chapter' && defaultTarget.id);
     const target = hasChapter ? defaultTarget : { kind: 'novel', id: String(novel.id || ''), title: novelTitle };
     const [scope, setScope] = useState(target.kind === 'chapter' ? 'chapter' : 'novel');
+    const [finalHint, setFinalHint] = useState('');
 
     const APPEND_LIMIT = 8000;
     const trimmedAppend = String(appendText || '').replace(/\r\n|\r/g, '\n');
@@ -1007,6 +988,45 @@
       scope === 'chapter'
         ? '将导出《' + novelTitle + '》的「' + chapterLabel + '」。'
         : '将导出《' + novelTitle + '》的全部章节。';
+
+    // Tell the writer which body will actually leave the app: a chapter with a
+    // 定稿 exports that version, not the unsaved buffer behind the modal.
+    useEffect(() => {
+      let alive = true;
+      const load = async () => {
+        if (!NW.db) return;
+        if (scope === 'chapter' && hasChapter) {
+          const fresh = await NW.db.getChapter(target.id).catch(() => null);
+          if (!fresh || fresh.finalVersionId == null) {
+            if (alive) setFinalHint('本章未设付印稿。');
+            return;
+          }
+          let label = '';
+          try {
+            const list = await NW.db.listVersions(target.id, { meta: true });
+            const picked = (list || []).filter((row) => String(row.id) === String(fresh.finalVersionId))[0];
+            if (picked && picked.label) label = String(picked.label);
+          } catch (err) {
+            /* the label is a nicety; the export still uses the version */
+          }
+          if (alive) setFinalHint('本章使用付印稿' + (label ? '「' + label + '」' : '') + '。');
+          return;
+        }
+        const rows = await NW.db.listChapters(novel.id);
+        const count = (rows || []).filter((row) => row && row.finalVersionId != null).length;
+        if (alive) {
+          setFinalHint(count
+            ? count + ' 章设有付印稿。'
+            : '未设置付印稿。');
+        }
+      };
+      load().catch(() => {
+        if (alive) setFinalHint('');
+      });
+      return () => {
+        alive = false;
+      };
+    }, [scope, hasChapter, target.id, novel.id]);
 
     const run = async () => {
       setBusy(true);
@@ -1101,8 +1121,8 @@
         h(
           'div',
           { className: 'nw-row' },
-          h('span', null, '不分章节（短篇连续排版）'),
-          NW.ui.toggle({ checked: continuous, onChange: setContinuous, label: '不分章节（短篇连续排版）' }),
+          h('span', null, '不分章节'),
+          NW.ui.toggle({ checked: continuous, onChange: setContinuous, label: '不分章节' }),
         ),
         h(
           'div',
@@ -1135,7 +1155,6 @@
               NW.ui.textarea({
                 value: appendText,
                 rows: 4,
-                placeholder: '例如：作者署名、联系方式、未完待续说明。这段文字会追加在正文最后。',
                 onChange: (v) => setAppendText(v),
                 ariaLabel: '文末追加内容',
               }),
@@ -1146,9 +1165,15 @@
               ),
             )
           : null,
-        format === 'pdf' ? h('p', { className: 'nw-hint-block' }, 'PDF 通过 docx 渲染生成，需要本机 PDF 引擎可用。') : null,
-        format === 'txt' && appendOn ? h('p', { className: 'nw-hint-block' }, '纯文本导出的文末追加依赖 Host 支持；若未生效请改用 docx。') : null,
         h('p', { className: 'nw-hint-block' }, headline),
+        finalHint
+          ? h(
+              'p',
+              { className: 'nw-hint-block nw-export-finalhint' },
+              h('span', { className: 'nw-final-badge is-final' }, '付印稿'),
+              h('span', null, finalHint),
+            )
+          : null,
         error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
       ),
       h(
@@ -1162,6 +1187,79 @@
     );
   };
 
+
+  // ============================================================ New novel ====
+  /**
+   * R176: create the book and its first chapter in one calm step.
+   *
+   * The old prompt only asked for a book title and then created a second thing
+   * called 「新章节」 that the writer had to rename immediately. For a short
+   * story that is a chapter tree with one leaf — pure ceremony. Asking for the
+   * first chapter here (optional, falling back to the book title) means the
+   * writer lands in a page that already says what the piece is called, and the
+   * shelf can hide a tree that only holds one row.
+   */
+  NW.dialogs.NewNovel = function NewNovel(props) {
+    const p = props || {};
+    const [title, setTitle] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+
+    const submit = async () => {
+      if (busy) return;
+      setBusy(true);
+      setError('');
+      try {
+        await p.onCreateNovel({
+          title: String(title || '').trim(),
+        });
+        if (typeof p.onClose === 'function') p.onClose();
+      } catch (err) {
+        setBusy(false);
+        setError(errText(err, '新建小说失败'));
+      }
+    };
+
+    const onEnter = (ev) => {
+      if (ev.key === 'Enter' && !ev.isComposing) {
+        ev.preventDefault();
+        submit();
+      }
+    };
+
+    return modal(
+      NW.t('新建小说'),
+      h(
+        'div',
+        { className: 'nw-newnovel' },
+        NW.ui.field({
+          label: '小说标题',
+          children: NW.ui.input({
+            value: title,
+            autoFocus: true,
+            placeholder: '未命名小说',
+            onChange: setTitle,
+            onKeyDown: onEnter,
+            ariaLabel: '小说标题',
+          }),
+        }),
+        error ? h('div', { className: 'nw-lock-error', role: 'alert' }, error) : null,
+      ),
+      h(
+        'div',
+        { style: { display: 'flex', gap: '8px' } },
+        NW.ui.btn({ onClick: p.onClose, children: NW.t('取消') }),
+        NW.ui.btn({
+          kind: 'primary',
+          onClick: submit,
+          disabled: busy,
+          children: busy ? '创建中…' : '创建并开始写',
+        }),
+      ),
+      '440px',
+      p.onClose,
+    );
+  };
 
   // ============================================================= Typeset ====
   NW.dialogs.Typeset = function Typeset(props) {
@@ -1212,7 +1310,6 @@
       h(
         'div',
         null,
-        h('p', { className: 'nw-hint-block' }, '预览模式：原文不会被覆盖，确认后才会写入。'),
         h(
           'div',
           { className: 'nw-inline', style: { justifyContent: 'space-between', marginBottom: '8px' } },
@@ -1372,7 +1469,7 @@
         const folder = String((picked && picked.dir) || '');
         if (!folder) return null;
         await persist({ dir: folder, mirror: true, encrypt: encrypt });
-        setHint('已选择保存位置：之后每次修改都会自动覆盖这个文件夹里的文件。');
+        setHint('已选择保存位置。');
         return picked;
       });
 
@@ -1420,7 +1517,6 @@
     body.push(
       NW.ui.field({
         label: '保存文件夹',
-        hint: '小说会以 Word 文档写进这个目录（加密时是 .docx.nwe），每次修改自动覆盖，不需要手动另存。',
         children: h(
           'div',
           { className: 'nw-inline', style: { gap: '6px' } },
@@ -1433,7 +1529,6 @@
           NW.ui.btn({
             onClick: chooseDir,
             disabled: !!busy,
-            title: '用系统对话框选择文件夹',
             children: NW.t('选择…'),
           }),
           NW.ui.btn({
@@ -1487,15 +1582,6 @@
       ),
     );
 
-    body.push(
-      h(
-        'p',
-        { className: 'nw-hint-block' },
-        encrypt
-          ? '加密后文件扩展名是 .docx.nwe，用其它编辑器打不开；密钥只保存在本机，换台电脑要先恢复密码。'
-          : '当前是明文存储，文件夹里的 .docx 可以直接用 Word 打开。',
-      ),
-    );
 
     body.push(
       h(
@@ -1828,10 +1914,9 @@
      * An empty value means "follow the harness default", which is the shipped
      * state; that is why every pair starts as `null` rather than a guessed id.
      */
-    const modelPicker = (label, provKey, modKey, hint) =>
+    const modelPicker = (label, provKey, modKey) =>
       NW.ui.field({
         label: label,
-        hint: hint,
         children: NW.ui.select({
           value: draft[provKey] && draft[modKey] ? draft[provKey] + '\u0000' + draft[modKey] : '',
           onChange: (value) => {
@@ -1972,7 +2057,7 @@
             hasPassword: data ? data.hasPassword !== false : prev.hasPassword,
             password: '',
             error: '',
-            hint: '邮箱设置已保存。可以点「测试连接」确认服务器可达。',
+            hint: '邮箱设置已保存。',
           }),
         );
         notify('投稿邮箱已保存', 'ok');
@@ -2131,7 +2216,7 @@
             hasPassword: data ? data.hasPassword !== false : prev.hasPassword,
             password: '',
             error: '',
-            hint: data && data.configured ? '收件设置已保存。可以点「测试连接」确认能读到收件箱。' : '',
+            hint: data && data.configured ? '收件设置已保存。' : '',
           }),
         );
         notify('收件设置已保存', 'ok');
@@ -2232,17 +2317,12 @@
     // R16 ⑥: a 4th `hint` argument now renders as a real note under the row —
     // before it only reached the tooltip, and the 标点 switch needs to explain
     // what it changes.
-    const rowToggle = (label, checked, onChange, hint) =>
+    const rowToggle = (label, checked, onChange) =>
       h(
         'div',
         { className: 'nw-row' },
-        h(
-          'span',
-          { className: 'nw-rowlabel' },
-          h('span', null, label),
-          hint ? h('span', { className: 'nw-dim nw-rowhint' }, hint) : null,
-        ),
-        NW.ui.toggle({ checked: !!checked, onChange: onChange, label: label, title: hint || label }),
+        h('span', { className: 'nw-rowlabel' }, h('span', null, label)),
+        NW.ui.toggle({ checked: !!checked, onChange: onChange, label: label }),
       );
 
     return modal(
@@ -2297,7 +2377,6 @@
             // 换一套。浅色随机不再是单独开关：跟随系统本身就是「交给环境」的意思。
             NW.ui.field({
               label: NW.t('跟随系统深浅色'),
-              hint: NW.t('系统切到浅色时，从浅色、护眼、报纸、杂志里随机一套，之后每半小时自动换一套；深色时用下面选的那套。'),
               children: NW.ui.toggle({
                 checked: draft.themeAuto === true,
                 label: NW.t('跟随系统'),
@@ -2307,7 +2386,6 @@
             draft.themeAuto
               ? NW.ui.field({
                   label: NW.t('系统为深色时用'),
-                  hint: NW.t('浅色一侧不再指定：每次进入浅色都会换一套，免得每天打开都是同一个白天。'),
                   children: NW.ui.select({
                     value: draft.themeDark || 'night',
                     onChange: (value) => set('themeDark', value),
@@ -2319,7 +2397,6 @@
             // night room can be pinned for writers who liked that version.
             NW.ui.field({
               label: NW.t('锁屏外观'),
-              hint: NW.t('跟随主题：白天是书房、夜里是夜灯。始终深色：锁屏固定夜灯。'),
               children: NW.ui.seg({
                 value: draft.lockDark === true ? 'dark' : 'theme',
                 ariaLabel: NW.t('锁屏外观'),
@@ -2334,7 +2411,6 @@
             // 字体画，挑的时候就能看见长什么样；下面还给一行正文范例。
             NW.ui.field({
               label: NW.t('字体'),
-              hint: NW.t('点一下换一种笔迹。楷体、仿宋、书宋都在这台机器上；装过方正书宋或霞鹜文楷的会优先用你装的。'),
               children: [
                 h(
                   'div',
@@ -2387,7 +2463,6 @@
             // 一栏像纸书，两栏像期刊。放得太隐蔽也没用，它就在字号行距旁边。
             NW.ui.field({
               label: NW.t('每页栏数'),
-              hint: NW.t('双栏把一页正文排成两栏（期刊那种），一行二十来字更好读；面板太窄会自动回到一栏。'),
               children: NW.ui.seg({
                 ariaLabel: NW.t('每页栏数'),
                 value: Number(draft.readColumns) >= 2 ? '2' : '1',
@@ -2403,7 +2478,6 @@
             // 它们不该在弹层里挤着填。
             NW.ui.field({
               label: NW.t('朗读接口地址'),
-              hint: NW.t('任何 OpenAI /v1/audio/speech 兼容的接口：填到 /v1 也行，填完整的 …/audio/speech 也行。留空则不用「自定义」引擎。'),
               children: h('input', {
                 type: 'text',
                 className: 'nw-input',
@@ -2417,7 +2491,6 @@
               { className: 'nw-grid2' },
               NW.ui.field({
                 label: NW.t('朗读接口密钥'),
-                hint: NW.t('本地服务通常留空。'),
                 children: h('input', {
                   type: 'password',
                   className: 'nw-input',
@@ -2439,7 +2512,6 @@
             ),
             NW.ui.field({
               label: NW.t('朗读音色'),
-              hint: NW.t('接口那边的音色名：alloy / nova / 或本地模型自己的名字。'),
               children: h('input', {
                 type: 'text',
                 className: 'nw-input',
@@ -2460,7 +2532,6 @@
               }),
               NW.ui.field({
                 label: NW.t('光标颜色'),
-                hint: NW.t('留空表示跟随主题。'),
                 children: h(
                   'div',
                   { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
@@ -2492,12 +2563,11 @@
             ),
             rowToggle('光标闪烁', draft.caretBlink !== false, (v) => set('caretBlink', v)),
             rowToggle('打字机模式', draft.typewriter, (v) => set('typewriter', v)),
-            rowToggle('沉浸模式（隐藏所有面板；Esc 退出，Ctrl+Shift+F 或 Ctrl+Alt+F 切换）', draft.immersive, (v) => set('immersive', v)),
+            rowToggle('沉浸模式', draft.immersive, (v) => set('immersive', v)),
             rowToggle(
               '只照亮光标所在的那一段',
               draft.focusDim !== false,
               (v) => set('focusDim', v),
-              NW.t('其余段落淡去，仍在原处；光标离开编辑区时全部恢复，鼠标一滚就回来。沉浸与非沉浸都生效。'),
             ),
           ),
         ),
@@ -2511,7 +2581,11 @@
               '统计字数包含标点符号',
               draft.countPunctuation !== false,
               (v) => set('countPunctuation', v),
-              '关闭后，状态栏、书籍总字数和投稿预览里的字数都会扣掉标点。默认包含，与常见中文写作软件一致。',
+            ),
+            rowToggle(
+              '显示字数',
+              draft.showWordCount !== false,
+              (v) => set('showWordCount', v),
             ),
             NW.ui.field({
               label: '自动保存间隔（毫秒）',
@@ -2529,9 +2603,19 @@
                 style: { maxWidth: '140px' },
               }),
             }),
+            // R176: export formatting belongs to 导出与文件, not 写作. Keeping
+            // the signature, meta toggle and cover control in the writing tab
+            // made it read as three unrelated writing switches.
+          ),
+        ),
+        // -------------------------------------------------- 3 导出与文件 ----
+        section(
+          '导出与文件',
+          h(
+            'div',
+            null,
             NW.ui.field({
               label: '文末追加内容',
-              hint: '导出时追加在正文最后，例如署名、联系方式或「未完待续」。',
               children: NW.ui.textarea({
                 rows: 3,
                 value: String(draft.exportSignature || ''),
@@ -2548,25 +2632,6 @@
               h('span', null, '封面图片'),
               NW.ui.btn({ onClick: () => openSibling(p, 'export', {}), children: '在导出面板中选择…' }),
             ),
-            // R29: two AI jobs, two models. Each defaults to the harness model;
-            // the writer picks a strong one for the editorial advice if they
-            // want. 「跟随默认模型」 is the shipped state, not a placeholder — an
-            // unset pair really does fall through to the harness selection on
-            // the Host side.
-            // R118: the 「AI 校对模型 / 要求」 pair is gone — that angle now runs
-            // inside AI建议 (the `words` focus), so there is nothing to tune
-            // separately. The old settings keys stay in DEFAULT_SETTINGS for
-            // migrating libraries, they are simply no longer rendered here.
-            modelPicker('AI 投稿模型', 'submitProvider', 'submitModel', '生成投稿邮件正文与按期刊要求排版时使用。'),
-            modelPicker('AI建议模型', 'adviceProvider', 'adviceModel', '通读全章给出AI建议，建议用能力更强的模型。'),
-          ),
-        ),
-        // -------------------------------------------------- 3 导出与文件 ----
-        section(
-          '导出与文件',
-          h(
-            'div',
-            null,
             NW.ui.field({
               label: '默认导出格式',
               children: NW.ui.select({
@@ -2585,7 +2650,6 @@
               h(
                 'span',
                 { className: 'nw-inline', style: { gap: '6px' } },
-                h('span', { className: 'nw-dim' }, NW.t('每部作品一个文件，打成一个 zip')),
                 NW.ui.btn({
                   onClick: () => {
                     if (typeof p.onExportAll !== 'function') return;
@@ -2679,7 +2743,6 @@
                       type: 'password',
                       value: pwState.oldValue,
                       onChange: (v) => setPwState((prev) => Object.assign({}, prev, { oldValue: v, error: '' })),
-                      placeholder: '修改密码前需要验证当前密码',
                     }),
                   }),
                   NW.ui.field({
@@ -2692,7 +2755,7 @@
                     }),
                   }),
                   NW.ui.field({
-                    label: '清除密码（输入当前密码）',
+                    label: '清除密码',
                     children: NW.ui.input({
                       type: 'password',
                       value: pwState.value,
@@ -2722,11 +2785,6 @@
                 ),
             pwState.error ? h('div', { className: 'nw-lock-error', role: 'alert' }, pwState.error) : null,
             h(
-              'p',
-              { className: 'nw-hint-block' },
-              '密码只在本机用 PBKDF2-SHA256 派生的密钥校验，正文用 AES-256-GCM 加密；忘记密码将无法恢复正文。',
-            ),
-            h(
               'div',
               { className: 'nw-row' },
               h('span', null, '立即锁定'),
@@ -2734,25 +2792,30 @@
             ),
           ),
         ),
-        // ------------------------------------------------------ 5 投稿 ----
+        // --------------------------------------------------------- 5 AI ----
+        // R183: two models, two different jobs. They no longer live in 投稿
+        // (advice has nothing to do with sending mail); the tab sits between
+        // privacy and submission so both are still one click from where used.
+        section(
+          'AI',
+          h(
+            'div',
+            null,
+            modelPicker('AI 投稿模型', 'submitProvider', 'submitModel'),
+            modelPicker('AI建议模型', 'adviceProvider', 'adviceModel'),
+          ),
+        ),
+        // ------------------------------------------------------ 6 投稿 ----
         section(
           '投稿',
           h(
             'div',
             null,
-            h(
-              'p',
-              { className: 'nw-hint-block' },
-              smtp.configured
-                ? '已配置投稿邮箱' + (smtp.user ? '（' + smtp.user + '）' : '') + '。'
-                : '还没有配置投稿邮箱。填好下面的服务器信息后，投稿助手就能直接发信。',
-            ),
             // One-click provider presets: typing smtp.qq.com + 465 + SSL by hand
             // was the single most common source of "连接已关闭".
             presets.length > 0
               ? NW.ui.field({
                   label: '快速填写',
-                  hint: '选择你的邮箱服务商，主机与端口会自动填好；密码处仍需填「授权码 / 客户端专用密码」。',
                   children: h(
                     'div',
                     { className: 'nw-preset-wrap' },
@@ -2811,7 +2874,6 @@
                     checked: !!smtp.secure,
                     onChange: (v) => setSmtp((prev) => Object.assign({}, prev, { secure: v })),
                     label: '使用 SSL',
-                    title: '465 端口通常用 SSL；587 端口通常关闭此项改用 STARTTLS。',
                   }),
                 ),
               }),
@@ -2826,7 +2888,6 @@
             }),
             NW.ui.field({
               label: '密码 / 授权码',
-              hint: '多数邮箱需要用「授权码」，不是网页登录密码。留空表示沿用已保存的密码。',
               children: NW.ui.input({
                 type: 'password',
                 value: smtp.password,
@@ -2838,13 +2899,11 @@
               '允许跳过证书校验（不推荐）',
               smtp.allowInsecureTls === true,
               (v) => setSmtp((prev) => Object.assign({}, prev, { allowInsecureTls: !!v })),
-              'R80 起默认拒绝：证书错误可能意味着中间人正在截取授权码。只有确认是公司代理 / 杀毒软件时才打开。',
             ),
             rowToggle(
               '允许明文登录（不推荐）',
               smtp.allowPlaintextAuth === true,
               (v) => setSmtp((prev) => Object.assign({}, prev, { allowPlaintextAuth: !!v })),
-              '服务器不提供 STARTTLS 时默认中止发送；只有可信的内网中继才需要打开。',
             ),
             h(
               'div',
@@ -2853,26 +2912,14 @@
               NW.ui.btn({ onClick: testSmtp, disabled: !!smtp.busy || !smtp.configured, children: NW.t('测试连接') }),
             ),
             smtp.busy ? h('div', { className: 'nw-inline', style: { marginTop: '8px' } }, NW.ui.spinner(smtp.busy)) : null,
-            smtp.error
-              ? h('div', { className: 'nw-lock-error', role: 'alert' }, smtp.error)
-              : smtp.hint
-                ? h('p', { className: 'nw-hint-block' }, smtp.hint)
-                : null,
+            smtp.error ? h('div', { className: 'nw-lock-error', role: 'alert' }, smtp.error) : null,
             // ---- 收件箱（IMAP）----
             // 投稿是「发信」，编辑部的回信要「收信」，两者是同一套账号；把收件
             // 摆在同一节里，作者才不用去猜「我该填哪个服务器」。
             h('hr', { className: 'nw-rule' }),
-            h(
-              'p',
-              { className: 'nw-hint-block' },
-              imap.configured
-                ? '收件箱已配置' + (imap.user ? '（' + imap.user + '）' : '') + '，首页会显示编辑部的最新回信。'
-                : '配好收信服务器后，首页会显示编辑部的最新回信和未读数；不配置也能正常投稿，只是回信要自己去网页邮箱看。',
-            ),
             imapPresets.length > 0
               ? NW.ui.field({
                   label: '快速填写',
-                  hint: '选服务商会自动填好 IMAP 主机与端口；密码同样要填授权码。',
                   children: h(
                     'div',
                     { className: 'nw-preset-wrap' },
@@ -2908,7 +2955,6 @@
               '启用收件箱',
               imap.enabled,
               (v) => setImap((prev) => Object.assign({}, prev, { enabled: !!v })),
-              '关闭后首页不再读取收件箱，设置仍保留。',
             ),
             rowToggle(
               '沿用发信账号',
@@ -2921,13 +2967,12 @@
                     user: v ? '' : prev.user,
                   }),
                 ),
-              '打开时自动用上面 SMTP 的邮箱地址与授权码收信，只需在服务器名与 SMTP 对不上时手动填。',
             ),
             NW.ui.field({
               label: 'IMAP 主机',
               children: NW.ui.input({
                 value: imap.host,
-                placeholder: imap.useSmtp ? '留空则自动用 SMTP 主机推导（smtp.qq.com → imap.qq.com）' : '例如 imap.qq.com',
+                placeholder: '例如 imap.qq.com',
                 onChange: (v) => setImap((prev) => Object.assign({}, prev, { host: v, error: '', hint: '' })),
               }),
             }),
@@ -2952,23 +2997,20 @@
                     checked: !!imap.secure,
                     onChange: (v) => setImap((prev) => Object.assign({}, prev, { secure: v })),
                     label: '使用 SSL',
-                    title: '993 端口用 SSL；143 端口关闭此项改用 STARTTLS。',
                   }),
                 ),
               }),
             ),
             NW.ui.field({
               label: '收件账号',
-              hint: imap.useSmtp ? '留空则用 SMTP 用户名收信。' : '',
               children: NW.ui.input({
                 value: imap.user,
-                placeholder: imap.useSmtp ? '留空则沿用发信邮箱' : '例如 you@qq.com',
+                placeholder: '例如 you@qq.com',
                 onChange: (v) => setImap((prev) => Object.assign({}, prev, { user: v, error: '', hint: '' })),
               }),
             }),
             NW.ui.field({
               label: '密码 / 授权码',
-              hint: '留空表示沿用已保存的密码（SMTP 那份也能用）。',
               children: NW.ui.input({
                 type: 'password',
                 value: imap.password,
@@ -2980,13 +3022,11 @@
               '允许跳过证书校验（不推荐）',
               imap.allowInsecureTls === true,
               (v) => setImap((prev) => Object.assign({}, prev, { allowInsecureTls: !!v })),
-              'R80 起默认拒绝：证书错误可能意味着中间人正在截取授权码。',
             ),
             rowToggle(
               '允许明文登录（不推荐）',
               imap.allowPlaintextAuth === true,
               (v) => setImap((prev) => Object.assign({}, prev, { allowPlaintextAuth: !!v })),
-              '服务器不提供 STARTTLS 时默认中止登录；只有可信的内网中继才需要打开。',
             ),
             h(
               'div',
@@ -2999,11 +3039,7 @@
               }),
             ),
             imap.busy ? h('div', { className: 'nw-inline', style: { marginTop: '8px' } }, NW.ui.spinner(imap.busy)) : null,
-            imap.error
-              ? h('div', { className: 'nw-lock-error', role: 'alert' }, imap.error)
-              : imap.hint
-                ? h('p', { className: 'nw-hint-block' }, imap.hint)
-                : null,
+            imap.error ? h('div', { className: 'nw-lock-error', role: 'alert' }, imap.error) : null,
             h(
               'div',
               { className: 'nw-row' },
@@ -3047,11 +3083,6 @@
                 h('span', { className: 'nw-dim' }, journalCount == null ? '' : journalCount + ' 家'),
                 NW.ui.btn({ onClick: openJournals, children: '打开投稿助手…' }),
               ),
-            ),
-            h(
-              'p',
-              { className: 'nw-hint-block' },
-              '期刊的邮箱与投稿要求以官方最新征稿启事为准，可在投稿助手的「期刊管理」里核对后保存。',
             ),
           ),
           { ref: submitSectionRef },
@@ -3327,24 +3358,50 @@
 
     // ---------------------------------------------------------- manuscript ---
     /**
-     * Read the chosen scope into `{title, content}` rows. Live editor text wins
-     * for the current chapter, everything else comes from IndexedDB so a stale
-     * sidebar row cannot submit an old draft.
+     * Read the chosen scope into `{title, content}` rows. A chapter whose 定稿
+     * is set submits that version, not the draft behind the editor; everything
+     * else reads IndexedDB so a stale sidebar row cannot submit an old draft.
      */
+    const finalContentOf = async (row) => {
+      if (!row || !NW.db) return '';
+      let meta = row;
+      try {
+        const fresh = await NW.db.getChapter(row.id);
+        if (fresh) meta = fresh;
+      } catch (err) {
+        /* keep the row we were given */
+      }
+      if (!meta.finalVersionId) return '';
+      try {
+        const version = await NW.db.getVersion(meta.finalVersionId);
+        if (version && String(version.chapterId) === String(row.id) && version.locked !== true) {
+          return String(version.content || '');
+        }
+      } catch (err) {
+        /* fall back to the live/stored body */
+      }
+      return '';
+    };
+
     const collectWork = async () => {
       const out = [];
       if (!novelId) return out;
       if (scope === 'chapter') {
         if (!currentChapter) return out;
-        let text = typeof p.getText === 'function' ? String(p.getText() || '') : '';
-        if (!text) text = textOfChapter(currentChapter);
-        out.push({ title: String(currentChapter.title || '第 1 章'), content: text });
+        const finalText = await finalContentOf(currentChapter);
+        let text = finalText;
+        if (!text) {
+          text = typeof p.getText === 'function' ? String(p.getText() || '') : '';
+          if (!text) text = textOfChapter(currentChapter);
+        }
+        out.push({ title: String(currentChapter.title || '第 1 章'), content: text, final: !!finalText });
         return out;
       }
       const rows = scope === 'custom' ? chapters.filter((row) => pickedIds.indexOf(String(row.id)) >= 0) : chapters;
       for (let i = 0; i < rows.length; i += 1) {
         const row = rows[i];
-        let content = textOfChapter(row);
+        const finalText = await finalContentOf(row);
+        let content = finalText || textOfChapter(row);
         if (!content && NW.db && typeof NW.db.getChapter === 'function') {
           try {
             const full = await NW.db.getChapter(row.id);
@@ -3353,7 +3410,7 @@
             content = textOfChapter(row);
           }
         }
-        out.push({ title: String(row.title || '第 ' + (i + 1) + ' 章'), content: content });
+        out.push({ title: String(row.title || '第 ' + (i + 1) + ' 章'), content: content, final: !!finalText });
       }
       return out;
     };
@@ -3699,10 +3756,10 @@
           .filter((key) => matchedVariant.genres[key])
           .map((key) => EMAIL_GENRE_LABELS[key] || key);
         if (genres.length) bits.push(genres.join('/'));
-        return '按本稿篇幅匹配到这家刊的这一条收稿邮箱' + (bits.length ? '：' + bits.join(' · ') : '') + '。';
+        return '匹配收稿邮箱' + (bits.length ? '：' + bits.join(' · ') : '') + '。';
       }
       if (emailInfo && emailInfo.matched === 'default' && Array.isArray(emailInfo.variants) && emailInfo.variants.length) {
-        return '这家刊分设了多个收稿邮箱，但当前篇幅没有单独对应的那一条，填的是通用邮箱，可核对后手动改。';
+        return '当前篇幅没有单独的收稿邮箱，填的是通用邮箱。';
       }
       return '';
     })();
@@ -3848,7 +3905,6 @@
       stepBody.push(h('h4', null, '选择要投稿的小说'));
 
       if (novelList.length === 0) {
-        stepBody.push(h('div', { className: 'nw-dim' }, '书架上还没有小说，请先回到写作页新建一部。'));
       }
 
       if (novelList.length > 0) {
@@ -3886,6 +3942,18 @@
             h('dd', null, chapters.length + ' 章'),
             h('dt', null, '字数'),
             h('dd', null, workBusy ? '统计中…' : workCount + ' 字'),
+            h('dt', null, '付印稿'),
+            h(
+              'dd',
+              null,
+              workBusy
+                ? '统计中…'
+                : (() => {
+                    const finals = (workRows || []).filter((row) => row.final).length;
+                    if (!finals) return '未设置（按当前正文投稿）';
+                    return scope === 'chapter' ? '本章使用付印稿' : finals + ' 章使用付印稿';
+                  })(),
+            ),
             h('dt', null, NW.t('体裁')),
             h('dd', null, genreLabelOf(genre || recommendedGenre)),
           ),
@@ -3956,10 +4024,6 @@
       stepBody.push(
         NW.ui.field({
           label: NW.t('体裁'),
-          hint:
-            '按字数自动推荐：' +
-            genreLabelOf(recommendedGenre) +
-            '；期刊的收稿邮箱会按体裁与篇幅匹配，可手动改选。',
           children: h('div', { className: 'nw-genre-seg nw-seg' }, genreButtons),
         }),
       );
@@ -4034,7 +4098,6 @@
           // R16 ⑩: 期刊水平等级 — the badge the author weighs first.
           NW.ui.field({
             label: NW.t('期刊等级'),
-            hint: '国家级 / 省级 / 市级只是常见的投稿难度参考，具体以期刊官方说明为准。',
             children: NW.ui.select({
               value: editTier,
               ariaLabel: NW.t('期刊等级'),
@@ -4049,7 +4112,6 @@
           }),
           NW.ui.field({
             label: '默认收稿邮箱',
-            hint: '不带分类条件的通用邮箱；下面登记了分体裁邮箱的，投稿时优先用那一行。',
             children: NW.ui.input({
               value: editEmail,
               placeholder: '编辑部收稿邮箱',
@@ -4088,7 +4150,6 @@
             NW.ui.btn({ onClick: () => setManage(false), disabled: !!manageBusy, children: '取消' }),
           ),
           manageBusy ? h('div', { className: 'nw-inline', style: { marginTop: '8px' } }, NW.ui.spinner(manageBusy)) : null,
-          h('p', { className: 'nw-hint-block' }, '信息会保存在本机，用于下次投稿；请以期刊官方最新征稿启事为准。'),
         );
       } else if (selected) {
         const requirementRows = (Array.isArray(selected.requirements) ? selected.requirements : []).map((line, index) =>
@@ -4153,7 +4214,7 @@
           ),
         );
       } else {
-        detailBody = h('div', { className: 'nw-dim' }, '在左侧选择一家期刊，这里会显示它的投稿要求、邮箱与字数范围。');
+        detailBody = null;
       }
 
       const journalButtons = filtered.map((entry) =>
@@ -4224,11 +4285,9 @@
         stepBody.push(
           h('p', { className: 'nw-hint-block' }, '收件人：' + String(sent.to || '') + '　·　发送时间：' + NW.fmtDate(sent.at)),
         );
-        stepBody.push(
-          historyRows.length > 0
-            ? h('div', { className: 'nw-version-list' }, historyRows)
-            : h('p', { className: 'nw-hint-block' }, '历史投稿记录会保存在本机，最多 50 条。'),
-        );
+        if (historyRows.length > 0) {
+          stepBody.push(h('div', { className: 'nw-version-list' }, historyRows));
+        }
         if (sendError) stepBody.push(h('div', { className: 'nw-lock-error', role: 'alert' }, sendError));
       } else if (preparing || (!prepared && !prepareError)) {
         // R32 ①: nothing of the letter is shown until the letter exists. A
@@ -4267,11 +4326,6 @@
               ),
             ),
             h('div', { className: 'nw-prep-bar', 'aria-hidden': 'true' }, h('i', null)),
-            h(
-              'div',
-              { className: 'nw-prep-hint' },
-              '模型正在通读全文并比对这家刊的征稿要求，通常十几秒。完成后直接进入预览，届时每个字段都能改。',
-            ),
           ),
         );
       } else if (prepareError) {
@@ -4343,7 +4397,7 @@
             }),
             NW.ui.field({
               label: '收件人',
-              hint: [toWhy, emailNote || '可以直接改成编辑部的其他邮箱。'].filter(Boolean).join(' '),
+              hint: [toWhy, emailNote].filter(Boolean).join(' '),
               children: toBox,
             }),
           ),
@@ -4353,8 +4407,7 @@
           '共 ' +
           body.length +
           ' 字符' +
-          (prepared && prepared.pasteInBody ? ' · 已包含稿件全文（按该刊要求粘贴在正文里）' : ' · 只含投稿信，小说全文走附件') +
-          '。可以直接修改，发出的就是这里的文字。';
+          (prepared && prepared.pasteInBody ? ' · 正文含稿件全文' : ' · 正文只含投稿信');
 
         stepBody.push(
           NW.ui.field({
@@ -4427,7 +4480,7 @@
             (prepared.attachmentNaming && prepared.attachmentNaming.sentence
               ? '，命名：' + prepared.attachmentNaming.sentence
               : '')
-          : '附件格式与数量已按征稿要求生成，可改名或增删。';
+          : '';
         stepBody.push(
           h(
             'div',
@@ -4442,7 +4495,7 @@
               NW.ui.btn({ onClick: addAttachmentFiles, disabled: !!attachBusy, children: attachBusy || '添加本地文件…' }),
               attachBoxes.length ? NW.ui.btn({ onClick: () => setAttachRows([]), children: '清空附件' }) : null,
             ),
-            h('span', { className: 'nw-hint' }, attachRule),
+            attachRule ? h('span', { className: 'nw-hint' }, attachRule) : null,
           ),
         );
 
@@ -4551,20 +4604,13 @@
             h(
               'div',
               { className: 'nw-lock-error', role: 'alert' },
-              '这家期刊以纸质邮寄为主，直接发邮件可能不被受理。建议改为本地导出后邮寄，或先电话 / 邮件确认收稿方式。',
+              '这家期刊以纸质邮寄为主，直接发邮件可能不被受理。',
             ),
           );
         }
         if (smtp.configured && smtp.user) {
           stepBody.push(h('p', { className: 'nw-hint-block' }, '将从 ' + smtp.user + ' 发出。'));
         }
-        stepBody.push(
-          h(
-            'p',
-            { className: 'nw-hint-block' },
-            '主题、正文、收件人、附件都可以直接改，确认无误后点右下角「确认投稿」。发送后会写入本机的投稿记录，可在「投稿管理」里标记处理状态。',
-          ),
-        );
 
       }
     }
@@ -4727,6 +4773,10 @@
     // 正文逐行摊开，先看清改了什么再决定要不要恢复。
     const [compare, setCompare] = useState(null);
 
+    // 完稿 versions live in their own panel; keep this history list to the
+    // automatic snapshots so the same save does not appear twice.
+    const autoRowsOf = (list) => (Array.isArray(list) ? list : []).filter((row) => row && row.kind !== 'final');
+
     useEffect(() => {
       let alive = true;
       if (!chapterId) {
@@ -4736,7 +4786,7 @@
       NW.db
         .listVersions(chapterId)
         .then((list) => {
-          if (alive) setRows(list || []);
+          if (alive) setRows(autoRowsOf(list));
         })
         .catch((err) => {
           if (alive) setError(errText(err, '读取版本失败'));
@@ -4752,7 +4802,7 @@
         let saved = true;
         if (typeof p.onSnapshotVersion === 'function') saved = await p.onSnapshotVersion(true);
         const list = await NW.db.listVersions(chapterId);
-        setRows(list || []);
+        setRows(autoRowsOf(list));
         if (typeof p.onToast === 'function') {
           if (saved === false) p.onToast('当前章节没有可保存的正文，未创建快照', 'warn');
           else p.onToast('已创建版本快照', 'ok');
@@ -4785,7 +4835,7 @@
 
     const body = [];
     if (rows == null) body.push(NW.ui.spinner('读取版本…'));
-    else if (rows.length === 0) body.push(NW.ui.empty('还没有历史版本。每次切换章节或手动快照都会记录。'));
+    else if (rows.length === 0) body.push(NW.ui.empty('还没有历史版本。'));
     else {
       body.push(
         h(
@@ -4859,7 +4909,7 @@
                   ),
                 ),
             diffRows.length > LIMIT
-              ? h('div', { className: 'nw-dim', style: { padding: '8px 10px' } }, '只显示了前 ' + LIMIT + ' 行；整章太长，恢复前建议直接预览。')
+              ? h('div', { className: 'nw-dim', style: { padding: '8px 10px' } }, '只显示了前 ' + LIMIT + ' 行。')
               : null,
           ),
         ),
@@ -4892,6 +4942,7 @@
     );
   };
 
+  // =============================================================== Final ====
   // ================================================================ Lore ====
   /**
    * R77: 设定集 —— 人物 / 地点 / 道具 / 随手设定，按书存。
@@ -5013,7 +5064,7 @@
       rows == null
         ? NW.ui.spinner('读取…')
         : filtered.length === 0
-          ? h('div', { className: 'nw-dim', style: { padding: '14px 6px' } }, query ? '没有匹配的设定' : '还没有设定。新建一个人物或地点。')
+          ? h('div', { className: 'nw-dim', style: { padding: '14px 6px' } }, query ? '没有匹配的设定' : '还没有设定。')
           : h(
               'div',
               { className: 'nw-lore-items', role: 'list' },
@@ -5083,8 +5134,6 @@
           'div',
           { className: 'nw-lore-empty' },
           NW.icon('book', { size: 26 }),
-          h('span', null, '左边选一张卡，或者新建一张。'),
-          h('span', { className: 'nw-dim' }, '设定只给自己看，不进正文、不进导出。'),
         );
 
     return modal(
@@ -5593,7 +5642,7 @@
 
     const body = [];
     if (rows == null) body.push(h('div', { className: 'nw-inline' }, NW.ui.spinner('读取投稿记录…')));
-    else if (list.length === 0) body.push(NW.ui.empty('还没有投稿记录。在「投稿助手」里发出第一封投稿后，这里会显示状态。'));
+    else if (list.length === 0) body.push(NW.ui.empty('还没有投稿记录。'));
     else {
       body.push(
         h(
@@ -5653,7 +5702,7 @@
                   needsLink(row)
                     ? h(
                         'span',
-                        { className: 'nw-submit-line-link', title: '这条记录还没跟着某本书，选一本就能显示它的现名' },
+                        { className: 'nw-submit-line-link' },
                         NW.ui.select({
                           value: '',
                           onChange: (value) => {
@@ -5885,7 +5934,7 @@
         const lines = [];
         lines.push((dryRun ? '预演：' : '已导入：') + updated + ' 家期刊，新增 ' + added + ' 个分体裁邮箱。');
         if (unmatched.length) {
-          lines.push('清单里没有这些刊（可先用「编辑」手动改别名）：' + unmatched.map((row) => row.journal).join('、'));
+          lines.push('清单里没有这些刊：' + unmatched.map((row) => row.journal).join('、'));
         }
         if (skipped.length) {
           lines.push('忽略了 ' + skipped.length + ' 行：' + skipped.slice(0, 3).map((row) => '第 ' + row.line + ' 行 ' + row.reason).join('；'));
@@ -5941,7 +5990,7 @@
         { className: 'nw-hint-block' },
         rows == null
           ? '正在读取…'
-          : '共 ' + list.length + ' 家，其中 ' + withEmail + ' 家已收录投稿邮箱。' + '邮箱与要求以期刊官方最新征稿启事为准，投稿前请再核对一次。',
+          : '共 ' + list.length + ' 家，其中 ' + withEmail + ' 家已收录投稿邮箱。',
       ),
     );
 
@@ -5951,11 +6000,6 @@
           'div',
           { className: 'nw-journal-edit' },
           h('h4', null, '批量导入投稿邮箱'),
-          h(
-            'p',
-            { className: 'nw-hint-block' },
-            '从期刊官网的征稿启事里把邮箱复制成一行一家，格式：期刊名 | 邮箱 | 体裁 | 字数 | 备注。后三列可留空（留空就是这家刊的通用邮箱）；填了体裁或字数就会记成「短篇/中篇/长篇各用不同邮箱」的分列邮箱。',
-          ),
           NW.ui.textarea({
             rows: 7,
             value: importText,
@@ -6047,7 +6091,6 @@
           creating
             ? NW.ui.field({
                 label: '期刊名称',
-                hint: '会显示在期刊库和投稿向导里；内部 id 由名称自动生成。',
                 children: NW.ui.input({
                   value: form.name,
                   placeholder: '例如：青年作家',
@@ -6057,7 +6100,6 @@
             : null,
           NW.ui.field({
             label: '默认收稿邮箱',
-            hint: '不带任何分类条件的通用邮箱。下面按体裁 / 篇幅单独登记了的，投稿时会优先用那一行。',
             children: NW.ui.input({ value: form.email, placeholder: '编辑部收稿邮箱', onChange: (v) => setForm(Object.assign({}, form, { email: v })) }),
           }),
           NW.ui.field({

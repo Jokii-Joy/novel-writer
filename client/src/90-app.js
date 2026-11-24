@@ -172,8 +172,21 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       parent = 0;
     }
     try {
-      const n = parseFloat(getComputedStyle(el).getPropertyValue('--dsh-frame-chrome-top'));
-      if (Number.isFinite(n) && n > 0) css = n;
+      // R178: the host has moved its top chrome between several variables
+      // (title bar, overlay toolbar, frame clearance). Read them all instead
+      // of trusting one name; any value the host stopped publishing would
+      // otherwise read as 0 and the fixed reading layer would slide back
+      // under the menu bar.
+      const cs = getComputedStyle(el);
+      const names = [
+        '--dsh-frame-chrome-top',
+        '--dsh-frame-top-clearance',
+        '--dsh-windows-titlebar-height',
+      ];
+      for (let i = 0; i < names.length; i += 1) {
+        const n = parseFloat(cs.getPropertyValue(names[i]));
+        if (Number.isFinite(n) && n > css) css = n;
+      }
     } catch (err) {
       css = 0;
     }
@@ -865,7 +878,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 .nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(2){animation-delay:.03s;}
 .nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(3){animation-delay:.06s;}
 .nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(4){animation-delay:.09s;}
-.nw-dock-menu[data-open="1"] .nw-dock-btn:nth-child(5){animation-delay:.12s;}
 
 /* 一行就是一个按钮：矩形盒子应答指针，形状由 ::before 画。
    盒子无圆角、无边框、无背景、无子元素应答指针——浏览器只有一个盒子要测。
@@ -1247,6 +1259,59 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     return msg || fallback || '操作失败';
   }
 
+  // R183: remember where a book was last read. One small map in
+  // localStorage is enough: losing it only means the next open starts at the
+  // first chapter again, and it never blocks the reader.
+  const READ_POS_KEY = 'nw-read-last-v1';
+  const READ_PAGE_KEY = 'nw-read-page-v1';
+  function readLastChapterOf(novelId) {
+    if (novelId == null) return null;
+    try {
+      const raw = window.localStorage.getItem(READ_POS_KEY);
+      if (!raw) return null;
+      const map = JSON.parse(raw);
+      return map && map[String(novelId)] != null ? map[String(novelId)] : null;
+    } catch (err) {
+      return null;
+    }
+  }
+  function rememberReadChapter(novelId, chapterId) {
+    if (novelId == null || chapterId == null) return;
+    try {
+      const raw = window.localStorage.getItem(READ_POS_KEY);
+      const map = raw ? JSON.parse(raw) : {};
+      if (!map || typeof map !== 'object') return;
+      map[String(novelId)] = String(chapterId);
+      window.localStorage.setItem(READ_POS_KEY, JSON.stringify(map));
+    } catch (err) {
+      /* storage may be unavailable; reading still works */
+    }
+  }
+  function readLastPageOf(novelId) {
+    if (novelId == null) return null;
+    try {
+      const raw = window.localStorage.getItem(READ_PAGE_KEY);
+      if (!raw) return null;
+      const map = JSON.parse(raw);
+      const page = map && map[String(novelId)];
+      return page == null || !Number.isFinite(Number(page)) ? null : Number(page);
+    } catch (err) {
+      return null;
+    }
+  }
+  function rememberReadPage(novelId, page) {
+    if (novelId == null || !Number.isFinite(Number(page))) return;
+    try {
+      const raw = window.localStorage.getItem(READ_PAGE_KEY);
+      const map = raw ? JSON.parse(raw) : {};
+      if (!map || typeof map !== 'object') return;
+      map[String(novelId)] = Math.max(0, Math.round(Number(page)));
+      window.localStorage.setItem(READ_PAGE_KEY, JSON.stringify(map));
+    } catch (err) {
+      /* storage may be unavailable; reading still works */
+    }
+  }
+
   // ------------------------------------------------------------ sidebar icon ---
   NW.SidebarIcon = function SidebarIcon(props) {
     const size = Number((props && props.size) || 16) || 16;
@@ -1367,6 +1432,16 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [activeNovelId, setActiveNovelId] = useState(null);
     const [activeChapterId, setActiveChapterId] = useState(null);
     const [chapter, setChapter] = useState(null);
+    // 完稿版本：the timeline is metadata-only (no decrypted bodies) and drives
+    // the folio tab count. The drawer and the proofing desk read the same list.
+    const [finalRows, setFinalRows] = useState([]);
+    // R175: 完稿 lives on the paper now. `folioOpen` owns the right-hand slip,
+    // `folioPreview` holds one decrypted version while it is open in place, and
+    // `proofPair` holds the two ids the proofing desk is comparing (`__live__`
+    // means the editor's current buffer).
+    const [folioOpen, setFolioOpen] = useState(false);
+    const [folioPreview, setFolioPreview] = useState(null);
+    const [proofPair, setProofPair] = useState(null);
     const [saveState, setSaveState] = useState('saved');
     const [savedAt, setSavedAt] = useState(0);
     /**
@@ -1541,6 +1616,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const [readOpen, setReadOpen] = useState(false);
     // R137：从目录点进来的那一章（「读这一章」）。null = 接着编辑器当前章。
     const [readAt, setReadAt] = useState(null);
+    const [readPageAt, setReadPageAt] = useState(null);
     // R129：从目录点另一本书的「读整本」时，得等那本书的章节加载完再开卷。
     const readPendingRef = useRef(null);
     // R173：这一次开卷是不是我们替用户打开的沉浸态——关卷时要还回去，
@@ -1586,6 +1662,11 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // R102: the last chapter write, kept so flushEditor() can wait for a save
     // whose editor has already unmounted (the 首页 → 继续写 race).
     const pendingSaveRef = useRef(null);
+    // R184: native document strip. `armed` stays true while the Electron window
+    // is open; `revision` is the last poll result the client has applied.
+    const moyuRef = useRef({ armed: false, revision: 0, chapterId: null, novelId: null });
+    // R187: the browser fallback strip (Document Picture-in-Picture).
+    const pipRef = useRef(null);
     const rootRef = useRef(null);
     /**
      * R117: whether the studio is in phone layout. The CSS breakpoint alone is
@@ -2785,6 +2866,223 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         .catch(() => {});
     }, []);
 
+    // R184: apply a committed draft from the native document strip. The window
+    // may have been opened for a different chapter; never overwrite the current
+    // editor with the wrong book's text. If the chapter is no longer on screen,
+    // save the draft back to its original row and let the shelf refresh.
+    const applyMoyuDraft = useCallback(
+      async (state) => {
+        if (!state || state.chapterId == null) return;
+        const targetId = state.chapterId;
+        const text = String(state.text == null ? '' : state.text);
+        const current = chapterRef.current;
+        if (current && String(current.id) === String(targetId)) {
+          const live =
+            editorRef.current && typeof editorRef.current.getContent === 'function'
+              ? String(editorRef.current.getContent())
+              : String(current.content == null ? '' : current.content);
+          if (text !== live && editorRef.current && typeof editorRef.current.setContent === 'function') {
+            editorRef.current.setContent(text);
+          }
+          await saveChapter(text, targetId);
+          return;
+        }
+        await saveChapter(text, targetId);
+        pushToast('摸鱼窗口的草稿已写回原章节', 'ok');
+      },
+      [saveChapter, pushToast],
+    );
+
+    const pollMoyu = useCallback(async () => {
+      if (!moyuRef.current.armed) return;
+      let state;
+      try {
+        state = await NW.io.moyu.poll(moyuRef.current.revision);
+      } catch (err) {
+        return;
+      }
+      if (!state || state.session === false) return;
+      const revision = Number(state.revision) || 0;
+      if (revision <= moyuRef.current.revision) return;
+      moyuRef.current.revision = revision;
+      if (!state.closed) return;
+      moyuRef.current.armed = false;
+      await applyMoyuDraft(state);
+    }, [applyMoyuDraft]);
+
+    // R187: the native strip needs an Electron main process, and the packaged
+    // DSH host runs as a Node-mode child, so `require('electron')` is not the
+    // window API there either. Document Picture-in-Picture gives the same
+    // always-on-top strip in Chromium; closing it writes the draft back through
+    // the normal save path.
+    const openMoyuPip = useCallback(
+      async ({ text, chapterId, title }) => {
+        const pip = typeof window === 'undefined' ? null : window.documentPictureInPicture;
+        if (!pip || typeof pip.requestWindow !== 'function') return false;
+        let win;
+        try {
+          win = await pip.requestWindow({ width: 900, height: 188 });
+        } catch (err) {
+          return false;
+        }
+        const doc = win.document;
+        doc.title = title || '摸鱼';
+        doc.body.textContent = '';
+        const style = doc.createElement('style');
+        style.textContent = [
+          'html,body{margin:0;height:100%;overflow:hidden;background:#17171a;color:#e6e2da}',
+          'body{font-family:"Noto Serif SC","Songti SC",serif}',
+          'textarea{box-sizing:border-box;width:100%;height:100%;padding:14px 46px 14px 22px;border:0;outline:0;resize:none;background:transparent;color:inherit;font:inherit;font-size:17px;line-height:1.9}',
+          'button{position:fixed;top:8px;right:10px;width:26px;height:26px;border:0;border-radius:6px;background:transparent;color:inherit;font-size:18px;line-height:1;cursor:pointer;opacity:.5}',
+          'button:hover{opacity:1;background:rgba(255,255,255,.08)}',
+        ].join('');
+        const area = doc.createElement('textarea');
+        area.value = text;
+        area.spellcheck = false;
+        area.setAttribute('aria-label', title || '摸鱼');
+        const close = doc.createElement('button');
+        close.type = 'button';
+        close.textContent = '×';
+        close.title = '收起';
+        close.setAttribute('aria-label', '收起');
+        close.addEventListener('click', () => win.close());
+        doc.body.append(style, area, close);
+        doc.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape') win.close();
+        });
+        let committed = false;
+        win.addEventListener('pagehide', () => {
+          if (committed) return;
+          committed = true;
+          if (pipRef.current === win) pipRef.current = null;
+          const next = area.value;
+          if (next === text) return;
+          applyMoyuDraft({ chapterId, text: next }).catch(() => {});
+        });
+        pipRef.current = win;
+        area.focus();
+        return true;
+      },
+      [applyMoyuDraft],
+    );
+
+    const openMoyu = useCallback(async () => {
+      const current = chapterRef.current;
+      if (!current) {
+        pushToast('先打开一章，再开始摸鱼', 'warn');
+        return;
+      }
+      if (moyuRef.current.armed && String(moyuRef.current.chapterId) === String(current.id)) {
+        pushToast('摸鱼窗口已经开着', 'warn');
+        return;
+      }
+      if (pipRef.current) {
+        pushToast('摸鱼窗口已经开着', 'warn');
+        return;
+      }
+      if (moyuRef.current.armed) {
+        // The writer switched chapters while the strip was open. Commit the
+        // old draft to its own chapter first, then open the new one.
+        try {
+          await NW.io.moyu.close();
+          await pollMoyu();
+        } catch (err) {
+          moyuRef.current.armed = false;
+        }
+      }
+      await flushEditor();
+      const text =
+        editorRef.current && typeof editorRef.current.getContent === 'function'
+          ? String(editorRef.current.getContent())
+          : String(current.content == null ? '' : current.content);
+      try {
+        const result = await NW.io.moyu.open({
+          text,
+          chapterId: current.id,
+          novelId: current.novelId,
+          title: current.title,
+        });
+        if (result && result.ok !== false) {
+          moyuRef.current = {
+            armed: true,
+            revision: 0,
+            chapterId: current.id,
+            novelId: current.novelId,
+          };
+          return;
+        }
+        // R187: no Electron main process here — fall back to the in-browser
+        // always-on-top strip instead of leaving the feature dead.
+        if (await openMoyuPip({ text, chapterId: current.id, title: current.title })) return;
+        if (result && result.reason === 'electron-unavailable') {
+          pushToast('摸鱼模式需要 Chrome / Edge 浏览器（画中画窗口）', 'warn');
+        } else {
+          pushToast('摸鱼窗口没有打开', 'error');
+        }
+      } catch (err) {
+        if (await openMoyuPip({ text, chapterId: current.id, title: current.title })) return;
+        pushToast(errText(err, '摸鱼模式打开失败'), 'error');
+      }
+    }, [flushEditor, openMoyuPip, pollMoyu, pushToast]);
+
+    // If the writer moves to another chapter while the strip is open, close
+    // and commit it immediately. The draft is written back to its original
+    // chapter, never into the chapter that just came on screen.
+    useEffect(() => {
+      if (pipRef.current) {
+        try {
+          pipRef.current.close();
+        } catch (err) {
+          pipRef.current = null;
+        }
+        return undefined;
+      }
+      const session = moyuRef.current;
+      if (!session.armed || session.chapterId == null) return undefined;
+      if (String(session.chapterId) === String(activeChapterId)) return undefined;
+      let cancelled = false;
+      (async () => {
+        try {
+          await NW.io.moyu.close();
+          if (!cancelled) await pollMoyu();
+        } catch (err) {
+          session.armed = false;
+        }
+      })();
+      return () => { cancelled = true; };
+    }, [activeChapterId, pollMoyu]);
+
+    useEffect(() => () => {
+      if (pipRef.current) {
+        try {
+          pipRef.current.close();
+        } catch (err) {
+          /* the window may already be gone */
+        }
+        pipRef.current = null;
+      }
+    }, []);
+
+    useEffect(() => {
+      if (typeof window === 'undefined' || typeof document === 'undefined') return undefined;
+      const tick = () => {
+        if (!moyuRef.current.armed) return;
+        pollMoyu().catch(() => {});
+      };
+      const timer = window.setInterval(tick, 1100);
+      const onFocus = () => tick();
+      const onVisible = () => {
+        if (document.visibilityState === 'visible') tick();
+      };
+      window.addEventListener('focus', onFocus);
+      document.addEventListener('visibilitychange', onVisible);
+      return () => {
+        window.clearInterval(timer);
+        window.removeEventListener('focus', onFocus);
+        document.removeEventListener('visibilitychange', onVisible);
+      };
+    }, [pollMoyu]);
+
     /**
      * Saves the current chapter as a version. Returns whether a snapshot was
      * actually written. Normal chapter switches are throttled to one per minute
@@ -2874,6 +3172,29 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       }
     }, []);
 
+    // R183: a freshly created chapter should be ready to name. The editor is
+    // remounted for the new key, so wait for its API, then focus the heading
+    // with the existing title selected — typing replaces the placeholder.
+    const focusChapterTitleSoon = useCallback(() => {
+      let tries = 0;
+      const run = () => {
+        const api = editorRef.current;
+        if (api && typeof api.focusTitle === 'function') {
+          api.focusTitle();
+          return;
+        }
+        tries += 1;
+        if (tries < 10 && typeof window.requestAnimationFrame === 'function') {
+          window.requestAnimationFrame(run);
+        }
+      };
+      if (typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(run);
+      } else {
+        run();
+      }
+    }, []);
+
     const selectNovel = useCallback(
       async (id) => {
         setActiveNovelId(id == null ? null : id);
@@ -2932,6 +3253,225 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       setChapters(list);
       return list;
     }, []);
+
+    /**
+     * 完稿 versions of the open chapter, metadata only. The editor is
+     * uncontrolled, so this is also the only place the shell keeps the count
+     * shown in the status bar; the dialog refreshes it through the same helper.
+     */
+    const refreshFinalRows = useCallback(async (chapterId) => {
+      const id = chapterId != null ? chapterId : chapterRef.current && chapterRef.current.id;
+      if (id == null) {
+        setFinalRows([]);
+        return [];
+      }
+      try {
+        const list = await NW.db.listVersions(id, { meta: true });
+        const finals = (Array.isArray(list) ? list : []).filter((row) => row && row.kind === 'final');
+        if (aliveRef.current) setFinalRows(finals);
+        return finals;
+      } catch (err) {
+        if (aliveRef.current) setFinalRows([]);
+        return [];
+      }
+    }, []);
+
+    useEffect(() => {
+      refreshFinalRows();
+    }, [activeChapterId, refreshFinalRows]);
+
+    /**
+     * 「完稿」: seal the live buffer as a version. It does *not* silently move
+     * the 付印稿 unless this is the chapter's first final, or the writer ticked
+     * 「同时设为付印稿」 in the drawer. The first shape made every capture the
+     * new final, which meant a quick save could change what an export would
+     * produce without the writer saying so.
+     */
+    const saveFinalVersion = useCallback(
+      async (meta) => {
+        const current = chapterRef.current;
+        if (!current || current.id == null) {
+          pushToast('先打开一章再保存完稿', 'warn');
+          return null;
+        }
+        const text = (() => {
+          const api = editorRef.current;
+          try {
+            if (api && typeof api.getContent === 'function') return String(api.getContent() || '');
+          } catch (err) {
+            /* fall through to the stored row */
+          }
+          return String(current.content || '');
+        })();
+        if (!String(text).trim()) {
+          pushToast('本章还没有正文，无法保存完稿', 'warn');
+          return null;
+        }
+        const hadFinal = !!current.finalVersionId;
+        const setFinal = meta && typeof meta.setFinal === 'boolean' ? meta.setFinal : !hadFinal;
+        const options = { kind: 'final' };
+        if (meta && meta.note) options.note = String(meta.note).slice(0, 200);
+        const version = await NW.db.saveVersion(current.id, text, options);
+        if (!version) throw new Error('完稿保存失败');
+        if (setFinal) {
+          await NW.db.setFinalVersion(current.id, version.id);
+          setChapter((prev) =>
+            prev && String(prev.id) === String(current.id)
+              ? Object.assign({}, prev, { finalVersionId: version.id, finalVersionAt: Date.now() })
+              : prev,
+          );
+          patchChapterInList(current.id, { finalVersionId: version.id });
+        }
+        await refreshFinalRows(current.id);
+        const words = version.words != null ? version.words : NW.format.wordCount(text);
+        const suffix = setFinal ? ' · 已设为付印稿' : hadFinal ? ' · 付印稿未变' : ' · 尚未设置付印稿';
+        pushToast('已保存' + (version.label || '完稿') + ' · ' + NW.fmtWords(words) + ' 字' + suffix, 'ok', {
+          label: '查看',
+          onClick: () => setFolioOpen(true),
+        });
+        return version;
+      },
+      [patchChapterInList, pushToast, refreshFinalRows],
+    );
+
+    const openFolio = useCallback(() => {
+      const current = chapterRef.current;
+      if (!current || current.id == null) {
+        pushToast('先打开一章再管理完稿', 'warn');
+        return;
+      }
+      setFolioOpen(true);
+    }, [pushToast]);
+
+    const closeFolio = useCallback(() => setFolioOpen(false), []);
+
+    /** Read one archived version in place. The body is decrypted only now. */
+    const openFolioPreview = useCallback(
+      async (row) => {
+        if (!row || row.id == null) return;
+        try {
+          const full = await NW.db.getVersion(row.id);
+          if (!full) throw new Error('这一版已经不存在');
+          setFolioPreview(Object.assign({}, row, full));
+          setFolioOpen(false);
+        } catch (err) {
+          pushToast(errText(err, '读取完稿失败'), 'error');
+        }
+      },
+      [pushToast],
+    );
+
+    const setFolioFinal = useCallback(
+      async (row) => {
+        const current = chapterRef.current;
+        if (!current || current.id == null || !row || row.id == null) return;
+        try {
+          await NW.db.setFinalVersion(current.id, row.id);
+          setChapter((prev) =>
+            prev && String(prev.id) === String(current.id)
+              ? Object.assign({}, prev, { finalVersionId: row.id, finalVersionAt: Date.now() })
+              : prev,
+          );
+          patchChapterInList(current.id, { finalVersionId: row.id });
+          await refreshFinalRows(current.id);
+          pushToast('已设为付印稿 · ' + (row.label || '完稿'), 'ok');
+        } catch (err) {
+          pushToast(errText(err, '设置付印稿失败'), 'error');
+        }
+      },
+      [patchChapterInList, pushToast, refreshFinalRows],
+    );
+
+    /**
+     * Put an archived version back into the editor. The live buffer is sealed
+     * first, so restoring is itself undoable through the normal history.
+     */
+    const restoreFolioVersion = useCallback(
+      async (row) => {
+        const current = chapterRef.current;
+        if (!current || current.id == null || !row || row.id == null) return;
+        try {
+          const ok = await NW.ui.confirm(
+            '编辑器里的当前正文会先自动留作历史版本，再把「' + (row.label || '这一稿') + '」放回正文。',
+            { title: '恢复这版完稿？', okText: '恢复' },
+          );
+          if (!ok) return;
+          await snapshotVersion(true);
+          // The drawer only holds metadata (`content: ''`), so always ask the
+          // store for the sealed body instead of trusting the row's shape.
+          const full = await NW.db.getVersion(row.id);
+          if (!full || typeof full.content !== 'string') throw new Error('这一版已经不存在');
+          const api = editorRef.current;
+          if (!api || typeof api.setContent !== 'function') throw new Error('编辑器还没有准备好');
+          api.setContent(full.content);
+          setFolioPreview(null);
+          setProofPair(null);
+          setFolioOpen(false);
+          pushToast('已把' + (row.label || '这一稿') + '放回正文', 'ok');
+        } catch (err) {
+          pushToast(errText(err, '恢复完稿失败'), 'error');
+        }
+      },
+      [pushToast, snapshotVersion],
+    );
+
+    const deleteFolioVersion = useCallback(
+      async (row) => {
+        const current = chapterRef.current;
+        if (!current || current.id == null || !row || row.id == null) return;
+        try {
+          const ok = await NW.ui.confirm(
+            '删除后无法恢复；若删的是付印稿，付印标记会一并清除，当前正文不受影响。',
+            { title: '删除这版完稿？', okText: '删除', danger: true },
+          );
+          if (!ok) return;
+          await NW.db.deleteVersion(row.id);
+          if (folioPreview && String(folioPreview.id) === String(row.id)) setFolioPreview(null);
+          if (proofPair && (String(proofPair.left) === String(row.id) || String(proofPair.right) === String(row.id))) {
+            setProofPair(null);
+          }
+          const wasFinal = String(current.finalVersionId || '') === String(row.id);
+          if (wasFinal) {
+            setChapter((prev) =>
+              prev && String(prev.finalVersionId) === String(row.id)
+                ? Object.assign({}, prev, { finalVersionId: null, finalVersionAt: null })
+                : prev,
+            );
+            patchChapterInList(current.id, { finalVersionId: null });
+          }
+          await refreshFinalRows(current.id);
+          pushToast('已删除 ' + (row.label || '这一稿'), 'ok');
+        } catch (err) {
+          pushToast(errText(err, '删除完稿失败'), 'error');
+        }
+      },
+      [folioPreview, patchChapterInList, proofPair, pushToast, refreshFinalRows],
+    );
+
+    const openProof = useCallback(
+      (pair) => {
+        const left = Array.isArray(pair) ? pair[0] : pair && pair.left;
+        const right = Array.isArray(pair) ? pair[1] : pair && pair.right;
+        const a = left == null ? '' : String(left);
+        const b = right == null ? '' : String(right);
+        if (!a || !b || a === b) {
+          pushToast('请选择两个不同的版本', 'warn');
+          return;
+        }
+        setProofPair({ left: a, right: b });
+        setFolioOpen(false);
+        setFolioPreview(null);
+      },
+      [pushToast],
+    );
+
+    const closeProof = useCallback(() => setProofPair(null), []);
+
+    useEffect(() => {
+      setFolioOpen(false);
+      setFolioPreview(null);
+      setProofPair(null);
+    }, [activeChapterId]);
 
     const refreshNovels = useCallback(async () => {
       const list = await NW.db.listNovels();
@@ -3257,18 +3797,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       return () => window.clearInterval(timer);
     }, [ready, locked, pullSync]);
 
-    const createNovel = useCallback(async () => {
-      try {
-        const title = await NW.ui.prompt({
-          title: NW.t('新建小说'),
-          label: '小说标题',
-          value: '',
-          placeholder: '未命名小说',
-        });
-        if (title == null) return;
-        const novel = await NW.db.createNovel({ title: String(title).trim() || '未命名小说' });
+    const createNovel = useCallback(() => {
+      setDialog({ kind: 'NewNovel' });
+    }, []);
+
+    const createNovelSubmit = useCallback(
+      async (input) => {
+        const bookTitle = String((input && input.title) || '').trim() || '未命名小说';
+        const novel = await NW.db.createNovel({ title: bookTitle });
         await refreshNovels();
-        const created = await NW.db.createChapter(novel.id, { title: NW.t('新章节') });
+        // R182: creating a book no longer asks for a first-chapter title. The
+        // book gets a single chapter named after itself, so the writer can start
+        // typing immediately; more chapters are added from the book card.
+        const created = await NW.db.createChapter(novel.id, { title: bookTitle });
         await refreshChapters();
         if (!aliveRef.current) return;
         setActiveNovelId(novel.id);
@@ -3279,14 +3820,21 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         // the click did nothing.
         setView('write');
         pushToast('小说已创建', 'ok');
-      } catch (err) {
-        pushToast(errText(err, '新建小说失败'), 'error');
-      }
-    }, [refreshNovels, refreshChapters, pushToast]);
+      },
+      [refreshNovels, refreshChapters, pushToast],
+    );
 
     const createChapter = useCallback(
-      async (parentId) => {
-        const novelId = activeNovelId != null ? activeNovelId : chapter && chapter.novelId;
+      async (parentId, novelIdArg) => {
+        // R182: the book card's + creates a chapter for that book directly,
+        // even when it is not the active one. The old signature only knew the
+        // active novel, which made a per-book action impossible.
+        const novelId =
+          novelIdArg != null
+            ? novelIdArg
+            : activeNovelId != null
+              ? activeNovelId
+              : chapter && chapter.novelId;
         if (novelId == null) {
           pushToast('请先新建或选择一部小说', 'error');
           return;
@@ -3295,23 +3843,37 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           flushEditor();
           // R22: number the default title. Every chapter used to be called
           // 新章节, so a book of ten chapters showed ten identical rows.
-          const siblings = (Array.isArray(chapters) ? chapters : []).filter(
-            (row) => row && String(row.novelId) === String(novelId) && row.parentId == null,
+          // R183: number from the largest existing 「新章节 N」 rather than
+          // the sibling count. Deleting 2 of 3 chapters used to hand the next
+          // one a title already in the book (3), which made two rows collide.
+          const bookRows = (Array.isArray(chapters) ? chapters : []).filter(
+            (row) => row && String(row.novelId) === String(novelId),
           );
-          const title = NW.t('新章节') + (siblings.length > 0 ? ' ' + (siblings.length + 1) : '');
+          let highest = 0;
+          for (let i = 0; i < bookRows.length; i += 1) {
+            const match = /^新章节(?:\s*(\d+))?$/.exec(String(bookRows[i].title || '').trim());
+            if (!match) continue;
+            const n = match[1] ? Number(match[1]) : 1;
+            if (n > highest) highest = n;
+          }
+          const title = NW.t('新章节') + (highest > 0 ? ' ' + (highest + 1) : '');
           const created = await NW.db.createChapter(novelId, { parentId: parentId == null ? null : parentId, title: title });
           await refreshChapters();
           if (!aliveRef.current) return;
+          setActiveNovelId(novelId);
           setActiveChapterId(created.id);
           setChapter(created);
           setSaveState('saved');
           // R22: a new chapter is meant to be written in, so open the editor.
           setView('write');
+          // R183: land in the title so the placeholder can be replaced in one
+          // gesture, instead of asking the writer to aim at the heading.
+          focusChapterTitleSoon();
         } catch (err) {
           pushToast(errText(err, '新建章节失败'), 'error');
         }
       },
-      [activeNovelId, chapter, chapters, flushEditor, refreshChapters, pushToast],
+      [activeNovelId, chapter, chapters, flushEditor, focusChapterTitleSoon, refreshChapters, pushToast],
     );
 
     const renameNode = useCallback(
@@ -3374,6 +3936,37 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
 
     const deleteNode = useCallback(
       async (kind, id) => {
+        const before = Array.isArray(chapters) ? chapters : [];
+        const gone = before.find((row) => row && String(row.id) === String(id)) || null;
+        // R183: a book with no chapters is a dead end — the card opens an empty
+        // reader and there is no chapter row left to click. Keep the last one.
+        if (kind === 'chapter' && gone) {
+          // deleteChapter removes the whole subtree, so count descendants too:
+          // deleting a volume whose children are the rest of the book would
+          // otherwise slip past a simple row count.
+          const doomedIds = new Set([String(id)]);
+          let grew = true;
+          while (grew) {
+            grew = false;
+            for (let i = 0; i < before.length; i += 1) {
+              const row = before[i];
+              if (!row || row.parentId == null) continue;
+              if (!doomedIds.has(String(row.parentId))) continue;
+              const key = String(row.id);
+              if (!doomedIds.has(key)) {
+                doomedIds.add(key);
+                grew = true;
+              }
+            }
+          }
+          const remaining = before.filter(
+            (row) => row && String(row.novelId) === String(gone.novelId) && !doomedIds.has(String(row.id)),
+          );
+          if (remaining.length === 0) {
+            pushToast('每本书至少保留一章；先新建一章，再删除这一章。', 'warn');
+            return;
+          }
+        }
         const ok = await NW.ui.confirm(
           kind === 'novel' ? '删除这部小说及其全部章节？删除后可在回收站恢复。' : '删除这个章节？删除后可在回收站恢复。',
           { danger: true, title: NW.t('确认删除') },
@@ -3384,8 +3977,6 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           flushEditor();
           // R22: remember where the doomed chapter sat before the delete, so the
           // cursor can fall through to its neighbour instead of the library head.
-          const before = Array.isArray(chapters) ? chapters : [];
-          const gone = before.find((row) => row && String(row.id) === String(id)) || null;
           const novelOf = (gone && gone.novelId) || activeNovelId;
           // The index has to be counted inside the doomed chapter's own book.
           // `chapters` holds every book, so an index taken from it pointed at a
@@ -3735,7 +4326,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
      * `startId` 是从目录点进来的那一章：不动编辑器的当前章，只决定翻开的
      * 是书里的哪一页（R129）。
      */
-    const openRead = useCallback((startId) => {
+    const openRead = useCallback((startId, startPage) => {
       setDockOpen(false);
       // R174：先把宿主顶上那一条量下来写进 CSS 变量——此刻 root 还在正常
       // 布局里，rect.top 就是宿主给面板留的位置；等类加上再量就只剩 0 了。
@@ -3748,6 +4339,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         }
       }
       setReadAt(startId == null ? null : startId);
+      setReadPageAt(startPage == null ? null : startPage);
       setReadOpen(true);
       // R173：开卷就是进「沉浸」——书架与状态栏不渲染、坞淡下去，整块面板
       // 只剩书。但**不**向浏览器要全屏：沉浸与全屏是两件事，这里只要前者。
@@ -3762,6 +4354,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const closeRead = useCallback(() => {
       setReadOpen(false);
       setReadAt(null);
+      setReadPageAt(null);
       if (readImmersiveRef.current) {
         readImmersiveRef.current = false;
         setImmersive(false);
@@ -3974,7 +4567,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           // by a second; exporting without this produced files missing the last
           // sentence the author typed.
           await flushEditor();
-          const rows = await NW.db.listChapters(activeNovelId);
+          // 定稿 wins: the row carries the chosen version's text when one is
+          // selected, and the live buffer only for chapters without one.
+          const rows = await NW.db.listChaptersForOutput(activeNovelId);
           let chapters = (rows || [])
             .filter((row) => row && row.id)
             .map((row, index) => ({
@@ -4029,7 +4624,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           await flushEditor();
           const payloads = [];
           for (const novel of books) {
-            const rows = await NW.db.listChapters(novel.id);
+            const rows = await NW.db.listChaptersForOutput(novel.id);
             payloads.push({
               title: novel.title || '未命名小说',
               author: opts.includeMeta === false ? '' : novel.author || '',
@@ -4150,11 +4745,24 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
       const pending = readPendingRef.current;
       if (!pending) return;
       if (String(pending.novelId) !== String(activeNovelId)) return;
-      if (!readChapters.length) return;
+      if (!readChapters.length) {
+        readPendingRef.current = null;
+        pushToast('这本书还没有章节，先新建一章。', 'warn');
+        return;
+      }
       readPendingRef.current = null;
-      const first = readChapters[0];
-      openRead(first ? first.id : null);
-    }, [activeNovelId, readChapters, openRead]);
+      // R183: reopening a book lands on the chapter where it was left, not
+      // always at page one.
+      const remembered = readLastChapterOf(pending.novelId);
+      const first =
+        readChapters.find((row) => row && String(row.id) === String(remembered)) ||
+        readChapters[0];
+      const rememberedPage =
+        remembered && first && String(first.id) === String(remembered)
+          ? readLastPageOf(pending.novelId)
+          : null;
+      openRead(first ? first.id : null, rememberedPage);
+    }, [activeNovelId, readChapters, openRead, pushToast]);
 
     // R47: annotations of the open book. Books are the unit here because the
     // reading view shows a whole book and the editor only the open chapter —
@@ -4240,7 +4848,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     const editDailyGoal = useCallback(async () => {
       const answer = await NW.ui.prompt({
         title: '每日字数目标',
-        label: '每天想写多少字？（0 关闭目标环）',
+        label: '每天想写多少字？',
         value: String(dailyGoal || 0),
       });
       if (answer == null) return;
@@ -4463,6 +5071,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           onRead: () => openRead(null),
         });
 
+    // R181: the paper's folio tab names the pinned version, not just a tiny
+    // seal. The list rows are the only place the label exists, so resolve it
+    // once here and hand it to the presentational tab.
+    const finalRow = chapter && chapter.finalVersionId != null
+      ? finalRows.find((row) => row && String(row.id) === String(chapter.finalVersionId))
+      : null;
+
     return h(
       'div',
       {
@@ -4511,6 +5126,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 onSelectChapter: selectChapter,
                 onCreateNovel: createNovel,
                 onCreateChapter: createChapter,
+                onCreateChapterForNovel: (novelId) => createChapter(null, novelId),
+                onCreateSubchapter: (parentId, novelId) => createChapter(parentId, novelId),
+                onToggleWordCount: (next) => applySettings({ showWordCount: next !== false }),
+                onMoyu: openMoyu,
                 onRename: renameNode,
                 onDelete: deleteNode,
                 onMove: moveNode,
@@ -4518,6 +5137,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 // 「读整本」从第一章读起。两者都不动编辑器当前章。
                 onReadChapter: (id) => {
                   if (id == null) return;
+                  rememberReadChapter(activeNovelId, id);
                   openRead(id);
                 },
                 onReadBook: (novelId) => {
@@ -4529,8 +5149,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     selectNovel(target);
                     return;
                   }
-                  const first = readChapters[0];
-                  openRead(first ? first.id : null);
+                  if (readChapters.length === 0) {
+                    pushToast('这本书还没有章节，先新建一章。', 'warn');
+                    return;
+                  }
+                  const remembered = readLastChapterOf(target);
+                  const start =
+                    readChapters.find((row) => row && String(row.id) === String(remembered)) ||
+                    readChapters[0];
+                  const rememberedPage =
+                    remembered && start && String(start.id) === String(remembered)
+                      ? readLastPageOf(target)
+                      : null;
+                  if (start) openRead(start.id, rememberedPage);
                 },
                 // R77: 章节信息（状态 / 简介 / 目标字数）。
                 onChapterInfo: (id, title) => openDialog('chapterInfo', { chapterId: id, title: title }),
@@ -4556,7 +5187,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
           : null,
         h(
           'div',
-          { className: 'nw-main' },
+          { className: 'nw-main' + (folioOpen ? ' has-folio' : '') },
           // R6 fix: the only 收起 button lives in the shelf header, so hiding the
           // shelf used to remove every in-panel route back (dock needs two clicks
           // and reads as a writing tool, not a layout control). This handle stays
@@ -4593,6 +5224,10 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                 // from updatedAt; countPunctuation is part of the recount key.
                 dailyStats: dailyStats,
                 countPunctuation: settings.countPunctuation !== false,
+                // R177: home honours the same word-count switch as the shelf
+                // and status bar — turning counts off must quiet every screen,
+                // not only the directory.
+                showWordCount: settings.showWordCount !== false,
                 // R100: 今天 becomes a goal ring, and 「只写 100 字」 starts a
                 // sitting-sized target on the chapter the writer is resuming.
                 dailyGoal: dailyGoal,
@@ -4785,6 +5420,32 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                       onToggle: () => setNotesOpen((v) => !v),
                       onSave: saveNotes,
                     }),
+                    // R180: the folio tab (and its in-place preview) belongs to
+                    // the paper, not to the whole bench. As a bench sibling its
+                    // `right:12px` landed on top of the advice column whenever
+                    // 「AI建议」 was open.
+                    h(NW.FolioTab, {
+                      count: finalRows.length,
+                      finalId: chapter.finalVersionId,
+                      finalLabel: finalRow ? finalRow.label : '',
+                      busy: busy,
+                      onCapture: () => {
+                        saveFinalVersion().catch((err) => pushToast(errText(err, '保存完稿失败'), 'error'));
+                      },
+                      onOpen: openFolio,
+                    }),
+                    folioPreview
+                      ? h(NW.FolioPreview, {
+                          row: folioPreview,
+                          chapterTitle: chapter.title,
+                          finalId: chapter.finalVersionId,
+                          settings: themeSettings,
+                          onClose: () => setFolioPreview(null),
+                          onSetFinal: setFolioFinal,
+                          onCompare: openProof,
+                          onRestore: restoreFolioVersion,
+                        })
+                      : null,
                   ),
                   adviceOpen
                     ? h(NW.Advice, {
@@ -4850,6 +5511,23 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
               ? null
               : dock
             : null,
+          (view === 'write' || immersive) && folioOpen && chapter
+            ? h(NW.FolioDrawer, {
+                open: true,
+                chapterId: String(chapter.id),
+                chapterTitle: chapter.title,
+                rows: finalRows,
+                finalId: chapter.finalVersionId,
+                busy: busy,
+                onClose: closeFolio,
+                onCapture: saveFinalVersion,
+                onPreview: openFolioPreview,
+                onSetFinal: setFolioFinal,
+                onCompare: openProof,
+                onRestore: restoreFolioVersion,
+                onDelete: deleteFolioVersion,
+              })
+            : null,
         ),
       ),
       // R44: 读一遍 — the book laid out as pages, covering the whole panel.
@@ -4865,6 +5543,8 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             currentId: chapter ? chapter.id : null,
             // R129：目录里点的章节优先于「编辑器当前章」。
             startId: readAt,
+            startPage: readPageAt,
+            onPageChange: (page) => rememberReadPage(activeNovelId, page),
             // The editor buffer can be ahead of the last autosave, so the open
             // chapter is read from the live text, not from the stored row.
             currentText: getEditorText(),
@@ -4872,6 +5552,9 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             // R131：朗读引擎里的「声音」下拉要能改设置（在线音色存进 settings），
             // 阅读页本身不持有设置，只把改动交回来。
             onReadSetting: (patch) => setSettings((prev) => ({ ...prev, ...patch })),
+            // R183: remember the chapter under the current page, so closing the
+            // reader and re-opening the book resumes where the writer stopped.
+            onChapterChange: (chapterId) => rememberReadChapter(activeNovelId, chapterId),
             // R47: reading is also when a writer notices — so this is where an
             // annotation can be drawn. The marks are the shell's, not the view's:
             // the same array feeds the editor underneath, so a line underlined
@@ -4898,6 +5581,20 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             },
           })
         : null,
+      // 校样台：把两个版本并成一张双页校样。它是覆盖层，编辑器仍挂在下面，
+      // 关闭后光标、滚动和未保存的正文都还在原处。
+      proofPair && chapter
+        ? h(NW.ProofDesk, {
+            chapterTitle: chapter.title,
+            versions: finalRows,
+            finalId: chapter.finalVersionId,
+            liveText: getEditorText(),
+            pair: proofPair,
+            onClose: closeProof,
+            onSetFinal: setFolioFinal,
+            onRestore: restoreFolioVersion,
+          })
+        : null,
       // Immersive is a pure canvas: no toolbar, no shelf, no status bar. The only
       // exit is Esc (registered below), so nothing steals vertical space.
       immersive
@@ -4905,7 +5602,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
         : h(NW.StatusBar, {
             saveState: saveDot,
             saveText: statusText + (savedAt ? ' · ' + NW.fmtDate(savedAt) : ''),
-            middle: h(
+            middle: settings.showWordCount === false ? null : h(
               'span',
               { className: 'nw-status-mid', style: { display: 'inline-flex', gap: '14px', alignItems: 'center' } },
               h('span', null, '本章 ' + NW.fmtWords(chapterWords) + ' 字'),
@@ -4936,10 +5633,13 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
             capabilities: caps,
             editorApi: editorRef,
             onClose: () => setDialog(null),
+            onCreateNovel: createNovelSubmit,
             getText: getEditorText,
             onSettings: applySettings,
             onToast: pushToast,
             onExport: exportNow,
+            onSaveFinal: saveFinalVersion,
+            onRefreshFinals: refreshFinalRows,
             onSelectChapter: selectChapter,
             onRefreshData: async () => {
               await refreshNovels();

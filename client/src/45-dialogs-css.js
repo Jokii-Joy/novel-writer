@@ -708,6 +708,21 @@
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 }
 
+/* ==================================================== 付印 marks (R175) == */
+/* The export/submit hint reuses the seal badge; the full version panel now
+   lives on the writing page (89-folio.js), not in a modal. */
+.nw-export-finalhint{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.nw-final-badge{
+  display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:999px;
+  background:var(--nw-soft);color:var(--nw-fg-soft);
+  font-size:10px;line-height:1;white-space:nowrap;
+}
+.nw-final-badge.is-final{
+  color:var(--nw-brand);
+  background:color-mix(in srgb, var(--nw-brand) 11%, transparent);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--nw-brand) 24%, transparent);
+}
+
 /* =================================================== submission (R3 new) == */
 /* Three steps: journal picker, manuscript picker, mail preview. */
 /* minmax(min(200px,100%),…) — a hard 200px floor overflows the moment the

@@ -1358,6 +1358,20 @@
     return api('clipboard.write', { text: String(text == null ? '' : text) }, { timeoutMs: 15000 });
   }
 
+  // R184: the native document strip (摸鱼模式). The host owns the Electron
+  // window; these three calls are only the handshake and the commit channel.
+  function moyuOpen(payload) {
+    return api('moyu.open', payload || {}, { timeoutMs: 15000 });
+  }
+
+  function moyuPoll(since) {
+    return api('moyu.poll', { since: Number(since) || 0 }, { timeoutMs: 15000 });
+  }
+
+  function moyuClose() {
+    return api('moyu.close', {}, { timeoutMs: 15000 });
+  }
+
   NW.apiUrl = apiUrl;
   NW.api = api;
 
@@ -1386,6 +1400,12 @@
     },
     clipboard: {
       write: clipboardWrite,
+    },
+    /** R184: native always-on-top document strip (Electron host only). */
+    moyu: {
+      open: moyuOpen,
+      poll: moyuPoll,
+      close: moyuClose,
     },
     /** R131: one paragraph of speech from the host (Edge online / custom API). */
     tts: {

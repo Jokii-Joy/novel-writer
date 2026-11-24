@@ -76,6 +76,10 @@
      * setting, so the two halves cannot disagree).
      */
     countPunctuation: true,
+    /* R176: hide every live word count (status bar, shelf rows, book tree head)
+       without touching goals or saved data. Writers asked for a quiet writing
+       mode that does not constantly put a number in front of them. */
+    showWordCount: true,
     /**
      * R29: one model per AI job. Each of the three is an independent
      * `provider` + `model` pair so the writer can run proofreading on a cheap
@@ -1172,14 +1176,20 @@
 
   // -------------------------------- history ----------------------------------
 
-  async function saveVersion(chapterId, content) {
-    if (!chapterId) return;
+  /**
+   * Saves a version snapshot. `options.kind === 'final'` marks a deliberate
+   * 完稿 version (see NW.FolioTab / NW.FolioDrawer); everything else is the automatic
+   * browsing snapshot and keeps the old 50-entry cap. Final versions are kept
+   * until the user deletes them, so a manuscript's finished drafts never expire.
+   */
+  async function saveVersion(chapterId, content, options) {
+    if (!chapterId) return undefined;
+    const opts = options || {};
+    const kind = opts.kind === 'final' ? 'final' : '';
     const text = content == null ? '' : String(content);
+    if (kind === 'final' && !text.trim()) return undefined;
     const stored = await sealContent(text);
-    const words =
-      NW.format && typeof NW.format.wordCount === 'function'
-        ? NW.format.wordCount(text)
-        : text.replace(/\s+/g, '').length;
+    const words = countWords(text);
     const version = {
       id: uid('ver'),
       chapterId: chapterId,
@@ -1187,33 +1197,171 @@
       words: words,
       createdAt: nextVersionStamp(),
     };
+    if (kind === 'final') {
+      version.kind = 'final';
+      let label = String(opts.label == null ? '' : opts.label).trim().slice(0, 40);
+      if (!label) {
+        const siblings = await readIndex('versions', 'byChapterId', chapterId);
+        let finals = 0;
+        let highest = 0;
+        for (let i = 0; i < siblings.length; i += 1) {
+          const sibling = siblings[i];
+          if (!sibling || sibling.kind !== 'final') continue;
+          finals += 1;
+          const match = /^第\s*(\d+)\s*稿$/.exec(String(sibling.label || '').trim());
+          if (match) highest = Math.max(highest, Number(match[1]) || 0);
+        }
+        // A deleted middle draft must not make the next save reuse its number.
+        label = '第' + (Math.max(finals, highest) + 1) + '稿';
+      }
+      version.label = label;
+      const note = String(opts.note == null ? '' : opts.note).trim().slice(0, 200);
+      if (note) version.note = note;
+    }
     const ok = await writeBatch([{ store: 'versions', type: 'put', value: version }]);
-    if (!ok) return;
+    if (!ok) return undefined;
 
-    // keep only the newest VERSION_LIMIT entries for this chapter
+    // Only automatic history is capped. A selected 定稿 is never pruned even if
+    // it happens to be an old auto snapshot (defensive: older builds could have
+    // set finalVersionId before `kind` existed).
+    let protectedId = '';
+    try {
+      const chapter = await readOne('chapters', chapterId);
+      if (chapter && chapter.finalVersionId) protectedId = String(chapter.finalVersionId);
+    } catch (err) {
+      /* a missing chapter must not block saving the snapshot */
+    }
     const existing = await readIndex('versions', 'byChapterId', chapterId);
-    if (existing.length > VERSION_LIMIT) {
-      existing.sort(function (a, b) {
+    const autos = existing.filter(function (row) {
+      return row && row.kind !== 'final' && row.id !== protectedId;
+    });
+    if (autos.length > VERSION_LIMIT) {
+      autos.sort(function (a, b) {
         return (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0);
       });
       const ops = [];
-      for (let i = VERSION_LIMIT; i < existing.length; i += 1) {
-        ops.push({ store: 'versions', type: 'delete', key: existing[i].id });
+      for (let i = VERSION_LIMIT; i < autos.length; i += 1) {
+        ops.push({ store: 'versions', type: 'delete', key: autos[i].id });
       }
       if (ops.length) await writeBatch(ops);
     }
     notify();
+    return Object.assign({}, version, { content: text });
   }
 
-  async function listVersions(chapterId) {
+  /**
+   * Lists a chapter's versions newest-first. `{meta:true}` skips decryption and
+   * returns empty `content`, for the version timeline which only needs labels,
+   * timestamps and word counts.
+   */
+  async function listVersions(chapterId, options) {
     if (!chapterId) return [];
+    const meta = !!(options && options.meta);
     const rows = await readIndex('versions', 'byChapterId', chapterId);
     rows.sort(function (a, b) {
       return (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0);
     });
     const out = [];
     for (let i = 0; i < rows.length; i += 1) {
+      if (meta) {
+        const row = Object.assign({}, rows[i], { content: '' });
+        const stored = Number(row.words);
+        row.words = Number.isFinite(stored) && stored >= 0 ? stored : 0;
+        out.push(row);
+        continue;
+      }
       out.push(await hydrateVersion(rows[i]));
+    }
+    return out;
+  }
+
+  /** Marks one version as the chapter's 定稿 (null clears the selection). */
+  async function setFinalVersion(chapterId, versionId) {
+    if (!chapterId) return undefined;
+    return serialise('chapter', async function () {
+      const chapter = await readOne('chapters', chapterId);
+      if (!chapter) return undefined;
+      const next = Object.assign({}, chapter);
+      if (versionId) {
+        const version = await readOne('versions', versionId);
+        if (!version || version.chapterId !== chapterId) throw new Error('该版本不属于当前章节');
+        next.finalVersionId = version.id;
+        next.finalVersionAt = now();
+      } else {
+        delete next.finalVersionId;
+        delete next.finalVersionAt;
+      }
+      next.updatedAt = now();
+      const ok = await writeBatch([{ store: 'chapters', type: 'put', value: next }]);
+      if (!ok) throw new Error('设定定稿失败');
+      if (next.novelId) await touchNovel(next.novelId);
+      notify();
+      return hydrateChapter(next);
+    });
+  }
+
+  /** Deletes one version; if it was the chapter's 定稿, that marker is cleared. */
+  async function deleteVersion(id) {
+    if (!id) return false;
+    return serialise('chapter', async function () {
+      const version = await readOne('versions', id);
+      if (!version) return false;
+      const chapter = version.chapterId ? await readOne('chapters', version.chapterId) : undefined;
+      const ops = [{ store: 'versions', type: 'delete', key: id }];
+      let nextChapter;
+      if (chapter) {
+        nextChapter = Object.assign({}, chapter);
+        if (nextChapter.finalVersionId === id) {
+          delete nextChapter.finalVersionId;
+          delete nextChapter.finalVersionAt;
+        }
+        nextChapter.updatedAt = now();
+        ops.push({ store: 'chapters', type: 'put', value: nextChapter });
+      }
+      const ok = await writeBatch(ops);
+      if (!ok) throw new Error('删除版本失败');
+      if (nextChapter && nextChapter.novelId) await touchNovel(nextChapter.novelId);
+      notify();
+      return true;
+    });
+  }
+
+  /**
+   * Chapter rows for export / submission. Chapters with a valid 定稿 version
+   * expose that version's text instead of the live buffer; chapters without
+   * one are returned unchanged. This is the ONE place both paths resolve the
+   * manuscript, so a chosen 定稿 means the same thing everywhere.
+   */
+  async function listChaptersForOutput(novelId) {
+    const rows = await listChapters(novelId);
+    const out = [];
+    for (let i = 0; i < rows.length; i += 1) {
+      const chapter = rows[i];
+      if (!chapter || !chapter.finalVersionId) {
+        out.push(chapter);
+        continue;
+      }
+      let final;
+      try {
+        final = await getVersion(chapter.finalVersionId);
+      } catch (err) {
+        final = undefined;
+      }
+      if (!final || final.chapterId !== chapter.id || final.locked) {
+        out.push(Object.assign({}, chapter, { finalMissing: true }));
+        continue;
+      }
+      const content = String(final.content == null ? '' : final.content);
+      out.push(
+        Object.assign({}, chapter, {
+          content: content,
+          wordCount: Number.isFinite(Number(final.words)) ? Number(final.words) : countWords(content),
+          finalVersionId: final.id,
+          finalLabel: final.label || '',
+          finalCreatedAt: final.createdAt || 0,
+          contentSource: 'final',
+        }),
+      );
     }
     return out;
   }
@@ -2308,6 +2456,9 @@
     saveVersion: saveVersion,
     listVersions: listVersions,
     getVersion: getVersion,
+    setFinalVersion: setFinalVersion,
+    deleteVersion: deleteVersion,
+    listChaptersForOutput: listChaptersForOutput,
     listTrash: listTrash,
     restoreTrash: restoreTrash,
     emptyTrash: emptyTrash,

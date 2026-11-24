@@ -474,7 +474,7 @@ mount(
   }),
 );
 let dock = textOf(rootTree);
-check('角度说明写明可空、可多选', /角度可多选|角度可以不选/.test(dock), dock.slice(0, 60));
+check('角度小字说明已撤下', !/角度可多选|角度可以不选/.test(dock), dock.slice(0, 60));
 check('默认没有选中任何角度 chip', !nodes().some((n) => n.tag === 'button' && n.props['data-on'] === '1'));
 const chipOf = (label) => nodes().find((n) => n.tag === 'button' && textOf(n) === label);
 // R75: a chip press must ONLY toggle. R74 fired the request 420ms after the
@@ -643,8 +643,8 @@ check(
   '复制入口只保留「全文与全部问题」，格式按钮已删除',
   /复制全文与全部问题/.test(textOf(rootTree)) && !/只复制格式/.test(textOf(rootTree)),
 );
-check('面板把格式说明单独成块', /格式说明/.test(textOf(rootTree)) && /可直接整段复制给 AI/.test(textOf(rootTree)));
-check('说明里告诉作者默认会带上全文', /会把本章全文和已有建议一起复制/.test(textOf(rootTree)));
+check('格式说明块保留、旁注已撤下', /格式说明/.test(textOf(rootTree)) && !/可直接整段复制给 AI/.test(textOf(rootTree)));
+check('粘贴面板不再附带大段说明', !/会把本章全文和已有建议一起复制/.test(textOf(rootTree)));
 
 pasteBox().props.onChange({ target: { value: '原文：屋子里很安静\n问题：太静\n建议：写一点声音' } });
 await tick(5);

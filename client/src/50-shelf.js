@@ -290,7 +290,7 @@
     const ch = p.ch;
     const api = p.api;
     const [hovered, setHovered] = React.useState(false);
-    const title = ch.title || tr('未命名章节');
+    const title = p.titleText || ch.title || tr('未命名章节');
     const classes = ['nw-shelf-row'];
     if (p.active) classes.push('is-active');
     // 菜单打开期间即使鼠标移出也保持动作条可见，否则锚点按钮会被卸载。
@@ -360,16 +360,18 @@
             })
           : null,
         h('span', { className: 'nw-shelf-row-title' }, title),
-        Number(ch.targetWords) > 0
-          ? h(
-              'span',
-              {
-                className: 'nw-shelf-row-meta',
-                'data-done': (Number(ch.wordCount) || 0) >= Number(ch.targetWords) ? '1' : '0',
-              },
-              fmtWords(ch.wordCount || 0) + '/' + fmtWords(ch.targetWords),
-            )
-          : h('span', { className: 'nw-shelf-row-meta' }, fmtWords(ch.wordCount || 0)),
+        !p.showWords
+          ? null
+          : Number(ch.targetWords) > 0
+            ? h(
+                'span',
+                {
+                  className: 'nw-shelf-row-meta',
+                  'data-done': (Number(ch.wordCount) || 0) >= Number(ch.targetWords) ? '1' : '0',
+                },
+                fmtWords(ch.wordCount || 0) + '/' + fmtWords(ch.targetWords),
+              )
+            : h('span', { className: 'nw-shelf-row-meta' }, fmtWords(ch.wordCount || 0)),
         showActions
           ? h(
               'span',
@@ -383,7 +385,30 @@
               makeIconBtn(icon('pencil'), tr('重命名'), () => api.rename(ch)),
               // 删除留在「⋯」里：它本来就在菜单里，行上少一枚按钮，标题就能多
               // 露出几个字（260px 宽的目录里这一段很值钱）。
-              makeIconBtn(icon('more', 15), tr('更多操作'), (ev) => api.openMenu(ev, 'chapter', ch)),
+              // R179: the «⋯» panel follows the pointer. Entering the 26px
+              // anchor opens it; moving into the panel keeps it alive; leaving
+              // both closes after a short grace period. Click still opens it for
+              // touch/keyboard, where hover never fires.
+              h(
+                'span',
+                {
+                  className: 'nw-more-anchor',
+                  onMouseEnter: (ev) => api.scheduleMenuOpen(ev.currentTarget, 'chapter', ch),
+                  onMouseLeave: () => {
+                    api.cancelMenuOpen();
+                    api.scheduleMenuClose();
+                  },
+                  onFocus: (ev) => api.openMenuAt(ev.currentTarget, 'chapter', ch),
+                  onBlur: (ev) => {
+                    if (ev.currentTarget.contains(ev.relatedTarget)) return;
+                    api.scheduleMenuClose();
+                  },
+                },
+                makeIconBtn(icon('more', 15), tr('更多操作'), (ev) => {
+                  ev.stopPropagation();
+                  api.openMenuAt(ev.currentTarget.parentElement || ev.currentTarget, 'chapter', ch);
+                }),
+              ),
             )
           : null,
       ),
@@ -427,12 +452,15 @@
   // ---------------------------------------------------------------- Shelf ---
   NW.Shelf = function Shelf(props) {
     const P = props || {};
+    const showWords = !(P.settings && P.settings.showWordCount === false);
 
     const [rawQuery, setRawQuery] = React.useState('');
     const [term, setTerm] = React.useState('');
     const [collapsedIds, setCollapsedIds] = React.useState(() => new Set());
     // 行内「更多操作」菜单：{kind:'novel'|'chapter', id, entity, x, y} 或 null。
     const [menu, setMenu] = React.useState(null);
+    // R177: low-frequency shelf actions live behind one «更多» menu per bar.
+    const [toolMenu, setToolMenu] = React.useState(null);
     // R31 ④: the bookcase sheet. Closed by default — the sidebar is for the
     // book you are writing, not for browsing the library.
     const [libraryOpen, setLibraryOpen] = React.useState(false);
@@ -446,6 +474,14 @@
     // 打字只会改当前章，其余行直接命中缓存，ShelfRow 的 memo 也不会被新对象打穿。
     const detailCacheRef = React.useRef(new Map());
     const menuRef = React.useRef(null);
+    const toolMenuRef = React.useRef(null);
+    // R179: row/book «⋯» menus open on hover/focus. The pointer has to cross a
+    // small gap between the 26px anchor and the floating panel, so closing is
+    // delayed; entering the menu cancels the pending close.
+    const menuCloseTimerRef = React.useRef(null);
+    // R183: hovering across a row should not fling menus open; a short opening
+    // delay keeps the shelf quiet while the pointer travels to 重命名/删除.
+    const menuOpenTimerRef = React.useRef(null);
     const sentTermRef = React.useRef('');
     const apiRef = React.useRef({});
 
@@ -473,6 +509,20 @@
       }, SEARCH_DEBOUNCE_MS);
       return () => clearTimeout(timer);
     }, [rawQuery]);
+
+    React.useEffect(
+      () => () => {
+        if (menuCloseTimerRef.current) {
+          clearTimeout(menuCloseTimerRef.current);
+          menuCloseTimerRef.current = null;
+        }
+        if (menuOpenTimerRef.current) {
+          clearTimeout(menuOpenTimerRef.current);
+          menuOpenTimerRef.current = null;
+        }
+      },
+      [],
+    );
 
     React.useEffect(() => {
       if (sentTermRef.current === term) return;
@@ -502,6 +552,27 @@
         document.removeEventListener('mousedown', onPointerDown, true);
       };
     }, [menu]);
+
+    // R177: the «更多» popover closes on Escape or a click outside it.
+    React.useEffect(() => {
+      if (!toolMenu) return undefined;
+      const onKeyDown = (ev) => {
+        if (ev.key !== 'Escape' && ev.key !== 'Esc') return;
+        ev.stopPropagation();
+        setToolMenu(null);
+      };
+      const onPointerDown = (ev) => {
+        const node = toolMenuRef.current;
+        if (node && ev.target && node.contains(ev.target)) return;
+        setToolMenu(null);
+      };
+      document.addEventListener('keydown', onKeyDown, true);
+      document.addEventListener('mousedown', onPointerDown, true);
+      return () => {
+        document.removeEventListener('keydown', onKeyDown, true);
+        document.removeEventListener('mousedown', onPointerDown, true);
+      };
+    }, [toolMenu]);
 
     // 一次遍历构建 children map + 每部小说字数/章节数汇总；依赖 props.chapters 引用。
     const index = React.useMemo(() => {
@@ -691,10 +762,10 @@
     // 菜单锚点用触发按钮的矩形定位：菜单贴着「⋯」按钮右缘下方弹出。
     // 菜单是侧栏内的绝对定位元素（.nw-shelf 的 overflow:hidden 会裁切），
     // 所以坐标要换算成侧栏内坐标，并按侧栏尺寸夹取；下方放不下时向上翻。
-    api.openMenu = (ev, kind, entity) => {
+    const openMenuAt = (anchor, kind, entity) => {
       if (!entity || entity.id == null) return;
       const hostRect = rectOf(shelfRef.current);
-      const rect = ev && ev.currentTarget ? rectOf(ev.currentTarget) : null;
+      const rect = anchor ? rectOf(anchor) : null;
       const menuW = 184;
       const menuH = 136;
       let x = 8;
@@ -711,14 +782,53 @@
         x = Math.max(8, Math.min(x, maxX));
         if (maxY > 0) y = Math.max(8, Math.min(y, Math.max(8, maxY - menuH - 8)));
       }
-      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
-      setMenu((prev) =>
-        prev && sameId(prev.id, entity.id) && prev.kind === kind
-          ? null
-          : { kind, id: entity.id, entity, x, y },
-      );
+      cancelMenuOpen();
+      cancelMenuClose();
+      setMenu({ kind, id: entity.id, entity, x, y });
     };
-    api.closeMenu = () => setMenu(null);
+    const cancelMenuOpen = () => {
+      if (menuOpenTimerRef.current) {
+        clearTimeout(menuOpenTimerRef.current);
+        menuOpenTimerRef.current = null;
+      }
+    };
+    const cancelMenuClose = () => {
+      if (menuCloseTimerRef.current) {
+        clearTimeout(menuCloseTimerRef.current);
+        menuCloseTimerRef.current = null;
+      }
+    };
+    const scheduleMenuOpen = (anchor, kind, entity) => {
+      cancelMenuOpen();
+      cancelMenuClose();
+      menuOpenTimerRef.current = setTimeout(() => {
+        menuOpenTimerRef.current = null;
+        openMenuAt(anchor, kind, entity);
+      }, 120);
+    };
+    const scheduleMenuClose = () => {
+      cancelMenuClose();
+      // Long enough to cross the gap between the 26px anchor and the floating
+      // panel even at a slow pointer speed; short enough to feel like it closes.
+      menuCloseTimerRef.current = setTimeout(() => {
+        menuCloseTimerRef.current = null;
+        setMenu(null);
+      }, 260);
+    };
+    api.openMenuAt = openMenuAt;
+    api.openMenu = (ev, kind, entity) => {
+      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+      openMenuAt(ev && ev.currentTarget, kind, entity);
+    };
+    api.cancelMenuClose = cancelMenuClose;
+    api.cancelMenuOpen = cancelMenuOpen;
+    api.scheduleMenuOpen = scheduleMenuOpen;
+    api.scheduleMenuClose = scheduleMenuClose;
+    api.closeMenu = () => {
+      cancelMenuOpen();
+      cancelMenuClose();
+      setMenu(null);
+    };
     api.dragStart = (ev, ch) => {
       dragIdRef.current = ch.id;
       try {
@@ -904,6 +1014,12 @@
     const buildTreeRows = (novelId) => {
       const out = [];
       const seen = new Set();
+      // R182: a newly created book's first chapter is named after the book.
+      // Once a second chapter exists the row no longer has the single-book
+      // 「正文」 override, which made the first chapter look like a duplicate of
+      // the book title. Apply the same override in the full tree as well.
+      const novelTitle =
+        (novels.find((n) => n && sameId(n.id, novelId)) || {}).title || '';
       const walk = (parentId, depth) => {
         const bucket = index.byParent.get(bucketKey(novelId, parentId));
         if (!bucket) return;
@@ -924,7 +1040,9 @@
               collapsed,
               active: isActive,
               detail: makeDetail(ch),
+              titleText: novelTitle && ch.title === novelTitle ? tr('正文') : null,
               menuOpen: !!(menu && menu.kind === 'chapter' && sameId(menu.id, ch.id)),
+              showWords,
               api,
             }),
           );
@@ -966,6 +1084,7 @@
               active: isActive,
               detail: makeDetail(ch),
               menuOpen: !!(menu && menu.kind === 'chapter' && sameId(menu.id, ch.id)),
+              showWords,
               api,
             }),
           );
@@ -1011,16 +1130,43 @@
       setTerm('');
     };
 
+    // R178: the book card only showed the novel row's updatedAt, which says
+    // when the book row last changed — not when the book was first and last
+    // written. Derive both from the chapters when they are available.
+    const novelTimes = (n) => {
+      const nid = String(n.id);
+      let firstAt = 0;
+      let lastAt = Number(n.updatedAt) || 0;
+      const rows = index.byNovel.get(nid) || EMPTY;
+      for (let i = 0; i < rows.length; i += 1) {
+        const ch = rows[i];
+        if (!ch) continue;
+        const created = Number(ch.createdAt) || 0;
+        const t = Number(ch.firstEditAt) || created;
+        if (t && (!firstAt || t < firstAt)) firstAt = t;
+        const u = Number(ch.updatedAt) || 0;
+        if (u > lastAt) lastAt = u;
+      }
+      if (!firstAt) firstAt = Number(n.createdAt) || 0;
+      return { firstAt: firstAt, lastAt: lastAt };
+    };
+
     const novelCard = (n) => {
       const nid = String(n.id);
       const isActive = sameId(activeNovelId, n.id);
       const meta = [];
-      if (n.updatedAt) meta.push(fmtDate(n.updatedAt));
-      if (index.novelWords.has(nid)) meta.push(fmtWords(index.novelWords.get(nid)) + ' ' + tr('字'));
+      const times = novelTimes(n);
+      if (times.firstAt) meta.push(tr('首次 {0}', fmtMoment(times.firstAt, false)));
+      if (times.lastAt) meta.push(tr('最后 {0}', fmtMoment(times.lastAt, false)));
+      if (showWords && index.novelWords.has(nid)) meta.push(fmtWords(index.novelWords.get(nid)) + ' ' + tr('字'));
       const count = index.novelChapterCount.get(nid);
-      if (count != null) meta.push(tr('{0} 章', count));
+      if (count != null && count !== 1) meta.push(tr('{0} 章', count));
+      // R182: clicking a book opens the reader, so the separate 「读整本」
+      // button is redundant. A one-chapter book still shows its compact row,
+      // but the card itself always means "read this book".
       const open = () => {
-        if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
+        if (typeof P.onReadBook === 'function') P.onReadBook(n.id);
+        else if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
       };
       return h(
         'div',
@@ -1052,9 +1198,15 @@
         h(
           'div',
           { className: 'nw-row-actions', onClick: (ev) => ev.stopPropagation() },
-          // R129：书行上也能直接「读整本」（从第一章读起）。
-          makeIconBtn(icon('openbook'), tr('读整本'), () => {
-            if (typeof P.onReadBook === 'function') P.onReadBook(n.id);
+          // R182: 新建章节 belongs to the book, not to a chapter's nested
+          // menu. Keep the + outside the «⋯» so adding the next chapter is one
+          // click from the book card; 「新建子章节」 has been removed.
+          makeIconBtn(icon('plus'), tr('新建章节'), () => {
+            if (typeof P.onCreateChapterForNovel === 'function') {
+              P.onCreateChapterForNovel(n.id);
+            } else if (typeof P.onCreateChapter === 'function') {
+              P.onCreateChapter(null);
+            }
           }),
           makeIconBtn(icon('pencil'), tr('重命名'), () => {
             if (typeof P.onRename === 'function') P.onRename('novel', n.id, n.title || '');
@@ -1062,7 +1214,26 @@
           makeIconBtn(icon('trash'), tr('删除'), () => {
             if (typeof P.onDelete === 'function') P.onDelete('novel', n.id);
           }),
-          makeIconBtn(icon('more', 15), tr('更多操作'), (ev) => api.openMenu(ev, 'novel', n)),
+          h(
+            'span',
+            {
+              className: 'nw-more-anchor',
+              onMouseEnter: (ev) => api.scheduleMenuOpen(ev.currentTarget, 'novel', n),
+              onMouseLeave: () => {
+                api.cancelMenuOpen();
+                api.scheduleMenuClose();
+              },
+              onFocus: (ev) => api.openMenuAt(ev.currentTarget, 'novel', n),
+              onBlur: (ev) => {
+                if (ev.currentTarget.contains(ev.relatedTarget)) return;
+                api.scheduleMenuClose();
+              },
+            },
+            makeIconBtn(icon('more', 15), tr('更多操作'), (ev) => {
+              ev.stopPropagation();
+              api.openMenuAt(ev.currentTarget.parentElement || ev.currentTarget, 'novel', n);
+            }),
+          ),
         ),
       );
     };
@@ -1070,7 +1241,7 @@
     const treeHead = (n, count, wordTotal) => {
       const bits = [tr('章节')];
       if (count != null) bits.push(tr('{0} 章', count));
-      if (wordTotal != null) bits.push(fmtWords(wordTotal) + ' ' + tr('字'));
+      if (showWords && wordTotal != null) bits.push(fmtWords(wordTotal) + ' ' + tr('字'));
       return h('div', { key: 'treehead-' + String(n.id), className: 'nw-shelf-treehead' }, bits.join(' · '));
     };
 
@@ -1111,7 +1282,6 @@
         'div',
         { key: 'empty-shelf', className: 'nw-shelf-empty' },
         makeEmpty(tr('还没有小说')),
-        h('p', { className: 'nw-shelf-empty-hint' }, tr('新建第一部小说，把灵感变成故事。')),
         makeBtn({
           kind: 'primary',
           title: tr('新建小说'),
@@ -1127,7 +1297,6 @@
           'div',
           { key: 'empty-search', className: 'nw-shelf-empty' },
           makeEmpty(tr('没有匹配的章节')),
-          h('p', { className: 'nw-shelf-empty-hint' }, tr('试试更短的关键词，标题和正文都会匹配。')),
         );
       } else {
         body = h(
@@ -1174,21 +1343,48 @@
 
       if (active) {
         const nid = String(active.id);
+        const count = index.novelChapterCount.get(nid);
+        const only = count === 1 ? (index.byNovel.get(nid) || [])[0] || null : null;
         parts.push(novelCard(active));
-        parts.push(treeHead(active, index.novelChapterCount.get(nid), index.novelWords.get(nid)));
-        const rows = buildTreeRows(active.id);
-        if (rows.length === 0) {
+        // R176: a book with exactly one chapter is a short story, not a
+        // hierarchy. Keep the chapter row itself — writers still expect to see
+        // and rename the chapter in the directory — but drop the 「章节 · 1 章」
+        // heading and the tree indentation that would make one row look nested.
+        if (only) {
           parts.push(
-            h('div', { key: 'emptytree-' + nid, className: 'nw-shelf-hint' }, tr('这部小说还没有章节，点页脚的 新建章节 开始。')),
+            h(
+              'div',
+              { key: 'singletree-' + nid, role: 'tree', 'aria-label': tr('章节'), className: 'nw-shelf-tree nw-shelf-tree-single' },
+              h(ShelfRow, {
+                key: String(only.id),
+                ch: only,
+                depth: 0,
+                hasKids: false,
+                collapsed: false,
+                active: sameId(activeChapterId, only.id),
+                detail: makeDetail(only),
+                titleText: only.title === active.title ? tr('正文') : null,
+                menuOpen: !!(menu && menu.kind === 'chapter' && sameId(menu.id, only.id)),
+                showWords,
+                api,
+              }),
+            ),
           );
         } else {
-          parts.push(
-            h('div', { key: 'tree-' + nid, role: 'tree', 'aria-label': tr('章节'), className: 'nw-shelf-tree' }, rows),
-          );
+          parts.push(treeHead(active, count, index.novelWords.get(nid)));
+          const rows = buildTreeRows(active.id);
+          if (rows.length === 0) {
+            parts.push(
+              h('div', { key: 'emptytree-' + nid, className: 'nw-shelf-hint' }, tr('这部小说还没有章节。')),
+            );
+          } else {
+            parts.push(
+              h('div', { key: 'tree-' + nid, role: 'tree', 'aria-label': tr('章节'), className: 'nw-shelf-tree' }, rows),
+            );
+          }
+          parts.push(rootDropEnd(active));
         }
-        parts.push(rootDropEnd(active));
       } else {
-        parts.push(h('div', { key: 'noactive', className: 'nw-shelf-hint' }, tr('从书架里选一部小说开始写作。')));
       }
 
       // R31 ④: 「书架」 — the counter where the other books wait. It renders
@@ -1227,13 +1423,15 @@
                 title: n.title || tr('无标题'),
                 onClick: () => {
                   setLibraryOpen(false);
-                  if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
+                  if (typeof P.onReadBook === 'function') P.onReadBook(n.id);
+                  else if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
                 },
                 onKeyDown: (ev) => {
                   if (ev.key !== 'Enter' && ev.key !== ' ') return;
                   ev.preventDefault();
                   setLibraryOpen(false);
-                  if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
+                  if (typeof P.onReadBook === 'function') P.onReadBook(n.id);
+                  else if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
                 },
               },
               h('span', { className: 'nw-shelf-cover', 'aria-hidden': 'true' }),
@@ -1244,12 +1442,18 @@
                 h(
                   'span',
                   { className: 'nw-shelf-book-meta' },
-                  [
-                    n.updatedAt ? fmtDate(n.updatedAt) : '',
-                    index.novelWords.has(String(n.id)) ? fmtWords(index.novelWords.get(String(n.id))) + ' ' + tr('字') : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' · '),
+                  (() => {
+                    const times = novelTimes(n);
+                    return [
+                      times.firstAt ? tr('首次 {0}', fmtMoment(times.firstAt, false)) : '',
+                      times.lastAt ? tr('最后 {0}', fmtMoment(times.lastAt, false)) : '',
+                      showWords && index.novelWords.has(String(n.id))
+                        ? fmtWords(index.novelWords.get(String(n.id))) + ' ' + tr('字')
+                        : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' · ');
+                  })(),
                 ),
               ),
             ),
@@ -1258,9 +1462,7 @@
           h(
             'div',
             { key: 'bookcase', id: 'nw-shelf-bookcase', className: 'nw-shelf-bookcase', role: 'group', 'aria-label': tr('书架') },
-            rows.length > 0
-              ? rows
-              : h('div', { className: 'nw-shelf-hint' }, tr('书架里只有这一本。')),
+            rows.length > 0 ? rows : null,
             h(
               'button',
               {
@@ -1320,11 +1522,36 @@
         h('span', { className: 'nw-shelf-menu-label' }, label),
       );
 
+    const toolItem = (name, label, onClick, danger) =>
+      h(
+        'button',
+        {
+          key: name,
+          type: 'button',
+          className: 'nw-shelf-toolitem' + (danger ? ' is-danger' : ''),
+          role: 'menuitem',
+          onClick: (ev) => {
+            ev.stopPropagation();
+            setToolMenu(null);
+            onClick();
+          },
+        },
+        icon(name, 15),
+        h('span', null, label),
+      );
+
     const renderMenu = () => {
       if (!menu) return null;
       const entity = menu.entity || {};
       const title =
         entity.title || (menu.kind === 'novel' ? tr('无标题') : tr('未命名章节'));
+      // R183: 「新建子章节」 only returns for a node that already acts as a
+      // volume (has children). A flat chapter keeps the simplified menu; an
+      // existing nested structure can still grow.
+      const childCount =
+        menu.kind === 'chapter' && menu.id != null
+          ? (index.byParent.get(bucketKey(entity.novelId, menu.id)) || []).length
+          : 0;
       return h(
         'div',
         {
@@ -1334,8 +1561,20 @@
           'aria-label': title,
           style: { left: menu.x + 'px', top: menu.y + 'px' },
           onClick: (ev) => ev.stopPropagation(),
+          onMouseEnter: () => {
+            api.cancelMenuOpen();
+            api.cancelMenuClose();
+          },
+          onMouseLeave: () => api.scheduleMenuClose(),
+          onFocus: () => api.cancelMenuClose(),
+          onBlur: (ev) => {
+            if (ev.currentTarget.contains(ev.relatedTarget)) return;
+            api.scheduleMenuClose();
+          },
         },
-        // R129：阅读放在菜单第一项——「读一章」是目录里最常按的那个动作。
+        // R182: the book card itself opens the reader, so its «⋯» no longer
+        // carries a separate 「读整本」 item. A chapter can still be opened
+        // directly from its own menu.
         menu.kind === 'chapter'
           ? menuItem(
               'openbook',
@@ -1346,21 +1585,19 @@
               },
               false,
             )
-          : menuItem(
-              'openbook',
-              tr('读整本'),
-              () => {
-                if (typeof P.onReadBook === 'function') P.onReadBook(menu.id);
-                else toast(tr('阅读入口尚未接入'));
-              },
-              false,
-            ),
-        menu.kind === 'chapter'
+          : null,
+        // R183: a volume keeps its door. Flat chapters do not show this item;
+        // adding one is still the book card's + (or the foot bar).
+        childCount > 0
           ? menuItem(
-              'child',
+              'plus',
               tr('新建子章节'),
               () => {
-                if (typeof P.onCreateChapter === 'function') P.onCreateChapter(menu.id);
+                if (typeof P.onCreateSubchapter === 'function') {
+                  P.onCreateSubchapter(menu.id, entity.novelId);
+                } else if (typeof P.onCreateChapter === 'function') {
+                  P.onCreateChapter(menu.id);
+                }
               },
               false,
             )
@@ -1441,18 +1678,71 @@
             makeIconBtn(icon('home', 15), tr('创作台首页'), () => {
               if (typeof P.onHome === 'function') P.onHome();
             }),
-            makeIconBtn(icon('immersive', 15), tr('沉浸模式'), () => {
-              if (typeof P.onImmersive === 'function') P.onImmersive();
-            }),
-            makeIconBtn(icon('panel', 15), tr('收起/展开宿主侧栏'), () => {
-              if (typeof P.onToggleHostSidebar === 'function') P.onToggleHostSidebar();
-            }),
-            makeIconBtn(icon('lock', 15), tr('锁定'), () => {
-              if (typeof P.onLock === 'function') P.onLock();
-            }),
+            // R176: one quiet switch for every live count. It lives in the shelf
+            // header so it is reachable from both the directory and the writing
+            // page; the label and pressed state explain which way it is set.
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-shelf-iconbtn nw-shelf-wordtoggle',
+                'data-off': showWords ? '0' : '1',
+                title: showWords ? tr('隐藏字数') : tr('显示字数'),
+                'aria-label': showWords ? tr('隐藏字数') : tr('显示字数'),
+                'aria-pressed': showWords ? 'true' : 'false',
+                onClick: () => {
+                  if (typeof P.onToggleWordCount === 'function') P.onToggleWordCount(!showWords);
+                },
+              },
+              icon('eye', 15),
+            ),
             // R14 ④: 设置 left the top strip — it already sits in the footer,
             // and two doors to the same dialog only made the header look busy.
             makeIconBtn(icon('chevleft', 15), tr('收起侧栏'), collapseShelf),
+            h(
+              'div',
+              {
+                className: 'nw-shelf-toolwrap',
+                onMouseEnter: () => setToolMenu('top'),
+                onMouseLeave: () => setToolMenu((cur) => (cur === 'top' ? null : cur)),
+                onFocus: () => setToolMenu('top'),
+                onBlur: (ev) => {
+                  if (ev.currentTarget.contains(ev.relatedTarget)) return;
+                  setToolMenu((cur) => (cur === 'top' ? null : cur));
+                },
+              },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'nw-shelf-iconbtn',
+                  title: tr('更多操作'),
+                  'aria-label': tr('更多操作'),
+                  'aria-haspopup': 'menu',
+                  'aria-expanded': toolMenu === 'top' ? 'true' : 'false',
+                  onClick: (ev) => {
+                    ev.stopPropagation();
+                    setToolMenu('top');
+                  },
+                },
+                icon('more', 15),
+              ),
+              toolMenu === 'top'
+                ? h(
+                    'div',
+                    { ref: toolMenuRef, className: 'nw-shelf-toolmenu is-top', role: 'menu', 'aria-label': tr('更多操作') },
+                    toolItem('immersive', tr('沉浸模式'), () => {
+                      if (typeof P.onImmersive === 'function') P.onImmersive();
+                    }),
+                    toolItem('panel', tr('收起/展开宿主侧栏'), () => {
+                      if (typeof P.onToggleHostSidebar === 'function') P.onToggleHostSidebar();
+                    }),
+                    toolItem('lock', tr('锁定'), () => {
+                      if (typeof P.onLock === 'function') P.onLock();
+                    }),
+                  )
+                : null,
+            ),
           ),
         ),
         h(
@@ -1487,21 +1777,53 @@
         h(
           'div',
           { className: 'nw-shelf-footbar', role: 'toolbar', 'aria-label': tr('目录操作') },
-          makeIconBtn(icon('book', 18), tr('新建小说'), () => {
-            if (typeof P.onCreateNovel === 'function') P.onCreateNovel();
-          }),
           makeIconBtn(icon('plus', 18), tr('新建章节'), () => {
             if (typeof P.onCreateChapter === 'function') P.onCreateChapter(null);
           }),
-          // R129: 从这一本书的第一页读起（目录里逐章读的另一半）。
-          makeIconBtn(icon('openbook', 18), tr('读整本'), () => {
-            if (typeof P.onReadBook === 'function') P.onReadBook();
-          }),
-          makeIconBtn(icon('upload', 18), tr('导入小说'), importNovel),
-          makeIconBtn(icon('trash', 18), tr('回收站'), openTrash),
+          makeIconBtn(icon('whale', 18), tr('摸鱼模式'), () => callOrHint(P.onMoyu, tr('摸鱼模式尚未接入'))),
           makeIconBtn(icon('gear', 18), tr('设置'), () => {
             if (typeof P.onOpenSettings === 'function') P.onOpenSettings();
           }),
+          h(
+            'div',
+            {
+              className: 'nw-shelf-toolwrap',
+              onMouseEnter: () => setToolMenu('foot'),
+              onMouseLeave: () => setToolMenu((cur) => (cur === 'foot' ? null : cur)),
+              onFocus: () => setToolMenu('foot'),
+              onBlur: (ev) => {
+                if (ev.currentTarget.contains(ev.relatedTarget)) return;
+                setToolMenu((cur) => (cur === 'foot' ? null : cur));
+              },
+            },
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-shelf-iconbtn',
+                title: tr('更多操作'),
+                'aria-label': tr('更多操作'),
+                'aria-haspopup': 'menu',
+                'aria-expanded': toolMenu === 'foot' ? 'true' : 'false',
+                onClick: (ev) => {
+                  ev.stopPropagation();
+                  setToolMenu('foot');
+                },
+              },
+              icon('more', 18),
+            ),
+            toolMenu === 'foot'
+              ? h(
+                  'div',
+                  { ref: toolMenuRef, className: 'nw-shelf-toolmenu is-foot', role: 'menu', 'aria-label': tr('更多操作') },
+                  toolItem('book', tr('新建小说'), () => {
+                    if (typeof P.onCreateNovel === 'function') P.onCreateNovel();
+                  }),
+                  toolItem('upload', tr('导入小说'), importNovel),
+                  toolItem('trash', tr('回收站'), openTrash),
+                )
+              : null,
+          ),
         ),
       ),
     );
@@ -1612,6 +1934,25 @@
 /* Six 32px buttons do not fit next to the label at the 220px minimum width, so
    the action cluster tightens to 24px targets and the label yields first. */
 .nw-shelf-topacts{display:flex;align-items:center;gap:1px;flex:0 0 auto;min-width:0;}
+/* R177: one compact «更多» menu instead of three low-frequency icons. */
+.nw-shelf-toolwrap{position:relative;display:inline-flex;flex:0 0 auto;}
+.nw-shelf-toolmenu{
+  position:absolute;right:0;z-index:calc(var(--nw-z-panel,20) + 2);
+  min-width:174px;padding:4px;
+  border:1px solid var(--nw-line-strong);border-radius:10px;
+  background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
+  animation:nw-fade-up .12s var(--nw-ease,ease) both;
+}
+.nw-shelf-toolmenu.is-top{top:calc(100% + 6px);}
+.nw-shelf-toolmenu.is-foot{bottom:calc(100% + 6px);}
+.nw-shelf-toolitem{
+  display:flex;align-items:center;gap:8px;width:100%;padding:7px 9px;
+  border:0;border-radius:7px;background:transparent;color:var(--nw-fg);
+  font:inherit;font-size:12px;line-height:1.3;text-align:left;cursor:pointer;
+}
+.nw-shelf-toolitem:hover,.nw-shelf-toolitem:focus-visible{background:var(--nw-sunken);outline:none;}
+.nw-shelf-toolitem.is-danger{color:var(--nw-danger);}
+.nw-shelf-toolitem svg{flex:0 0 auto;opacity:.8;}
 .nw-shelf-topacts .nw-btn[data-kind="icon"],
 .nw-shelf-topacts .nw-shelf-iconbtn{
   width:24px;height:24px;border-radius:var(--nw-r-control);
@@ -1623,6 +1964,21 @@
 .nw-shelf-topbar .nw-shelf-iconbtn:hover{
   background:var(--nw-surface-2);color:var(--nw-fg);
   transform:none;box-shadow:none;
+}
+.nw-shelf-wordtoggle{position:relative;}
+.nw-shelf-wordtoggle[data-off="1"]{opacity:.55;}
+.nw-shelf-wordtoggle[data-off="1"]:hover{opacity:.8;}
+/* 关闭字数时给眼睛加一道斜杠：单靠变淡，看起来只是「按钮不可用」，
+   而不是「字数被藏起来了」。 */
+.nw-shelf-wordtoggle[data-off="1"]::after{
+  content:"";
+  position:absolute;
+  left:50%;top:50%;
+  width:15px;height:1px;
+  border-radius:1px;
+  background:currentColor;
+  transform:translate(-50%,-50%) rotate(-45deg);
+  pointer-events:none;
 }
 
 /* ---------------------------------------------------------- 搜索框 ---- */
@@ -1752,6 +2108,7 @@
 }
 
 /* ------------------------------------------------------ 章节树 ---- */
+.nw-shelf-tree-single{padding-top:2px;}
 .nw-shelf-tree{padding:2px 0;}
 .nw-shelf-treehead{
   display:flex;align-items:center;gap:var(--nw-sp-2);
@@ -1899,6 +2256,10 @@
 .nw-shelf .nw-row-actions .nw-shelf-iconbtn:hover{
   background:var(--nw-surface-2);color:var(--nw-fg);
 }
+/* R179: hover bridge for the row/book «⋯» panel. Inline-flex keeps the 26px
+   hit target inside the 26px action bar; the wrapper only exists to catch
+   pointer/focus transitions around the icon. */
+.nw-more-anchor{display:inline-flex;align-items:center;flex:0 0 auto;}
 .nw-shelf-novel .nw-row-actions{
   top:var(--nw-sp-1);right:var(--nw-sp-1);transform:none;
   opacity:0;pointer-events:none;

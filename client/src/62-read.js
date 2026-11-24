@@ -153,7 +153,11 @@
      paper a hair instead of painting a white sheet into a dark room. */
   --nw-read-serif:"Songti SC","Noto Serif SC","Source Han Serif SC","Source Han Serif CN",STSong,SimSun,Georgia,"Times New Roman",serif;
   --nw-read-desk:color-mix(in srgb, var(--nw-fg) 11%, var(--nw-bg));
-  --nw-read-paper:color-mix(in srgb, var(--nw-fg) 1.5%, var(--nw-bg));
+  /* R176: the reading sheet is the same sheet the writer types on. The old
+     paper was --nw-bg mixed with 1.5% ink, which read as a slightly dirty
+     version of the theme swatch; --nw-panel is the editor's actual page
+     fill, so switching 写作 → 读一遍 no longer changes the paper colour. */
+  --nw-read-paper:var(--nw-panel);
   --nw-read-edge:color-mix(in srgb, var(--nw-fg) 10%, transparent);
   --nw-read-rule:color-mix(in srgb, var(--nw-fg) 22%, transparent);
   --nw-read-rule-soft:color-mix(in srgb, var(--nw-fg) 12%, transparent);
@@ -209,14 +213,13 @@
    --nw-chrome-top 由面板自己量（90-app.js 的 hostChromeTop：正常布局里 root
    的 rect.top、父容器的 rect.top、宿主的 --dsh-frame-chrome-top，取最大），
    阅读页从那条下面开始；量不到就回落 0，与 R173 一致。 */
-.nw-root.nw-reading{position:fixed;inset:var(--nw-chrome-top,0px) 0 0 0;z-index:1000;
+.nw-root.nw-reading{position:fixed;inset:max(var(--nw-chrome-top,0px),var(--dsh-frame-top-clearance,0px),var(--dsh-windows-titlebar-height,0px)) 0 0 0;z-index:1000;
   /* 基类 .nw-root 是 height:100%。fixed 之后 100% 仍然按包含块算整屏高，
      加上 top 那一条就会多出一截、页脚落到视口外面去——交给 inset 定高。 */
   height:auto;}
 /* A dark room reads the other way round: the desk goes *below* the page. */
 .nw-read[data-theme="night"]{
   --nw-read-desk:color-mix(in srgb, #000 46%, var(--nw-bg));
-  --nw-read-paper:color-mix(in srgb, var(--nw-fg) 2.5%, var(--nw-bg));
   --nw-read-flip:color-mix(in srgb, var(--nw-fg) 7%, var(--nw-read-paper));
 }
 /* R144：夜里没有窗光，纸边不能变成发光包边。纸垛与两侧书口共用这四个
@@ -1145,7 +1148,7 @@
   position:absolute;inset:0;z-index:2;
   pointer-events:none;overflow:hidden;
 }
-.nw-mark-side{
+.nw-read .nw-mark-side{
   position:absolute;box-sizing:border-box;
   min-width:17px;height:17px;padding:0 3px;
   display:flex;align-items:center;justify-content:center;
@@ -1159,12 +1162,12 @@
   box-shadow:0 1px 0 color-mix(in srgb, var(--nw-fg) 6%, transparent);
   transition:border-color .12s var(--nw-ease, ease), background-color .12s var(--nw-ease, ease);
 }
-.nw-mark-side:hover{border-color:var(--nw-mark-comment, var(--nw-brand));}
-.nw-mark-side[data-active="1"]{
+.nw-read .nw-mark-side:hover{border-color:var(--nw-mark-comment, var(--nw-brand));}
+.nw-read .nw-mark-side[data-active="1"]{
   background:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 24%, var(--nw-read-paper));
   border-color:var(--nw-mark-comment, var(--nw-brand));
 }
-.nw-mark-side:focus-visible{outline:2px solid var(--nw-brand);outline-offset:1px;}
+.nw-read .nw-mark-side:focus-visible{outline:2px solid var(--nw-brand);outline-offset:1px;}
 /* 鼠标停在签上、或点开一条批注时，那句话亮起来。 */
 .nw-mark[data-hover="1"]{
   background-color:color-mix(in srgb, var(--nw-brand) 20%, transparent);
@@ -1308,6 +1311,10 @@
     // R129：开场停在哪一章。目录里的「读这一章」传这一章的 id，「读整本」传第一章；
     // 都不传时沿用编辑器当前章（dock 上的「读一遍」）。
     const startId = p.startId == null ? currentId : String(p.startId);
+    const startPage =
+      p.startPage == null || !Number.isFinite(Number(p.startPage))
+        ? null
+        : Math.max(0, Math.round(Number(p.startPage)));
     const currentText = typeof p.currentText === 'string' ? p.currentText : null;
     // 这两个数组每次渲染都会被重建，而「翻页」恰好就是一次渲染。正文的 useMemo
     // 靠它们的**引用**判断要不要把整本书重新拆段——不缓存的话，按一下方向键
@@ -1975,11 +1982,11 @@
     // 在中间自己停住；分段还顺便给了「念到哪段亮哪段」「念到下一页自动翻页」。
     // 在线引擎的声音：Edge 读声那几个中文自然音，写死一份，免得每次拉列表。
     const EDGE_VOICES = [
-      ['zh-CN-XiaoxiaoNeural', '晓晓 · 女声（最像真人）'],
+      ['zh-CN-XiaoxiaoNeural', '晓晓 · 女声'],
       ['zh-CN-XiaoyiNeural', '晓伊 · 女声'],
       ['zh-CN-YunxiNeural', '云希 · 男声'],
-      ['zh-CN-YunjianNeural', '云健 · 男声（讲故事）'],
-      ['zh-CN-YunyangNeural', '云扬 · 男声（播报）'],
+      ['zh-CN-YunjianNeural', '云健 · 男声'],
+      ['zh-CN-YunyangNeural', '云扬 · 男声'],
       ['zh-CN-YunxiaNeural', '云夏 · 少年'],
       ['zh-CN-liaoning-XiaobeiNeural', '晓北 · 东北腔'],
       ['zh-CN-shaanxi-XiaoniNeural', '晓妮 · 陕西腔'],
@@ -3074,10 +3081,18 @@
 
       if (!jumpedRef.current) {
         jumpedRef.current = true;
-        const mark = marksRef.current[startId];
-        let start = 0;
-        if (mark && typeof mark.offsetLeft === 'number' && step > 0) {
-          start = Math.round(mark.offsetLeft / step);
+        // R183: startId is a chapter id. Look it up in the measured starts
+        // first — a placeholder title has no heading element in marksRef, so
+        // the old heading-based jump opened at page one for 新章节.
+        const chapterStart = starts.find((entry) => entry.id === startId);
+        let start = chapterStart ? chapterStart.page : 0;
+        if (startPage != null) {
+          start = startPage;
+        } else if (!chapterStart) {
+          const mark = marksRef.current[startId];
+          if (mark && typeof mark.offsetLeft === 'number' && step > 0) {
+            start = Math.round(mark.offsetLeft / step);
+          }
         }
         start = Math.max(0, Math.min(start, fit));
         start = snap(start);
@@ -3115,7 +3130,7 @@
       }
       // lineHeight 不进 `--nw-read-col` 的算法，但它决定一栏能装多少行：
       // 行高变了 scrollWidth 就变，不重算 total 会把页码停在旧的总页数上。
-    }, [fontSize, lineHeight, readColumns, currentId, startId, chapters, abortTurn]);
+    }, [fontSize, lineHeight, readColumns, currentId, startId, startPage, chapters, abortTurn]);
 
     React.useLayoutEffect(() => {
       measure();
@@ -3462,6 +3477,10 @@
         const index = base + offset;
         const key = String(row.id);
         const own = byChapter[key] || [];
+        // A one-chapter book already carries its title on the cover. Repeating
+        // the same words as a chapter heading reads like a duplicated page.
+        const redundantHeading =
+          chapters.length === 1 && novelTitle && String(row.title) === novelTitle;
         return h(
           'section',
           {
@@ -3476,10 +3495,10 @@
             }
             : undefined,
           },
-          isPlaceholderTitle(row.title)
+          isPlaceholderTitle(row.title) || redundantHeading
             ? null
             : [
-              // 标题本身已经写了「第 X 章」就不再重复一遍，换三个点当眉标。
+              // 单章书的书名就是章名：整块标题都不重复，封面已经写过一次。
               h(
                 'div',
                 { className: 'nw-read-kicker', key: 'kicker' },
@@ -3518,7 +3537,7 @@
           })(),
         );
       });
-    }, [currentId, currentText, marks]);
+    }, [chapters.length, currentId, currentText, marks, novelTitle]);
 
     const body = React.useMemo(() => {
       if (!chapters.length) {
@@ -3546,6 +3565,42 @@
       }
       return Math.max(0, idx - 2);
     }, [chapters, layout.starts, page]);
+
+    // R183: which chapter is under the reader's current page. This is the
+    // same start table the mirror uses; the App persists it per book so
+    // re-opening the book can resume here instead of page one.
+    const chapterAtPage = React.useMemo(() => {
+      const starts = layout.starts || [];
+      let at = null;
+      for (let i = 0; i < starts.length; i += 1) {
+        if (starts[i].page <= page) at = starts[i];
+        else break;
+      }
+      return at ? String(at.id) : '';
+    }, [layout.starts, page]);
+    const onChapterChangeRef = React.useRef(p.onChapterChange);
+    React.useEffect(() => {
+      onChapterChangeRef.current = p.onChapterChange;
+    }, [p.onChapterChange]);
+    React.useEffect(() => {
+      if (!chapterAtPage) return;
+      if (typeof onChapterChangeRef.current === 'function') {
+        onChapterChangeRef.current(chapterAtPage);
+      }
+    }, [chapterAtPage]);
+
+    // R183: remember the page too, not just the chapter. A long chapter that
+    // spans several spreads would otherwise always reopen at its first page.
+    const onPageChangeRef = React.useRef(p.onPageChange);
+    React.useEffect(() => {
+      onPageChangeRef.current = p.onPageChange;
+    }, [p.onPageChange]);
+    React.useEffect(() => {
+      if (!jumpedRef.current) return;
+      if (typeof onPageChangeRef.current === 'function') {
+        onPageChangeRef.current(pageRef.current);
+      }
+    }, [page]);
 
     // 窗口只在读者走出去时才换：换一次就要重排那几章，不能每翻一页都重排。
     const [mirrorFrom, setMirrorFrom] = React.useState(0);
@@ -3754,8 +3809,12 @@
     const backFolio = turnPagesRef.current.live ? folioAt(turnPagesRef.current.to) : stageFolio;
     // 单栏时整页就是那张纸，没有「另一半」：纸一抬起来它就是新页了。
     const shownFolio = halfFolio || stageFolio;
-    const runningChapter = spread ? leftFolio.chapter : shownFolio.chapter;
-    const runningRightChapter = spread ? rightFolio.rightChapter : shownFolio.rightChapter;
+    // R183：单章书的章名就是书名。封面和天头左侧已经印过书名，右侧再印一次
+    // 同一个名字会像把一页装订了两遍；天头只留“《书名》”。
+    const singleNamedChapter =
+      chapters.length === 1 && novelTitle && String(chapters[0].title) === String(novelTitle);
+    const runningChapter = singleNamedChapter ? '' : spread ? leftFolio.chapter : shownFolio.chapter;
+    const runningRightChapter = singleNamedChapter ? '' : spread ? rightFolio.rightChapter : shownFolio.rightChapter;
     // 页码按「书上印的那一页」算：对开是 n+1 / n+2，单栏就是 n+1。
     const pageLeft = spread ? leftFolio.left : shownFolio.left;
     const pageRight = spread ? rightFolio.right : shownFolio.right;
@@ -3871,7 +3930,6 @@
           className: 'nw-mark-pop-note',
           value: noteDraft,
           rows: 1,
-          placeholder: NW.t('这条批注写给自己看'),
           'aria-label': NW.t('批注'),
           autoFocus: true,
           // R53g：没有保存键。打字即存（700ms 合并一次），收起时补最后一次。
@@ -3911,13 +3969,6 @@
         // R53e：文字只属于批注。这句话在这里被写成批注，就等于它从「一条下划线」
         // 变成「一条批注」——同一句话不可能同时是两样东西。所以窗里说清楚这件事，
         // 而不是让作者以为自己在一条下划线上贴了一张便签。本来已经是批注的不必说。
-        String(editing.mark.kind) === 'comment'
-          ? null
-          : h(
-            'div',
-            { className: 'nw-mark-pop-hint' },
-            NW.t('写下字，这句话就是一条批注'),
-          ),
       )
       : null;
 
@@ -3938,7 +3989,6 @@
           className: 'nw-mark-pop-note',
           value: composerNote,
           rows: 1,
-          placeholder: NW.t('这条批注写给自己看'),
           'aria-label': NW.t('批注'),
           autoFocus: true,
           onChange: (ev) => {
@@ -3977,6 +4027,9 @@
       grow(composerRef.current);
     }, [noteDraft, composerNote, editing, composer]);
 
+    if (typeof window !== 'undefined') {
+
+    }
     return h(
       'div',
       {
@@ -4004,7 +4057,7 @@
               'data-on': speaking ? '1' : '0',
               'aria-pressed': speaking ? 'true' : 'false',
               'aria-label': speaking ? NW.t('停止朗读') : NW.t('念给我听'),
-              title: speaking ? NW.t('停止朗读') + '（再点一下）' : NW.t('念给我听'),
+              title: speaking ? NW.t('停止朗读') : NW.t('念给我听'),
               onClick: startSpeakHere,
             },
             NW.icon(speaking ? 'volumeoff' : 'volume', { size: 16 }),
@@ -4067,18 +4120,7 @@
                   ),
                 ),
                 speakEngine === 'api' || speakEngine === 'baidu'
-                  ? h(
-                      'div',
-                      { className: 'nw-read-speakmenu-row' },
-                      h('span', { className: 'nw-read-speakmenu-label' }, NW.t('声音')),
-                      h(
-                        'span',
-                        { className: 'nw-read-speakmenu-note' },
-                        speakEngine === 'baidu'
-                          ? NW.t('百度只有这一个女声')
-                          : String(p.settings.ttsApiVoice || 'alloy') + ' · ' + NW.t('在设置里改'),
-                      ),
-                    )
+                  ? null
                   : h(
                       'div',
                       { className: 'nw-read-speakmenu-row' },
@@ -4113,19 +4155,6 @@
                 speakError
                   ? h('div', { className: 'nw-read-speakmenu-note nw-read-speakmenu-error' }, speakError)
                   : null,
-                h(
-                  'div',
-                  { className: 'nw-read-speakmenu-note' },
-                  speakEngine === 'edge'
-                    ? NW.t('微软的在线自然音，免费、不用密钥，但这一段正文会联网发给微软。有些网络会被它拒掉（403），那就换百度或自定义 API。')
-                    : speakEngine === 'baidu'
-                      ? NW.t('百度的免费朗读，不用密钥，国内连得通；音色只有一个女声，比系统语音清楚但不带感情。这一段正文会联网发给百度。')
-                      : speakEngine === 'api'
-                      ? NW.t('任何 OpenAI /v1/audio/speech 兼容的接口都可以：地址、密钥、模型在 设置 → 阅读 里填。本地跑的 GPT-SoVITS、CosyVoice、Kokoro 也走这条。')
-                      : speakVoices.length
-                        ? NW.t('本机自带的声音，离线可用，正文不出本机。')
-                        : NW.t('这台机器没有报出中文声音，朗读可能用英文音色念中文。'),
-                ),
               )
             : null,
         ),
@@ -4134,8 +4163,8 @@
           {
             type: 'button',
             className: 'nw-read-bar-close',
-            'aria-label': NW.t('回到写作') + '（Esc）',
-            title: NW.t('回到写作') + '（Esc）',
+            'aria-label': NW.t('回到写作'),
+            title: NW.t('回到写作'),
             onClick: close,
           },
           NW.icon('x', { size: 16 }),
@@ -4261,22 +4290,8 @@
                 h('span', { className: 'nw-read-foot-name' }, footRightName),
                 h('span', { className: 'nw-read-count' }, pageRight == null ? '' : String(pageRight)),
               ),
-              h(
-                'span',
-                { className: 'nw-read-hint', key: 'hint', 'data-fade': hintOn ? '0' : '1' },
-                '← → 翻页 · 选字可以标注 · Esc 回到写作',
-              ),
             ]
             : [
-              h(
-                'div',
-                { className: 'nw-read-foot-slot', key: 'left', 'data-side': 'left' },
-                h(
-                  'span',
-                  { className: 'nw-read-hint', 'data-fade': hintOn ? '0' : '1' },
-                  '← → 翻页 · 选字可以标注 · Esc 回到写作',
-                ),
-              ),
               h(
                 'div',
                 { className: 'nw-read-foot-slot', key: 'right', 'data-side': 'right' },

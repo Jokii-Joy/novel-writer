@@ -246,10 +246,24 @@ NW.io.exportProject(novel, format, options) : Promise<void>   // builds via host
 NW.io.download(name, blob)
 NW.io.exportBackupJson() : Promise<Blob>             // full snapshot of every store
 NW.io.importBackupJson(blob) : Promise<void>
+NW.io.tts.speak({engine, text, voice, edgeVoice, rate, api}) : Promise<{engine, mime, audio}>  // R131
 NW.ai.models() : Promise<{providers, current, models}>
-NW.ai.proofread({provider, model, text, mode}) : Promise<{suggestions}>
+NW.ai.revise({provider, model, text, focus, note}) : Promise<{advice, provider, model}>
+NW.ai.reviseSafe(...)                                // revise + model failover
+NW.ai.reviseSelection(...) / reviseSelectionStream(...) / reviseStream(...)
 NW.cloud.*                                           // thin wrappers over the cloud.* routes
 ```
+R131: `NW.io.tts.speak` posts `{engine,text,voice,edgeVoice,rate,api}` to the Host's `tts`
+method and gets `{engine, mime, audio: base64}` back. `engine:'system'` never reaches it — the
+renderer speaks that one itself, so a request for it is an error (`tts-wrong-engine`). The Host
+module is `lib/tts.js`: `edge` (Microsoft read-aloud over a hand-rolled websocket, 403s in some
+networks), `baidu` (`fanyi.baidu.com/gettts`, free, one voice), `api` (any OpenAI
+`/v1/audio/speech` endpoint; `url`/`key`/`model`/`voice` ride along with each request and are
+never stored host-side).
+
+R118: `NW.ai.proofread` / `proofreadSafe` were removed with the 「AI 校对」 panel — the
+错别字/标点 angle now runs through `revise` with `focus:'words'`. The Host routes
+(`ai/proofread`, `/nw/v1/ai/proofread`) stay for LAN clients and the host tests.
 
 ### `NW.Editor` — editor (`60-editor.js`)
 
