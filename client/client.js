@@ -11808,136 +11808,35 @@ const SEL_EMIT_MS = 120;
 .nw-mark-gutter{
   position:absolute;left:0;top:0;right:0;bottom:0;
   z-index:var(--nw-z-float);
-  /* R195：页宽比可视区窄时，签要伸到纸右边的留白里——overflow:hidden 会把
-     签裁掉，裁掉的按钮连点都点不到。其它方向仍由滚动区负责裁。 */
-  overflow:visible;pointer-events:none;
+  overflow:hidden;pointer-events:none;
 }
-/* R195：页边签改成窄卡片——一条标注一张，右边贴齐纸面，跟着句子走。签上
-   显示这条标注的内容（批注写意见，删除线写被划的句子），颜色只用来分类型；
-   只画当前视野里的几条，翻页时随滚动重画。 */
+/* 一枚签 = 一条带批注的线。签上写**章内序号**（按 start 排序），同一行挂两条
+   批注、两枚签上下错开之后，序号是唯一能分辨谁是谁的线索；鼠标停上去再点亮
+   它指的那句，序号和句子就配上了。 */
 .nw-mark-side{
   position:absolute;
-  box-sizing:border-box;width:196px;height:26px;padding:0 5px 0 8px;
-  display:flex;align-items:center;gap:6px;
-  border:1px solid var(--nw-line-strong);border-radius:6px;
-  background:var(--nw-panel);color:var(--nw-fg);
-  font-family:var(--nw-ui-font);
-  cursor:pointer;pointer-events:auto;opacity:.96;
-  box-shadow:0 1px 3px rgba(20,14,6,.12);
-  transition:transform .12s, box-shadow .12s, opacity .12s, border-color .12s;
-}
-.nw-mark-side[data-kind="strike"]{
-  border-color:color-mix(in srgb, var(--nw-mark-strike, var(--nw-danger)) 34%, var(--nw-line-strong));
-}
-.nw-mark-side[data-kind="comment"]{
-  border-color:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 34%, var(--nw-line-strong));
-}
-.nw-mark-side:hover{transform:translateY(-1px);opacity:1;box-shadow:0 2px 7px rgba(20,14,6,.16);}
-.nw-mark-side:focus-visible{outline:2px solid var(--nw-brand);outline-offset:1px;opacity:1;}
-/* R199：默认收起——纸上只留一枚序号小签，点一下才展开整行。标注多的时候，
-   一排展开的行会把正文右缘整段盖住，收起态只占一个字的宽度。 */
-.nw-mark-side[data-open="0"]{
-  width:26px;padding:0;gap:0;justify-content:center;opacity:.9;
-}
-.nw-mark-side[data-open="0"] .nw-mark-side-badge,
-.nw-mark-side[data-open="0"] .nw-mark-side-text,
-.nw-mark-side[data-open="0"] .nw-mark-side-acts{display:none;}
-.nw-mark-side-n{
-  font:600 11px/1 var(--nw-ui-font);
-  color:var(--nw-soft);
+  box-sizing:border-box;width:16px;height:16px;padding:0;
+  display:flex;align-items:center;justify-content:center;
+  border:0;border-radius:4px;cursor:pointer;pointer-events:auto;
+  font-family:var(--nw-ui-font);font-size:9px;line-height:1;
   font-variant-numeric:tabular-nums;
+  color:var(--nw-panel);
+  background:var(--nw-mark-comment, var(--nw-brand));
+  box-shadow:0 0 0 1px color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 28%, transparent);
+  transition:transform .12s, opacity .12s;
+  opacity:.9;
 }
-.nw-mark-side[data-open="1"] .nw-mark-side-n{display:none;}
-.nw-mark-side-badge{
-  flex:0 0 auto;padding:1px 5px;border-radius:4px;
-  background:color-mix(in srgb, var(--nw-fg) 8%, transparent);
-  color:var(--nw-soft);font-size:10px;line-height:14px;letter-spacing:.02em;
+.nw-mark-side:hover{transform:scale(1.14);opacity:1;}
+.nw-mark-side[data-active="1"]{opacity:1;box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-brand) 40%, transparent);}
+.nw-mark-side:focus-visible{outline:2px solid var(--nw-brand);outline-offset:1px;opacity:1;}
+/* R191：删除线的签换成正文里那条删除线的颜色，批注仍用批注色——同一列签
+   一眼能分出哪种要逐字判断、哪种只是读一句意见。 */
+.nw-mark-side[data-kind="strike"]{
+  background:var(--nw-mark-strike, var(--nw-danger));
+  box-shadow:0 0 0 1px color-mix(in srgb, var(--nw-mark-strike, var(--nw-danger)) 30%, transparent);
 }
-.nw-mark-side[data-kind="strike"] .nw-mark-side-badge{
-  color:var(--nw-mark-strike, var(--nw-danger));
-  background:color-mix(in srgb, var(--nw-mark-strike, var(--nw-danger)) 12%, transparent);
-}
-.nw-mark-side[data-kind="comment"] .nw-mark-side-badge{
-  color:var(--nw-mark-comment, var(--nw-brand));
-  background:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 14%, transparent);
-}
-.nw-mark-side-text{
-  flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  font-size:11px;line-height:1;color:var(--nw-fg);
-}
-.nw-mark-side-acts{display:flex;gap:2px;flex:0 0 auto;}
-.nw-mark-side-btn{
-  width:20px;height:20px;padding:0;border:1px solid var(--nw-line-strong);border-radius:5px;
-  background:var(--nw-btn-bg);color:var(--nw-danger);cursor:pointer;
-  font-family:inherit;font-size:11px;font-weight:600;line-height:1;
-}
-.nw-mark-side-btn:hover{background:var(--nw-btn-hover);}
-.nw-mark-side-btn[data-primary="1"]{
-  color:var(--nw-ok);
-  border-color:color-mix(in srgb,var(--nw-ok) 45%,var(--nw-line-strong));
-  background:color-mix(in srgb,var(--nw-ok) 8%,var(--nw-btn-bg));
-}
-/* R197：点页边签打开的「标注」面板。行的样子沿用 R190 的列表：类型徽标、
-   引文、裁决按钮；签只显示当前视野里的序号，面板也只列这些。 */
-.nw-markspanel{
-  position:absolute;right:24px;top:50%;transform:translateY(-50%);
-  z-index:var(--nw-z-panel);
-  width:min(300px,calc(100% - 48px));max-height:min(62vh,460px);
-  display:flex;flex-direction:column;
-  border:1px solid var(--nw-line-strong);border-radius:var(--nw-r-control);
-  background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
-  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);color:var(--nw-fg);
-  animation:nw-fade-in .1s var(--nw-ease, ease) both;
-}
-.nw-markspanel-head{
-  display:flex;align-items:center;gap:8px;
-  padding:8px 8px 6px 12px;border-bottom:1px solid var(--nw-line);
-}
-.nw-markspanel-title{flex:1 1 auto;font-weight:600;letter-spacing:.02em;}
-.nw-markspanel-close{
-  width:22px;height:22px;padding:0;border:0;border-radius:6px;
-  background:transparent;color:var(--nw-soft);cursor:pointer;
-  font-size:15px;line-height:1;
-}
-.nw-markspanel-close:hover{background:var(--nw-btn-hover);color:var(--nw-fg);}
-.nw-markspanel-list{overflow-y:auto;padding:4px;display:flex;flex-direction:column;gap:2px;}
-.nw-markspanel-row{display:flex;align-items:center;gap:4px;border-radius:6px;}
-.nw-markspanel-row:hover{background:var(--nw-btn-hover);}
-.nw-markspanel-quote{
-  flex:1 1 auto;min-width:0;display:flex;align-items:baseline;gap:6px;
-  padding:6px 4px 6px 8px;border:0;border-radius:6px;background:transparent;
-  color:var(--nw-fg);cursor:pointer;text-align:left;
-  font-family:inherit;font-size:var(--nw-fs-tiny);line-height:1.45;
-}
-.nw-markspanel-badge{
-  flex:0 0 auto;padding:1px 5px;border-radius:4px;
-  background:color-mix(in srgb, var(--nw-fg) 8%, transparent);
-  color:var(--nw-soft);font-size:10px;letter-spacing:.02em;
-}
-.nw-markspanel-row[data-kind="strike"] .nw-markspanel-badge{
-  color:var(--nw-mark-strike, var(--nw-danger));
-  background:color-mix(in srgb, var(--nw-mark-strike, var(--nw-danger)) 12%, transparent);
-}
-.nw-markspanel-row[data-kind="comment"] .nw-markspanel-badge{
-  color:var(--nw-mark-comment, var(--nw-brand));
-  background:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 14%, transparent);
-}
-.nw-markspanel-text{
-  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  color:var(--nw-fg);
-}
-.nw-markspanel-acts{display:flex;gap:2px;padding-right:4px;}
-.nw-markspanel-btn{
-  flex:0 0 auto;min-width:26px;height:22px;padding:0 6px;
-  border:1px solid var(--nw-line-strong);border-radius:6px;
-  background:var(--nw-btn-bg);color:var(--nw-danger);cursor:pointer;
-  font-family:inherit;font-size:12px;font-weight:600;line-height:1;
-}
-.nw-markspanel-btn:hover{background:var(--nw-btn-hover);}
-.nw-markspanel-btn[data-primary="1"]{
-  color:var(--nw-ok);
-  border-color:color-mix(in srgb,var(--nw-ok) 45%,var(--nw-line-strong));
-  background:color-mix(in srgb,var(--nw-ok) 8%,var(--nw-btn-bg));
+.nw-mark-side[data-kind="strike"][data-active="1"]{
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-mark-strike, var(--nw-danger)) 45%, transparent);
 }
 /* R53c：不再画引线。用户说那条细线在页边空白里看不出来，两条签错开时更像
    装饰。改成让**句子自己**回答：鼠标停在签上、或点开一条批注时，它指的那句
@@ -12476,10 +12375,6 @@ const SEL_EMIT_MS = 120;
     const [markView, setMarkView] = React.useState(null);
     const markViewRef = React.useRef(null);
     markViewRef.current = markView;
-    // R197：页边签只负责报数；点开这张「标注」面板再逐条裁决（R190 的列表）。
-    const [markList, setMarkList] = React.useState([]);
-    const [marksOpen, setMarksOpen] = React.useState(false);
-    const visibleMarkIdsRef = React.useRef({});
     // R73：「选中文字 → 修改建议」的那颗小钮。R53 之所以把选字弹条撤掉，是因为
     // 一条三按钮的横条压在正在选的字上面；这一颗只有一个按钮，落在指针松开处的
     // 右下角，选中一消失它就自己走，所以不需要任何关闭动作。
@@ -12488,10 +12383,6 @@ const SEL_EMIT_MS = 120;
     selBtnRef.current = selBtn;
     /** 页边批注签的容器（.nw-mark-gutter），由 paintGutter() 直接填 DOM。 */
     const gutterRef = React.useRef(null);
-    /** R195: 页边签的重画合并到一帧里，滚动时不会每个像素都重建一批 DOM。 */
-    const gutterRafRef = React.useRef(0);
-    /** R199: 页边签默认收起成序号小签，点一下才展开整行；同一时间只展开一条。 */
-    const gutterOpenRef = React.useRef('');
 
     /** Right-hand blank currently reserved for the floating dock, in px. */
     const dockLaneRef = React.useRef(-1);
@@ -14398,10 +14289,6 @@ const SEL_EMIT_MS = 120;
     function setMarks(list) {
       marksRef.current = Array.isArray(list) ? list.slice() : [];
       rebuildHighlights();
-      // R195: rebuildHighlights 在正文/标注都没变时会提前返回，页边签也就不会
-      // 重画；这里补一次，保证从阅读页回来时签能回来。
-      scheduleGutter();
-      setMarkList(marksRef.current);
     }
 
     /**
@@ -14485,33 +14372,15 @@ const SEL_EMIT_MS = 120;
       }
       // Paper-relative: the card lives inside `.nw-stack`, so it scrolls with
       // the words instead of hovering over the chrome.
-      const chipEl = ev && ev.target && typeof ev.target.closest === 'function'
-        ? ev.target.closest('.nw-mark-side') : null;
-      let left;
-      let top;
-      if (chipEl) {
-        // R195：从页边签点开时，卡片落在签的正下方（贴纸右边），不压住签
-        // 所指的那句话——签在页边，卡片往左展开就会盖住正文。
-        const cr = chipEl.getBoundingClientRect();
-        const sc = scrollerRef.current;
-        const sr = sc ? sc.getBoundingClientRect() : box;
-        const maxLeft = Math.max(8, sr.width - (box.left - sr.left) - cardW - 8);
-        left = clampNum(cr.right - box.left - cardW, 8, maxLeft);
-        const below = cr.bottom - box.top + 6;
-        const above = cr.top - box.top - cardH - 6;
-        top = below + cardH > (stack.scrollHeight || box.height) - 8 ? above : below;
-        top = Math.max(8, top);
-      } else {
-        const localX = cx - box.left;
-        left = localX + 16;
-        if (left + cardW > stackW - 8) left = localX - cardW - 16;
-        left = clampNum(left, 8, Math.max(8, stackW - cardW - 8));
-        // Prefer level with the click; when the card would run off the bottom of
-        // the window, open it above the click instead of under it.
-        top = cy - 14;
-        if (top + cardH > vh - 8) top = cy - cardH - 10;
-        top = clampNum(top - box.top, 8, Math.max(8, (stack.scrollHeight || box.height) - 8));
-      }
+      const localX = cx - box.left;
+      let left = localX + 16;
+      if (left + cardW > stackW - 8) left = localX - cardW - 16;
+      left = clampNum(left, 8, Math.max(8, stackW - cardW - 8));
+      // Prefer level with the click; when the card would run off the bottom of
+      // the window, open it above the click instead of under it.
+      let top = cy - 14;
+      if (top + cardH > vh - 8) top = cy - cardH - 10;
+      top = clampNum(top - box.top, 8, Math.max(8, (stack.scrollHeight || box.height) - 8));
       setMarkView({ mark: mark, left: Math.round(left), top: Math.round(top) });
       // Light the line the card belongs to, so the paper answers the click.
       const hl = hlRef.current;
@@ -14735,7 +14604,6 @@ const SEL_EMIT_MS = 120;
         return true;
       });
       rebuildHighlights();
-      setMarkList(marksRef.current);
       closeMarkView();
       if (typeof p.onMarkRemove === 'function') {
         const done = p.onMarkRemove(id);
@@ -14752,19 +14620,6 @@ const SEL_EMIT_MS = 120;
      * margin cannot overlap a glyph, and it is a real button instead of a
      * zero-width anchor that had to be hit-tested through the mirror.
      */
-    /** R195: 把页边签的重画合并到下一帧——滚动、尺寸变化和标注增删都可能连发。 */
-    function scheduleGutter() {
-      if (gutterRafRef.current) return;
-      if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
-        paintGutter();
-        return;
-      }
-      gutterRafRef.current = window.requestAnimationFrame(() => {
-        gutterRafRef.current = 0;
-        paintGutter();
-      });
-    }
-
     function paintGutter() {
       const box = gutterRef.current;
       if (!box) return;
@@ -14784,35 +14639,26 @@ const SEL_EMIT_MS = 120;
           || String(r.kind || '') === 'comment'
           || String(r.kind || '') === 'strike'),
       );
-      // R199：展开的那条被接受/删掉、或切了章，就把展开态一起清掉。
-      if (gutterOpenRef.current && !rows.some((r) => r && String(r.id) === String(gutterOpenRef.current))) {
-        gutterOpenRef.current = '';
-      }
+      // The common case is "no notes in this chapter": leave the (empty) layer
+      // alone instead of rewriting it on every measured frame while typing.
       if (!rows.length) {
         if (box.firstChild) clearNode(box);
         return;
       }
+      clearNode(box);
       const hl = hlRef.current;
       const stack = stackRef.current;
       if (!hl || !stack) return;
       const stackRect = stack.getBoundingClientRect();
       const stackW = stack.clientWidth || stackRect.width || 0;
-      // R195：阅读页盖上来时编辑器会被隐藏，量到的矩形是空的。旧顺序是先
-      // clear 再算 placed，于是关掉阅读页回来时页边签一片空白，要重进插件才
-      // 回来；现在量不到就原样留着。
-      if (stackW < 40 || !stackRect.height) return;
+      if (stackW < 40) return;
       const want = {};
       for (let i = 0; i < rows.length; i += 1) want[String(rows[i].id)] = rows[i];
-      // R53b：本章之内按 start 排序，序号仍然要留给 aria/title。
+      // R53b：签上写序号（本章之内按 start 排），否则同一行两条批注错开一格之
+      // 后就是两枚一模一样的点，谁也认不出哪枚对哪句。悬停再点亮它那句。
       const seq = {};
       const ordered = rows.slice().sort((a, b) => (Number(a.start) || 0) - (Number(b.start) || 0));
       for (let i = 0; i < ordered.length; i += 1) seq[String(ordered[i].id)] = i + 1;
-      // R195：只画当前视野里的标注。签跟着纸走，滚动时由 scroll 事件重画；
-      // 视野外的一条都不建，页边不会攒出一串看不见的按钮。
-      const sc = scrollerRef.current;
-      const scRect = sc ? sc.getBoundingClientRect() : stackRect;
-      const visTop = Math.max(0, scRect.top - stackRect.top);
-      const visBottom = Math.min(stackRect.height, scRect.bottom - stackRect.top);
       const nodes = hl.querySelectorAll('mark.nw-hl-mark[data-id]');
       const placed = [];
       const seen = {};
@@ -14824,101 +14670,44 @@ const SEL_EMIT_MS = 120;
         if (!rects.length) continue;
         seen[id] = 1;
         const r0 = rects[0];
-        const y = r0.top - stackRect.top + Math.min(r0.height, 26) / 2;
-        if (y < visTop - 6 || y > visBottom + 6) continue;
-        placed.push({ id: id, y: y });
+        placed.push({
+          id: id,
+          y: r0.top - stackRect.top + Math.min(r0.height, 26) / 2,
+        });
       }
-      visibleMarkIdsRef.current = seen;
-      if (!placed.length) {
-        if (box.firstChild) clearNode(box);
-        return;
-      }
-      clearNode(box);
+      if (!placed.length) return;
       placed.sort((a, b) => a.y - b.y);
-      const CHIP_W = 196;
-      const CHIP_H = 26;
-      // R195：签贴纸面右缘，和原来的「页边」同一列，只是从 16px 的圆点变成
-      // 一张能读出内容的窄卡。碰撞时向下让一行，避免两条叠成一块。
-      // R195：页宽比可视区窄时，签放在纸右侧的留白里，完全不压正文；页宽
-      // 撑满、留白不够时退回纸面内侧，至少不跑出滚动区。
-      const stackLeftInScroll = scRect ? stackRect.left - scRect.left : 0;
-      const scrollW = sc ? (sc.clientWidth || 0) : 0;
-      const marginRight = scrollW ? scrollW - stackLeftInScroll - stackW : 0;
-      // R199：收起态只占一枚序号签的宽度，展开态才是一整行。
-      const CHIP_W_CLOSED = 26;
+      // Two signs on the same line would stack; push the later one down a row of
+      // its own rather than letting them overlap into one indistinguishable blob.
+      // R53c：错开之后不再画引线（用户说那条细线看不出来），改由「悬停/点开
+      // 时句子明显变色」来指认——签上的序号说第几条，句子亮起来说哪一行。
       let last = -Infinity;
+      const left = Math.round(Math.max(8, stackW - 22));
+      const SIDE_H = 16;
       for (let i = 0; i < placed.length; i += 1) {
         const row = placed[i];
+        let y = row.y - SIDE_H / 2;
+        if (y - last < SIDE_H + 2) y = last + SIDE_H + 2;
+        last = y;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'nw-mark-side';
         const markRow = want[row.id] || {};
         const markKind = String(markRow.kind || '');
         const markNo = seq[row.id] || '';
         const kindName = markKind === 'strike' ? NW.t('删除线') : markKind === 'underline' ? NW.t('下划线') : NW.t('批注');
-        const quote = String(markRow.quote || '').replace(/\s+/g, ' ').trim();
-        const note = String(markRow.note || '').replace(/\s+/g, ' ').trim();
-        const preview = (markKind === 'comment' ? (note || quote) : (quote || note)) || kindName;
-        const markLabel = (markKind === 'comment'
+        const markLabel = markKind === 'comment'
           ? NW.t('第') + markNo + NW.t('条批注')
-          : NW.t('第') + markNo + NW.t('处') + kindName) + '：' + preview;
-        const isOpen = String(gutterOpenRef.current || '') === String(row.id);
-        const chipW = isOpen ? CHIP_W : CHIP_W_CLOSED;
-        const left = Math.round(Math.max(8, stackW - chipW - 8));
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'nw-mark-side';
+          : NW.t('第') + markNo + NW.t('处') + kindName;
+        const markHint = String(markRow.note || markRow.quote || kindName).slice(0, 80);
         btn.setAttribute('data-id', row.id);
         btn.setAttribute('data-kind', markKind);
-        btn.setAttribute('data-open', isOpen ? '1' : '0');
-        btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
         btn.setAttribute('aria-label', markLabel);
-        btn.title = '#' + markNo + ' ' + (note && quote ? note + ' — ' + quote : (note || quote));
-        // R199：收起时只露一个序号签，点开才展开成整行（类型 + 引文 + √/X）。
-        const noEl = document.createElement('span');
-        noEl.className = 'nw-mark-side-n';
-        noEl.textContent = String(markNo || '');
-        btn.appendChild(noEl);
-        const badge = document.createElement('span');
-        badge.className = 'nw-mark-side-badge';
-        badge.textContent = kindName;
-        const previewEl = document.createElement('span');
-        previewEl.className = 'nw-mark-side-text';
-        previewEl.textContent = preview;
-        const acts = document.createElement('span');
-        acts.className = 'nw-mark-side-acts';
-        function actBtn(label, primary, title, run) {
-          const b = document.createElement('button');
-          b.type = 'button';
-          b.className = 'nw-mark-side-btn';
-          b.textContent = label;
-          b.title = title;
-          b.setAttribute('aria-label', title);
-          if (primary) b.setAttribute('data-primary', '1');
-          b.addEventListener('click', (ev) => {
-            if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-            if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
-            run();
-            scheduleGutter();
-          });
-          return b;
-        }
-        if (markKind === 'underline') {
-          acts.appendChild(actBtn('X', false, NW.t('删除'), () => removeMarkOf(row.id)));
-        } else {
-          acts.appendChild(actBtn('\u221a', true,
-            markKind === 'comment' ? NW.t('用批注里的话替换原文') : NW.t('删掉被划掉的这几个字'),
-            () => decideMarkOf(markRow, true)));
-          acts.appendChild(actBtn('X', false, NW.t('拒绝'), () => decideMarkOf(markRow, false)));
-        }
-        btn.appendChild(badge);
-        btn.appendChild(previewEl);
-        btn.appendChild(acts);
+        btn.title = '#' + markNo + ' ' + markHint;
+        btn.textContent = String(seq[row.id] || '');
         btn.style.left = left + 'px';
-        let y = row.y - CHIP_H / 2;
-        if (y < visTop + 2) y = visTop + 2;
-        if (y < last + CHIP_H + 4) y = last + CHIP_H + 4;
-        if (y + CHIP_H > stackRect.height - 2) y = stackRect.height - CHIP_H - 2;
-        last = y;
         btn.style.top = Math.round(y) + 'px';
-        // 悬停点亮它指的那句：同一行两条时可以对照读。
+        // 悬停点亮它指的那句：同一行两条批注时，这是唯一的「谁是谁」。
         btn.addEventListener('mouseenter', () => {
           const own = hl.querySelectorAll('mark[data-id="' + row.id + '"]');
           for (let k = 0; k < own.length; k += 1) own[k].setAttribute('data-hover', '1');
@@ -14927,26 +14716,12 @@ const SEL_EMIT_MS = 120;
           const own = hl.querySelectorAll('mark[data-id="' + row.id + '"]');
           for (let k = 0; k < own.length; k += 1) own[k].removeAttribute('data-hover');
         });
-        // R199：按下就展开（不等 click）——签在 mousedown 之后会被正文抢焦点
-        // 触发的重绘换掉，等 click 到来时元素已经不是原来那个，事件就丢了。
-        btn.addEventListener('pointerdown', (ev) => {
-          const t = ev && ev.target;
-          if (t && typeof t.closest === 'function' && t.closest('.nw-mark-side-btn')) return;
-          if (String(gutterOpenRef.current || '') === String(row.id)) return;
-          if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-          gutterOpenRef.current = String(row.id);
-          scheduleGutter();
-        });
-        // R199：收起时点一下展开；展开之后再点，才跳到这条标注的字。
+        // R192：签本身就是入口。删除线签和批注签同位置、同形状，只换颜色；
+        // 点一下就在签旁边开那张接受/拒绝的小卡，不必先去纸上找那一行。
         btn.addEventListener('click', (ev) => {
-          const t = ev && ev.target;
-          if (t && typeof t.closest === 'function' && t.closest('.nw-mark-side-btn')) return;
-          if (!isOpen) {
-            gutterOpenRef.current = String(row.id);
-            scheduleGutter();
-            return;
-          }
-          focusMarkRow(markRow);
+          if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+          if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+          openMarkView(markRow, ev);
         });
         box.appendChild(btn);
       }
@@ -15977,8 +15752,6 @@ const SEL_EMIT_MS = 120;
         // the scroller even when the caret did not move. This uses the cached
         // line top only — no rect, no mirror, no reflow.
         repaintFocusSoon();
-        // R195：页边签只画视野内的标注，滚动时跟着重画。
-        scheduleGutter();
         // R107: a scroll we caused may still deliver its event after a second
         // programmatic scroll superseded it (chapter landing + centring). Those
         // are not the writer taking over; ignoring them keeps the typewriter
@@ -16198,12 +15971,6 @@ const SEL_EMIT_MS = 120;
           }
           focusRafRef.current = 0;
         }
-        if (gutterRafRef.current) {
-          if (typeof window.cancelAnimationFrame === 'function') {
-            window.cancelAnimationFrame(gutterRafRef.current);
-          }
-          gutterRafRef.current = 0;
-        }
         measureQueuedRef.current = false;
         if (measureTimerRef.current) {
           window.clearTimeout(measureTimerRef.current);
@@ -16254,55 +16021,6 @@ const SEL_EMIT_MS = 120;
       return () => document.removeEventListener('pointerdown', onDocDown, true);
     }, [markView]);
 
-    // R199：页边签默认收起；点到别处（正文、书架、状态栏）就把展开的那条收回去。
-    React.useEffect(() => {
-      function onDocDown(ev) {
-        if (!gutterOpenRef.current) return;
-        const t = ev && ev.target;
-        if (t && typeof t.closest === 'function'
-          && (t.closest('.nw-mark-side') || t.closest('.nw-mark-view'))) return;
-        gutterOpenRef.current = '';
-        scheduleGutter();
-      }
-      document.addEventListener('pointerdown', onDocDown, true);
-      return () => document.removeEventListener('pointerdown', onDocDown, true);
-    }, []);
-
-    // R197：面板点空白处或按 Esc 收起。
-    React.useEffect(() => {
-      if (!marksOpen) return undefined;
-      function onDocDown(ev) {
-        const t = ev && ev.target;
-        if (t && typeof t.closest === 'function'
-          && (t.closest('.nw-markspanel') || t.closest('.nw-mark-side'))) return;
-        setMarksOpen(false);
-      }
-      function onKey(ev) {
-        if (ev && ev.key === 'Escape') setMarksOpen(false);
-      }
-      document.addEventListener('pointerdown', onDocDown, true);
-      document.addEventListener('keydown', onKey, true);
-      return () => {
-        document.removeEventListener('pointerdown', onDocDown, true);
-        document.removeEventListener('keydown', onKey, true);
-      };
-    }, [marksOpen]);
-
-    // R195: 阅读页是盖在写作区上的浮层，关掉时编辑器并不重新挂载；靠一个
-    // IntersectionObserver 在纸面重新进入视野时补画页边签——否则要重进插件
-    // 才看得到。
-    React.useEffect(() => {
-      const stack = stackRef.current;
-      if (!stack || typeof IntersectionObserver !== 'function') return undefined;
-      const io = new IntersectionObserver(() => scheduleGutter(), { threshold: 0.01 });
-      try {
-        io.observe(stack);
-      } catch (err) {
-        /* detached node */
-      }
-      return () => io.disconnect();
-    }, []);
-
     // ---------------------------------------------------------------- render --
     const find = findRef.current;
     const matchTotal = find.matches.length;
@@ -16319,115 +16037,6 @@ const SEL_EMIT_MS = 120;
     // 改正文（见 decideMarkOf）；下划线没有「该改成什么」的语义，仍只有一个删除。
     const markKind = markView && markView.mark ? String(markView.mark.kind || 'underline') : '';
     const markIsLine = markKind === 'strike' || markKind === 'underline';
-    // R197：面板里点一行，把正文按这条标注的区间选中，页边和纸一起跟过去。
-    function focusMarkRow(row) {
-      const ta = taRef.current;
-      if (!ta || !row) return;
-      setMarksOpen(false);
-      try {
-        ta.focus();
-        ta.setSelectionRange(Number(row.start) || 0, Number(row.end) || 0);
-      } catch (err) {
-        /* non-focusable clone */
-      }
-      scheduleMeasure(true);
-    }
-
-    const visIds = Object.keys(visibleMarkIdsRef.current || {});
-    const panelRows = visIds.length
-      ? markList.filter((r) => r && visIds.indexOf(String(r.id)) >= 0)
-      : markList;
-    const marksPanel = marksOpen && panelRows.length
-      ? h(
-          'div',
-          {
-            className: 'nw-markspanel',
-            role: 'dialog',
-            'aria-label': NW.t('标注'),
-            onMouseDown: (ev) => {
-              if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-            },
-          },
-          h(
-            'div',
-            { className: 'nw-markspanel-head' },
-            h('span', { className: 'nw-markspanel-title' }, NW.t('标注')),
-            h(
-              'button',
-              {
-                type: 'button',
-                className: 'nw-markspanel-close',
-                title: NW.t('关闭'),
-                'aria-label': NW.t('关闭'),
-                onClick: () => setMarksOpen(false),
-              },
-              '\u00d7',
-            ),
-          ),
-          h(
-            'div',
-            { className: 'nw-markspanel-list' },
-            panelRows.map((row, idx) => {
-              const kind = String(row.kind || 'underline');
-              const quote = String(row.quote || '').replace(/\s+/g, ' ').trim();
-              return h(
-                'div',
-                {
-                  key: 'mk-' + String(row.id == null ? idx : row.id),
-                  className: 'nw-markspanel-row',
-                  'data-kind': kind,
-                },
-                h(
-                  'button',
-                  {
-                    type: 'button',
-                    className: 'nw-markspanel-quote',
-                    title: NW.t('跳到这一条'),
-                    onClick: () => focusMarkRow(row),
-                  },
-                  h('span', { className: 'nw-markspanel-badge' }, kind === 'strike'
-                    ? NW.t('删除线')
-                    : kind === 'comment' ? NW.t('批注') : NW.t('下划线')),
-                  h('span', { className: 'nw-markspanel-text' }, quote || NW.t('（没有引文）')),
-                ),
-                h(
-                  'div',
-                  { className: 'nw-markspanel-acts' },
-                  kind === 'underline'
-                    ? h('button', {
-                      type: 'button',
-                      className: 'nw-markspanel-btn',
-                      'data-danger': '1',
-                      title: NW.t('删除'),
-                      'aria-label': NW.t('删除'),
-                      onClick: () => removeMarkOf(row.id),
-                    }, 'X')
-                    : [
-                      h('button', {
-                        key: 'ok',
-                        type: 'button',
-                        className: 'nw-markspanel-btn',
-                        'data-primary': '1',
-                        title: kind === 'comment' ? NW.t('用批注里的话替换原文') : NW.t('删掉被划掉的这几个字'),
-                        'aria-label': NW.t('接受'),
-                        onClick: () => decideMarkOf(row, true),
-                      }, '\u221a'),
-                      h('button', {
-                        key: 'no',
-                        type: 'button',
-                        className: 'nw-markspanel-btn',
-                        title: NW.t('拒绝'),
-                        'aria-label': NW.t('拒绝'),
-                        onClick: () => decideMarkOf(row, false),
-                      }, 'X'),
-                    ],
-                ),
-              );
-            }),
-          ),
-        )
-      : null;
-
     const markCard =
       markView && markView.mark
         ? h(
@@ -16706,7 +16315,6 @@ const SEL_EMIT_MS = 120;
             // R51: the read-only card. It sits inside `.nw-stack` so it scrolls
             // with the paper, and after the textarea so it is never buried under
             // the text it is describing.
-            marksPanel,
             markCard,
             // R53: note signs live in the page margin, outside the words. Filled
             // imperatively by paintGutter() so a sign costs one absolutely
