@@ -20331,8 +20331,9 @@ const SEL_EMIT_MS = 120;
     const headRight = rightBlank ? '' : runningRightChapter;
     const footRightName = rightBlank ? '' : runningRightChapter;
 
-    // 选中一段字之后浮出来的小工具条：就四个动作，不下拉、不弹窗。
+    // 选中一段字之后浮出来的小工具条：删除线 / 批注，不下拉、不弹窗。
     // 便签开着的时候收起来：那一版的选区已经交给便签了，再叠一个条子只是噪音。
+    // R201：下划线不再提供。旧数据里的下划线标注仍在（点它可删），只是不再能新建。
     const toolbar = sel && !composer
       ? h(
         'div',
@@ -20345,12 +20346,6 @@ const SEL_EMIT_MS = 120;
             top: Math.round(Math.max(8, sel.y - 44)) + 'px',
           },
         },
-        h('button', {
-          type: 'button',
-          className: 'nw-mark-bar-btn',
-          onClick: () => addMark('underline'),
-          title: NW.t('下划线'),
-        }, NW.t('下划线')),
         h('button', {
           type: 'button',
           className: 'nw-mark-bar-btn',
