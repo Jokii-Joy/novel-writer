@@ -838,6 +838,87 @@ const SEL_EMIT_MS = 120;
   color:var(--nw-brand);
   font-weight:600;
 }
+/* R190：写作区右侧的「标注」小标签。读者在「读一遍」里画下的线，在这里逐条
+   接受或拒绝——不必在纸上找那一行，标签上直接写着条数。 */
+.nw-markstab{
+  position:absolute;right:0;top:50%;transform:translateY(-50%);
+  z-index:var(--nw-z-float);
+  display:flex;flex-direction:column;align-items:center;gap:5px;
+  padding:11px 7px;border:1px solid var(--nw-line);border-right:0;
+  border-radius:8px 0 0 8px;background:var(--nw-panel);color:var(--nw-soft);
+  cursor:pointer;font-family:var(--nw-ui-font);font-size:11px;
+  writing-mode:vertical-rl;letter-spacing:.14em;
+  box-shadow:var(--nw-shadow-1, 0 1px 2px rgba(0,0,0,.06));
+  transition:color .12s, background .12s;
+}
+.nw-markstab:hover,.nw-markstab[aria-expanded="true"]{color:var(--nw-fg);background:var(--nw-btn-hover);}
+.nw-markstab-n{
+  writing-mode:horizontal-tb;display:flex;align-items:center;justify-content:center;
+  min-width:16px;height:16px;padding:0 4px;border-radius:8px;
+  background:var(--nw-brand);color:var(--nw-panel);
+  font-size:9px;font-weight:600;line-height:1;letter-spacing:0;
+}
+.nw-markspanel{
+  position:absolute;right:24px;top:50%;transform:translateY(-50%);
+  z-index:var(--nw-z-panel);
+  width:min(300px,calc(100% - 48px));max-height:min(62vh,460px);
+  display:flex;flex-direction:column;
+  border:1px solid var(--nw-line-strong);border-radius:var(--nw-r-control);
+  background:var(--nw-panel);box-shadow:var(--nw-shadow-2);
+  font-family:var(--nw-ui-font);font-size:var(--nw-fs-tiny);color:var(--nw-fg);
+  animation:nw-fade-in .1s var(--nw-ease, ease) both;
+}
+.nw-markspanel-head{
+  display:flex;align-items:center;gap:8px;
+  padding:8px 8px 6px 12px;border-bottom:1px solid var(--nw-line);
+}
+.nw-markspanel-title{flex:1 1 auto;font-weight:600;letter-spacing:.02em;}
+.nw-markspanel-close{
+  width:22px;height:22px;padding:0;border:0;border-radius:6px;
+  background:transparent;color:var(--nw-soft);cursor:pointer;
+  font-size:15px;line-height:1;
+}
+.nw-markspanel-close:hover{background:var(--nw-btn-hover);color:var(--nw-fg);}
+.nw-markspanel-list{overflow-y:auto;padding:4px;display:flex;flex-direction:column;gap:2px;}
+.nw-markspanel-row{display:flex;align-items:center;gap:4px;border-radius:6px;}
+.nw-markspanel-row:hover{background:var(--nw-btn-hover);}
+.nw-markspanel-quote{
+  flex:1 1 auto;min-width:0;display:flex;align-items:baseline;gap:6px;
+  padding:6px 4px 6px 8px;border:0;border-radius:6px;background:transparent;
+  color:var(--nw-fg);cursor:pointer;text-align:left;
+  font-family:inherit;font-size:var(--nw-fs-tiny);line-height:1.45;
+}
+.nw-markspanel-badge{
+  flex:0 0 auto;padding:1px 5px;border-radius:4px;
+  background:color-mix(in srgb, var(--nw-fg) 8%, transparent);
+  color:var(--nw-soft);font-size:10px;letter-spacing:.02em;
+}
+.nw-markspanel-row[data-kind="strike"] .nw-markspanel-badge{
+  color:var(--nw-mark-strike, var(--nw-danger));
+  background:color-mix(in srgb, var(--nw-mark-strike, var(--nw-danger)) 12%, transparent);
+}
+.nw-markspanel-row[data-kind="comment"] .nw-markspanel-badge{
+  color:var(--nw-mark-comment, var(--nw-brand));
+  background:color-mix(in srgb, var(--nw-mark-comment, var(--nw-brand)) 14%, transparent);
+}
+.nw-markspanel-text{
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--nw-fg);
+}
+.nw-markspanel-acts{display:flex;gap:2px;padding-right:4px;}
+.nw-markspanel-btn{
+  flex:0 0 auto;min-width:26px;height:22px;padding:0 6px;
+  border:1px solid var(--nw-line-strong);border-radius:6px;
+  background:var(--nw-btn-bg);color:var(--nw-danger);cursor:pointer;
+  font-family:inherit;font-size:12px;font-weight:600;line-height:1;
+}
+.nw-markspanel-btn:hover{background:var(--nw-btn-hover);}
+.nw-markspanel-btn[data-primary="1"]{
+  color:var(--nw-ok);
+  border-color:color-mix(in srgb,var(--nw-ok) 45%,var(--nw-line-strong));
+  background:color-mix(in srgb,var(--nw-ok) 8%,var(--nw-btn-bg));
+}
+
 /* R53c：写作区不再有「标记」按钮。左上角那颗铅笔被用户点名去掉了——它常驻在
    纸面上方，占着一格视觉重量，而标注是低频动作。现在入口改成**右键**：选中一段
    字，按右键才弹出这张小菜单（浏览器原生菜单被拦下），没选中就还是原生菜单，
@@ -1294,13 +1375,10 @@ const SEL_EMIT_MS = 120;
     const [markView, setMarkView] = React.useState(null);
     const markViewRef = React.useRef(null);
     markViewRef.current = markView;
-    // R53：写作区不再有「选字弹条」。标注动作收进左上角的动作胶囊：一个铅笔
-    // 按钮开一张小菜单（下划线 / 删除线 / 批注）。菜单只认**按下那一刻**的选区，
-    // 所以它开着的这段时间里正文选区可以随便变，不会标错地方。
-    // R53c：那个按钮撤了，入口改成右键。
-    const [markMenu, setMarkMenu] = React.useState(null);
-    const markMenuRef = React.useRef(null);
-    markMenuRef.current = markMenu;
+    // R190：写作区只认标注、不再造标注。造标注是「读一遍」里的事；这里给出
+    // 一张侧边小标签，把这一章已有的标注列出来，逐条接受或拒绝。
+    const [markList, setMarkList] = React.useState([]);
+    const [marksOpen, setMarksOpen] = React.useState(false);
     // R73：「选中文字 → 修改建议」的那颗小钮。R53 之所以把选字弹条撤掉，是因为
     // 一条三按钮的横条压在正在选的字上面；这一颗只有一个按钮，落在指针松开处的
     // 右下角，选中一消失它就自己走，所以不需要任何关闭动作。
@@ -1310,27 +1388,6 @@ const SEL_EMIT_MS = 120;
     /** 页边批注签的容器（.nw-mark-gutter），由 paintGutter() 直接填 DOM。 */
     const gutterRef = React.useRef(null);
 
-    // R53c：菜单现在从右键弹出（没有常驻按钮了）。按下菜单以外的任何地方、
-    // 或按 Escape 都会收起。捕获阶段监听，这样在纸面上按下开始选字时也能先
-    // 把菜单清掉。
-    React.useEffect(() => {
-      if (!markMenu) return undefined;
-      const onDown = (ev) => {
-        const t = ev.target;
-        if (t && typeof t.closest === 'function' && t.closest('.nw-mark-menu')) return;
-        closeMarkMenu();
-      };
-      const onKey = (ev) => {
-        if (ev.key !== 'Escape') return;
-        closeMarkMenu();
-      };
-      document.addEventListener('mousedown', onDown, true);
-      window.addEventListener('keydown', onKey, true);
-      return () => {
-        document.removeEventListener('mousedown', onDown, true);
-        window.removeEventListener('keydown', onKey, true);
-      };
-    }, [markMenu]);
     /** Right-hand blank currently reserved for the floating dock, in px. */
     const dockLaneRef = React.useRef(-1);
 
@@ -3192,6 +3249,7 @@ const SEL_EMIT_MS = 120;
      */
     function setMarks(list) {
       marksRef.current = Array.isArray(list) ? list.slice() : [];
+      setMarkList(marksRef.current);
       rebuildHighlights();
     }
 
@@ -3258,8 +3316,13 @@ const SEL_EMIT_MS = 120;
       const box = stack.getBoundingClientRect();
       const stackW = box.width || 0;
       const vh = window.innerHeight || 768;
-      let cx = Number(ev && ev.clientX);
-      let cy = Number(ev && ev.clientY);
+      // R190: `Number(ev && ev.clientX)` is 0 for a null event (JavaScript
+      // coerces null to 0, which is finite) — the programmatic path used to
+      // pin the card at the paper's top-left corner. Only trust real numbers.
+      const evx = ev && typeof ev.clientX === 'number' ? ev.clientX : NaN;
+      const evy = ev && typeof ev.clientY === 'number' ? ev.clientY : NaN;
+      let cx = evx;
+      let cy = evy;
       if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
         // Keyboard / programmatic open: fall back to the mark's own first line.
         const hl = hlRef.current;
@@ -3304,53 +3367,6 @@ const SEL_EMIT_MS = 120;
       for (let i = 0; i < nodes.length; i += 1) nodes[i].removeAttribute('data-active');
       const signs = gutterRef.current ? gutterRef.current.querySelectorAll('.nw-mark-side[data-active]') : [];
       for (let i = 0; i < signs.length; i += 1) signs[i].removeAttribute('data-active');
-    }
-
-    /**
-     * R53c: the marking menu, opened by right-clicking a selection.
-     *
-     * The range is frozen at the moment the menu opens. The menu never appears
-     * by itself — selecting words used to pop a three-button bar right over the
-     * words being selected, which is what the writer asked to get rid of. Now
-     * it only shows up when the writer asks for it (right-click), and it opens
-     * at the pointer, next to the words instead of at the page corner.
-     */
-    function openMarkMenu(ev) {
-      const ta = taRef.current;
-      if (!ta) return;
-      const a = Number(ta.selectionStart) || 0;
-      const b = Number(ta.selectionEnd) || 0;
-      const start = Math.min(a, b);
-      const end = Math.max(a, b);
-      const text = ta.value.slice(start, end);
-      const hasRange = end > start && !!String(text).trim() && end - start <= 4000;
-      // 右键点在哪，菜单就长在哪。菜单是 .nw-surface 的直接子节点（固定在纸面
-      // 之上，不跟着纸滚），所以坐标按 surface 换算；先右后左、先下后上夹在
-      // 纸面之内。
-      const surf = surfaceRef.current;
-      const surfRect = surf ? surf.getBoundingClientRect() : null;
-      const menuW = 152;
-      const menuH = 132;
-      let x = surfRect && ev ? Number(ev.clientX) - surfRect.left + 2 : 14;
-      let y = surfRect && ev ? Number(ev.clientY) - surfRect.top + 2 : 46;
-      if (surfRect) {
-        if (x + menuW > surfRect.width - 8) x = Math.max(8, x - menuW - 4);
-        if (y + menuH > surfRect.height - 8) y = Math.max(8, y - menuH - 4);
-        x = Math.max(8, Math.min(x, Math.max(8, surfRect.width - menuW - 8)));
-      }
-      setMarkView(null);
-      setMarkMenu({
-        start: start,
-        end: end,
-        quote: String(text || '').slice(0, 240),
-        hasRange: hasRange,
-        x: Math.round(x),
-        y: Math.round(y),
-      });
-    }
-
-    function closeMarkMenu() {
-      setMarkMenu((cur) => (cur ? null : cur));
     }
 
     // ------------------------------------------------- 选中 → 修改建议 (R73) --
@@ -3500,75 +3516,6 @@ const SEL_EMIT_MS = 120;
     }
 
 
-    /**
-     * R53: create (or retype) a mark over the range the menu was opened on.
-     *
-     * Duplicates are killed at the source: the same words never become two
-     * marks. Marking a span that is already marked just changes its type, and
-     * marking it with the type it already has only puts the card back on it.
-     * The database does the same merge, so a refresh cannot resurrect a twin.
-     */
-    function createMarkOfSelection(kind) {
-      const menu = markMenuRef.current;
-      const ta = taRef.current;
-      if (!menu || !ta) return;
-      if (!menu.hasRange) return;
-      const start = clampNum(menu.start, 0, ta.value.length);
-      const end = clampNum(menu.end, start, ta.value.length);
-      if (end <= start) return;
-      const text = ta.value.slice(start, end);
-      const rows = marksRef.current || [];
-      const existing = rows.find((r) => r && sameSpan(r, { start: start, end: end }));
-      closeMarkMenu();
-      if (existing) {
-        const existingNote = String(existing.note || '').trim();
-        // R53e：写着字的线就是批注，不能靠再点一次「下划线」把它降回一条线——
-        // 那样要么丢掉作者写的话，要么存进去又被 db 判回 comment，界面上闪一下
-        // 等于没反应。有字就只把卡片开出来，线本身不动。
-        if (existingNote && String(kind) !== 'comment') {
-          openMarkView(existing, null);
-          return;
-        }
-        if (String(existing.kind) === String(kind)) {
-          // Nothing to draw: the line is already on the paper. Just show it.
-          openMarkView(existing, null);
-          return;
-        }
-        marksRef.current = rows.map((r) => (r && sameSpan(r, { start: start, end: end })
-          ? Object.assign({}, r, { kind: kind })
-          : r));
-        rebuildHighlights();
-        if (typeof p.onMarkCreate === 'function') {
-          const retyped = p.onMarkCreate(Object.assign({}, existing, { kind: kind }));
-          if (retyped && typeof retyped.catch === 'function') retyped.catch(() => {});
-        }
-        const row = (marksRef.current || []).find((r) => r && sameSpan(r, { start: start, end: end }));
-        if (row) openMarkView(row, null);
-        return;
-      }
-      const id = 'mk-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36);
-      const draft = {
-        id: id,
-        // Without this the row is thrown away by db.cleanMark (which requires a
-        // chapter) — every mark drawn in the writing surface used to vanish.
-        chapterId: chapterIdRef.current || (chapter && chapter.id) || '',
-        kind: kind,
-        start: start,
-        end: end,
-        quote: String(text || '').slice(0, 240),
-        note: '',
-      };
-      // Paint it at once: the app round-trips through IndexedDB before the list
-      // comes back, and a line that appears a beat late reads as "it didn't work".
-      marksRef.current = rows.concat([draft]);
-      rebuildHighlights();
-      if (typeof p.onMarkCreate === 'function') {
-        const created = p.onMarkCreate(draft);
-        if (created && typeof created.catch === 'function') created.catch(() => {});
-      }
-      if (kind === 'comment') openMarkView(draft, null);
-    }
-
     /** Delete a mark from the card, painting the change immediately. */
     /**
      * R134: 裁决一条标注——接受或拒绝。
@@ -3605,6 +3552,27 @@ const SEL_EMIT_MS = 120;
       removeMarkOf(id);
     }
 
+    /** R190: jump from the side list to the line, then open its card. */
+    function focusMark(mark) {
+      if (!mark) return;
+      const ta = taRef.current;
+      if (ta) {
+        ta.focus();
+        try {
+          ta.setSelectionRange(Number(mark.start) || 0, Number(mark.end) || 0);
+        } catch (err) {
+          /* out-of-range rows are still listed and still deletable */
+        }
+        scheduleMeasure(true);
+      }
+      // R190: 先收起列表再等一帧量。选中之后打字机会重新居中、纸面整体上移，
+      // 立刻按旧的 mark 矩形算卡片位置会把卡片甩到纸面左上角；等布局稳定再开。
+      setMarksOpen(false);
+      window.setTimeout(function () {
+        openMarkView(mark, null);
+      }, 160);
+    }
+
     function removeMarkOf(id) {
       if (id == null) return;
       const rows = marksRef.current || [];
@@ -3618,6 +3586,7 @@ const SEL_EMIT_MS = 120;
         if (target && sameSpan(r, target)) return false;
         return true;
       });
+      setMarkList(marksRef.current);
       rebuildHighlights();
       closeMarkView();
       if (typeof p.onMarkRemove === 'function') {
@@ -5010,69 +4979,6 @@ const SEL_EMIT_MS = 120;
     const matchPos = matchTotal ? Math.min(find.index + 1, matchTotal) : 0;
     const countText = find.notice || (find.query ? matchPos + '/' + matchTotal : '');
 
-    // R53c：标记菜单——从**右键**弹出（角上那颗铅笔已按用户要求撤掉），永远不会
-    // 因为「选中了字」自己冒出来。三行，每行带一小段样本，选之前就能看见画出来
-    // 是什么样。`onMouseDown` preventDefault 是为了保住冻结的选区——菜单被点时
-    // textarea 若失焦，selectionStart/End 就没了。
-    const markMenuBar = markMenu
-      ? h(
-          'div',
-          {
-            className: 'nw-mark-menu',
-            role: 'menu',
-            'aria-label': NW.t('标一下'),
-            // R53c：跟着右键的位置走，不再是左上角那个固定点。
-            style: { left: (markMenu.x || 0) + 'px', top: (markMenu.y || 0) + 'px' },
-            onMouseDown: (ev) => {
-              if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-            },
-          },
-          h(
-            'div',
-            { className: 'nw-mark-menu-quote' },
-            markMenu.hasRange
-              ? '「' + String(markMenu.quote || '').slice(0, 14) + '」'
-              : NW.t('先选中一段字'),
-          ),
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'nw-mark-menu-btn',
-              role: 'menuitem',
-              disabled: !markMenu.hasRange,
-              onClick: () => createMarkOfSelection('underline'),
-            },
-            h('span', { className: 'nw-mark-menu-swatch', 'data-kind': 'underline' }),
-            NW.t('下划线'),
-          ),
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'nw-mark-menu-btn',
-              role: 'menuitem',
-              disabled: !markMenu.hasRange,
-              onClick: () => createMarkOfSelection('strike'),
-            },
-            h('span', { className: 'nw-mark-menu-swatch', 'data-kind': 'strike' }),
-            NW.t('删除线'),
-          ),
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'nw-mark-menu-btn',
-              role: 'menuitem',
-              disabled: !markMenu.hasRange,
-              onClick: () => createMarkOfSelection('comment'),
-            },
-            h('span', { className: 'nw-mark-menu-swatch', 'data-kind': 'comment' }),
-            NW.t('批注'),
-          ),
-        )
-      : null;
-
     // R51: the read-only mark card. Deliberately no <textarea> in it: the
     // writing surface is where the line is, so it is where you find out what the
     // line says; writing the note happens in 读一遍, where the whole page is
@@ -5151,6 +5057,114 @@ const SEL_EMIT_MS = 120;
             ),
           )
         : null;
+
+    // R190: the marks tab. The writer asked for a small, clickable label on the
+    // side instead of hunting for the line in the paper — the reading view makes
+    // the marks, this list is where they are judged.
+    const marksTab = markList.length
+      ? h(
+          'button',
+          {
+            type: 'button',
+            className: 'nw-markstab',
+            title: NW.t('标注'),
+            'aria-label': NW.t('标注') + ' ' + markList.length,
+            'aria-expanded': marksOpen ? 'true' : 'false',
+            onMouseDown: (ev) => {
+              if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+            },
+            onClick: () => setMarksOpen((v) => !v),
+          },
+          h('span', { className: 'nw-markstab-n' }, String(markList.length)),
+          h('span', null, NW.t('标注')),
+        )
+      : null;
+    const marksPanel = marksOpen && markList.length
+      ? h(
+          'div',
+          {
+            className: 'nw-markspanel',
+            role: 'dialog',
+            'aria-label': NW.t('标注'),
+            onMouseDown: (ev) => {
+              if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+            },
+          },
+          h(
+            'div',
+            { className: 'nw-markspanel-head' },
+            h('span', { className: 'nw-markspanel-title' }, NW.t('标注')),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'nw-markspanel-close',
+                title: NW.t('关闭'),
+                'aria-label': NW.t('关闭'),
+                onClick: () => setMarksOpen(false),
+              },
+              '\u00d7',
+            ),
+          ),
+          h(
+            'div',
+            { className: 'nw-markspanel-list' },
+            markList.map((row, idx) => {
+              const kind = String(row.kind || 'underline');
+              const quote = String(row.quote || '').trim();
+              return h(
+                'div',
+                { key: 'mk-' + String(row.id == null ? idx : row.id), className: 'nw-markspanel-row', 'data-kind': kind },
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'nw-markspanel-quote',
+                    title: NW.t('跳到这一条'),
+                    onClick: () => focusMark(row),
+                  },
+                  h('span', { className: 'nw-markspanel-badge' }, kind === 'strike'
+                    ? NW.t('删除线')
+                    : kind === 'comment' ? NW.t('批注') : NW.t('下划线')),
+                  h('span', { className: 'nw-markspanel-text' }, quote || NW.t('（没有引文）')),
+                ),
+                h(
+                  'div',
+                  { className: 'nw-markspanel-acts' },
+                  kind === 'underline'
+                    ? h('button', {
+                      type: 'button',
+                      className: 'nw-markspanel-btn',
+                      'data-danger': '1',
+                      title: NW.t('删除'),
+                      'aria-label': NW.t('删除'),
+                      onClick: () => removeMarkOf(row.id),
+                    }, 'X')
+                    : [
+                      h('button', {
+                        key: 'ok',
+                        type: 'button',
+                        className: 'nw-markspanel-btn',
+                        'data-primary': '1',
+                        title: kind === 'comment' ? NW.t('用批注里的话替换原文') : NW.t('删掉被划掉的这几个字'),
+                        'aria-label': NW.t('接受'),
+                        onClick: () => decideMarkOf(row, true),
+                      }, '\u221a'),
+                      h('button', {
+                        key: 'no',
+                        type: 'button',
+                        className: 'nw-markspanel-btn',
+                        title: NW.t('拒绝'),
+                        'aria-label': NW.t('拒绝'),
+                        onClick: () => decideMarkOf(row, false),
+                      }, 'X'),
+                    ],
+                ),
+              );
+            }),
+          ),
+        )
+      : null;
 
     const findBar =
       chapter && find.open
@@ -5349,27 +5363,13 @@ const SEL_EMIT_MS = 120;
                 syncSelBtn();
                 scheduleMeasure(true);
               },
-              // R53c：标注的唯一入口。选中一段字再按右键 → 在指针旁弹出小菜单；
-              // 没选中就原样放行，浏览器自己的复制/粘贴菜单照旧。这样纸面上不
-              // 再需要任何常驻按钮。
-              // 右键直接点在一条已有的线上（且没有选中文字）时，按「看批注」处理：
-              // 那一下的意思几乎总是「这条线写了什么」。
+              // R190：写作区不再造标注。右键落在一条已有标注上时把卡片叫出来，
+              // 其它情况把菜单交还给浏览器（复制、粘贴照旧）。
               onContextMenu: (ev) => {
-                const ta = taRef.current;
-                if (!ta) return;
-                const a = Number(ta.selectionStart) || 0;
-                const b = Number(ta.selectionEnd) || 0;
-                const hasRange = Math.max(a, b) - Math.min(a, b) > 0;
-                if (hasRange) {
-                  if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-                  openMarkMenu(ev);
-                  return;
-                }
                 const hit = markAtPoint(ev);
-                if (hit) {
-                  if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-                  openMarkView(hit, ev);
-                }
+                if (!hit) return;
+                if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+                openMarkView(hit, ev);
               },
             }),
             // R51: the read-only card. It sits inside `.nw-stack` so it scrolls
@@ -5463,6 +5463,8 @@ const SEL_EMIT_MS = 120;
       // outside .nw-scroll because a scrolling ancestor would drag them along;
       // paintFocus() keeps them in viewport coordinates instead.
       h('div', { className: 'nw-veil nw-veil-top', ref: veilTopRef, 'aria-hidden': 'true' }),
+      marksTab,
+      marksPanel,
       h('div', { className: 'nw-veil nw-veil-bot', ref: veilBotRef, 'aria-hidden': 'true' }),
       findBar,
       // R53c：角落胶囊里只剩「回到首页」和「锁定」。原来那颗标记铅笔被用户点名
@@ -5519,7 +5521,6 @@ const SEL_EMIT_MS = 120;
                 )
               : null,
           ),
-      markMenuBar,
       selBtnBar,
     );
   };

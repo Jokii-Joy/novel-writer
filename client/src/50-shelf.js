@@ -1161,12 +1161,11 @@
       if (showWords && index.novelWords.has(nid)) meta.push(fmtWords(index.novelWords.get(nid)) + ' ' + tr('字'));
       const count = index.novelChapterCount.get(nid);
       if (count != null && count !== 1) meta.push(tr('{0} 章', count));
-      // R182: clicking a book opens the reader, so the separate 「读整本」
-      // button is redundant. A one-chapter book still shows its compact row,
-      // but the card itself always means "read this book".
+      // R190: 点书 = 接着写。阅读页从「读一遍」或章节菜单进，书架不再把作者
+      // 推进阅读器——用户说「从书架里点击书籍时不要进入阅读页」。
       const open = () => {
-        if (typeof P.onReadBook === 'function') P.onReadBook(n.id);
-        else if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
+        if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
+        else if (typeof P.onReadBook === 'function') P.onReadBook(n.id);
       };
       return h(
         'div',
@@ -1423,15 +1422,15 @@
                 title: n.title || tr('无标题'),
                 onClick: () => {
                   setLibraryOpen(false);
-                  if (typeof P.onReadBook === 'function') P.onReadBook(n.id);
-                  else if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
+                  if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
+                  else if (typeof P.onReadBook === 'function') P.onReadBook(n.id);
                 },
                 onKeyDown: (ev) => {
                   if (ev.key !== 'Enter' && ev.key !== ' ') return;
                   ev.preventDefault();
                   setLibraryOpen(false);
-                  if (typeof P.onReadBook === 'function') P.onReadBook(n.id);
-                  else if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
+                  if (typeof P.onSelectNovel === 'function') P.onSelectNovel(n.id);
+                  else if (typeof P.onReadBook === 'function') P.onReadBook(n.id);
                 },
               },
               h('span', { className: 'nw-shelf-cover', 'aria-hidden': 'true' }),
