@@ -1259,6 +1259,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     return msg || fallback || '操作失败';
   }
 
+  // R191: cheap text signature (length + FNV-1a). Only used to decide whether
+  // the live buffer still equals the chapter's newest 完稿 version.
+  function textSig(text) {
+    const s = String(text == null ? '' : text);
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < s.length; i += 1) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return s.length + ':' + (h >>> 0).toString(36);
+  }
+
   // R183: remember where a book was last read. One small map in
   // localStorage is enough: losing it only means the next open starts at the
   // first chapter again, and it never blocks the reader.
@@ -1435,6 +1447,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // 完稿版本：the timeline is metadata-only (no decrypted bodies) and drives
     // the folio tab count. The drawer and the proofing desk read the same list.
     const [finalRows, setFinalRows] = useState([]);
+
+    // R191：「完稿」只在正文和最新一版完稿不同时可用。比较的是文本签名，
+    // 只留在内存里，不落库。
+    const liveSigRef = useRef('');
+    const finalSigRef = useRef('');
+    const [sealedSame, setSealedSame] = useState(false);
+    const onEditorContent = useCallback((text) => {
+      const sig = textSig(text);
+      liveSigRef.current = sig;
+      const base = finalSigRef.current;
+      const same = !!base && sig === base;
+      setSealedSame((prev) => (prev === same ? prev : same));
+    }, []);
     // R175: 完稿 lives on the paper now. `folioOpen` owns the right-hand slip,
     // `folioPreview` holds one decrypted version while it is open in place, and
     // `proofPair` holds the two ids the proofing desk is comparing (`__live__`
@@ -3279,6 +3304,42 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     useEffect(() => {
       refreshFinalRows();
     }, [activeChapterId, refreshFinalRows]);
+
+    // R191: 章节一换，先按已保存的正文取签名；「完稿」的可点状态由最新一稿
+    // 决定，见下面那个 effect。
+    useEffect(() => {
+      const chapter = chapterRef.current;
+      liveSigRef.current = textSig(chapter && chapter.content);
+      const base = finalSigRef.current;
+      setSealedSame(!!base && liveSigRef.current === base);
+    }, [activeChapterId, chapter && chapter.id, chapter && chapter.content]);
+
+    useEffect(() => {
+      let alive = true;
+      const newest = finalRows.length ? finalRows[0] : null;
+      if (!newest || !newest.id) {
+        finalSigRef.current = '';
+        setSealedSame(false);
+        return () => {
+          alive = false;
+        };
+      }
+      (async () => {
+        let text = '';
+        try {
+          const full = await NW.db.getVersion(newest.id);
+          text = full && full.content != null ? full.content : '';
+        } catch (err) {
+          text = '';
+        }
+        if (!alive) return;
+        finalSigRef.current = textSig(text);
+        setSealedSame(!!finalSigRef.current && liveSigRef.current === finalSigRef.current);
+      })();
+      return () => {
+        alive = false;
+      };
+    }, [activeChapterId, finalRows]);
 
     /**
      * 「完稿」: seal the live buffer as a version. It does *not* silently move
@@ -5389,6 +5450,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                           return dirty ? 'dirty' : 'saved';
                         });
                       },
+                      onContent: onEditorContent,
                       onSelectionChange: onSelectionChange,
                       // R73: 选中文字后浮出的小方钮点下去就是这里。开这扇窗口意味着
                       // 要并排看原文和改写，所以整章的修改建议栏先让位。
@@ -5425,6 +5487,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     // `right:12px` landed on top of the advice column whenever
                     // 「AI建议」 was open.
                     h(NW.FolioTab, {
+                      noChanges: sealedSame,
                       count: finalRows.length,
                       finalId: chapter.finalVersionId,
                       finalLabel: finalRow ? finalRow.label : '',

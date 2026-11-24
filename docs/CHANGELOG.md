@@ -1,5 +1,11 @@
 # 精神空间 · 开发日志与详细文档
 
+- 第一百九十一轮（R191）**删除线颜色分签、完稿防重、接受可撤销**：
+  - 用户原话：「删除线的标签和批注要一样，都在稿纸的侧边，可以有颜色区分。已保存版本的稿子在没有变化时，完稿按钮要不可点。接受批注和删除线时，要可以Ctrl+z撤回原文。」
+  - **页边签分色**：`paintGutter()` 给每枚 `.nw-mark-side` 补 `data-kind`，删除线的签改用 `var(--nw-mark-strike, var(--nw-danger))`（演示环境实测 `rgb(184, 70, 60)`），批注仍用批注色（`rgb(15, 107, 115)`）；`aria-label` 也按类型写（「第 N 处删除线」/「第 N 条批注」），悬停标题在没写意见时退回引文，不再一律叫「批注」。
+  - **完稿防重**：新增文本签名（长度 + FNV-1a）`textSig`；编辑器在输入、接受/拒绝、外部替换时通过新加的 `onContent` 回调把当前正文签名交给外壳，外壳再把最新一版完稿的实际正文解密后取签名（`NW.db.getVersion`）。两边相同即 `noChanges`，`NW.FolioTab` 的「完稿」按钮 `disabled` 并换成 `aria-label="完稿（没有改动）"`；正文一改立刻恢复可点。切章时按 `chapter.content` 先取一次签名，章节对象迟到时靠依赖 `chapter.content` 的 effect 纠正。
+  - **接受可 Ctrl+Z**：`replaceRange()` 不再直接改 `ta.value`（那会把这一段编辑从浏览器撤销栈里切掉），改为选中区间后 `document.execCommand('insertText')`；删除线接受（清空区间）走 `execCommand('delete')`，失败才退回原来的手动拼接。接受后 `afterEdit()` 重新登记内容、脏标记与尺寸，undo 栈里就多了一步「像用户自己敲的」编辑。
+  - 验收：`node --check`（60-editor.js / 90-app.js / 89-folio.js）通过；`build-client` 重建 `client/client.js` 1,739,547 B（仍停在既有的 `verify-autolock`）；`verify-client-load` 通过。CDP 演示环境实测：页边 2 枚签（删除线红 / 批注青）且标签分流；点完「完稿」后按钮 `disabled=true`、`aria-label=完稿（没有改动）`，敲一个字后变回 `disabled=false`；接受删除线正文 113 → 80 字，焦点回到正文按 Ctrl+Z 后恢复 113 字且被删的句子回来（签保持已裁决状态）。
 - 第一百九十轮（R190）**编辑页只留「看标注」，标注入口移到侧边**：
   - 用户原话：「编辑页面的批注、下划线、删除线功能删除。阅读页面添加的删除线为啥在编辑页面不能接受或者拒绝，最好也在侧边加个小标签方便点击。从书架里点击书籍时不要进入阅读页。」
   - **编辑页不再创建标注**：拆掉右键 / 选区浮出的标注菜单（`markMenu` 状态、`markMenuBar`、`openMarkMenu` / `closeMarkMenu` / `createMarkOfSelection` 全部删除，`60-editor.js` 里 `markMenu*` 引用为 0）；正文的 `onContextMenu` 现在只在点到已有标注时拦下并打开卡片，其余交还浏览器菜单。新标注统一去「读一遍」里划，编辑页保持只读审阅。

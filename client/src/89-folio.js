@@ -108,8 +108,8 @@
         {
           type: 'button',
           className: 'nw-folio-capture',
-          'aria-label': '完稿',
-          disabled: !!p.busy,
+          'aria-label': p.noChanges ? '完稿（没有改动）' : '完稿',
+          disabled: !!p.busy || !!p.noChanges,
           onClick: p.onCapture,
         },
         icon('check', 13),

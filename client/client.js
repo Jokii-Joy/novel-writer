@@ -11829,6 +11829,15 @@ const SEL_EMIT_MS = 120;
 .nw-mark-side:hover{transform:scale(1.14);opacity:1;}
 .nw-mark-side[data-active="1"]{opacity:1;box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-brand) 40%, transparent);}
 .nw-mark-side:focus-visible{outline:2px solid var(--nw-brand);outline-offset:1px;opacity:1;}
+/* R191：删除线的签换成正文里那条删除线的颜色，批注仍用批注色——同一列签
+   一眼能分出哪种要逐字判断、哪种只是读一句意见。 */
+.nw-mark-side[data-kind="strike"]{
+  background:var(--nw-mark-strike, var(--nw-danger));
+  box-shadow:0 0 0 1px color-mix(in srgb, var(--nw-mark-strike, var(--nw-danger)) 30%, transparent);
+}
+.nw-mark-side[data-kind="strike"][data-active="1"]{
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--nw-mark-strike, var(--nw-danger)) 45%, transparent);
+}
 /* R53c：不再画引线。用户说那条细线在页边空白里看不出来，两条签错开时更像
    装饰。改成让**句子自己**回答：鼠标停在签上、或点开一条批注时，它指的那句
    明显变色（见下面的 [data-hover] 与 mark[data-active]）。 */
@@ -14091,6 +14100,21 @@ const SEL_EMIT_MS = 120;
 
     // ---------------------------------------------------------- text edits --
     /** Marks the buffer dirty and schedules the debounced save + re-measure. */
+    /**
+     * R191: tell the shell what the buffer says *now*, so the 完稿 button can
+     * compare it with the last sealed version without polling the textarea.
+     */
+    function notifyContent() {
+      const ta = taRef.current;
+      const fn = propsRef.current.onContent;
+      if (!ta || typeof fn !== 'function') return;
+      try {
+        fn(ta.value);
+      } catch (err) {
+        /* a broken listener must not break typing */
+      }
+    }
+
     function afterEdit() {
       const ta = taRef.current;
       if (!ta) return;
@@ -14111,6 +14135,7 @@ const SEL_EMIT_MS = 120;
       scheduleSave();
       if (findRef.current.open) refreshMatches();
       scheduleMeasure(true);
+      notifyContent();
     }
 
     /**
@@ -14180,6 +14205,7 @@ const SEL_EMIT_MS = 120;
       if (findRef.current.open) refreshMatches();
       scheduleMeasure(true);
       rebuildHighlights();
+      notifyContent();
     }
 
     /**
@@ -14295,10 +14321,36 @@ const SEL_EMIT_MS = 120;
       const s = clampNum(numOf(start, 0), 0, ta.value.length);
       const e = clampNum(numOf(end, s), s, ta.value.length);
       const insert = typeof text === 'string' ? text : String(text == null ? '' : text);
-      const next = ta.value.slice(0, s) + insert + ta.value.slice(e);
+      // R191：接受批注 / 删除线也要能 Ctrl+Z 撤回。直接改 ta.value 会把这一段
+      // 编辑从浏览器的撤销栈里切掉；走 execCommand 才是「像用户自己敲的」。
+      let done = false;
+      try {
+        ta.focus();
+        ta.setSelectionRange(s, e);
+        done = insert
+          ? document.execCommand('insertText', false, insert)
+          : document.execCommand('delete', false, null);
+      } catch (err) {
+        done = false;
+      }
+      if (!done) {
+        const next = ta.value.slice(0, s) + insert + ta.value.slice(e);
+        const fallbackCaret = s + insert.length;
+        setEditorText(next, fallbackCaret, fallbackCaret);
+        flushNow(); // external edits are discrete: persist right away
+        return;
+      }
+      // execCommand 已经把文本写进 textarea，但 valueRef / 脏标记 / 尺寸测量 /
+      // 批注镜像都要按一次「编辑」重新走一遍。
+      afterEdit();
       const caret = s + insert.length;
-      setEditorText(next, caret, caret);
-      flushNow(); // external edits are discrete: persist right away
+      try {
+        ta.setSelectionRange(caret, caret);
+      } catch (err) {
+        /* ignore */
+      }
+      scheduleMeasure(true);
+      flushNow();
     }
 
     function setHighlights(list) {
@@ -14742,9 +14794,18 @@ const SEL_EMIT_MS = 120;
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'nw-mark-side';
+        const markRow = want[row.id] || {};
+        const markKind = String(markRow.kind || '');
+        const markNo = seq[row.id] || '';
+        const kindName = markKind === 'strike' ? NW.t('删除线') : markKind === 'underline' ? NW.t('下划线') : NW.t('批注');
+        const markLabel = markKind === 'comment'
+          ? NW.t('第') + markNo + NW.t('条批注')
+          : NW.t('第') + markNo + NW.t('处') + kindName;
+        const markHint = String(markRow.note || markRow.quote || kindName).slice(0, 80);
         btn.setAttribute('data-id', row.id);
-        btn.setAttribute('aria-label', NW.t('第') + (seq[row.id] || '') + NW.t('条批注'));
-        btn.title = '#' + (seq[row.id] || '') + ' ' + String(want[row.id].note || NW.t('批注')).slice(0, 80);
+        btn.setAttribute('data-kind', markKind);
+        btn.setAttribute('aria-label', markLabel);
+        btn.title = '#' + markNo + ' ' + markHint;
         btn.textContent = String(seq[row.id] || '');
         btn.style.left = left + 'px';
         btn.style.top = Math.round(y) + 'px';
@@ -15073,6 +15134,7 @@ const SEL_EMIT_MS = 120;
       scheduleSave();
       if (findRef.current.open) refreshMatches();
       scheduleMeasure(true);
+      notifyContent();
     }
 
     function handleKeyDown(ev) {
@@ -21015,8 +21077,8 @@ const SEL_EMIT_MS = 120;
         {
           type: 'button',
           className: 'nw-folio-capture',
-          'aria-label': '完稿',
-          disabled: !!p.busy,
+          'aria-label': p.noChanges ? '完稿（没有改动）' : '完稿',
+          disabled: !!p.busy || !!p.noChanges,
           onClick: p.onCapture,
         },
         icon('check', 13),
@@ -23601,6 +23663,18 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     return msg || fallback || '操作失败';
   }
 
+  // R191: cheap text signature (length + FNV-1a). Only used to decide whether
+  // the live buffer still equals the chapter's newest 完稿 version.
+  function textSig(text) {
+    const s = String(text == null ? '' : text);
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < s.length; i += 1) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return s.length + ':' + (h >>> 0).toString(36);
+  }
+
   // R183: remember where a book was last read. One small map in
   // localStorage is enough: losing it only means the next open starts at the
   // first chapter again, and it never blocks the reader.
@@ -23777,6 +23851,19 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     // 完稿版本：the timeline is metadata-only (no decrypted bodies) and drives
     // the folio tab count. The drawer and the proofing desk read the same list.
     const [finalRows, setFinalRows] = useState([]);
+
+    // R191：「完稿」只在正文和最新一版完稿不同时可用。比较的是文本签名，
+    // 只留在内存里，不落库。
+    const liveSigRef = useRef('');
+    const finalSigRef = useRef('');
+    const [sealedSame, setSealedSame] = useState(false);
+    const onEditorContent = useCallback((text) => {
+      const sig = textSig(text);
+      liveSigRef.current = sig;
+      const base = finalSigRef.current;
+      const same = !!base && sig === base;
+      setSealedSame((prev) => (prev === same ? prev : same));
+    }, []);
     // R175: 完稿 lives on the paper now. `folioOpen` owns the right-hand slip,
     // `folioPreview` holds one decrypted version while it is open in place, and
     // `proofPair` holds the two ids the proofing desk is comparing (`__live__`
@@ -25621,6 +25708,42 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
     useEffect(() => {
       refreshFinalRows();
     }, [activeChapterId, refreshFinalRows]);
+
+    // R191: 章节一换，先按已保存的正文取签名；「完稿」的可点状态由最新一稿
+    // 决定，见下面那个 effect。
+    useEffect(() => {
+      const chapter = chapterRef.current;
+      liveSigRef.current = textSig(chapter && chapter.content);
+      const base = finalSigRef.current;
+      setSealedSame(!!base && liveSigRef.current === base);
+    }, [activeChapterId, chapter && chapter.id, chapter && chapter.content]);
+
+    useEffect(() => {
+      let alive = true;
+      const newest = finalRows.length ? finalRows[0] : null;
+      if (!newest || !newest.id) {
+        finalSigRef.current = '';
+        setSealedSame(false);
+        return () => {
+          alive = false;
+        };
+      }
+      (async () => {
+        let text = '';
+        try {
+          const full = await NW.db.getVersion(newest.id);
+          text = full && full.content != null ? full.content : '';
+        } catch (err) {
+          text = '';
+        }
+        if (!alive) return;
+        finalSigRef.current = textSig(text);
+        setSealedSame(!!finalSigRef.current && liveSigRef.current === finalSigRef.current);
+      })();
+      return () => {
+        alive = false;
+      };
+    }, [activeChapterId, finalRows]);
 
     /**
      * 「完稿」: seal the live buffer as a version. It does *not* silently move
@@ -27731,6 +27854,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                           return dirty ? 'dirty' : 'saved';
                         });
                       },
+                      onContent: onEditorContent,
                       onSelectionChange: onSelectionChange,
                       // R73: 选中文字后浮出的小方钮点下去就是这里。开这扇窗口意味着
                       // 要并排看原文和改写，所以整章的修改建议栏先让位。
@@ -27767,6 +27891,7 @@ const LS_LAST_CHAPTER = 'nw.lastChapterByNovel';
                     // `right:12px` landed on top of the advice column whenever
                     // 「AI建议」 was open.
                     h(NW.FolioTab, {
+                      noChanges: sealedSame,
                       count: finalRows.length,
                       finalId: chapter.finalVersionId,
                       finalLabel: finalRow ? finalRow.label : '',
