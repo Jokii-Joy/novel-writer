@@ -60,17 +60,11 @@
 
 ## 截图
 
-| 编辑器 | 夜间 |
+| 编辑器 | AI 建议 |
 | :-: | :-: |
-| ![编辑器](docs/screenshots/final-01-canvas.png) | ![夜间](docs/screenshots/final-07-night.png) |
+| ![编辑器](docs/screenshots/final-01-canvas.png) | ![AI 建议](docs/screenshots/final-05a-proofread.png) |
 
-| 设置 | 投稿 |
-| :-: | :-: |
-| ![设置](docs/screenshots/final-03-settings.png) | ![投稿](docs/screenshots/final-04-submit.png) |
-
-| AI 建议 | 沉浸模式 |
-| :-: | :-: |
-| ![AI 建议](docs/screenshots/final-05a-proofread.png) | ![沉浸模式](docs/screenshots/final-06-immersive.png) |
+![夜间主题](docs/screenshots/final-07-night.png)
 
 ## 快速开始
 
