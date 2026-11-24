@@ -11879,9 +11879,10 @@ const SEL_EMIT_MS = 120;
   width:auto;min-width:0;padding:4px;gap:0;
   border-radius:var(--nw-r-control);
 }
-.nw-mark-view[data-compact="1"] .nw-mark-view-acts{gap:0;}
+.nw-mark-view[data-compact="1"] .nw-mark-view-acts{gap:4px;}
 .nw-mark-view[data-compact="1"] .nw-mark-view-btn{flex:0 0 auto;padding:0 12px;}
-.nw-mark-view-acts{display:flex;gap:4px;}
+/* R194：接受 / 拒绝上下排——并排两颗按钮横着占掉半行正文，竖排只占按钮宽。 */
+.nw-mark-view-acts{display:flex;flex-direction:column;gap:4px;}
 .nw-mark-view-btn{
   flex:1 1 auto;height:22px;padding:0 8px;
   border-radius:var(--nw-r-control);border:1px solid var(--nw-line-strong);
@@ -14348,8 +14349,8 @@ const SEL_EMIT_MS = 120;
       // 一大截。还按 200×150 去避让的话，卡片会在离点击处很远的地方落地，看着像
       // 点错了地方。两种尺寸分开算。
       const compact = String(mark.kind) !== 'comment';
-      const cardW = compact ? 168 : 200;
-      const cardH = compact ? 38 : 150;
+      const cardW = compact ? 84 : 200;
+      const cardH = compact ? 60 : 150;
       const box = stack.getBoundingClientRect();
       const stackW = box.width || 0;
       const vh = window.innerHeight || 768;
